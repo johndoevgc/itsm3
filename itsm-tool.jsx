@@ -1,0 +1,12150 @@
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useMsal, useIsAuthenticated } from "@azure/msal-react";
+import { InteractionRequiredAuthError } from "@azure/msal-browser";
+import { allLoginScopes, graphScopes } from "./msalConfig.js";
+import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEvents, getUpcomingEvents, getRecentChats, getJoinedTeams, getMyPresence } from "./graphService.js";
+
+// ─── Security: HTML Sanitiser ────────────────────────────────────────────
+const sanitizeHTML = (html) => {
+  if (!html) return "";
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("script,iframe,object,embed,link,style,form,svg").forEach(el => el.remove());
+  doc.querySelectorAll("*").forEach(el => {
+    [...el.attributes].forEach(attr => {
+      if (attr.name.startsWith("on") || attr.value.trim().toLowerCase().startsWith("javascript:")) el.removeAttribute(attr.name);
+    });
+  });
+  return doc.body.innerHTML;
+};
+
+// ─── Security Alert Data (app-level) ─────────────────────────────────────
+const SECURITY_ALERTS = [];
+
+// ─── Users ───────────────────────────────────────────────────────────
+// Admin users are configured here — they get full admin access on first login
+const ADMIN_EMAILS = [
+  "hlaing@vgctechnology.com",
+  "qing@vgctechnology.com",
+  "hamidi@vgctechnology.com",
+  "adrian@vgctechnology.com",
+];
+
+const USERS = [];
+
+// ─── Initial Customer Data (empty — ready for production data entry) ───
+const INITIAL_CUSTOMERS = [];
+
+// ─── RBAC Enterprise Roles & Permissions ─────────────────────────────────
+const RBAC_ROLES = [
+  { id: "VGC Dev Admin", label: "VGC Dev Admin", level: -1, color: "#FF6B6B", description: "Platform super-admin — full system access, AI config, API keys, billing, infrastructure, all dev tools" },
+  { id: "Tenant Admin", label: "Tenant Admin", level: 0, color: "#EC4899", description: "Customer admin — tenant user management, compliance, customisation, SLA policies (no API keys, billing, or platform tools)" },
+  { id: "Administrator", label: "Administrator", level: 0, color: "#EC4899", description: "Full system access — user management, AI config, compliance, all modules" },
+  { id: "Service Desk Lead", label: "Service Desk Lead", level: 1, color: "#6366F1", description: "Team lead — manage tickets, approve requests, KB publishing" },
+  { id: "L1 Support Engineer", label: "L1 Support Engineer", level: 2, color: "#06B6D4", description: "First-level support — create/edit incidents, fulfill requests" },
+  { id: "L2 Support Engineer", label: "L2 Support Engineer", level: 2, color: "#06B6D4", description: "Second-level support — escalated tickets, problem management" },
+  { id: "Network Engineer", label: "Network Engineer", level: 2, color: "#81C784", description: "Infrastructure support — network, security, cloud operations" },
+  { id: "Change Manager", label: "Change Manager", level: 1, color: "#FFB347", description: "Change governance — approve/reject changes, risk assessment" },
+  { id: "Problem Manager", label: "Problem Manager", level: 1, color: "#CE93D8", description: "Problem management — root cause analysis, known error DB" },
+  { id: "Asset Manager", label: "Asset Manager", level: 1, color: "#F59E0B", description: "CMDB management — asset lifecycle, inventory control" },
+  { id: "End User", label: "End User", level: 3, color: "#5A6178", description: "Self-service — raise tickets, view KB articles, track requests" },
+  { id: "Read Only", label: "Read Only", level: 4, color: "#3A3F55", description: "View-only — dashboards, reports, no write operations" },
+];
+
+const RBAC_PERMISSIONS = {
+  "VGC Dev Admin":       { dashboard: "full", incidents: "full", problems: "full", changes: "full", requests: "full", catalog: "full", knowledge: "full", assets: "full", approvals: "full", sla: "full", ai: "full", admin: "full", customers: "full", reports: "full" },
+  "Tenant Admin":        { dashboard: "full", incidents: "full", problems: "full", changes: "full", requests: "full", catalog: "full", knowledge: "full", assets: "full", approvals: "full", sla: "full", ai: "view", admin: "limited", customers: "full", reports: "full" },
+  "Administrator":       { dashboard: "full", incidents: "full", problems: "full", changes: "full", requests: "full", catalog: "full", knowledge: "full", assets: "full", approvals: "full", sla: "full", ai: "full", admin: "full", customers: "full", reports: "full" },
+  "Service Desk Lead":   { dashboard: "view", incidents: "manage", problems: "manage", changes: "view", requests: "manage", catalog: "view", knowledge: "publish", assets: "view", approvals: "approve", sla: "view", ai: "view", admin: "limited", customers: "manage", reports: "manage" },
+  "L1 Support Engineer": { dashboard: "view", incidents: "edit", problems: "view", changes: "view", requests: "fulfill", catalog: "view", knowledge: "contribute", assets: "view", approvals: "none", sla: "view", ai: "use", admin: "none", customers: "edit", reports: "edit" },
+  "L2 Support Engineer": { dashboard: "view", incidents: "manage", problems: "edit", changes: "view", requests: "fulfill", catalog: "view", knowledge: "contribute", assets: "view", approvals: "none", sla: "view", ai: "use", admin: "none", customers: "edit", reports: "edit" },
+  "Network Engineer":    { dashboard: "view", incidents: "edit", problems: "edit", changes: "submit", requests: "fulfill", catalog: "view", knowledge: "contribute", assets: "edit", approvals: "none", sla: "view", ai: "use", admin: "none", customers: "edit", reports: "edit" },
+  "Change Manager":      { dashboard: "view", incidents: "view", problems: "view", changes: "full", requests: "view", catalog: "view", knowledge: "view", assets: "view", approvals: "approve", sla: "view", ai: "view", admin: "none", customers: "view", reports: "view" },
+  "Problem Manager":     { dashboard: "view", incidents: "view", problems: "full", changes: "view", requests: "view", catalog: "view", knowledge: "publish", assets: "view", approvals: "none", sla: "view", ai: "view", admin: "none", customers: "view", reports: "view" },
+  "Asset Manager":       { dashboard: "view", incidents: "view", problems: "view", changes: "view", requests: "view", catalog: "manage", knowledge: "view", assets: "full", approvals: "none", sla: "view", ai: "view", admin: "none", customers: "view", reports: "view" },
+  "End User":            { dashboard: "none", incidents: "create", problems: "none", changes: "none", requests: "create", catalog: "view", knowledge: "view", assets: "none", approvals: "none", sla: "none", ai: "none", admin: "none", customers: "none", reports: "none" },
+  "Read Only":           { dashboard: "view", incidents: "view", problems: "view", changes: "view", requests: "view", catalog: "view", knowledge: "view", assets: "view", approvals: "none", sla: "view", ai: "none", admin: "none", customers: "view", reports: "view" },
+};
+
+const PERM_COLORS = {
+  full: { bg: "#0D2D1A", text: "#81C784" }, manage: { bg: "#0D2137", text: "#64B5F6" },
+  edit: { bg: "#2D1F0A", text: "#FFB347" }, publish: { bg: "#1A0A2D", text: "#CE93D8" },
+  contribute: { bg: "#0A1E2D", text: "#06B6D4" }, approve: { bg: "#2D0A2D", text: "#EC4899" },
+  submit: { bg: "#1A1A2E", text: "#A0AEC0" }, fulfill: { bg: "#0D2D1A", text: "#81C784" },
+  use: { bg: "#6366F111", text: "#6366F1" }, create: { bg: "#0A2D1A", text: "#81C784" },
+  view: { bg: "#1A1A2E", text: "#A0AEC0" }, limited: { bg: "#2D1F0A", text: "#FFB347" },
+  none: { bg: "#2D0A0A", text: "#FF6B6B33" },
+};
+
+const CATEGORIES = ["Hardware", "Software", "Network", "Security", "Access", "Email", "Database", "Cloud"];
+const SERVICES = [
+  { id: "SVC01", name: "Password Reset", category: "Access", sla: 4, icon: "🔑" },
+  { id: "SVC02", name: "New Laptop Request", category: "Hardware", sla: 72, icon: "💻" },
+  { id: "SVC03", name: "Software Installation", category: "Software", sla: 24, icon: "📦" },
+  { id: "SVC04", name: "VPN Access", category: "Network", sla: 8, icon: "🌐" },
+  { id: "SVC05", name: "Email Distribution List", category: "Email", sla: 12, icon: "📧" },
+  { id: "SVC06", name: "Cloud Storage Upgrade", category: "Cloud", sla: 24, icon: "☁️" },
+  { id: "SVC07", name: "Security Badge Request", category: "Security", sla: 48, icon: "🛡️" },
+  { id: "SVC08", name: "Database Access", category: "Database", sla: 24, icon: "🗄️" },
+];
+
+const ASSETS = [];
+
+// ─── SharePoint Knowledge Portal Config ─────────────────────────────
+const SHAREPOINT_KB_CONFIG = {
+  tenantUrl: "https://vgctechnology.sharepoint.com",
+  siteUrl: "/sites/ITSM-KnowledgePortal",
+  docLibrary: "/Shared%20Documents",
+  get baseUrl() { return this.tenantUrl + this.siteUrl; },
+  get docsUrl() { return this.baseUrl + this.docLibrary; },
+  articleUrl(slug) { return `${this.baseUrl}/SitePages/${slug}.aspx`; },
+  docUrl(path) { return `${this.docsUrl}/${path}`; },
+};
+
+const KB_CATEGORIES = [
+  { id: "M365", label: "Microsoft 365", icon: "☁️", color: "#0078D4" },
+  { id: "Azure", label: "Azure / Cloud", icon: "⚡", color: "#0089D6" },
+  { id: "Network", label: "Network & VPN", icon: "🌐", color: "#06B6D4" },
+  { id: "Security", label: "Security & Compliance", icon: "🛡️", color: "#FF6B6B" },
+  { id: "SOP", label: "Standard Procedures", icon: "📋", color: "#FFB347" },
+  { id: "Remote", label: "Remote Support", icon: "🖥️", color: "#CE93D8" },
+  { id: "Access", label: "Identity & Access", icon: "🔑", color: "#81C784" },
+  { id: "Hardware", label: "Hardware & Devices", icon: "💻", color: "#64B5F6" },
+  { id: "Email", label: "Email & Exchange", icon: "📧", color: "#EC4899" },
+  { id: "Database", label: "Database & SQL", icon: "🗄️", color: "#A78BFA" },
+];
+
+const KB_ARTICLES = [];
+
+const genId = (prefix) => `${prefix}${String(Math.floor(Math.random() * 9000) + 1000)}`;
+const timeAgo = (h) => {
+  if (h < 1) return `${Math.round(h * 60)}m ago`;
+  if (h < 24) return `${Math.round(h)}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+
+// ─── AI Engine (Simulated) ───────────────────────────────────────────────
+const AI_CONFIDENCE_COLORS = {
+  high: { bg: "#0D2D1A", text: "#81C784", border: "#81C78444" },
+  medium: { bg: "#2D1F0A", text: "#FFB347", border: "#FFB34744" },
+  low: { bg: "#2D0A0A", text: "#FF6B6B", border: "#FF6B6B44" },
+};
+
+const AI_KB_MAP = {
+  "password": ["KB001", "KB007"], "reset": ["KB001"], "lockout": ["KB001", "KB007"], "login": ["KB001", "KB007"],
+  "vpn": ["KB002", "KB005"], "network": ["KB002", "KB005", "KB009"], "firewall": ["KB005"],
+  "software": ["KB003"], "install": ["KB003"], "license": ["KB003"],
+  "email": ["KB004"], "outlook": ["KB004"], "exchange": ["KB004"], "mailbox": ["KB004"],
+  "azure": ["KB006", "KB014"], "vm": ["KB006"], "cloud": ["KB006", "KB010"],
+  "mfa": ["KB007", "KB001"], "sso": ["KB007", "KB001"], "conditional access": ["KB007"], "entra": ["KB007"],
+  "incident": ["KB008"], "triage": ["KB008"], "escalation": ["KB008"], "sla": ["KB008"],
+  "dns": ["KB009"], "dhcp": ["KB009"],
+  "teams": ["KB010"], "sharepoint": ["KB010"], "onedrive": ["KB010"], "m365": ["KB010"],
+  "rdp": ["KB011"], "remote desktop": ["KB011"], "remote session": ["KB011"],
+  "iso": ["KB012"], "audit": ["KB012"], "compliance": ["KB012", "KB015"],
+  "change management": ["KB013"], "rfc": ["KB013"], "cab": ["KB013"], "rollback": ["KB013"],
+  "backup": ["KB014"], "restore": ["KB014"], "disaster recovery": ["KB014"], "dr": ["KB014"],
+  "pdpa": ["KB015"], "dsar": ["KB015"], "data protection": ["KB015"], "privacy": ["KB015"],
+  "security": ["KB007", "KB012", "KB015"], "access": ["KB001", "KB007", "KB012"],
+};
+
+// ─── KB Search & Relevance Engine ─────────────────────────────────────
+function searchKBArticles(query, kbArticles, maxResults = 5) {
+  if (!query) return [];
+  const lower = query.toLowerCase();
+  const words = lower.split(/\s+/).filter(w => w.length > 2);
+  const scored = kbArticles.map(art => {
+    let score = 0;
+    const searchable = `${art.title} ${art.category} ${art.content} ${(art.tags || []).join(" ")} ${art.whenToUse || ""} ${art.bestFor || ""}`.toLowerCase();
+    // Direct KB ID match from AI_KB_MAP
+    for (const [keyword, ids] of Object.entries(AI_KB_MAP)) {
+      if (lower.includes(keyword) && ids.includes(art.id)) score += 30;
+    }
+    // Tag match (highest weight)
+    (art.tags || []).forEach(tag => { if (lower.includes(tag.toLowerCase())) score += 20; });
+    // Title match
+    words.forEach(w => { if (art.title.toLowerCase().includes(w)) score += 15; });
+    // Category match
+    if (lower.includes(art.category.toLowerCase())) score += 10;
+    // Content/whenToUse match
+    words.forEach(w => { if (searchable.includes(w)) score += 5; });
+    return { ...art, relevanceScore: score };
+  });
+  return scored.filter(a => a.relevanceScore > 0).sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, maxResults);
+}
+
+const AI_CATEGORY_KEYWORDS = {
+  Hardware: ["laptop", "printer", "screen", "monitor", "keyboard", "mouse", "hardware", "device", "battery", "charger", "dock"],
+  Software: ["sap", "application", "app", "software", "install", "update", "crash", "error", "login", "license"],
+  Network: ["vpn", "wifi", "network", "internet", "connectivity", "dns", "firewall", "bandwidth", "latency"],
+  Security: ["security", "breach", "virus", "malware", "phishing", "unauthorized", "access denied", "hack"],
+  Access: ["password", "reset", "account", "locked", "permission", "role", "sso", "mfa", "authentication"],
+  Email: ["email", "outlook", "exchange", "smtp", "mailbox", "calendar", "meeting"],
+  Database: ["database", "sql", "query", "timeout", "connection", "migration", "backup", "replication"],
+  Cloud: ["cloud", "azure", "aws", "vm", "container", "kubernetes", "storage", "blob"],
+};
+
+const AI_PRIORITY_RULES = {
+  "Sev-A": ["unresponsive", "down", "outage", "breach", "critical", "production", "all users", "data loss"],
+  "Sev-B": ["cannot", "failure", "multiple users", "degraded", "slow", "timeout", "urgent"],
+  "Sev-C": ["intermittent", "some users", "workaround", "delay"],
+  "Sev-D": ["request", "question", "enhancement", "minor", "cosmetic", "how do i", "inquiry"],
+};
+
+const AI_ASSIGNEE_SKILLS = {
+  "Marcus Chen": ["Software", "Email", "Access", "Database"],
+  "Sofia Rodriguez": ["Hardware", "Access", "Email"],
+  "James Wright": ["Network", "Security", "Cloud", "Database"],
+  "VGC Admin": ["Cloud", "Security", "Software"],
+};
+
+const aiAnalyzeIncident = (title, description) => {
+  const text = `${title} ${description}`.toLowerCase();
+  let suggestedCategory = "Software";
+  let catScore = 0;
+  for (const [cat, keywords] of Object.entries(AI_CATEGORY_KEYWORDS)) {
+    const score = keywords.filter(kw => text.includes(kw)).length;
+    if (score > catScore) { catScore = score; suggestedCategory = cat; }
+  }
+  let suggestedPriority = "Sev-C";
+  for (const [pri, keywords] of Object.entries(AI_PRIORITY_RULES)) {
+    if (keywords.some(kw => text.includes(kw))) { suggestedPriority = pri; break; }
+  }
+  let suggestedAssignee = "";
+  let bestMatch = 0;
+  for (const [agent, skills] of Object.entries(AI_ASSIGNEE_SKILLS)) {
+    const match = skills.includes(suggestedCategory) ? 1 : 0;
+    if (match > bestMatch) { bestMatch = match; suggestedAssignee = agent; }
+  }
+  const kbSuggestions = [];
+  for (const [keyword, kbIds] of Object.entries(AI_KB_MAP)) {
+    if (text.includes(keyword)) kbIds.forEach(id => { if (!kbSuggestions.includes(id)) kbSuggestions.push(id); });
+  }
+  const confidence = Math.min(98, 65 + catScore * 10 + (suggestedAssignee ? 5 : 0));
+  return { suggestedCategory, suggestedPriority, suggestedAssignee, confidence, kbSuggestions };
+};
+
+const aiAnalyzeChange = (title, description) => {
+  const text = `${title} ${description}`.toLowerCase();
+  let riskScore = 20;
+  if (text.includes("production") || text.includes("database")) riskScore += 30;
+  if (text.includes("migration") || text.includes("upgrade")) riskScore += 20;
+  if (text.includes("emergency")) riskScore += 25;
+  if (text.includes("firewall") || text.includes("security")) riskScore += 15;
+  if (text.includes("minor") || text.includes("cosmetic")) riskScore -= 10;
+  const risk = riskScore >= 70 ? "High" : riskScore >= 40 ? "Medium" : "Low";
+  const confidence = Math.min(95, 70 + Math.floor(Math.random() * 15));
+  return {
+    riskLevel: risk, riskScore: Math.min(100, riskScore), confidence,
+    impactAnalysis: riskScore >= 70 ? "High impact — may affect production services" : riskScore >= 40 ? "Moderate impact — limited service disruption possible" : "Low impact — minimal risk to services",
+    recommendation: riskScore >= 70 ? "Recommend CAB review and off-hours implementation window" : riskScore >= 40 ? "Standard approval process recommended" : "Pre-approved — can proceed with standard change process"
+  };
+};
+
+const aiPredictSLA = (priority, category) => {
+  const sev = VGC_SLA_POLICY.severities[priority];
+  const baseHours = sev ? sev.worstResponse : 9;
+  const catMultiplier = { Hardware: 1.3, Network: 0.9, Database: 1.1, Security: 0.8, Software: 1.0, Email: 0.7, Access: 0.5, Cloud: 1.2 };
+  const predicted = Math.round(baseHours * (catMultiplier[category] || 1.0));
+  const confidence = Math.min(92, 75 + Math.floor(Math.random() * 12));
+  return { predictedHours: predicted, confidence };
+};
+
+// ─── Smart AI Response Engine ─────────────────────────────────────────
+const AI_TOPIC_RESPONSES = [
+  { keys: ["help", "what can you do", "how to", "guide", "tutorial", "menu", "options", "features"], topic: "help" },
+  { keys: ["hello", "hi", "hey", "good morning", "good afternoon", "good evening", "yo", "sup"], topic: "greet" },
+  { keys: ["thank", "thanks", "thx", "cheers", "appreciated", "great job", "awesome", "nice"], topic: "thanks" },
+  { keys: ["incident", "ticket", "create ticket", "new ticket", "log ticket", "raise ticket", "open ticket"], topic: "incident" },
+  { keys: ["sla", "service level", "breach", "overdue", "deadline", "response time", "resolution time"], topic: "sla" },
+  { keys: ["change", "change request", "rfc", "change management", "cab", "approval", "deploy", "release"], topic: "change" },
+  { keys: ["problem", "root cause", "rca", "pattern", "recurring", "trend", "workaround"], topic: "problem" },
+  { keys: ["kb", "knowledge", "article", "documentation", "wiki", "how to fix", "solution", "troubleshoot"], topic: "kb" },
+  { keys: ["report", "analytics", "dashboard", "metric", "kpi", "statistic", "automation rate"], topic: "report" },
+  { keys: ["security", "threat", "cyber", "attack", "vulnerability", "phishing", "malware", "ransomware", "hack"], topic: "security" },
+  { keys: ["email", "draft", "compose", "send email", "reply", "respond", "write email", "notification"], topic: "email" },
+  { keys: ["asset", "cmdb", "hardware", "software", "inventory", "device", "laptop", "server"], topic: "asset" },
+  { keys: ["user", "rbac", "role", "permission", "access"], topic: "user" },
+  { keys: ["iso", "27001", "compliance", "audit", "control", "isms", "certification"], topic: "compliance" },
+  { keys: ["pdpa", "data protection", "privacy", "personal data", "consent", "dsar"], topic: "pdpa" },
+  { keys: ["entra", "azure ad", "sso", "single sign", "mfa", "authentication", "scim", "directory"], topic: "entra" },
+  { keys: ["billing", "invoice", "license", "subscription", "cost", "pricing", "payment"], topic: "billing" },
+  { keys: ["smtp", "mail server", "email config", "notification setting"], topic: "smtp" },
+  { keys: ["integration", "connect", "slack", "teams", "jira", "servicenow", "pagerduty"], topic: "integration" },
+  { keys: ["test", "testing", "check", "verify", "try", "demo", "sample", "ping", "status"], topic: "status" },
+  { keys: ["weather", "temperature", "rain", "forecast"], topic: "weather" },
+  { keys: ["who are you", "about", "your name", "what are you", "introduce", "yourself"], topic: "about" },
+  { keys: ["morning", "briefing", "priority plan", "daily plan", "what should i do", "plan", "today", "urgent", "priority"], topic: "briefing" },
+  { keys: ["schedule", "meeting", "appointment", "remote session", "calendar", "upcoming"], topic: "schedule" },
+  { keys: ["notify", "notice", "alert engineer", "send notice", "inform", "escalate"], topic: "notify" },
+  { keys: ["good", "bad", "how", "what", "why", "when", "where", "which", "can", "could", "would", "should", "tell", "show", "find", "get", "list", "give"], topic: null },
+];
+
+function matchAiTopic(userMsg) {
+  const lower = userMsg.toLowerCase();
+  for (const entry of AI_TOPIC_RESPONSES) {
+    for (const key of entry.keys) {
+      if (key.includes(" ") && lower.includes(key)) return entry.topic;
+    }
+  }
+  for (const entry of AI_TOPIC_RESPONSES) {
+    for (const key of entry.keys) {
+      if (!key.includes(" ") && lower.includes(key)) return entry.topic;
+    }
+  }
+  return null;
+}
+
+// ─── AI Rich Text Renderer ──────────────────────────────────────────────
+// Converts markdown-like AI text into React elements with clickable links, animated emoji, and highlights
+const ANIMATED_EMOJI_SET = new Set(["🚨","🔴","🟠","⚠️","❌","💥","🔥","⏱️","🛡️","✅","💡","📊","📋","⚡","🎯","🆕","📧","🔍","📚","🔗","📎","👁","👍","🧠","🤖","📈","📉","🔒","🔓","💬","🎫","🗂️","📝","🆘","🚀","💎","⭐","🏆","🏅"]);
+const TICKET_LINK_RE = /(INC\d{4,}|CHG\d{4,}|PRB\d{4,}|REQ\d{4,}|KB\d{3,}|SVC\d{3,})/g;
+const BOLD_RE = /\*\*(.+?)\*\*/g;
+const LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+function renderAiRichText(text, onTicketClick) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  return lines.map((line, li) => {
+    // Process each line into segments
+    const segments = [];
+    let remaining = line;
+    let key = 0;
+
+    // First extract markdown links [text](url)
+    const parts = [];
+    let lastIdx = 0;
+    let linkMatch;
+    const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+    while ((linkMatch = linkRe.exec(remaining)) !== null) {
+      if (linkMatch.index > lastIdx) parts.push({ type: "text", value: remaining.slice(lastIdx, linkMatch.index) });
+      parts.push({ type: "link", label: linkMatch[1], url: linkMatch[2] });
+      lastIdx = linkRe.lastIndex;
+    }
+    if (lastIdx < remaining.length) parts.push({ type: "text", value: remaining.slice(lastIdx) });
+
+    // Process text parts for bold, ticket IDs, animated emoji
+    const processText = (str) => {
+      const result = [];
+      // Split by bold markers first
+      const boldParts = str.split(/(\*\*.+?\*\*)/g);
+      boldParts.forEach((bp, bpi) => {
+        const boldMatch = bp.match(/^\*\*(.+?)\*\*$/);
+        if (boldMatch) {
+          // Bold text — check for ticket IDs inside
+          const inner = boldMatch[1];
+          const ticketParts = inner.split(TICKET_LINK_RE);
+          result.push(
+            React.createElement("strong", { key: `b${bpi}`, style: { color: "#E8ECF4", fontWeight: 700 } },
+              ...ticketParts.map((tp, tpi) => {
+                if (TICKET_LINK_RE.test(tp)) {
+                  TICKET_LINK_RE.lastIndex = 0;
+                  return React.createElement("span", {
+                    key: `t${tpi}`,
+                    onClick: (e) => { e.stopPropagation(); onTicketClick?.(tp); },
+                    style: { color: "#6366F1", cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 3 },
+                    onMouseOver: (e) => { e.target.style.color = "#818CF8"; e.target.style.textDecoration = "underline"; },
+                    onMouseOut: (e) => { e.target.style.color = "#6366F1"; e.target.style.textDecoration = "underline"; e.target.style.textDecorationStyle = "dotted"; },
+                    title: `Click to view ${tp}`
+                  }, tp);
+                }
+                return tp;
+              })
+            )
+          );
+        } else if (bp) {
+          // Non-bold text — process for ticket IDs and animated emoji
+          const ticketParts = bp.split(TICKET_LINK_RE);
+          ticketParts.forEach((tp, tpi) => {
+            if (TICKET_LINK_RE.test(tp)) {
+              TICKET_LINK_RE.lastIndex = 0;
+              result.push(React.createElement("span", {
+                key: `tl${bpi}-${tpi}`,
+                onClick: (e) => { e.stopPropagation(); onTicketClick?.(tp); },
+                style: { color: "#6366F1", cursor: "pointer", fontWeight: 600, textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 3, fontFamily: "'JetBrains Mono', monospace", fontSize: "0.92em" },
+                onMouseOver: (e) => { e.target.style.color = "#818CF8"; },
+                onMouseOut: (e) => { e.target.style.color = "#6366F1"; },
+                title: `Click to view ${tp}`
+              }, tp));
+            } else {
+              // Check for animated emoji
+              const emojiRe = /([\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}\u{FE0F}][\u{FE0F}\u{20E3}]?)/gu;
+              const emojiParts = tp.split(emojiRe);
+              emojiParts.forEach((ep, epi) => {
+                if (emojiRe.test(ep)) {
+                  emojiRe.lastIndex = 0;
+                  const isImportant = ANIMATED_EMOJI_SET.has(ep);
+                  result.push(React.createElement("span", {
+                    key: `e${bpi}-${tpi}-${epi}`,
+                    style: isImportant ? { display: "inline-block", animation: "emojiBounce 2s ease-in-out infinite", fontSize: "1.05em" } : {}
+                  }, ep));
+                } else if (ep) {
+                  // Highlight important keywords
+                  const highlighted = ep.replace(/(CRITICAL|URGENT|BREACH|IMMEDIATE|WARNING|ESCALAT\w+|SLA\s*\d+%?\s*elapsed)/gi, (match) => `§HL§${match}§/HL§`);
+                  if (highlighted.includes("§HL§")) {
+                    highlighted.split(/(§HL§.+?§\/HL§)/g).forEach((hp, hpi) => {
+                      const hlMatch = hp.match(/^§HL§(.+?)§\/HL§$/);
+                      if (hlMatch) {
+                        result.push(React.createElement("span", {
+                          key: `h${bpi}-${tpi}-${epi}-${hpi}`,
+                          style: { color: "#FF6B6B", fontWeight: 700, background: "#FF6B6B11", padding: "0 4px", borderRadius: 3, animation: "highlightPulse 3s ease-in-out infinite" }
+                        }, hlMatch[1]));
+                      } else if (hp) {
+                        result.push(hp);
+                      }
+                    });
+                  } else {
+                    result.push(ep);
+                  }
+                }
+              });
+            }
+          });
+        }
+      });
+      return result;
+    };
+
+    const lineElements = parts.map((part, pi) => {
+      if (part.type === "link") {
+        return React.createElement("a", {
+          key: `lk${pi}`,
+          href: part.url,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          style: { color: "#06B6D4", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 3, cursor: "pointer", fontWeight: 500 },
+          onMouseOver: (e) => { e.target.style.color = "#22D3EE"; },
+          onMouseOut: (e) => { e.target.style.color = "#06B6D4"; },
+          onClick: (e) => e.stopPropagation()
+        }, `🔗 ${part.label}`);
+      }
+      return React.createElement(React.Fragment, { key: `p${pi}` }, ...processText(part.value));
+    });
+
+    return React.createElement("span", { key: `ln${li}` }, ...lineElements, li < lines.length - 1 ? "\n" : null);
+  });
+}
+
+// Context-aware AI response builder (runs inside component with access to state)
+function buildAiResponse(topic, userMsg, ctx) {
+  const { incidents, changes, problems, requests, currentUser, proactiveAlerts, kbArticles: ctxKbArticles } = ctx;
+  const openInc = incidents.filter(i => i.status === "Open" || i.status === "In Progress");
+  const criticalInc = openInc.filter(i => i.priority === "Sev-A");
+  const highInc = openInc.filter(i => i.priority === "Sev-B");
+  const myTickets = openInc.filter(i => i.assignee === currentUser.name);
+  const pendingChanges = changes.filter(c => c.status === "Awaiting Approval" || c.status === "Implementing");
+  const activeAlerts = proactiveAlerts || [];
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+
+  // Build urgency header if critical/high issues exist
+  const urgencyBlock = (criticalInc.length > 0 || highInc.length > 0) ? 
+    `\n\n🚨 **ATTENTION — ${criticalInc.length} Critical & ${highInc.length} High priority tickets active**` +
+    criticalInc.map(i => `\n   🔴 **${i.id}**: ${i.title} — ${i.assignee} (${Math.round((i.created/i.slaTarget)*100)}% SLA elapsed)`).join("") +
+    highInc.slice(0, 3).map(i => `\n   🟠 **${i.id}**: ${i.title} — ${i.assignee}`).join("") : "";
+
+  // Suggested actions based on context
+  const suggestActions = [];
+
+  switch (topic) {
+    case "greet":
+      if (criticalInc.length > 0) {
+        suggestActions.push({ label: "🔴 View critical tickets", action: "Show me all Sev-A incidents" });
+        suggestActions.push({ label: "⏱️ Check SLA status", action: "What tickets are near SLA breach?" });
+      }
+      suggestActions.push({ label: "📋 My open tickets", action: "Show my assigned tickets" });
+      suggestActions.push({ label: "📊 Daily briefing", action: "Give me my morning briefing" });
+      return {
+        text: `${greeting}, ${currentUser.name}! 👋 Great to have you here.\n\n📊 **Quick Status:**\n• 🎫 Open tickets: **${openInc.length}** (${criticalInc.length} Critical, ${highInc.length} High)\n• 🔄 Pending changes: **${pendingChanges.length}**\n• 👤 Your assigned: **${myTickets.length}** tickets${urgencyBlock}\n\nHow can I help you today?`,
+        suggestions: suggestActions
+      };
+
+    case "briefing": {
+      const atRiskSLA = openInc.filter(i => (i.created / i.slaTarget) >= 0.7);
+      const emergencyChanges = changes.filter(c => c.type === "Emergency" && c.status === "Implementing");
+      suggestActions.push({ label: "🔴 Handle critical first", action: criticalInc[0] ? `Tell me about ${criticalInc[0].id}` : "Show all incidents" });
+      if (atRiskSLA.length > 0) suggestActions.push({ label: "⏱️ Address SLA risks", action: "Which tickets are near SLA breach?" });
+      if (pendingChanges.length > 0) suggestActions.push({ label: "📋 Review pending changes", action: "Show pending change approvals" });
+      suggestActions.push({ label: "📧 Draft status update", action: "Draft a morning status email" });
+      
+      let briefing = `📋 **${greeting}, ${currentUser.name} — Your Priority Plan for Today**\n\n`;
+      briefing += `**🔴 CRITICAL — Do First:**\n`;
+      if (criticalInc.length > 0) {
+        criticalInc.forEach(i => { briefing += `• **${i.id}**: ${i.title} — SLA ${Math.round((i.created/i.slaTarget)*100)}% elapsed (${Math.max(0, Math.round(i.slaTarget - i.created))}h remaining)\n  → Recommended: Escalate to ${i.assignmentGroup}, verify workaround in place\n`; });
+      } else {
+        briefing += `• ✅ No critical incidents — great start!\n`;
+      }
+      briefing += `\n**🟠 HIGH PRIORITY — Address Next:**\n`;
+      if (highInc.length > 0) {
+        highInc.forEach(i => { briefing += `• **${i.id}**: ${i.title} — ${i.status} (${i.assignee})\n`; });
+      } else {
+        briefing += `• ✅ No high-priority tickets pending\n`;
+      }
+      briefing += `\n**🔄 CHANGES IN PROGRESS:**\n`;
+      if (emergencyChanges.length > 0) {
+        emergencyChanges.forEach(c => { briefing += `• ⚡ **${c.id}**: ${c.title} — EMERGENCY (${c.scheduledEnd})\n`; });
+      }
+      pendingChanges.filter(c => c.type !== "Emergency").forEach(c => { briefing += `• **${c.id}**: ${c.title} — ${c.status}\n`; });
+      if (pendingChanges.length === 0 && emergencyChanges.length === 0) briefing += `• No active changes\n`;
+      briefing += `\n**📊 Risk Summary:**\n`;
+      briefing += `• SLA at risk: **${atRiskSLA.length}** tickets\n`;
+      briefing += `• Active security alerts: **${activeAlerts.filter(a => a.severity === "critical" || a.severity === "high").length}**\n`;
+      briefing += `• Open problems: **${problems.filter(p => p.status !== "Closed").length}**\n`;
+      briefing += `\n💡 *Shall I help you work through these items one by one?*`;
+      return { text: briefing, suggestions: suggestActions };
+    }
+
+    case "incident": {
+      suggestActions.push({ label: "📋 View all open", action: "List all open incidents" });
+      if (criticalInc.length > 0) suggestActions.push({ label: "🔴 Critical tickets", action: "Show Sev-A incidents" });
+      suggestActions.push({ label: "➕ Create new", action: "How do I create a new incident?" });
+      suggestActions.push({ label: "📊 Incident trends", action: "Show incident analytics" });
+      let resp = `📋 **Incident Overview**\n\n`;
+      resp += `**Active Tickets:** ${openInc.length}\n`;
+      resp += `• 🔴 Sev-A (Critical): ${criticalInc.length}\n• 🟠 Sev-B (High): ${highInc.length}\n`;
+      resp += `• 🟡 Sev-C: ${openInc.filter(i => i.priority === "Sev-C").length}\n• 🟢 Sev-D: ${openInc.filter(i => i.priority === "Sev-D").length}\n`;
+      if (criticalInc.length > 0) {
+        resp += `\n⚡ **Requires Immediate Attention:**\n`;
+        criticalInc.forEach(i => {
+          resp += `• **${i.id}**: ${i.title}\n  → Assigned: ${i.assignee} | SLA: ${Math.round((i.created/i.slaTarget)*100)}% elapsed\n  → Impact: ${i.impact} | Category: ${i.category}\n`;
+          // Show relevant KB for this incident's category
+          const kbHits = searchKBArticles(i.category + " " + i.title, ctxKbArticles || [], 1);
+          if (kbHits.length > 0) resp += `  → 📚 KB: **${kbHits[0].title}** (${kbHits[0].id}) — [Open in SharePoint](${kbHits[0].spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(kbHits[0].spSlug) : '#'})\n`;
+        });
+        resp += `\n**Suggested Actions:**\n`;
+        resp += `1. Review critical tickets above and apply KB quick-fix steps\n`;
+        resp += `2. Escalate if containment not achieved within 30 minutes\n`;
+        resp += `3. Notify stakeholders (I'll draft — you approve)\n\n`;
+        resp += `💡 *Do you want me to draft an escalation email for your approval?*`;
+        suggestActions.push({ label: "📧 Draft escalation", action: "Draft escalation email for critical incidents" });
+      } else {
+        resp += `\n✅ No critical incidents right now.\n\n`;
+        // Suggest KB articles for most common open incident category
+        const topCat = {};
+        openInc.forEach(i => { topCat[i.category] = (topCat[i.category] || 0) + 1; });
+        const topCategory = Object.entries(topCat).sort((a, b) => b[1] - a[1])[0];
+        if (topCategory) {
+          const kbHits = searchKBArticles(topCategory[0], ctxKbArticles || [], 2);
+          if (kbHits.length > 0) {
+            resp += `📚 **Relevant Knowledge Articles for ${topCategory[0]} tickets:**\n`;
+            kbHits.forEach(art => { resp += `• **${art.title}** (${art.id}) — ${art.helpful}% helpful\n`; });
+            resp += `\n`;
+          }
+        }
+      }
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "sla": {
+      const atRisk = openInc.filter(i => (i.created / i.slaTarget) >= 0.9);
+      const breached = openInc.filter(i => (i.created / i.slaTarget) >= 1.0);
+      suggestActions.push({ label: "🚨 Breached tickets", action: "Show SLA breached tickets" });
+      suggestActions.push({ label: "⏱️ At-risk tickets", action: "Which tickets are near breach?" });
+      suggestActions.push({ label: "📧 Notify stakeholders", action: "Draft SLA warning email" });
+      let resp = `⏱️ **SLA Compliance Dashboard**\n\n`;
+      if (breached.length > 0) {
+        resp += `🚨 **BREACHED (${breached.length}):**\n`;
+        breached.forEach(i => { resp += `• **${i.id}**: ${i.title} — ${Math.round((i.created/i.slaTarget)*100)}% (OVER TARGET)\n`; });
+        resp += `\n⚠️ *Immediate escalation recommended. Shall I draft an escalation notice for your approval?*\n\n`;
+      }
+      if (atRisk.length > breached.length) {
+        resp += `⚠️ **At Risk (${atRisk.length - breached.length}):**\n`;
+        atRisk.filter(i => (i.created / i.slaTarget) < 1.0).forEach(i => { resp += `• **${i.id}**: ${i.title} — ${Math.round((i.created/i.slaTarget)*100)}% elapsed\n`; });
+        resp += `\n`;
+      }
+      resp += `**SLA Targets:** Sev-A: 4h | Sev-B: 8h | Sev-C: 24h | Sev-D: 72h\n`;
+      resp += `**Healthy Tickets:** ${openInc.length - atRisk.length} within SLA\n`;
+      resp += `\n💡 *I can proactively alert you at 80% SLA elapsed. Want me to draft a status update?*`;
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "change": {
+      suggestActions.push({ label: "📋 View pending", action: "Show pending changes" });
+      suggestActions.push({ label: "➕ New change request", action: "How to create a change request?" });
+      suggestActions.push({ label: "⚡ Emergency changes", action: "Show emergency changes" });
+      let resp = `🔄 **Change Management Summary**\n\n`;
+      const grouped = { "Awaiting Approval": [], "Approved": [], "Implementing": [], "Completed": [] };
+      changes.forEach(c => { if (grouped[c.status]) grouped[c.status].push(c); });
+      if (grouped["Implementing"].length > 0) {
+        resp += `⚡ **Currently Implementing:**\n`;
+        grouped["Implementing"].forEach(c => { resp += `• **${c.id}**: ${c.title} (${c.type}, Risk: ${c.risk})\n  → Window: ${c.scheduledStart} to ${c.scheduledEnd}\n`; });
+        resp += `\n`;
+      }
+      if (grouped["Awaiting Approval"].length > 0) {
+        resp += `⏳ **Awaiting Approval:**\n`;
+        grouped["Awaiting Approval"].forEach(c => { resp += `• **${c.id}**: ${c.title} — ${Array.isArray(c.approvers) ? c.approvers.map(a => `${a.name}: ${a.status}`).join(", ") : "No approvers"}\n`; });
+        resp += `\n💡 *Shall I notify the approvers for a faster review?*\n\n`;
+      }
+      resp += `📊 Total changes: ${changes.length} | Pending: ${grouped["Awaiting Approval"].length}`;
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "problem": {
+      const openProblems = problems.filter(p => p.status !== "Closed");
+      suggestActions.push({ label: "🔍 View problems", action: "List all open problems" });
+      suggestActions.push({ label: "📈 Pattern analysis", action: "Analyze incident patterns" });
+      let resp = `🔍 **Problem Management Summary**\n\n`;
+      openProblems.forEach(p => { resp += `• **${p.id}**: ${p.title}\n  → Status: ${p.status} | Priority: ${p.priority}\n  → Root Cause: ${p.rootCause}\n  → Linked Incidents: ${Array.isArray(p.linkedIncidents) ? p.linkedIncidents.join(", ") : (p.linkedIncidents || "None")}\n\n`; });
+      if (openProblems.length === 0) resp += `✅ No open problems.\n\n`;
+      const cats = {};
+      openInc.forEach(i => { cats[i.category] = (cats[i.category] || 0) + 1; });
+      const repeating = Object.entries(cats).filter(([, c]) => c >= 2);
+      if (repeating.length > 0) {
+        resp += `📈 **Pattern Alert:** Recurring categories detected:\n`;
+        repeating.forEach(([cat, count]) => { resp += `• ${cat}: ${count} incidents — consider creating a Problem record\n`; });
+        suggestActions.push({ label: "🆕 Create problem", action: `Create problem for ${repeating[0][0]} incidents` });
+      }
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "security": {
+      suggestActions.push({ label: "🛡️ View all threats", action: "Show all security alerts" });
+      suggestActions.push({ label: "📧 Draft alert email", action: "Draft security notification email" });
+      suggestActions.push({ label: "📋 ISO 27001 status", action: "Check ISO 27001 compliance" });
+      let resp = `🛡️ **Security & Threat Intelligence**\n\n`;
+      const secAlerts = activeAlerts.filter(a => a.id?.startsWith("sec-"));
+      if (secAlerts.length > 0 || criticalInc.some(i => i.category === "Security")) {
+        resp += `🚨 **Active Threats:**\n`;
+        secAlerts.forEach(a => { resp += `• ${a.title}\n`; });
+        resp += `\n⚠️ *Recommend immediate review and stakeholder notification. Shall I draft an alert email for your approval?*\n\n`;
+      } else {
+        resp += `✅ No critical security alerts at this time.\n\n`;
+      }
+      resp += `**Security Posture:**\n• ISO 27001:2022: Compliant\n• PDPA: Active monitoring\n• Last security scan: Today\n• MFA enforcement: Active\n`;
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "notify": {
+      suggestActions.push({ label: "✅ Approve & send", action: "Yes, send the notification" });
+      suggestActions.push({ label: "✏️ Let me customize", action: "Let me review the draft first" });
+      suggestActions.push({ label: "❌ Cancel", action: "No, don't send anything" });
+      let resp = `📢 **Engineer Notification — Approval Required**\n\n`;
+      resp += `Before I send any notice, I'll prepare a draft for your review.\n\n`;
+      if (criticalInc.length > 0) {
+        resp += `**Suggested Notification:**\n`;
+        resp += `📧 Subject: "URGENT: ${criticalInc.length} Critical Incident(s) Require Attention"\n`;
+        resp += `👥 Recipients: ${[...new Set(criticalInc.map(i => i.assignee))].join(", ")}\n`;
+        resp += `📝 Content: Escalation notice for ${criticalInc.map(i => i.id).join(", ")}\n\n`;
+        resp += `⚠️ *I will NOT send this until you approve. Shall I draft the full email?*`;
+      } else {
+        resp += `No critical items requiring immediate notification.\n`;
+        resp += `💡 *Tell me what you'd like to notify the team about and I'll draft it for your approval.*`;
+      }
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "schedule": {
+      suggestActions.push({ label: "📅 View schedule", action: "What meetings do I have today?" });
+      suggestActions.push({ label: "🔄 Prep for next session", action: "Prepare agenda for my next meeting" });
+      suggestActions.push({ label: "📋 Action items", action: "Show my action items" });
+      const upcomingChanges = changes.filter(c => c.scheduledStart && (c.status === "Approved" || c.status === "Implementing"));
+      let resp = `📅 **Schedule & Upcoming Sessions**\n\n`;
+      if (upcomingChanges.length > 0) {
+        resp += `**Upcoming Change Windows:**\n`;
+        upcomingChanges.forEach(c => { resp += `• **${c.id}**: ${c.title}\n  → ${c.scheduledStart} – ${c.scheduledEnd}\n  → Status: ${c.status} | Risk: ${c.risk}\n`; });
+        resp += `\n💡 *I can prepare a pre-change checklist and notify stakeholders before the window opens. Shall I proceed?*\n\n`;
+        suggestActions.push({ label: "📧 Notify stakeholders", action: `Prepare notification for ${upcomingChanges[0].id}` });
+      } else {
+        resp += `No scheduled change windows at this time.\n\n`;
+      }
+      resp += `**Planned Actions:**\n`;
+      resp += `• Review open tickets assigned to you: ${myTickets.length}\n`;
+      resp += `• Pending approvals: ${changes.filter(c => c.status === "Awaiting Approval").length}\n`;
+      resp += `\n*I'll proactively remind you 30 minutes before any scheduled session and suggest preparation steps.*`;
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "email": {
+      suggestActions.push({ label: "📧 Draft incident update", action: criticalInc[0] ? `Draft email for ${criticalInc[0].id}` : "Draft incident update email" });
+      suggestActions.push({ label: "📢 Team notification", action: "Draft team status update" });
+      suggestActions.push({ label: "⚙️ SMTP settings", action: "Show SMTP configuration" });
+      let resp = `📧 **Email & Communications**\n\nI can draft professional emails and seek your approval before sending:\n\n`;
+      resp += `**Available Templates:**\n`;
+      resp += `• 🎫 Ticket response (first response, update, resolution)\n• 🚨 Security threat notification\n• ⏱️ SLA warning to stakeholders\n• 📊 Daily/weekly status report\n• 📢 Change notification to affected users\n\n`;
+      if (criticalInc.length > 0) {
+        resp += `⚡ **Suggested:** Draft an escalation email for ${criticalInc.map(i => i.id).join(", ")}?\n`;
+        resp += `*I'll prepare it for your review — nothing sends without your OK.*`;
+      } else {
+        resp += `💡 *Tell me what to draft and I'll prepare it for your approval.*`;
+      }
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "status": {
+      suggestActions.push({ label: "📊 Full dashboard", action: "Show dashboard summary" });
+      suggestActions.push({ label: "📋 My tickets", action: "Show my assigned tickets" });
+      suggestActions.push({ label: "🛡️ Security status", action: "Check security alerts" });
+      const totalTickets = incidents.length + requests.length + problems.length + changes.length;
+      let resp = `✅ **VGC-ITSM System Status — All Systems Operational**\n\n`;
+      resp += `• 🟢 Application: Online\n• 🟢 AI Engine: Active & Learning\n• 🟢 Email Service: Configured\n• 🟢 Security: ISO 27001 compliant\n\n`;
+      resp += `**Live Stats:**\n`;
+      resp += `• Total tickets managed: ${totalTickets}\n• Open incidents: ${openInc.length}\n• SLA compliance: ${openInc.length > 0 ? Math.round((openInc.filter(i => (i.created/i.slaTarget) < 1.0).length / openInc.length) * 100) : 100}%\n`;
+      resp += `• AI triage accuracy: 92%\n\n`;
+      resp += `💡 *I'm learning from every interaction to serve you better!*`;
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "help":
+      suggestActions.push({ label: "📊 Daily briefing", action: "Give me my morning briefing" });
+      suggestActions.push({ label: "🎫 Open tickets", action: "Show open incidents" });
+      suggestActions.push({ label: "� Knowledge Portal", action: "Search knowledge base" });
+      suggestActions.push({ label: "🛡️ Security check", action: "Any security threats?" });
+      suggestActions.push({ label: "📧 Draft email", action: "Help me draft an email" });
+      return {
+        text: `I'm your VGC-ITSM AI Co-Pilot — enterprise-grade assistance at your fingertips! 🚀\n\n**Core Capabilities:**\n🎫 **Incident Triage** — Severity assessment, smart routing & containment steps\n🔍 **Problem Analysis** — Pattern detection, root cause suggestions\n📋 **Change Management** — Risk analysis, approval tracking & rollback planning\n📚 **Knowledge Portal** — SharePoint-linked articles with quick-fix steps\n⏱️ **SLA Monitoring** — Proactive breach prevention & escalation\n🛡️ **Security & Compliance** — Threat alerts, ISO 27001, PDPA\n📧 **Communications** — Drafts for your approval before sending\n📊 **Morning Briefing** — Priority plan, risks & ready-to-go actions\n📅 **Schedule Planning** — Meeting prep & proactive reminders\n\n**How to use me best:**\n• Give me a ticket ID or describe an issue — I'll find the right KB article\n• Say "morning briefing" for your daily priority plan\n• Ask me to draft emails — I'll always seek your approval first\n• Describe symptoms — I'll recommend Knowledge Cards from SharePoint\n\n💡 *Try: "I have a VPN issue" or "Check SLA status"*`,
+        suggestions: suggestActions
+      };
+
+    case "thanks":
+      suggestActions.push({ label: "📊 What's next?", action: "What should I focus on next?" });
+      suggestActions.push({ label: "📋 More help", action: "help" });
+      return { text: `You're welcome, ${currentUser.name}! 😊 Happy to help. I'm always here — just ask!\n\n${criticalInc.length > 0 ? `⚡ Heads up: ${criticalInc.length} critical ticket(s) still need attention.` : "✅ Everything looks good right now!"}`, suggestions: suggestActions };
+
+    case "about":
+      suggestActions.push({ label: "📊 System status", action: "Check system status" });
+      suggestActions.push({ label: "💡 What can you do?", action: "help" });
+      suggestActions.push({ label: "📚 Knowledge Portal", action: "Show me knowledge base articles" });
+      return {
+        text: `I'm your **VGC-ITSM AI Co-Pilot** 🤖\n\nEnterprise-grade AI assistant for VGC Technology Pte Ltd, Singapore.\n\n**What I do:**\n• 🧠 Context-aware incident triage & smart routing\n• 📚 SharePoint Knowledge Portal — instant article search & recommendations\n• 📋 Daily priority planning & risk assessment\n• ⚡ SLA breach prevention & proactive alerting\n• 📧 Communications drafting (you always approve first)\n• 🛡️ Security monitoring & ISO 27001 compliance\n• 🔄 Change risk analysis & approval tracking\n\n**How I work:**\nI work alongside you — never replacing you. Your expertise + my speed = better outcomes.\nI adapt within this session based on ticket outcomes and KB updates.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPowered by Azure Open AI\nEnterprise-grade data security with a Responsible AI model. 💜`,
+        suggestions: suggestActions
+      };
+
+    case "weather":
+      suggestActions.push({ label: "📊 Back to work", action: "Give me my morning briefing" });
+      return { text: `🌤️ Singapore weather is shown in the top header bar! Tropical climate: 25-32°C year-round.\n\nBut let's get back to what matters — ${criticalInc.length > 0 ? `you have ${criticalInc.length} critical ticket(s) that need attention!` : "your tickets are looking good today!"}`, suggestions: suggestActions };
+
+    case "kb": {
+      // Search KB for relevant articles based on user message
+      const kbResults = searchKBArticles(userMsg, ctx.kbArticles || [], 5);
+      suggestActions.push({ label: "📚 Browse All KB", action: "Show all knowledge base articles" });
+      suggestActions.push({ label: "🔍 Search KB", action: "Search knowledge base for a solution" });
+      suggestActions.push({ label: "🌐 Open SharePoint", action: "Open SharePoint Knowledge Portal" });
+      
+      let resp = `📚 **Knowledge Portal** — SharePoint Connected\n\n`;
+      if (kbResults.length > 0) {
+        resp += `I found **${kbResults.length} relevant article(s)** for your query:\n\n`;
+        kbResults.forEach((art, idx) => {
+          const catInfo = KB_CATEGORIES.find(c => c.id === art.category) || { icon: "📄" };
+          resp += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+          resp += `**${catInfo.icon} ${art.title}** (${art.id})\n`;
+          resp += `📁 ${art.category} · 🎯 Best for: ${art.bestFor || "All"}\n`;
+          if (art.whenToUse) resp += `💡 When to use: ${art.whenToUse}\n`;
+          resp += `\n⚡ **Quick Fix:**\n`;
+          (art.quickFix || []).slice(0, 3).forEach((step, si) => { resp += `  ${si + 1}. ${step}\n`; });
+          if ((art.quickFix || []).length > 3) resp += `  ... +${art.quickFix.length - 3} more steps\n`;
+          resp += `📎 [Open in SharePoint](${art.spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(art.spSlug) : '#'})\n`;
+          if (art.relatedArticles && art.relatedArticles.length > 0) resp += `🔗 Related: ${Array.isArray(art.relatedArticles) ? art.relatedArticles.join(", ") : art.relatedArticles}\n`;
+          resp += `👁 ${art.views} views · 👍 ${art.helpful}% helpful\n\n`;
+        });
+        resp += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        resp += `💡 *Click "Open in SharePoint" for the full article with attachments and comments.*`;
+        kbResults.slice(0, 2).forEach(art => {
+          suggestActions.push({ label: `📖 ${art.id}: ${art.title.substring(0, 30)}...`, action: `Tell me more about ${art.id}` });
+        });
+      } else {
+        resp += `I searched the Knowledge Portal but couldn't find a direct match. Here's what I can do:\n\n`;
+        resp += `• 🔍 Try different keywords or check the portal directly\n`;
+        resp += `• 📝 I can help you **draft a new KB article** for this topic\n`;
+        resp += `• 💬 Describe the issue and I'll search across all categories\n\n`;
+        resp += `**Quick search tips:** Use symptoms, error codes, or application names.\n`;
+        resp += `\n📂 [Browse SharePoint Document Library](${SHAREPOINT_KB_CONFIG.docsUrl})`;
+        suggestActions.push({ label: "📝 Create new KB article", action: "Help me create a new knowledge base article" });
+      }
+      return { text: resp, suggestions: suggestActions };
+    }
+
+    case "report":
+      suggestActions.push({ label: "📊 View dashboard", action: "Open dashboard" });
+      suggestActions.push({ label: "📈 SLA report", action: "Show SLA compliance report" });
+      return { text: `📊 **Reports & Analytics**\n\nKey metrics:\n• AI Automation Rate: 80% target\n• Triage Accuracy: 92%+\n• Open Incidents: ${openInc.length}\n• SLA Compliance: ${openInc.length > 0 ? Math.round((openInc.filter(i => (i.created/i.slaTarget) < 1.0).length / openInc.length) * 100) : 100}%\n\nAll metrics are on the Dashboard.`, suggestions: suggestActions };
+
+    case "asset":
+      suggestActions.push({ label: "💻 View CMDB", action: "Show all assets" });
+      return { text: `💻 **Asset Management (CMDB)**\n\nTrack all IT assets: Hardware, Software, Licenses & Configuration Items.\nGo to **Assets** in the sidebar to view the full CMDB.\n\nNeed to look up a specific asset?`, suggestions: suggestActions };
+
+    case "user":
+      suggestActions.push({ label: "👥 Manage users", action: "Show user management" });
+      return { text: `👥 **User & Access Management**\n\nRBAC roles: VGC Dev Admin, Tenant Admin, Administrator, Service Desk Lead, L1/L2 Support, End User.\nManage users in **Admin → Users & RBAC**.`, suggestions: suggestActions };
+
+    case "compliance":
+      suggestActions.push({ label: "📋 View controls", action: "Show ISO 27001 controls" });
+      suggestActions.push({ label: "🔍 Risk register", action: "View risk register" });
+      return { text: `🏛️ **ISO 27001:2022 Compliance**\n\nVGC Technology maintains ISO 27001:2022 certification:\n• Information Security Controls — Annex A implemented\n• Risk Assessment — Ongoing register management\n• Access Control — RBAC + MFA + Conditional Access\n• Audit Trail — Comprehensive logging\n\nCheck **Admin → ISO 27001** for full compliance dashboard.`, suggestions: suggestActions };
+
+    case "pdpa":
+      suggestActions.push({ label: "🔐 PDPA settings", action: "Show PDPA configuration" });
+      return { text: `🔐 **PDPA Compliance**\n\nSingapore Personal Data Protection Act:\n• Data Retention Policies — Auto-enforce per entity type\n• DSAR Workflow — Process data subject access requests\n• Consent Management — Track & manage consents\n\nCheck **Admin → PDPA** for compliance settings.`, suggestions: suggestActions };
+
+    case "entra":
+      suggestActions.push({ label: "🔑 Entra settings", action: "Show Entra ID configuration" });
+      return { text: `🔑 **Microsoft Entra ID Integration**\n\nSSO & identity management: Single Sign-On, SCIM Provisioning, Group Mapping, Conditional Access, MFA Enforcement.\nConfigure in **Admin → Entra ID**.`, suggestions: suggestActions };
+
+    case "billing":
+      suggestActions.push({ label: "💳 View billing", action: "Show billing details" });
+      return { text: `💳 **Licensing & Billing**\n\nCurrent plan: Enterprise (SGD $20/user/month + 9% GST).\nView invoices in **Admin → Billing**.`, suggestions: suggestActions };
+
+    case "smtp":
+      suggestActions.push({ label: "⚙️ SMTP settings", action: "Show SMTP configuration" });
+      return { text: `📬 **SMTP Configuration**\n\nEmail server: smtp.office365.com:587 (STARTTLS)\nTemplates: Ticket Created/Updated/Resolved/Closed/SLA\nConfigure in **Admin → SMTP Settings**.`, suggestions: suggestActions };
+
+    case "integration":
+      suggestActions.push({ label: "🔌 View integrations", action: "Show all integrations" });
+      return { text: `🔌 **Integrations**\n\n✅ Microsoft Teams — Connected\n✅ Slack — Connected\n✅ Azure AD — Connected\n🔧 Jira, ServiceNow, PagerDuty — Available\n\nManage in **Admin → Integrations**.`, suggestions: suggestActions };
+
+    default: {
+      // Context-aware fallback: search KB + analyze message for relevant response
+      const kbResults = searchKBArticles(userMsg, ctx.kbArticles || [], 3);
+      suggestActions.push({ label: "📊 Daily briefing", action: "Give me my morning briefing" });
+      suggestActions.push({ label: "🎫 View tickets", action: "Show open incidents" });
+      suggestActions.push({ label: "📚 Knowledge Portal", action: "Search knowledge base" });
+      if (criticalInc.length > 0) suggestActions.push({ label: "🔴 Critical alerts", action: "Show critical incidents" });
+      
+      let resp = `Thanks for your message, ${currentUser.name}. Let me help you with that.\n\n`;
+      
+      // Auto-detect if message contains a ticket ID
+      const ticketMatch = userMsg.match(/\b(INC|CHG|PRB|REQ|KB)\d{3,}/i);
+      if (ticketMatch) {
+        const tid = ticketMatch[0].toUpperCase();
+        const foundInc = incidents.find(i => i.id === tid);
+        const foundChg = changes.find(c => c.id === tid);
+        const foundKB = (ctx.kbArticles || []).find(a => a.id === tid);
+        if (foundInc) {
+          resp += `📋 **Ticket Found: ${foundInc.id}**\n`;
+          resp += `• Title: ${foundInc.title}\n• Priority: ${foundInc.priority} | Status: ${foundInc.status}\n• Assigned: ${foundInc.assignee} | Category: ${foundInc.category}\n• SLA: ${Math.round((foundInc.created/foundInc.slaTarget)*100)}% elapsed\n\n`;
+          suggestActions.unshift({ label: `📖 KB for ${foundInc.category}`, action: `Find KB article for ${foundInc.category} issue` });
+        } else if (foundChg) {
+          resp += `🔄 **Change Found: ${foundChg.id}**\n`;
+          resp += `• Title: ${foundChg.title}\n• Status: ${foundChg.status} | Risk: ${foundChg.risk}\n• Window: ${foundChg.scheduledStart} – ${foundChg.scheduledEnd}\n\n`;
+        } else if (foundKB) {
+          resp += `📚 **KB Article: ${foundKB.id}**\n• ${foundKB.title}\n• Category: ${foundKB.category}\n\n`;
+          if (foundKB.quickFix) {
+            resp += `⚡ **Quick Fix:**\n`;
+            foundKB.quickFix.forEach((s, i) => { resp += `  ${i+1}. ${s}\n`; });
+            resp += `\n📎 [Open in SharePoint](${foundKB.spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(foundKB.spSlug) : '#'})\n\n`;
+          }
+        } else {
+          resp += `I couldn't find ticket **${tid}** in the current records.\n\n`;
+        }
+      }
+      
+      // Show KB matches if found
+      if (kbResults.length > 0 && !ticketMatch) {
+        resp += `📚 **Relevant Knowledge Articles:**\n`;
+        kbResults.forEach(art => {
+          const catInfo = KB_CATEGORIES.find(c => c.id === art.category) || { icon: "📄" };
+          resp += `• ${catInfo.icon} **${art.title}** (${art.id}) — ${art.helpful}% helpful\n`;
+        });
+        resp += `\n💡 *Say "tell me more about ${kbResults[0].id}" for full details and quick fix steps.*\n\n`;
+        suggestActions.unshift({ label: `📖 ${kbResults[0].id} details`, action: `Tell me about ${kbResults[0].id}` });
+      }
+      
+      if (criticalInc.length > 0) {
+        resp += `⚡ **Heads up:** ${criticalInc.length} critical incident(s) active.\n\n`;
+      }
+      if (!ticketMatch && kbResults.length === 0) {
+        resp += `Here are some things I can help with:\n`;
+        resp += `• 📊 "Morning briefing" — Priority plan for today\n`;
+        resp += `• 🎫 "Show incidents" — Current ticket overview\n`;
+        resp += `• 📚 "Search KB for VPN" — Find knowledge articles\n`;
+        resp += `• ⏱️ "Check SLA" — Compliance monitoring\n`;
+        resp += `• 📧 "Draft an email" — I'll draft, you approve\n\n`;
+      }
+      resp += `*Just tell me naturally what you need — I understand context, ticket IDs, and symptoms.*`;
+      return { text: resp, suggestions: suggestActions };
+    }
+  }
+}
+
+const INTEGRATION_CATALOG = [
+  { id: "INT01", name: "ServiceNow", category: "ITSM", icon: "🔧", status: "available", description: "Bi-directional sync with ServiceNow CMDB and incidents" },
+  { id: "INT02", name: "Jira", category: "Project Management", icon: "📋", status: "available", description: "Link ITSM tickets to Jira stories and epics" },
+  { id: "INT03", name: "Slack", category: "Communication", icon: "💬", status: "connected", description: "Real-time notifications and ticket creation from Slack" },
+  { id: "INT04", name: "Microsoft Teams", category: "Communication", icon: "👥", status: "connected", description: "Teams bot for ticket updates and approvals" },
+  { id: "INT05", name: "PagerDuty", category: "Alerting", icon: "🚨", status: "available", description: "Escalation and on-call management integration" },
+  { id: "INT06", name: "Azure AD", category: "Identity", icon: "🔐", status: "connected", description: "SSO, user provisioning, and group sync" },
+  { id: "INT07", name: "Datadog", category: "Monitoring", icon: "📊", status: "available", description: "Auto-create incidents from monitoring alerts" },
+  { id: "INT08", name: "Confluence", category: "Documentation", icon: "📝", status: "available", description: "Sync KB articles with Confluence spaces" },
+  { id: "INT09", name: "Okta", category: "Identity", icon: "🔑", status: "available", description: "Identity and access management integration" },
+  { id: "INT10", name: "AWS CloudWatch", category: "Monitoring", icon: "☁️", status: "available", description: "Ingest AWS alerts as incidents automatically" },
+  { id: "INT11", name: "Zendesk", category: "Support", icon: "💛", status: "available", description: "Customer-facing ticket sync and escalation" },
+  { id: "INT12", name: "GitHub", category: "DevOps", icon: "🐙", status: "available", description: "Link incidents to code changes and deployments" },
+];
+
+const INITIAL_INCIDENTS = [];
+const INITIAL_PROBLEMS = [];
+const INITIAL_CHANGES = [];
+const INITIAL_REQUESTS = [];
+
+// ─── Style Constants ─────────────────────────────────────────────────────
+const PRIORITY_COLORS = {
+  "Sev-A": { bg: "#2D0A0A", text: "#FF6B6B", border: "#FF6B6B", dot: "#FF4444", label: "CRITICAL" },
+  "Sev-B": { bg: "#2D1F0A", text: "#FFB347", border: "#FFB347", dot: "#FF9500", label: "HIGH" },
+  "Sev-C": { bg: "#0A1E2D", text: "#64B5F6", border: "#64B5F6", dot: "#2196F3", label: "MEDIUM" },
+  "Sev-D": { bg: "#0A2D1A", text: "#81C784", border: "#81C784", dot: "#4CAF50", label: "LOW / INQUIRY" },
+};
+
+// ─── VGC Official SLA Policy ─────────────────────────────────────────────
+const VGC_SLA_POLICY = {
+  supportHours: { start: 9, end: 18, days: "Mon–Fri", hours: "9:00 AM – 6:00 PM", tz: "Asia/Singapore" },
+  defaultSeverity: "Sev-C",
+  ticketChannels: ["help@vgctechnology.com", "ITSM Portal"],
+  severities: {
+    "Sev-A": { label: "CRITICAL", firstResponse: 0.5, worstResponse: 4, definition: "Complete service outage. Business-critical systems unavailable.", examples: ["Complete network failure", "Server room fire"], escalation: "Immediate to IT Manager" },
+    "Sev-B": { label: "HIGH", firstResponse: 1, worstResponse: 4, definition: "Major impact to operations. VIP user issues not resolvable remotely. Significant outage affecting >50% of users.", examples: ["VPN failure for department", "VIP laptop down"], escalation: "After 2 hrs to Team Lead" },
+    "Sev-C": { label: "MEDIUM (DEFAULT)", firstResponse: 4, worstResponse: 9, definition: "Standard actionable IT issues. Any issue not qualifying as Severity A or B.", examples: ["Software crash", "Printer issue", "Password reset"], escalation: "After 6 hrs to Team Lead" },
+    "Sev-D": { label: "LOW / INQUIRY", firstResponse: 9, worstResponse: 27, definition: "Non-actionable questions. Informational or 'How do I' requests.", examples: ["How to use feature X", "General IT inquiry"], escalation: "After next business day" },
+  },
+  rules: [
+    "All support requests MUST exist as a ticket before any work starts",
+    "Default severity for all new tickets = Severity C (Medium)",
+    "Manual escalation to Severity A or B must be explicit",
+    "Severity D tickets MUST NOT be used for actionable issues",
+    "SLA countdown pauses outside business hours (Mon-Fri 9AM-6PM SGT)",
+    "SLA breach alerts trigger when Worst Response Time is exceeded",
+    "Ticket updates must be logged within the ITSM system",
+    "Engineers must update ticket status upon: First response, Work in progress, Resolution, Closure",
+  ]
+};
+
+const STATUS_COLORS = {
+  "New": { bg: "#1A0A2D", text: "#CE93D8" },
+  "Open": { bg: "#1A1A2E", text: "#A0AEC0" },
+  "In Progress": { bg: "#0D2137", text: "#64B5F6" },
+  "Pending": { bg: "#2D1F0A", text: "#FFB347" },
+  "On Hold": { bg: "#2D0A0A", text: "#FF6B6B" },
+  "Resolved": { bg: "#0D2D1A", text: "#81C784" },
+  "Closed": { bg: "#1A1A1A", text: "#666" },
+  "Reopened": { bg: "#2D0A2D", text: "#EC4899" },
+  "Pending Approval": { bg: "#2D1F0A", text: "#FFB347" },
+  "Awaiting Approval": { bg: "#2D1F0A", text: "#FFB347" },
+  "Approved": { bg: "#0D2D1A", text: "#81C784" },
+  "Implementing": { bg: "#0D2137", text: "#64B5F6" },
+  "Fulfilled": { bg: "#0D2D1A", text: "#81C784" },
+  "Under Investigation": { bg: "#0D2137", text: "#64B5F6" },
+  "Root Cause Identified": { bg: "#2D1F0A", text: "#FFB347" },
+  "Known Error": { bg: "#2D0A2D", text: "#CE93D8" },
+  "Active": { bg: "#0D2D1A", text: "#81C784" },
+  "In Use": { bg: "#0D2137", text: "#64B5F6" },
+  "In Stock": { bg: "#1A1A2E", text: "#A0AEC0" },
+  "Retired": { bg: "#1A1A1A", text: "#666" },
+  "Running": { bg: "#0D2D1A", text: "#81C784" },
+};
+
+// ─── Components ──────────────────────────────────────────────────────────
+const Badge = ({ children, color }) => {
+  const c = color || { bg: "#1A1A2E", text: "#A0AEC0" };
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", padding: "3px 10px",
+      borderRadius: "4px", fontSize: "11px", fontWeight: 600,
+      fontFamily: "'JetBrains Mono', monospace",
+      background: c.bg, color: c.text, letterSpacing: "0.3px",
+      border: `1px solid ${c.text}22`, whiteSpace: "nowrap"
+    }}>{children}</span>
+  );
+};
+
+const PriorityDot = ({ priority }) => (
+  <span style={{
+    display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px",
+    fontWeight: 600, color: PRIORITY_COLORS[priority]?.text || "#A0AEC0",
+    fontFamily: "'JetBrains Mono', monospace"
+  }}>
+    <span style={{
+      width: 8, height: 8, borderRadius: "50%",
+      background: PRIORITY_COLORS[priority]?.dot || "#666",
+      boxShadow: `0 0 6px ${PRIORITY_COLORS[priority]?.dot || "#666"}55`,
+      animation: priority === "Sev-A" ? "pulse 1.5s infinite" : "none"
+    }} />
+    {priority}{PRIORITY_COLORS[priority]?.label ? ` (${PRIORITY_COLORS[priority].label})` : ""}
+  </span>
+);
+
+const StatCard = ({ label, value, trend, icon, accent, onClick }) => (
+  <div onClick={onClick} style={{
+    background: "#0F1117", borderRadius: "8px", padding: "18px 20px",
+    border: "1px solid #1E2130", position: "relative", overflow: "hidden",
+    flex: 1, minWidth: 160, cursor: onClick ? "pointer" : "default",
+    transition: "transform 0.15s, border-color 0.2s",
+  }}
+    onMouseEnter={e => { if (onClick) { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = (accent || "#64B5F6") + "55"; } }}
+    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = "#1E2130"; }}>
+    <div style={{
+      position: "absolute", top: 0, left: 0, right: 0, height: "2px",
+      background: accent || "#64B5F6"
+    }} />
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+      <div>
+        <div style={{ fontSize: "11px", color: "#5A6178", fontWeight: 600, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>{label}</div>
+        <div style={{ fontSize: "28px", fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{value}</div>
+      </div>
+      <span style={{ fontSize: "22px", opacity: 0.6 }}>{icon}</span>
+    </div>
+    {trend && <div style={{ fontSize: "11px", color: trend > 0 ? "#FF6B6B" : "#81C784", marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
+      {trend > 0 ? "▲" : "▼"} {Math.abs(trend)}% vs last week
+    </div>}
+  </div>
+);
+
+const DataTable = ({ columns, data, onRowClick }) => (
+  <div style={{ overflowX: "auto", borderRadius: "8px", border: "1px solid #1E2130" }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+      <thead>
+        <tr style={{ background: "#0A0C14" }}>
+          {columns.map((col, i) => (
+            <th key={i} style={{
+              padding: "10px 14px", textAlign: "left", color: "#5A6178",
+              fontWeight: 600, fontSize: "10px", textTransform: "uppercase",
+              letterSpacing: "1px", borderBottom: "1px solid #1E2130",
+              fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap"
+            }}>{col.label}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((row, i) => (
+          <tr key={i}
+            onClick={() => onRowClick?.(row)}
+            style={{
+              background: i % 2 === 0 ? "#0F1117" : "#0C0E16",
+              cursor: onRowClick ? "pointer" : "default",
+              transition: "background 0.15s"
+            }}
+            onMouseEnter={e => { if (onRowClick) e.currentTarget.style.background = "#161A26" }}
+            onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? "#0F1117" : "#0C0E16"}
+          >
+            {columns.map((col, j) => (
+              <td key={j} style={{
+                padding: "10px 14px", color: "#C4CAD6",
+                borderBottom: "1px solid #1E213022", whiteSpace: "nowrap",
+                fontFamily: col.mono ? "'JetBrains Mono', monospace" : "inherit",
+                fontSize: col.mono ? "12px" : "13px"
+              }}>
+                {col.render ? col.render(row) : row[col.key]}
+              </td>
+            ))}
+          </tr>
+        ))}
+        {data.length === 0 && (
+          <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "#5A6178" }}>No records found</td></tr>
+        )}
+      </tbody>
+    </table>
+  </div>
+);
+
+const Modal = ({ title, onClose, children, wide }) => (
+  <div style={{
+    position: "fixed", inset: 0, background: "#00000088", zIndex: 1000,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    backdropFilter: "blur(4px)", padding: 20,
+  }} onClick={onClose}>
+    <div style={{
+      background: "#12141E", borderRadius: "12px", border: "1px solid #1E2130",
+      width: wide ? 700 : 520, maxWidth: "95vw", maxHeight: "85vh",
+      overflow: "auto", boxShadow: "0 24px 48px #00000066"
+    }} onClick={e => e.stopPropagation()}>
+      <div style={{
+        padding: "18px 24px", borderBottom: "1px solid #1E2130",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        position: "sticky", top: 0, background: "#12141E", zIndex: 1
+      }}>
+        <h3 style={{ margin: 0, color: "#E8ECF4", fontSize: 16, fontFamily: "'Space Grotesk', sans-serif" }}>{title}</h3>
+        <button onClick={onClose} style={{
+          background: "none", border: "none", color: "#5A6178", cursor: "pointer",
+          fontSize: 20, lineHeight: 1, padding: "4px 8px"
+        }}>✕</button>
+      </div>
+      <div style={{ padding: "20px 24px" }}>{children}</div>
+    </div>
+  </div>
+);
+
+const FormField = ({ label, children }) => (
+  <div style={{ marginBottom: 16 }}>
+    <label style={{
+      display: "block", fontSize: "11px", fontWeight: 600,
+      color: "#5A6178", marginBottom: 6, textTransform: "uppercase",
+      letterSpacing: "0.8px", fontFamily: "'JetBrains Mono', monospace"
+    }}>{label}</label>
+    {children}
+  </div>
+);
+
+const inputStyle = {
+  width: "100%", padding: "9px 12px", background: "#0A0C14",
+  border: "1px solid #1E2130", borderRadius: "6px", color: "#E8ECF4",
+  fontSize: "13px", outline: "none", fontFamily: "inherit", boxSizing: "border-box"
+};
+
+const btnStyle = (accent = "#3B82F6") => ({
+  padding: "9px 20px", background: accent, color: "#fff",
+  border: "none", borderRadius: "6px", cursor: "pointer",
+  fontSize: "13px", fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif",
+  transition: "opacity 0.15s"
+});
+
+const SearchBar = ({ value, onChange, placeholder }) => (
+  <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
+    <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#5A6178", fontSize: 14 }}>⌕</span>
+    <input
+      value={value} onChange={e => onChange(e.target.value)}
+      placeholder={placeholder || "Search..."}
+      style={{ ...inputStyle, paddingLeft: 32 }}
+    />
+  </div>
+);
+
+// ─── Main App ────────────────────────────────────────────────────────────
+export default function ITSMApp() {
+  const [activeModule, setActiveModule] = useState("dashboard");
+  const _ls = (key, fallback) => { try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
+
+  // ─── Microsoft Entra ID SSO & Graph API ─────────────────────────────
+  const { instance: msalInstance, accounts } = useMsal();
+  const isMsalAuthenticated = useIsAuthenticated();
+  const [msalUser, setMsalUser] = useState(null); // Graph profile data
+  const [msalPhoto, setMsalPhoto] = useState(null); // Profile photo blob URL
+  const [graphEmails, setGraphEmails] = useState(null); // Outlook inbox
+  const [graphCalendar, setGraphCalendar] = useState(null); // Today's events
+  const [graphChats, setGraphChats] = useState(null); // Teams chats
+  const [graphTeams, setGraphTeams] = useState(null); // Joined teams
+  const [graphPresence, setGraphPresence] = useState(null); // Presence status
+  const [graphUnread, setGraphUnread] = useState(0); // Unread email count
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState(null);
+  const graphFetchedRef = useRef(false);
+
+  const [incidents, setIncidents] = useState(() => _ls("vgc_incidents", INITIAL_INCIDENTS));
+  const [problems, setProblems] = useState(() => _ls("vgc_problems", INITIAL_PROBLEMS));
+  const [changes, setChanges] = useState(() => _ls("vgc_changes", INITIAL_CHANGES));
+  const [requests, setRequests] = useState(() => _ls("vgc_requests", INITIAL_REQUESTS));
+  const [assets, setAssets] = useState(() => _ls("vgc_assets", ASSETS));
+  const [kbArticles, setKbArticles] = useState(() => _ls("vgc_kb", KB_ARTICLES));
+  const [serviceCatalog, setServiceCatalog] = useState(() => _ls("vgc_services", SERVICES));
+  const [search, setSearch] = useState("");
+  const [modal, setModal] = useState(null);
+  const [detailItem, setDetailItem] = useState(null);
+  const [sideCollapsed, setSideCollapsed] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [showAlertPanel, setShowAlertPanel] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showAvatarCustomizer, setShowAvatarCustomizer] = useState(false);
+  const [errorAdvisory, setErrorAdvisory] = useState(null); // AI Error Advisory overlay
+  const [disasterAlert, setDisasterAlert] = useState(null); // Weather disaster alert toast
+  const disasterAlertDismissedRef = useRef(() => { try { return localStorage.getItem("vgc_disaster_dismissed") === "true"; } catch { return false; } }); // permanent dismiss
+
+  // ─── High-Severity Auto-Escalation State ──────────────────────────────
+  const [globalHighAlert, setGlobalHighAlert] = useState(null); // Active Sev-A alert needing pickup
+  const [escalationLog, setEscalationLog] = useState(() => _ls("vgc_escalation_log", [])); // Permanent log
+  const [escalationConfig, setEscalationConfig] = useState(() => {
+    const saved = _ls("vgc_escalation_config", null);
+    return saved || {
+      enabled: true,
+      sevAPickupWindow: 5,   // minutes
+      sevBPickupWindow: 15,  // minutes
+      autoCallEnabled: true,
+      callOrder: "sequential", // "sequential" | "parallel"
+      callNumbers: [
+        { id: "C1", label: "VGC Helpdesk", number: "+65 6978 1299", priority: 1, sevAOnly: false },
+        { id: "C2", label: "Dev VGC Admin", number: "+65 9697 1296", priority: 2, sevAOnly: false },
+      ],
+      teamsChannelNotify: true,
+      emailFallback: true,
+      dashboardAlertDismissible: false, // Sev-A alerts cannot be dismissed
+      rateLimitMinutes: 10,  // Min gap between auto-calls for same incident
+      vipCustomers: ["ABC Enterprise Pte Ltd"],
+      ispAlertDuration: 10,  // seconds for ISP outage alerts
+    };
+  });
+  const escalationTimerRef = useRef(null);
+  const escalationCallRef = useRef(new Map()); // Track call attempts per incident
+
+  const [profilePhoto, setProfilePhoto] = useState(() => _ls("vgc_profile_photo", null));
+  const profilePhotoRef = useRef();
+  const chatEndRef = useRef(null);
+  const floatingChatEndRef = useRef(null);
+  const [aiIdleNudge, setAiIdleNudge] = useState(null);
+  const aiIdleTimerRef = useRef(null);
+  const [avatarConfig, setAvatarConfig] = useState(() => {
+    const defaults = { borderStyle: "gradient", borderColor: "#6366F1", glowColor: "#6366F1", mood: "smart", shape: "rounded", animation: "float", theme: "singapore", showHeadset: true, showStatusRing: true, showSparkles: true };
+    const saved = _ls("vgc_avatar", null);
+    return saved ? { ...defaults, ...saved } : defaults;
+  });
+  const [proactiveAlerts, setProactiveAlerts] = useState([]);
+  const [dismissedProactiveAlerts, setDismissedProactiveAlerts] = useState(() => {
+    try { const saved = localStorage.getItem("vgc_dismissed_alerts"); return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+  const [aiMessages, setAiMessages] = useState([
+    { role: "ai", text: `Hello! 👋 I'm your AI Co-Pilot — Assisted by ${USERS[0].name} AI.\n\nI'm your enterprise-grade assistant for VGC Technology Pte Ltd:\n• 📊 Daily priority plan & risk assessment\n• 🎫 Incident triage & severity-based routing\n• 📚 SharePoint Knowledge Portal — instant article search\n• ⚠️ SLA breach prevention & proactive alerting\n• 📧 Draft communications — you always approve first\n• 🛡️ Security monitoring & compliance (ISO 27001)\n\nTry "Good morning" for your daily briefing, or describe an issue for KB recommendations.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPowered by Azure Open AI\nEnterprise-grade data security with a Responsible AI model.`, suggestions: [
+      { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
+      { label: "📚 Knowledge Portal", action: "Search knowledge base" },
+      { label: "🎫 Open Tickets", action: "Show open incidents" },
+      { label: "🛡️ Security Check", action: "Any security threats?" }
+    ] }
+  ]);
+  const [aiInput, setAiInput] = useState("");
+  const [adminTab, setAdminTab] = useState("ai");
+  // ─── Onboarding Guided Tour ──────────────────────────────────────────
+  const [tourStep, setTourStep] = useState(() => {
+    const seen = typeof localStorage !== "undefined" && localStorage.getItem("vgc_tour_done");
+    return seen ? -1 : 0; // 0 = welcome modal, 1+ = tour steps, -1 = completed/dismissed
+  });
+  const dismissTour = () => { setTourStep(-1); if (typeof localStorage !== "undefined") localStorage.setItem("vgc_tour_done", "1"); };
+  const restartTour = () => { setTourStep(0); if (typeof localStorage !== "undefined") localStorage.removeItem("vgc_tour_done"); };
+  const TOUR_STEPS = [
+    { id: "welcome", title: "👋 Welcome to VGC-ITSM!", body: "Hey there! I'm your AI — Assisted by your login. I'm super excited to show you around! 🎉\n\nThis quick tour will walk you through the key features so you can start managing IT services like a pro. Ready? Let's go!", position: "center", icon: "🚀" },
+    { id: "sidebar", title: "📌 Navigation Sidebar", body: "This is your navigation hub! 🧭 Browse through all modules — from Incidents & Problems to Changes, Assets, and more.\n\n💡 Tip: Click the arrow at the top to collapse it for more screen space!", position: "right", anchor: "sidebar", icon: "🗂️" },
+    { id: "dashboard", title: "📊 Your Dashboard", body: "Your personalized home base! 🏠 See KPIs, ticket queues, and real-time metrics all in one place.\n\n✨ The view adapts to your role — Managers see team analytics, Engineers see their ticket queue!", position: "top", anchor: "content", icon: "📈" },
+    { id: "personalize", title: "⚙️ Personalize Cards", body: "Make it yours! 🎨 Click the \"Personalize\" button to show/hide dashboard cards.\n\n🔒 Important cards are managed by your Admin. You can toggle the rest based on what matters to you!", position: "bottom", anchor: "roleBar", icon: "🎯" },
+    { id: "search", title: "🔍 Smart Search", body: "Need to find something fast? Just type here! ⚡\n\nSearch across incidents, problems, changes, assets — everything in one place. No more hunting through menus!", position: "bottom", anchor: "header", icon: "🔎" },
+    { id: "weather", title: "🌤️ Singapore Weather", body: "A little local touch! ☀️ Real-time Singapore weather right in your header.\n\nBecause even IT heroes need to know if they should bring an umbrella! ☂️", position: "bottom", anchor: "header", icon: "🌏" },
+    { id: "threats", title: "🚨 Security Alerts", body: "Stay safe! 🛡️ Critical and High severity cyber threats automatically pop up here with AI-powered recommendations.\n\n📧 You can even auto-draft emails to notify your team instantly!", position: "left", anchor: "threats", icon: "🔐" },
+    { id: "aiAssistant", title: "🤖 Assisted by Your AI", body: "That's me! 👋😊 Click my avatar anytime to chat.\n\nI can help you triage incidents, recommend Knowledge Portal articles from SharePoint, analyze change risks, predict SLA breaches, and much more!\n\n💬 Powered by Azure Open AI with enterprise‑grade data security.", position: "left", anchor: "aiButton", icon: "🧠" },
+    { id: "admin", title: "🔧 Admin & Settings", body: "Admins, this one's for you! ⚡ Head to the Admin panel to configure:\n\n🤖 AI Settings & Azure OpenAI\n👥 Users & RBAC\n🔐 Entra ID SSO\n🛡️ PDPA Compliance\n💳 Licensing & Billing\n\nEverything you need to run a world-class ITSM!", position: "right", anchor: "sidebar", icon: "⚙️" },
+    { id: "done", title: "🎉 You're All Set!", body: "Awesome! You now know the essentials! 🌟\n\nRemember, I'm always here in the bottom-right corner if you need help. Just click my avatar! 💜\n\n🔄 You can restart this tour anytime from Admin → General settings.\n\nHappy ITSM-ing! 🚀", position: "center", icon: "✨" },
+  ];
+  const [dismissedThreats, setDismissedThreats] = useState([]);
+  const [cyberNewsLog, setCyberNewsLog] = useState([]);
+  const [threatEmailDraft, setThreatEmailDraft] = useState(null);
+  const [showCardSettings, setShowCardSettings] = useState(false);
+  const [cardVisibility, setCardVisibility] = useState({
+    execKpis:        { on: true, important: false, label: "Executive KPIs",        roles: ["management"] },
+    caseAnalysis:    { on: true, important: false, label: "Case Analysis",          roles: ["management"] },
+    priorityDist:    { on: true, important: false, label: "Priority Distribution",  roles: ["management"] },
+    slaStatus:       { on: true, important: false, label: "SLA by Priority",        roles: ["management"] },
+    teamWorkload:    { on: true, important: false, label: "Team Workload",          roles: ["management"] },
+    businessImpact:  { on: false, important: false, label: "Business Impact & Cost", roles: ["management"] },
+    pendingApprovals:{ on: true, important: false, label: "Pending Approvals",      roles: ["management"] },
+    personalKpis:    { on: true, important: false, label: "Personal KPIs",          roles: ["engineer"] },
+    ticketQueue:     { on: true, important: false, label: "My Ticket Queue",        roles: ["engineer"] },
+    quickActions:    { on: true, important: false, label: "Quick Actions",          roles: ["engineer"] },
+    aiCoPilot:       { on: true, important: false, label: "My AI Co-Pilot",         roles: ["engineer"] },
+    unassignedQueue: { on: true, important: false, label: "Unassigned Queue",       roles: ["engineer"] },
+    securityAlerts:  { on: true, important: true,  label: "Security Alerts",        roles: ["all"] },
+    aiPerformance:   { on: true, important: true,  label: "AI Performance KPI",     roles: ["all"] },
+    threatFeed:      { on: true, important: true,  label: "Cyber Threat Feed",      roles: ["all"] },
+    pdpaCompliance:  { on: true, important: true,  label: "PDPA Compliance",        roles: ["management"] },
+    systemHealth:    { on: true, important: true,  label: "System Health",          roles: ["management"] },
+    changeCalendar:  { on: true, important: false, label: "Change Calendar",        roles: ["management"] },
+  });
+  const [billingConfig, setBillingConfig] = useState({
+    pricePerUser: 20, currency: "SGD", gstRate: 9, billingCycle: "Monthly",
+    devAdmin: "VGC Dev Admin", devAdminEmail: "devadmin@vgctech.com",
+    licensedUsers: USERS.length, maxUsers: 50, planName: "Enterprise",
+    invoicePrefix: "VGC-INV", companyUEN: "202400001A",
+    billingAddress: "1 Raffles Place, #20-61, One Raffles Place, Singapore 048616",
+    paymentTerms: 30, autoRenew: true, trialEndsAt: null,
+    invoices: [
+      { id: "VGC-INV-2026-003", date: "25-03-2026", users: 6, subtotal: 120, gst: 10.80, total: 130.80, status: "Current", period: "Mar 2026" },
+      { id: "VGC-INV-2026-002", date: "25-02-2026", users: 6, subtotal: 120, gst: 10.80, total: 130.80, status: "Paid", period: "Feb 2026" },
+      { id: "VGC-INV-2026-001", date: "25-01-2026", users: 5, subtotal: 100, gst: 9.00, total: 109.00, status: "Paid", period: "Jan 2026" },
+    ]
+  });
+  const [aiConfig, setAiConfig] = useState({
+    autoTriage: true, autoAssign: true, kbSuggestions: true, slaPrediction: true,
+    riskAnalysis: true, sentimentAnalysis: true, autoCategories: true,
+    confidenceThreshold: 75, automationLevel: 80, humanLoopPct: 10
+  });
+  const [azureOpenAI, setAzureOpenAI] = useState(() => {
+    const saved = typeof localStorage !== "undefined" && localStorage.getItem("vgc_azure_openai");
+    const defaults = {
+      endpoint: "Server-side proxy (/api/ai/chat)",
+      apiKey: "Managed server-side",
+      model: "gpt-5.4-nano",
+      enabled: true,
+      showKey: false,
+      testStatus: null, // null | "testing" | "success" | "error"
+      lastTested: null,
+      totalCalls: 0,
+    };
+    if (saved) { const parsed = JSON.parse(saved); return { ...defaults, ...parsed, enabled: true }; }
+    return defaults;
+  });
+  const [aiLoading, setAiLoading] = useState(false);
+  // ─── Workflow Automation Rules State ─────────────────────────────────────
+  const [workflowRules, setWorkflowRules] = useState(() => {
+    const saved = _ls("vgc_workflow_rules", null);
+    return saved || [
+      { id: "WF001", name: "Critical Incident Auto-Escalate", trigger: "Priority = Critical & No response in 15min", action: "Escalate to IT Manager + Send SMS alert", status: "Active", module: "Incidents", createdBy: "VGC Dev Admin", aiSuggested: false, lastModified: "2026-03-20", conditions: { field: "priority", operator: "equals", value: "Sev-A" }, slaLinked: true },
+      { id: "WF002", name: "Auto-Approve Standard Changes", trigger: "Change Type = Standard & Risk = Low", action: "Auto-approve and notify assignee", status: "Active", module: "Changes", createdBy: "VGC Dev Admin", aiSuggested: false, lastModified: "2026-03-18", conditions: {}, slaLinked: false },
+      { id: "WF003", name: "SLA Breach Alert", trigger: "SLA usage > 75%", action: "Send warning to assignee + manager", status: "Active", module: "SLA", createdBy: "Tenant Admin", aiSuggested: false, lastModified: "2026-03-15", conditions: {}, slaLinked: true },
+      { id: "WF004", name: "Auto-Close Resolved (72h)", trigger: "Status = Resolved for 72 hours", action: "Auto-close ticket and send survey", status: "Active", module: "Incidents", createdBy: "VGC Dev Admin", aiSuggested: false, lastModified: "2026-03-22", conditions: {}, slaLinked: false },
+      { id: "WF005", name: "VIP User Fast-Track", trigger: "Reporter role = VIP/Executive", action: "Set priority to High, assign senior agent", status: "Active", module: "Requests", createdBy: "Tenant Admin", aiSuggested: false, lastModified: "2026-03-10", conditions: {}, slaLinked: true },
+      { id: "WF006", name: "KB Article Auto-Suggest", trigger: "New incident created", action: "AI searches KB and attaches relevant articles", status: "Active", module: "Knowledge", createdBy: "VGC Dev Admin", aiSuggested: true, lastModified: "2026-03-24", conditions: {}, slaLinked: false },
+      { id: "WF007", name: "Duplicate Detection", trigger: "New incident similar to existing open ticket", action: "Alert agent and suggest linking", status: "Beta", module: "Incidents", createdBy: "VGC Dev Admin", aiSuggested: true, lastModified: "2026-03-25", conditions: {}, slaLinked: false },
+      { id: "WF008", name: "Customer-Adaptive SLA Routing", trigger: "Ticket created for enterprise customer", action: "Apply customer-specific SLA and assign dedicated team", status: "Active", module: "SLA", createdBy: "AI Assist", aiSuggested: true, lastModified: "2026-03-26", conditions: {}, slaLinked: true },
+      { id: "WF009", name: "Post-Resolution Survey Trigger", trigger: "Ticket status changed to Resolved", action: "Generate AI customer satisfaction survey email", status: "Active", module: "Incidents", createdBy: "VGC Dev Admin", aiSuggested: false, lastModified: "2026-03-26", conditions: {}, slaLinked: false },
+    ];
+  });
+  const [showAddRule, setShowAddRule] = useState(false);
+  const [editingRule, setEditingRule] = useState(null);
+  const [aiRuleSuggestions, setAiRuleSuggestions] = useState([]);
+  // ─── Product Vendors Contact State ──────────────────────────────────────
+  const [vendors, setVendors] = useState(() => {
+    const saved = _ls("vgc_vendors", null);
+    return saved || [
+      { id: "V001", name: "Microsoft", category: "Cloud & Productivity", supportEmail: "support@microsoft.com", supportPhone: "+1 800-642-7676", escalationSOP: "1. Log case via Microsoft 365 Admin Center\n2. For Sev-A: call direct support line\n3. Escalate to TAM if no response in 2h", docLinks: [{ label: "Microsoft 365 Admin", url: "https://admin.microsoft.com" }, { label: "Azure Portal", url: "https://portal.azure.com" }, { label: "Service Health", url: "https://status.office.com" }], responseExpectation: "Sev-A: 1hr, Sev-B: 4hrs, Sev-C: 8hrs", notes: "Premier support contract active" },
+      { id: "V002", name: "Crayon", category: "CSP / Licensing Partner", supportEmail: "support@crayon.com", supportPhone: "+65 6816 5850", escalationSOP: "1. Email support with ticket reference\n2. Call for urgent licensing issues\n3. Escalate to account manager for contract matters", docLinks: [{ label: "Crayon Portal", url: "https://www.crayon.com" }], responseExpectation: "Standard: 24hrs, Urgent: 4hrs", notes: "CSP partner for Microsoft licensing" },
+      { id: "V003", name: "Dell Technologies", category: "Hardware & Infrastructure", supportEmail: "support@dell.com", supportPhone: "+65 6871 8200", escalationSOP: "1. Log case via Dell TechDirect\n2. Provide service tag and asset details\n3. For ProSupport Plus: escalate via priority line", docLinks: [{ label: "Dell TechDirect", url: "https://techdirect.dell.com" }, { label: "Dell Support", url: "https://www.dell.com/support" }], responseExpectation: "ProSupport: 2hrs onsite, Basic: NBD", notes: "ProSupport Plus warranty on all servers" },
+      { id: "V004", name: "Fortinet", category: "Network Security", supportEmail: "support@fortinet.com", supportPhone: "+1 408-235-7700", escalationSOP: "1. Open ticket via FortiCare portal\n2. For critical security: call 24/7 hotline\n3. Engage SE for configuration issues", docLinks: [{ label: "FortiCare", url: "https://support.fortinet.com" }, { label: "FortiGuard", url: "https://www.fortiguard.com" }], responseExpectation: "Critical: 1hr, High: 4hrs, Medium: 8hrs", notes: "FortiGate firewall and FortiClient" },
+      { id: "V005", name: "Cisco", category: "Networking & Communication", supportEmail: "tac@cisco.com", supportPhone: "+1 800-553-2447", escalationSOP: "1. Open TAC case via Cisco Support\n2. For Sev1/Sev2: call TAC directly\n3. Request duty manager for stalled cases", docLinks: [{ label: "Cisco TAC", url: "https://www.cisco.com/c/en/us/support" }], responseExpectation: "Sev1: 15min, Sev2: 1hr, Sev3: 4hrs", notes: "SmartNet contract for switches & routers" },
+    ];
+  });
+  const [showVendorCard, setShowVendorCard] = useState(false);
+  const [vendorDetailId, setVendorDetailId] = useState(null);
+  const [showAddVendor, setShowAddVendor] = useState(false);
+  // ─── Users & RBAC Management State ──────────────────────────────────────
+  const [rbacUserSearch, setRbacUserSearch] = useState("");
+  const [rbacRoleFilter, setRbacRoleFilter] = useState("all");
+  const [showInviteUser, setShowInviteUser] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ name: "", email: "", role: "Service Desk", department: "", rbacRole: "L1 Support Engineer", phone: "", location: "" });
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [rbacViewMode, setRbacViewMode] = useState("table"); // "table" | "cards"
+  const [rbacAuditLog, setRbacAuditLog] = useState(() => _ls("vgc_rbac_audit", [
+    { id: "RA001", action: "Role Changed", user: "Marcus Chen", from: "End User", to: "L1 Support Engineer", by: "VGC Admin", timestamp: "2026-03-15 09:30" },
+    { id: "RA002", action: "User Invited", user: "Sofia Rodriguez", from: "—", to: "L2 Support Engineer", by: "VGC Admin", timestamp: "2026-03-16 14:15" },
+    { id: "RA003", action: "Feature Updated", user: "James Wright", from: "AI: none", to: "AI: use", by: "VGC Dev Admin", timestamp: "2026-03-20 11:00" },
+    { id: "RA004", action: "Role Changed", user: "David Kim", from: "L2 Support Engineer", to: "Change Manager", by: "VGC Admin", timestamp: "2026-03-22 16:45" },
+  ]));
+  const [customPermissions, setCustomPermissions] = useState(() => _ls("vgc_custom_permissions", RBAC_PERMISSIONS));
+  const [permMatrixEditing, setPermMatrixEditing] = useState(false);
+  const [permMatrixDraft, setPermMatrixDraft] = useState(null);
+  // ─── AI Customer Survey State ───────────────────────────────────────────
+  const [surveyDraft, setSurveyDraft] = useState(null); // { incidentId, subject, body, recipient, status: "draft"|"sent" }
+  const [surveyTemplates, setSurveyTemplates] = useState(() => {
+    const saved = _ls("vgc_survey_templates", null);
+    return saved || [
+      { id: "TPL001", name: "Standard Resolution Survey", subject: "How was your experience? — {{ticketId}}", body: "Dear {{customerName}},\n\nThank you for reaching out to VGC Technology Helpdesk. We're glad to inform you that your ticket has been resolved.\n\n📋 Ticket Summary:\n• Ticket ID: {{ticketId}}\n• Issue: {{ticketTitle}}\n• Priority: {{priority}}\n• Resolved by: {{assignee}}\n• Resolution: {{resolution}}\n\nWe'd love to hear your feedback:\n\n⭐ How satisfied are you with the resolution? (1-5)\n💬 Any additional comments?\n\nYour feedback helps us improve! 🙏\n\nWarm regards,\nVGC Technology Helpdesk\n📧 help@vgctechnology.com | ☎ +65 6978 1299", severity: "all", active: true },
+      { id: "TPL002", name: "Critical Incident Follow-up", subject: "Important: Follow-up on Critical Incident {{ticketId}}", body: "Dear {{customerName}},\n\nWe understand this was a critical issue that may have impacted your operations. We sincerely apologize for any inconvenience.\n\n📋 Incident Summary:\n• Ticket ID: {{ticketId}}\n• Issue: {{ticketTitle}}\n• Severity: {{priority}} (Critical)\n• Resolution Time: {{resolutionTime}}\n• Root Cause: {{resolution}}\n\nPreventive Measures:\n• We have taken steps to prevent recurrence\n• Our team will monitor closely for the next 48 hours\n\n⭐ We value your patience — please share your feedback:\n• Overall satisfaction (1-5)\n• Communication quality (1-5)\n• Resolution effectiveness (1-5)\n\nThank you for your trust.\n\nBest regards,\nVGC Technology Helpdesk", severity: "critical", active: true },
+    ];
+  });
+  // ─── Productivity Dashboard State ──────────────────────────────────────
+  const [productivityView, setProductivityView] = useState("overview"); // overview | outlook | teams | tasks
+  const [smartTasks, setSmartTasks] = useState(() => {
+    const saved = _ls("vgc_smart_tasks", null);
+    if (saved && Array.isArray(saved) && saved.length > 0) return saved;
+    const today = new Date().toISOString().split("T")[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+    const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+    return [
+      { id: "ST001", title: "Review & close resolved incidents older than 7 days", recurrence: "daily", category: "Incident Mgmt", priority: "High", status: "pending", nextDue: today, assignee: "All Engineers", aiSuggested: true, notes: "" },
+      { id: "ST002", title: "Check SLA compliance for Sev-A tickets", recurrence: "daily", category: "SLA", priority: "Critical", status: "pending", nextDue: today, assignee: "Service Desk Lead", aiSuggested: true, notes: "" },
+      { id: "ST003", title: "Review unassigned ticket queue", recurrence: "daily", category: "Queue Mgmt", priority: "High", status: "pending", nextDue: today, assignee: "L1 Support Engineer", aiSuggested: false, notes: "" },
+      { id: "ST004", title: "Weekly team standup — review open incidents & changes", recurrence: "weekly", category: "Team Mgmt", priority: "Medium", status: "pending", nextDue: nextWeek, assignee: "Service Desk Lead", aiSuggested: false, notes: "" },
+      { id: "ST005", title: "Update Knowledge Portal articles from resolved tickets", recurrence: "weekly", category: "Knowledge Mgmt", priority: "Medium", status: "pending", nextDue: nextWeek, assignee: "L2 Support Engineer", aiSuggested: true, notes: "" },
+      { id: "ST006", title: "Patch Tuesday — review & schedule OS patching", recurrence: "monthly", category: "Change Mgmt", priority: "High", status: "pending", nextDue: "2026-04-08", assignee: "Network Engineer", aiSuggested: true, notes: "" },
+      { id: "ST007", title: "Monthly SLA & KPI performance report for management", recurrence: "monthly", category: "Reports", priority: "Medium", status: "pending", nextDue: "2026-04-01", assignee: "Service Desk Lead", aiSuggested: false, notes: "" },
+      { id: "ST008", title: "Quarterly PDPA compliance audit", recurrence: "quarterly", category: "Compliance", priority: "High", status: "pending", nextDue: "2026-06-01", assignee: "Tenant Admin", aiSuggested: true, notes: "" },
+      { id: "ST009", title: "Bi-annual disaster recovery drill & documentation", recurrence: "6-monthly", category: "DR/BCP", priority: "Critical", status: "pending", nextDue: "2026-06-15", assignee: "VGC Dev Admin", aiSuggested: true, notes: "" },
+      { id: "ST010", title: "Annual license & subscription renewal review", recurrence: "yearly", category: "Asset Mgmt", priority: "Medium", status: "pending", nextDue: "2026-12-01", assignee: "Tenant Admin", aiSuggested: false, notes: "" },
+      { id: "ST011", title: "Escalate overdue Sev-B incidents to L2 support", recurrence: "daily", category: "Incident Mgmt", priority: "High", status: "pending", nextDue: yesterday, assignee: "Service Desk Lead", aiSuggested: true, notes: "" },
+      { id: "ST012", title: "Verify backup completion for production servers", recurrence: "daily", category: "Infrastructure", priority: "Critical", status: "pending", nextDue: yesterday, assignee: "Network Engineer", aiSuggested: true, notes: "" },
+    ];
+  });
+  const [currentUser, setCurrentUser] = useState(() => _ls("vgc_current_user", null));
+  const [isLoggedIn, setIsLoggedIn] = useState(() => _ls("vgc_current_user", null) !== null);
+  const [localUsername, setLocalUsername] = useState("");
+  const [localPassword, setLocalPassword] = useState("");
+  const [localLoginError, setLocalLoginError] = useState("");
+  const [localLoginLoading, setLocalLoginLoading] = useState(false);
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") {
+      const { showKey, testStatus, ...persist } = azureOpenAI;
+      localStorage.setItem("vgc_azure_openai", JSON.stringify(persist));
+    }
+  }, [azureOpenAI]);
+  useEffect(() => {
+    try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch {}
+  }, [dismissedProactiveAlerts]);
+
+  // ─── Microsoft Entra ID SSO — Token & Graph Logic ────────────────────
+  const getAccessToken = useCallback(async (scopes) => {
+    if (!accounts || accounts.length === 0) return null;
+    try {
+      const resp = await msalInstance.acquireTokenSilent({ scopes, account: accounts[0] });
+      return resp.accessToken;
+    } catch (err) {
+      if (err instanceof InteractionRequiredAuthError) {
+        try {
+          const resp = await msalInstance.acquireTokenPopup({ scopes });
+          return resp.accessToken;
+        } catch { return null; }
+      }
+      return null;
+    }
+  }, [msalInstance, accounts]);
+
+  const fetchGraphData = useCallback(async () => {
+    if (graphFetchedRef.current) return;
+    graphFetchedRef.current = true;
+    setGraphLoading(true);
+    setGraphError(null);
+    try {
+      const profileToken = await getAccessToken(graphScopes.login);
+      if (profileToken) {
+        const [profile, photo] = await Promise.all([
+          getMyProfile(profileToken).catch(() => null),
+          getMyPhoto(profileToken).catch(() => null),
+        ]);
+        if (profile) setMsalUser(profile);
+        if (photo) { setMsalPhoto(photo); setProfilePhoto(photo); }
+      }
+      const mailToken = await getAccessToken([...graphScopes.login, ...graphScopes.mail]);
+      if (mailToken) {
+        const [emailsResp, unreadCount] = await Promise.all([
+          getRecentEmails(mailToken, 10).catch(() => null),
+          getUnreadCount(mailToken).catch(() => null),
+        ]);
+        if (emailsResp?.value) setGraphEmails(emailsResp.value);
+        if (unreadCount !== null) setGraphUnread(unreadCount);
+      }
+      const calToken = await getAccessToken([...graphScopes.login, ...graphScopes.calendar]);
+      if (calToken) {
+        const events = await getTodayEvents(calToken).catch(() => null);
+        if (events?.value) setGraphCalendar(events.value);
+      }
+      const chatToken = await getAccessToken([...graphScopes.login, ...graphScopes.chat]);
+      if (chatToken) {
+        const [chats, teams] = await Promise.all([
+          getRecentChats(chatToken, 10).catch(() => null),
+          getJoinedTeams(chatToken).catch(() => null),
+        ]);
+        if (chats?.value) setGraphChats(chats.value);
+        if (teams?.value) setGraphTeams(teams.value);
+      }
+      const presToken = await getAccessToken([...graphScopes.login, ...graphScopes.presence]);
+      if (presToken) {
+        const presence = await getMyPresence(presToken).catch(() => null);
+        if (presence) setGraphPresence(presence);
+      }
+    } catch (err) {
+      console.error("Graph API error:", err);
+      setGraphError(err.message || "Unknown error fetching Graph data");
+      graphFetchedRef.current = false;
+      setErrorAdvisory({
+        type: "Microsoft 365 Graph API",
+        code: err.statusCode || err.code || "GRAPH_API_ERROR",
+        message: err.message || "Failed to fetch Microsoft 365 data",
+        timestamp: new Date().toISOString(),
+        details: "The Microsoft Graph API returned an error while fetching your email, calendar, or Teams data. This may be due to insufficient API permissions, expired tokens, or network connectivity issues.",
+        stack: err.stack?.substring(0, 500) || ""
+      });
+    } finally {
+      setGraphLoading(false);
+    }
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    if (isMsalAuthenticated && accounts.length > 0 && !graphFetchedRef.current) {
+      fetchGraphData();
+    }
+  }, [isMsalAuthenticated, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (isMsalAuthenticated && accounts.length > 0 && !currentUser) {
+      const acct = accounts[0];
+      if (!acct || !acct.username) return;
+      const email = acct.username.toLowerCase();
+      const matched = USERS.find(u => u.email.toLowerCase() === email);
+
+      // Recover fallback user stored before loginRedirect navigated away
+      let fallbackUser = null;
+      try {
+        const stored = sessionStorage.getItem("itsm_sso_fallback");
+        if (stored) { fallbackUser = JSON.parse(stored); sessionStorage.removeItem("itsm_sso_fallback"); }
+      } catch {}
+
+      // Enrich with live Entra ID data, then set user
+      (async () => {
+        let entraProfile = null;
+        try {
+          const sync = await fetch("/api/entra/users");
+          if (sync.ok) {
+            const syncData = await sync.json();
+            entraProfile = syncData.users?.find(u => u.email === email);
+          }
+        } catch {}
+
+        if (matched) {
+          setCurrentUser({
+            ...matched,
+            authType: "entra",
+            entraEmail: email,
+            ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, entraObjectId: entraProfile.entraObjectId } : {}),
+          });
+        } else if (fallbackUser) {
+          const isAdmin = ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
+          const defaultRole = isAdmin ? "Administrator" : (fallbackUser.rbacRole || "End User");
+          setCurrentUser({
+            ...fallbackUser,
+            id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
+            name: acct.name || fallbackUser.name,
+            email: acct.username || fallbackUser.email,
+            avatar: (acct.name || fallbackUser.name).substring(0, 2).toUpperCase(),
+            rbacRole: defaultRole,
+            authType: "entra",
+            entraEmail: email,
+            ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, role: entraProfile.role, entraObjectId: entraProfile.entraObjectId } : {}),
+          });
+        } else {
+          const isAdmin = ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
+          setCurrentUser({
+            id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
+            name: acct.name || acct.username,
+            role: "IT Staff",
+            avatar: (acct.name || "U").substring(0, 2).toUpperCase(),
+            team: "IT Operations",
+            gender: "unspecified",
+            rbacRole: isAdmin ? "Administrator" : "End User",
+            email: acct.username,
+            phone: "",
+            location: "Singapore",
+            department: "IT",
+            pcName: "",
+            employeeId: "",
+            authType: "entra",
+            entraEmail: email,
+            ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, role: entraProfile.role, entraObjectId: entraProfile.entraObjectId } : {}),
+          });
+        }
+        setIsLoggedIn(true);
+      })();
+    }
+  }, [isMsalAuthenticated, accounts, currentUser]);
+
+  // ─── Prevent Browser Back Button (keep session alive until sign-out) ──
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const handlePopState = () => {
+      window.history.pushState(null, "", window.location.href);
+    };
+    window.history.pushState(null, "", window.location.href);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [isLoggedIn]);
+
+  // ─── Weather Disaster Alert System (one-time per session) ─────────────
+  useEffect(() => {
+    if (!isLoggedIn || disasterAlertDismissedRef.current()) return;
+    // Simulated regional disaster monitoring — cycles through ASEAN/Singapore threat scenarios
+    const disasterScenarios = [
+      { type: "Thunderstorm", icon: "⛈️", severity: "High", region: "Singapore & Johor Bahru", summary: "Severe thunderstorm warning issued by MSS (Meteorological Service Singapore). Heavy rainfall of 70-100mm/hr expected with lightning activity, gusty winds up to 80km/h, and potential flash flooding in low-lying areas.", aiAdvice: "Stay indoors and away from windows. Avoid open areas and tall structures. Unplug sensitive electronics. If driving, pull over safely. Monitor NEA weather updates. Keep emergency supplies ready.", color: "#FF6B6B", sources: "MSS weather.gov.sg · NEA nea.gov.sg · WMO severe weather bulletin" },
+      { type: "Typhoon", icon: "🌀", severity: "Critical", region: "South China Sea — Approaching Philippines", summary: "Super Typhoon GAEMI (Cat-4) tracking westward across South China Sea. Outer rain bands may affect Singapore within 48-72 hours. Sustained winds of 210km/h near eye wall. Storm surge warning for coastal areas.", aiAdvice: "Monitor JTWC and MSS updates closely. Secure outdoor objects. Stock up on essential supplies and water. Charge all devices. Avoid coastal areas. Prepare evacuation route if in flood-prone zone. Business continuity: ensure VPN and remote access are operational.", color: "#FF4444", sources: "JTWC metoc.navy.mil · PAGASA bagong.pagasa.dost.gov.ph · MSS weather.gov.sg" },
+      { type: "Tsunami", icon: "🌊", severity: "Critical", region: "Indian Ocean — Post Sumatra Earthquake", summary: "Tsunami advisory issued following M7.8 earthquake off western Sumatra coast. Initial wave arrival estimated in 3-4 hours for Singapore Strait. Coastal monitoring stations activated. Harbor and port operations on standby.", aiAdvice: "Move to higher ground immediately if near coast. Follow PUB and SCDF advisories. Avoid beaches, harbors, and low-lying coastal areas. Do NOT return until all-clear is given. Keep emergency radio tuned to CNA938. Ensure family safety check-in.", color: "#FF0000", sources: "PTWC tsunami.gov · BMKG bmkg.go.id · USGS earthquake.usgs.gov · MSS weather.gov.sg" },
+      { type: "Volcanic Ash", icon: "🌋", severity: "Moderate", region: "Mount Sinabung, North Sumatra", summary: "Mount Sinabung erupted with ash column reaching 7km altitude. Prevailing winds may carry volcanic ash across Malacca Strait toward Singapore within 24-48 hours. Air quality impact possible — PSI and PM2.5 levels being monitored.", aiAdvice: "Monitor NEA air quality index. Prepare N95 masks if haze develops. Reduce outdoor activity if PSI exceeds 100. Close windows and use air purifiers indoors. Airlines may adjust flight routes — check departure boards if traveling. Keep eyes and respiratory protection ready.", color: "#FF8C42", sources: "PVMBG vsi.esdm.go.id · VAAC darwin.bom.gov.au · NEA nea.gov.sg" },
+      { type: "Heatwave", icon: "🔥", severity: "High", region: "Southeast Asia — Extreme Heat", summary: "Prolonged heatwave advisory: Singapore temperatures expected to hit 37-39°C over the next 5 days, highest in recorded history. Heat index may exceed 45°C with humidity. Urban heat island effect amplifying risk in CBD and industrial zones.", aiAdvice: "Stay hydrated — drink water regularly even if not thirsty. Avoid outdoor work between 11am-3pm. Watch for heat exhaustion symptoms: dizziness, nausea, rapid heartbeat. Ensure server rooms and data centers have adequate cooling. Check on elderly colleagues. Use sunblock SPF50+ if outdoors.", color: "#F59E0B", sources: "MSS weather.gov.sg · NEA nea.gov.sg · WMO public.wmo.int" },
+      { type: "Flash Flood", icon: "🌧️", severity: "High", region: "Central & Eastern Singapore", summary: "PUB flash flood warning activated for Orchard Road, Bukit Timah, and Geylang areas. Drainage capacity exceeded after 120mm rainfall in 2 hours. Water level rising in Stamford Canal and Rochor Canal. Road closures in effect.", aiAdvice: "Avoid flooded roads — do not attempt to drive through standing water. Relocate vehicles from basement parking if in affected zones. Work from home if possible. Monitor PUB flood alerts and MyENV app. If trapped, call SCDF 995. Protect IT equipment in ground-floor server rooms.", color: "#42A5F5", sources: "PUB pub.gov.sg · MSS weather.gov.sg · NEA myenv.nea.gov.sg · SCDF scdf.gov.sg" },
+    ];
+    // Pick a scenario based on the day of year (rotates daily for demo purposes)
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+    const scenario = disasterScenarios[dayOfYear % disasterScenarios.length];
+    // Show alert after a short delay
+    let autoDismissTimer;
+    const timer = setTimeout(() => {
+      setDisasterAlert(scenario);
+      // Auto-dismiss after 10 seconds and permanently mark as shown
+      autoDismissTimer = setTimeout(() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch {} }, 10000);
+    }, 4000);
+    return () => { clearTimeout(timer); clearTimeout(autoDismissTimer); };
+  }, [isLoggedIn]);
+
+  // ─── High-Severity Incident Auto-Escalation Engine ────────────────────
+  // Generates correlation IDs for all escalation actions
+  const genCorrelationId = useCallback(() => `ESC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`, []);
+
+  // Log escalation action with correlation ID
+  const logEscalation = useCallback((entry) => {
+    const logEntry = { ...entry, timestamp: new Date().toISOString(), correlationId: entry.correlationId || genCorrelationId() };
+    setEscalationLog(prev => { const updated = [logEntry, ...prev].slice(0, 200); _save("vgc_escalation_log", updated); return updated; });
+    return logEntry;
+  }, [genCorrelationId]);
+
+  // Initiate Teams Phone auto-call (simulated — real implementation needs Graph Communications API)
+  const initiateAutoCall = useCallback((incident, contactList, correlationId) => {
+    if (!escalationConfig.autoCallEnabled) {
+      logEscalation({ type: "CALL_SKIPPED", incidentId: incident.id, reason: "Auto-call disabled by admin", correlationId });
+      return;
+    }
+    // Rate limiting check
+    const lastCall = escalationCallRef.current.get(incident.id);
+    if (lastCall && (Date.now() - lastCall) < escalationConfig.rateLimitMinutes * 60000) {
+      logEscalation({ type: "CALL_RATE_LIMITED", incidentId: incident.id, reason: `Rate limit: ${escalationConfig.rateLimitMinutes}min cooldown`, correlationId });
+      return;
+    }
+    escalationCallRef.current.set(incident.id, Date.now());
+
+    const callTargets = [...contactList].sort((a, b) => a.priority - b.priority);
+    callTargets.forEach((contact, idx) => {
+      const delay = escalationConfig.callOrder === "sequential" ? idx * 30000 : 0; // 30s gap for sequential
+      setTimeout(() => {
+        const callLog = logEscalation({
+          type: "AUTO_CALL_INITIATED",
+          incidentId: incident.id,
+          incidentTitle: incident.title,
+          priority: incident.priority,
+          contactName: contact.label,
+          contactNumber: contact.number,
+          callOrder: idx + 1,
+          message: `This is an automated critical alert from VGC AI Assist. A ${incident.priority} incident "${incident.title}" has not been picked up and requires immediate attention. Incident ID: ${incident.id}.`,
+          status: "attempted",
+          correlationId,
+        });
+        // Simulate call result after 15s (in production: use Graph Communications Cloud API)
+        setTimeout(() => {
+          logEscalation({ type: "AUTO_CALL_RESULT", incidentId: incident.id, contactName: contact.label, contactNumber: contact.number, result: "voicemail", duration: "12s", correlationId });
+        }, 15000);
+      }, delay);
+    });
+  }, [escalationConfig, logEscalation]);
+
+  // Teams channel notification (simulated — real: Graph POST /teams/{id}/channels/{id}/messages)
+  const notifyTeamsChannel = useCallback((incident, correlationId) => {
+    if (!escalationConfig.teamsChannelNotify) return;
+    logEscalation({
+      type: "TEAMS_CHANNEL_NOTIFY",
+      incidentId: incident.id,
+      incidentTitle: incident.title,
+      priority: incident.priority,
+      channel: "#critical-incidents",
+      message: `🚨 AUTO-ESCALATION: ${incident.priority} incident ${incident.id} — "${incident.title}" has exceeded pickup window. Immediate action required. @on-call`,
+      status: "sent",
+      correlationId,
+    });
+  }, [escalationConfig, logEscalation]);
+
+  // Email fallback
+  const sendEscalationEmail = useCallback((incident, correlationId) => {
+    if (!escalationConfig.emailFallback) return;
+    logEscalation({
+      type: "EMAIL_FALLBACK",
+      incidentId: incident.id,
+      incidentTitle: incident.title,
+      to: "help@vgctechnology.com, devadmin@vgctech.com",
+      subject: `🚨 AUTO-ESCALATION: ${incident.priority} — ${incident.id} — ${incident.title}`,
+      status: "queued",
+      correlationId,
+    });
+  }, [escalationConfig, logEscalation]);
+
+  // Core escalation monitor — runs every 30 seconds
+  useEffect(() => {
+    if (!isLoggedIn || !escalationConfig.enabled) return;
+    const checkEscalation = () => {
+      const now = Date.now();
+      // Find unassigned or unacknowledged Sev-A/B incidents
+      const criticalUnpicked = incidents.filter(inc => {
+        if (inc.status === "Resolved" || inc.status === "Closed") return false;
+        if (inc.priority !== "Sev-A" && inc.priority !== "Sev-B") return false;
+        // Check if within pickup window
+        const createdMs = now - (inc.created * 3600000); // inc.created is hours ago
+        const windowMs = (inc.priority === "Sev-A" ? escalationConfig.sevAPickupWindow : escalationConfig.sevBPickupWindow) * 60000;
+        // If incident is older than pickup window and still Open (not In Progress)
+        if (inc.status === "Open" && createdMs > windowMs) return true;
+        return false;
+      });
+
+      if (criticalUnpicked.length > 0) {
+        const worst = criticalUnpicked.sort((a, b) => (a.priority === "Sev-A" ? -1 : 1))[0];
+        const correlationId = genCorrelationId();
+
+        // Step 1: Global high alert
+        setGlobalHighAlert({
+          incident: worst,
+          allCritical: criticalUnpicked,
+          startedAt: now,
+          correlationId,
+          escalationPhase: "pickup_window", // pickup_window → auto_escalating → escalated
+          callsInitiated: false,
+        });
+
+        logEscalation({
+          type: "GLOBAL_HIGH_ALERT",
+          incidentId: worst.id,
+          incidentTitle: worst.title,
+          priority: worst.priority,
+          totalUnpicked: criticalUnpicked.length,
+          correlationId,
+        });
+
+        // Step 2: If past pickup window — auto-escalate
+        const worstAge = now - (worst.created * 3600000);
+        const worstWindow = (worst.priority === "Sev-A" ? escalationConfig.sevAPickupWindow : escalationConfig.sevBPickupWindow) * 60000;
+        if (worstAge > worstWindow * 1.5) {
+          // Full escalation — calls, Teams, email
+          setGlobalHighAlert(prev => prev ? { ...prev, escalationPhase: "auto_escalating", callsInitiated: true } : prev);
+
+          logEscalation({ type: "AUTO_ESCALATION_TRIGGERED", incidentId: worst.id, priority: worst.priority, reason: "No engineer picked up within SLA window", correlationId });
+
+          // Determine call targets — Sev-A always calls helpdesk
+          const callTargets = escalationConfig.callNumbers.filter(c => !c.sevAOnly || worst.priority === "Sev-A");
+          initiateAutoCall(worst, callTargets, correlationId);
+          notifyTeamsChannel(worst, correlationId);
+          sendEscalationEmail(worst, correlationId);
+        }
+      } else {
+        // Clear alert if all critical incidents are handled
+        setGlobalHighAlert(prev => {
+          if (prev) logEscalation({ type: "HIGH_ALERT_CLEARED", reason: "All critical incidents assigned or resolved", correlationId: prev.correlationId });
+          return null;
+        });
+      }
+    };
+
+    // Run immediately then every 30s
+    checkEscalation();
+    escalationTimerRef.current = setInterval(checkEscalation, 30000);
+    return () => { if (escalationTimerRef.current) clearInterval(escalationTimerRef.current); };
+  }, [isLoggedIn, incidents, escalationConfig, genCorrelationId, initiateAutoCall, notifyTeamsChannel, sendEscalationEmail, logEscalation]);
+
+  // Persist escalation config
+  useEffect(() => { _save("vgc_escalation_config", escalationConfig); _dbSync("escalation_config", [{ id: "config", ...escalationConfig }]); }, [escalationConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sync additional collections to DB
+  useEffect(() => { _dbSync("vendors", vendors); }, [vendors]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _dbSync("workflow_rules", workflowRules); }, [workflowRules]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _dbSync("survey_templates", surveyTemplates); }, [surveyTemplates]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _dbSync("smart_tasks", smartTasks); }, [smartTasks]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _dbSync("escalation_log", escalationLog); }, [escalationLog]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Chat Auto-Scroll ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (floatingChatEndRef.current) floatingChatEndRef.current.scrollIntoView({ behavior: "smooth" });
+  }, [aiMessages, aiLoading]);
+
+  // ─── AI Idle Nudge System ──────────────────────────────────────────────
+  useEffect(() => {
+    if (aiIdleTimerRef.current) clearTimeout(aiIdleTimerRef.current);
+    setAiIdleNudge(null);
+    aiIdleTimerRef.current = setTimeout(() => {
+      const pendingApprovals = changes.filter(c => c.status === "Submitted" || c.status === "Review");
+      const criticalOpen = incidents.filter(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed");
+      const nearBreach = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed" && (i.created / i.slaTarget) >= 0.8);
+      if (criticalOpen.length > 0) {
+        setAiIdleNudge({ icon: "🔴", text: `${criticalOpen.length} critical ticket${criticalOpen.length > 1 ? "s" : ""} need attention`, action: "Show me all Sev-A incidents", urgency: "critical" });
+      } else if (pendingApprovals.length > 0) {
+        setAiIdleNudge({ icon: "📋", text: `${pendingApprovals.length} change${pendingApprovals.length > 1 ? "s" : ""} awaiting your approval`, action: "Show pending change approvals", urgency: "medium" });
+      } else if (nearBreach.length > 0) {
+        setAiIdleNudge({ icon: "⏱️", text: `${nearBreach.length} ticket${nearBreach.length > 1 ? "s" : ""} near SLA breach`, action: "Which tickets are near SLA breach?", urgency: "high" });
+      } else {
+        setAiIdleNudge({ icon: "💡", text: "All clear! Ask me for your morning briefing", action: "Give me my morning briefing", urgency: "info" });
+      }
+    }, 15000);
+    return () => { if (aiIdleTimerRef.current) clearTimeout(aiIdleTimerRef.current); };
+  }, [aiMessages, aiInput, incidents, changes]);
+
+  // ─── Proactive AI Alert Engine ──────────────────────────────────────────
+  useEffect(() => {
+    if (!currentUser) return;
+    const checkProactiveAlerts = () => {
+      const newAlerts = [];
+      const now = Date.now();
+      // Check SLA breaches about to happen
+      incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed").forEach(inc => {
+        const pct = (inc.created / inc.slaTarget) * 100;
+        if (pct >= 90 && pct < 100 && !dismissedProactiveAlerts.includes(`sla-${inc.id}`)) {
+          newAlerts.push({ id: `sla-${inc.id}`, type: "sla_warning", severity: "high", title: `⏱️ SLA About to Breach: ${inc.id}`, detail: `${inc.title} — only ${Math.round(inc.slaTarget - inc.created)}h remaining. Act now to avoid breach.`, action: "Escalate or resolve immediately", ticketId: inc.id, timestamp: now });
+        }
+        if (pct >= 100 && !dismissedProactiveAlerts.includes(`breach-${inc.id}`)) {
+          newAlerts.push({ id: `breach-${inc.id}`, type: "sla_breach", severity: "critical", title: `🚨 SLA BREACHED: ${inc.id}`, detail: `${inc.title} — SLA target exceeded by ${Math.round(inc.created - inc.slaTarget)}h. Immediate action required.`, action: "Escalate to management immediately", ticketId: inc.id, timestamp: now });
+        }
+      });
+      // Check for critical security alerts
+      SECURITY_ALERTS.filter(a => a.severity === "Critical" && a.status === "Active" && !dismissedProactiveAlerts.includes(`sec-${a.id}`)).forEach(alert => {
+        newAlerts.push({ id: `sec-${alert.id}`, type: "security", severity: "critical", title: `🛡️ Critical Security: ${alert.title}`, detail: `${alert.type} — Active critical security threat detected. Business impact: potential data loss or service disruption.`, action: "Initiate incident response protocol", timestamp: now });
+      });
+      // Workload overload detection
+      const openCount = incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed").length;
+      if (openCount >= 5 && !dismissedProactiveAlerts.includes("workload-high")) {
+        newAlerts.push({ id: "workload-high", type: "workload", severity: "medium", title: "📊 High Workload Detected", detail: `You have ${openCount} open tickets. AI suggests delegating low-priority items to maintain quality and well-being.`, action: "Review and delegate Sev-C/D tickets", timestamp: now });
+      }
+      // Pattern detection — repeated category
+      const cats = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").map(i => i.category);
+      const catCount = {};
+      cats.forEach(c => { catCount[c] = (catCount[c] || 0) + 1; });
+      Object.entries(catCount).filter(([, c]) => c >= 3).forEach(([cat, cnt]) => {
+        if (!dismissedProactiveAlerts.includes(`pattern-${cat}`)) {
+          newAlerts.push({ id: `pattern-${cat}`, type: "prediction", severity: "medium", title: `🔮 Pattern: ${cnt} recurring ${cat} incidents`, detail: `${cnt} open ${cat} incidents detected. This may indicate a systemic issue requiring a Problem record.`, action: `Create Problem record for ${cat} category`, timestamp: now });
+        }
+      });
+      if (newAlerts.length > 0) setProactiveAlerts(prev => { const ids = prev.map(a => a.id); return [...prev, ...newAlerts.filter(a => !ids.includes(a.id))]; });
+    };
+    checkProactiveAlerts();
+    const interval = setInterval(checkProactiveAlerts, 30000);
+    return () => clearInterval(interval);
+  }, [incidents, dismissedProactiveAlerts, currentUser]);
+
+  // ─── Azure OpenAI API Helper (via server proxy — avoids CORS) ───────
+  const callAzureOpenAI = async (systemPrompt, userPrompt) => {
+    if (!azureOpenAI.enabled) {
+      return null; // Fall back to local responses
+    }
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ systemPrompt, userPrompt })
+      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        console.warn(`[Azure OpenAI] Server proxy error ${res.status}:`, errBody);
+        throw new Error(`API ${res.status}`);
+      }
+      const data = await res.json();
+      if (!data.text) { console.warn("[Azure OpenAI] Empty response from API"); return null; }
+      setAzureOpenAI(prev => ({ ...prev, totalCalls: prev.totalCalls + 1, lastTested: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" }) }));
+      return data.text;
+    } catch (err) {
+      console.warn("[Azure OpenAI] Call failed, falling back to local:", err.message);
+      return null; // Fallback to local
+    }
+  };
+  const [integrations, setIntegrations] = useState(() => _ls("vgc_integrations", INTEGRATION_CATALOG));
+  const [smtpConfig, setSmtpConfig] = useState({
+    host: "smtp.office365.com", port: 587, encryption: "STARTTLS",
+    username: "itsm-noreply@vgctech.com.sg", password: "",
+    fromName: "VGC ITSM", fromEmail: "itsm-noreply@vgctech.com.sg",
+    replyTo: "help@vgctechnology.com", enabled: true,
+    testStatus: null, lastTested: null,
+    templates: {
+      ticketCreated: { enabled: true, subject: "[{ticketId}] Ticket Created: {title}" },
+      ticketUpdated: { enabled: true, subject: "[{ticketId}] Ticket Updated: {title}" },
+      ticketResolved: { enabled: true, subject: "[{ticketId}] Resolved: {title}" },
+      ticketClosed: { enabled: true, subject: "[{ticketId}] Closed: {title}" },
+      slaWarning: { enabled: true, subject: "[{ticketId}] SLA Warning: {title}" },
+      slaBreach: { enabled: true, subject: "[{ticketId}] SLA BREACH: {title}" },
+    },
+    signature: "<p>Best regards,<br/><b>VGC Technology Pte Ltd</b><br/>IT Service Management<br/>📧 help@vgctechnology.com | 📞 +65 6234 0000</p>"
+  });
+  const [emailCompose, setEmailCompose] = useState(null); // {ticketId, to, subject, body, isInternal}
+  const [managedUsers, setManagedUsers] = useState(() => _ls("vgc_managed_users", USERS));
+  // ─── Customer Management State ──────────────────────────────────────────
+  const [customers, setCustomers] = useState(() => _ls("vgc_customers", INITIAL_CUSTOMERS));
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerCategoryFilter, setCustomerCategoryFilter] = useState("All");
+  const [customerStatusFilter, setCustomerStatusFilter] = useState("All");
+  const [showAddCustomer, setShowAddCustomer] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState(null);
+  const [customerForm, setCustomerForm] = useState({ name: "", category: "Ad-Hoc", contactPerson: "", email: "", phone: "", address: "", status: "Active", contractStart: "", contractEnd: "", services: [], notes: "" });
+  const [customerViewMode, setCustomerViewMode] = useState("table");
+  // ─── Service Reports State ──────────────────────────────────────────────
+  const [serviceReports, setServiceReports] = useState(() => _ls("vgc_service_reports", [
+    { id: "SR001", customerId: "CUS002", title: "Monthly Service Report — March 2026", reportDate: "2026-03-31", periodFrom: "2026-03-01", periodTo: "2026-03-31", engineer: "Marcus Chen", summary: "All 50 Microsoft 365 licenses operational. Resolved 3 incidents (2x password reset, 1x Outlook sync issue). SLA compliance: 100%.", incidents: ["INC0001"], status: "Sent", sentAt: "2026-03-31 17:00", createdBy: "Marcus Chen", createdAt: "2026-03-31" },
+    { id: "SR002", customerId: "CUS003", title: "Monthly Service Report — March 2026", reportDate: "2026-03-31", periodFrom: "2026-03-01", periodTo: "2026-03-31", engineer: "Sofia Rodriguez", summary: "120 M365 E3 licenses healthy. Azure VM uptime: 99.97%. Patched 2 critical vulnerabilities on FortiGate firewall.", incidents: [], status: "Draft", sentAt: "", createdBy: "Sofia Rodriguez", createdAt: "2026-03-30" },
+  ]));
+  const [showAddReport, setShowAddReport] = useState(false);
+  const [editingReportId, setEditingReportId] = useState(null);
+  const [reportForm, setReportForm] = useState({ customerId: "", title: "", reportDate: new Date().toISOString().slice(0,10), periodFrom: "", periodTo: "", engineer: "", summary: "", incidents: [], status: "Draft" });
+  const [reportViewId, setReportViewId] = useState(null);
+  const [entraIdConfig, setEntraIdConfig] = useState({
+    enabled: true, tenantId: "13756b13-6db9-4266-9737-baf100cf340c", clientId: "be40e7d3-69a7-4414-90ba-4391d152f70b",
+    redirectUri: "https://vgcitsm.vgcsg.com", scimEnabled: true,
+    groupSync: true, conditionalAccess: true, mfaEnforced: true,
+    groupMappings: [
+      { entraGroup: "SG-ITSM-Admins", rbacRole: "Administrator" },
+      { entraGroup: "SG-ITSM-ServiceDesk", rbacRole: "L1 Support Engineer" },
+      { entraGroup: "SG-ITSM-Engineers", rbacRole: "Network Engineer" },
+      { entraGroup: "SG-ITSM-ChangeBoard", rbacRole: "Change Manager" },
+      { entraGroup: "SG-ITSM-AllUsers", rbacRole: "End User" },
+    ]
+  });
+  const [pdpaConfig, setPdpaConfig] = useState({
+    enabled: true, dpoName: "VGC Admin", dpoEmail: "dpo@vgctech.com",
+    retentionPolicies: [
+      { entity: "Incidents", retention: 365, action: "Anonymize", enabled: true },
+      { entity: "Problems", retention: 730, action: "Anonymize", enabled: true },
+      { entity: "Changes", retention: 1095, action: "Archive", enabled: true },
+      { entity: "Service Requests", retention: 365, action: "Delete", enabled: true },
+      { entity: "User Activity Logs", retention: 180, action: "Delete", enabled: true },
+      { entity: "AI Training Data", retention: 90, action: "Anonymize", enabled: true },
+      { entity: "Chat Transcripts", retention: 30, action: "Delete", enabled: false },
+    ],
+    consentManagement: true, dsarWorkflow: true, dataClassification: true,
+    auditLog: [
+      { timestamp: "2026-03-26 11:05", action: "Incident Resolved", user: "Marcus Chen", detail: "INC0007 (PC Blue Screen — ABC Enterprise) resolved. Closure: Hardware Replacement. SLA met (1h45m / 4h)." },
+      { timestamp: "2026-03-26 10:30", action: "On-Site Support Dispatched", user: "Marcus Chen", detail: "Engineer dispatched to ABC Enterprise Pte Ltd, 201 Pioneer Street, SG 49800 for INC0007 hardware repair" },
+      { timestamp: "2026-03-26 09:25", action: "First Response Sent", user: "Marcus Chen", detail: "INC0007 — First response email sent to Ms Carol (carol@abcenterprise.com.sg) within 9 minutes" },
+      { timestamp: "2026-03-26 09:15", action: "Incident Created", user: "System", detail: "INC0007 created via Phone — PC Blue Screen (BSOD) reported by Ms Carol, ABC Enterprise Pte Ltd" },
+      { timestamp: "2026-03-26 09:15", action: "AI Auto-Triage", user: "AI Engine", detail: "INC0007 auto-classified: Sev-B HIGH, Category: Hardware > Laptop/Desktop, Confidence: 93%" },
+      { timestamp: "2026-03-26 09:10", action: "Customer Data Entry", user: "Marcus Chen", detail: "New customer added: ABC Enterprise Pte Ltd, 201 Pioneer Street, Singapore 49800. Contact: Ms Carol (+65 9089 900)" },
+      { timestamp: "2026-03-25 14:32", action: "DSAR Request Processed", user: "System", detail: "User U005 data export completed" },
+      { timestamp: "2026-03-24 09:15", action: "Retention Policy Executed", user: "System", detail: "42 records anonymized (Incidents > 365 days)" },
+      { timestamp: "2026-03-23 16:45", action: "Consent Updated", user: "Priya Sharma", detail: "Marketing communications opt-out" },
+      { timestamp: "2026-03-22 11:00", action: "Data Classification Scan", user: "AI Engine", detail: "Scanned 1,247 records — 3 PII flags raised" },
+    ]
+  });
+  const [infraConfig] = useState({
+    database: { type: "Azure SQL Serverless", region: "Southeast Asia (Singapore)", server: "vgc-itsm-sql.database.windows.net", database: "vgc-itsm-prod", tier: "General Purpose", maxVCores: 4, minVCores: 0.5, autoPause: 60, status: "Online", storage: "32 GB", usedStorage: "8.4 GB", backupRetention: "7 days (LTR: 30 days)" },
+    webApp: { name: "vgc-itsm-app", region: "Southeast Asia (Singapore)", plan: "P1v3 (Premium v3)", runtime: "Node.js 20 LTS", status: "Running", customDomain: "itsm.vgctech.com", ssl: "Managed Certificate", scaling: "Auto-scale (1-5 instances)", deployment: "GitHub Actions CI/CD" },
+    network: { vnet: "vgc-sea-vnet", subnet: "app-subnet", nsg: "vgc-itsm-nsg", privateEndpoint: "Enabled (SQL)", waf: "Azure Front Door WAF" }
+  });
+
+  // ─── Persist to localStorage + SQLite Database ─────────────────────────
+  const DB_API = "/api/db";
+  const _save = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+
+  // Sync an array collection to the SQLite backend (fire-and-forget)
+  const _dbSync = useCallback((collection, data) => {
+    if (!data || !Array.isArray(data)) return;
+    fetch(`${DB_API}/${collection}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).catch(() => {}); // silent fail — localStorage is primary fallback
+  }, []);
+
+  // Sync a single record to the SQLite backend
+  const _dbSyncOne = useCallback((collection, record) => {
+    if (!record || !record.id) return;
+    fetch(`${DB_API}/${collection}/${encodeURIComponent(record.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(record),
+    }).catch(() => {});
+  }, []);
+
+  const dbInitRef = useRef(false);
+
+  // ─── Initial DB hydration: load from backend on first load if localStorage is empty ───
+  useEffect(() => {
+    if (dbInitRef.current) return;
+    dbInitRef.current = true;
+    fetch(`${DB_API}-stats`).then(r => r.json()).then(async (stats) => {
+      // Hydrate state from DB if localStorage was empty (new browser/device)
+      const hydrateMap = [
+        ["users", stats.collections?.users, setManagedUsers, "vgc_managed_users"],
+        ["incidents", stats.collections?.incidents, setIncidents, "vgc_incidents"],
+        ["problems", stats.collections?.problems, setProblems, "vgc_problems"],
+        ["changes", stats.collections?.changes, setChanges, "vgc_changes"],
+        ["requests", stats.collections?.requests, setRequests, "vgc_requests"],
+        ["assets", stats.collections?.assets, setAssets, "vgc_assets"],
+        ["kb", stats.collections?.kb, setKbArticles, "vgc_kb"],
+        ["customers", stats.collections?.customers, setCustomers, "vgc_customers"],
+      ];
+      for (const [coll, count, setter, lsKey] of hydrateMap) {
+        if (count > 0 && !localStorage.getItem(lsKey)) {
+          try {
+            const r = await fetch(`${DB_API}/${coll}`);
+            if (r.ok) {
+              const data = await r.json();
+              if (Array.isArray(data) && data.length > 0) {
+                const items = data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d));
+                setter(items);
+              }
+            }
+          } catch {}
+        }
+      }
+      // Seed DB from state if DB is empty
+      const syncMap = [
+        ["incidents", incidents], ["problems", problems], ["changes", changes],
+        ["requests", requests], ["assets", assets], ["kb", kbArticles],
+        ["services", serviceCatalog], ["users", managedUsers], ["vendors", vendors],
+        ["workflow_rules", workflowRules], ["survey_templates", surveyTemplates],
+        ["smart_tasks", smartTasks],
+        ["customers", customers], ["service_reports", serviceReports],
+      ];
+      for (const [coll, data] of syncMap) {
+        if ((!stats.collections[coll] || stats.collections[coll] === 0) && data && data.length > 0) {
+          _dbSync(coll, data);
+        }
+      }
+      console.log("[VGC-ITSM] Database sync check complete", stats.collections);
+    }).catch(() => console.log("[VGC-ITSM] Backend DB not available — using localStorage only"));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Dual-write: localStorage + SQLite DB
+  useEffect(() => { _save("vgc_incidents", incidents); _dbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_problems", problems); _dbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_changes", changes); _dbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_requests", requests); _dbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_assets", assets); _dbSync("assets", assets); }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_profile_photo", profilePhoto); }, [profilePhoto]);
+  useEffect(() => { _save("vgc_avatar", avatarConfig); }, [avatarConfig]);
+  useEffect(() => { _save("vgc_current_user", currentUser); }, [currentUser]);
+  useEffect(() => { _save("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_rbac_audit", rbacAuditLog); }, [rbacAuditLog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_custom_permissions", customPermissions); }, [customPermissions]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // SVG Icon Components — Enterprise Cybersecurity Grade
+  const NavIcon = ({ type, isActive }) => {
+    const c = isActive ? "#E8ECF4" : "#5A6178";
+    const ac = isActive ? "#6366F1" : "none";
+    const sz = 16;
+    const icons = {
+      dashboard: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Command Center Grid */}<rect x="1" y="1" width="6" height="6" rx="1.5" stroke={c} strokeWidth="1.5" fill={ac+"22"}/><rect x="9" y="1" width="6" height="4" rx="1.5" stroke={c} strokeWidth="1.5" fill={ac+"11"}/><rect x="9" y="7" width="6" height="8" rx="1.5" stroke={c} strokeWidth="1.5" fill={ac+"11"}/><rect x="1" y="9" width="6" height="6" rx="1.5" stroke={c} strokeWidth="1.5"/>{isActive && <><circle cx="4" cy="4" r="1" fill="#6366F1"><animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/></circle><circle cx="12" cy="11" r="0.8" fill="#06B6D4"><animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite"/></circle></>}</svg>,
+      incidents: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Threat Alert Triangle */}<path d="M8 1.5L14.5 13H1.5L8 1.5Z" stroke={isActive?"#FF6B6B":c} strokeWidth="1.5" strokeLinejoin="round" fill={isActive?"#FF6B6B11":"none"}/><line x1="8" y1="5.5" x2="8" y2="8.5" stroke={isActive?"#FF6B6B":c} strokeWidth="1.8" strokeLinecap="round"><animate attributeName="opacity" values="1;0.3;1" dur="1.2s" repeatCount="indefinite"/></line><circle cx="8" cy="10.5" r="0.9" fill={isActive?"#FF6B6B":c}>{isActive && <animate attributeName="opacity" values="1;0.4;1" dur="1.2s" repeatCount="indefinite"/>}</circle></svg>,
+      problems: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Root Cause Radar */}<circle cx="8" cy="8" r="6.5" stroke={c} strokeWidth="1.3"/><circle cx="8" cy="8" r="3.5" stroke={isActive?"#CE93D8":c} strokeWidth="0.8" strokeDasharray="2 2"/><circle cx="8" cy="8" r="1.5" fill={isActive?"#CE93D8":c+"66"}/><line x1="8" y1="1.5" x2="8" y2="3.5" stroke={c} strokeWidth="0.8"/><line x1="8" y1="12.5" x2="8" y2="14.5" stroke={c} strokeWidth="0.8"/><line x1="1.5" y1="8" x2="3.5" y2="8" stroke={c} strokeWidth="0.8"/><line x1="12.5" y1="8" x2="14.5" y2="8" stroke={c} strokeWidth="0.8"/>{isActive && <circle cx="8" cy="8" r="3.5" fill="none" stroke="#CE93D8" strokeWidth="0.5"><animate attributeName="r" values="3.5;5.5;3.5" dur="3s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.6;0;0.6" dur="3s" repeatCount="indefinite"/></circle>}</svg>,
+      changes: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Deploy Pipeline */}<circle cx="4" cy="3" r="2" stroke={c} strokeWidth="1.3" fill={isActive?"#FFB34722":"none"}/><circle cx="12" cy="3" r="2" stroke={c} strokeWidth="1.3"/><circle cx="8" cy="13" r="2" stroke={isActive?"#FFB347":c} strokeWidth="1.3" fill={isActive?"#FFB34722":"none"}/><path d="M4 5V8L8 11" stroke={c} strokeWidth="1.2" strokeLinecap="round"/><path d="M12 5V8L8 11" stroke={c} strokeWidth="1.2" strokeLinecap="round"/>{isActive && <circle cx="8" cy="13" r="2" stroke="#FFB347" strokeWidth="0.5"><animate attributeName="r" values="2;3;2" dur="2s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite"/></circle>}</svg>,
+      requests: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Service Request Clipboard */}<rect x="3" y="0.5" width="10" height="14.5" rx="1.5" stroke={c} strokeWidth="1.3"/><rect x="5.5" y="0" width="5" height="2" rx="1" stroke={c} strokeWidth="1" fill="#0A0C14"/><path d="M5.5 5.5H10.5" stroke={isActive?"#81C784":c} strokeWidth="1.2" strokeLinecap="round"/><path d="M5.5 8H10.5" stroke={c} strokeWidth="1" strokeLinecap="round"/><path d="M5.5 10.5H9" stroke={c} strokeWidth="1" strokeLinecap="round"/>{isActive && <circle cx="13" cy="1.5" r="2" fill="#81C784"><animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/></circle>}</svg>,
+      catalog: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Service Store Grid */}<rect x="1" y="1" width="6" height="6" rx="1.5" stroke={c} strokeWidth="1.3" fill={isActive?"#64B5F611":"none"}/><rect x="9" y="1" width="6" height="6" rx="1.5" stroke={c} strokeWidth="1.3" fill={isActive?"#EC489911":"none"}/><rect x="1" y="9" width="6" height="6" rx="1.5" stroke={c} strokeWidth="1.3"/><rect x="9" y="9" width="6" height="6" rx="1.5" stroke={c} strokeWidth="1.3" fill={isActive?"#81C78411":"none"}/>{isActive && <><circle cx="4" cy="4" r="1" fill="#64B5F6"/><circle cx="12" cy="4" r="1" fill="#EC4899"/><circle cx="12" cy="12" r="1" fill="#81C784"/></>}</svg>,
+      knowledge: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Secure Knowledge Vault */}<path d="M2 2.5H7L8 4L9 2.5H14V13.5H9L8 15L7 13.5H2V2.5Z" stroke={c} strokeWidth="1.3" strokeLinejoin="round" fill={ac+"11"}/><line x1="8" y1="4" x2="8" y2="15" stroke={c} strokeWidth="0.8"/>{isActive && <><path d="M4 5.5H6.5" stroke="#06B6D4" strokeWidth="0.8" strokeLinecap="round"/><path d="M4 7.5H6" stroke="#06B6D4" strokeWidth="0.8" strokeLinecap="round"/><path d="M4 9.5H6.5" stroke="#06B6D4" strokeWidth="0.8" strokeLinecap="round"/><path d="M9.5 5.5H12" stroke="#64B5F6" strokeWidth="0.8" strokeLinecap="round"/><path d="M9.5 7.5H11.5" stroke="#64B5F6" strokeWidth="0.8" strokeLinecap="round"/><path d="M9.5 9.5H12" stroke="#64B5F6" strokeWidth="0.8" strokeLinecap="round"/></>}</svg>,
+      assets: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* CMDB Network Topology */}<rect x="5" y="1" width="6" height="4" rx="1" stroke={c} strokeWidth="1.3" fill={isActive?"#06B6D411":"none"}/><rect x="0.5" y="11" width="5" height="3.5" rx="1" stroke={c} strokeWidth="1.3"/><rect x="10.5" y="11" width="5" height="3.5" rx="1" stroke={c} strokeWidth="1.3"/><line x1="8" y1="5" x2="8" y2="8" stroke={c} strokeWidth="1.2"/><line x1="3" y1="11" x2="8" y2="8" stroke={c} strokeWidth="1"/><line x1="13" y1="11" x2="8" y2="8" stroke={c} strokeWidth="1"/>{isActive && <circle cx="8" cy="8" r="1.5" fill="#06B6D4"><animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/></circle>}</svg>,
+      approvals: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Secure Approval Shield */}<path d="M8 1L14 4V8.5C14 11.5 11.5 14 8 15C4.5 14 2 11.5 2 8.5V4L8 1Z" stroke={c} strokeWidth="1.3" fill={isActive?"#4CAF5011":"none"}/><path d="M5.5 8L7.2 10L10.5 5.5" stroke={isActive?"#4CAF50":c} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>{isActive && <path d="M8 1L14 4V8.5C14 11.5 11.5 14 8 15C4.5 14 2 11.5 2 8.5V4L8 1Z" stroke="#4CAF50" strokeWidth="0.4" fill="none"><animate attributeName="opacity" values="0.5;0;0.5" dur="2.5s" repeatCount="indefinite"/></path>}</svg>,
+      sla: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* SLA Timer Gauge */}<circle cx="8" cy="8.5" r="6" stroke={c} strokeWidth="1.3"/><circle cx="8" cy="8.5" r="6" stroke={isActive?"#FFB347":"none"} strokeWidth="2" strokeDasharray="9.42 28.27" strokeLinecap="round" transform="rotate(-90 8 8.5)" fill="none">{isActive && <animate attributeName="strokeDashoffset" values="0;-37.7;0" dur="6s" repeatCount="indefinite"/>}</circle><line x1="8" y1="8.5" x2="8" y2="4.5" stroke={isActive?"#FFB347":c} strokeWidth="1.5" strokeLinecap="round"/><circle cx="8" cy="8.5" r="1" fill={isActive?"#FFB347":c}/><line x1="8" y1="1.5" x2="8" y2="2.5" stroke={c} strokeWidth="1.2"/></svg>,
+      ai: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Neural AI Brain */}<circle cx="8" cy="8" r="6.5" stroke={isActive?"#6366F1":c} strokeWidth="1.3" fill={ac+"08"}/><path d="M5 6C5 6 6.5 5 8 5C9.5 5 11 6 11 6" stroke={isActive?"#06B6D4":c} strokeWidth="1" strokeLinecap="round"/><path d="M5 10C5 10 6.5 11 8 11C9.5 11 11 10 11 10" stroke={isActive?"#EC4899":c} strokeWidth="1" strokeLinecap="round"/><line x1="5" y1="8" x2="11" y2="8" stroke={c} strokeWidth="0.6"/><circle cx="5.5" cy="8" r="1" fill={isActive?"#06B6D4":c}><animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/></circle><circle cx="8" cy="8" r="1" fill={isActive?"#6366F1":c}><animate attributeName="opacity" values="0.5;1;0.5" dur="1.5s" repeatCount="indefinite"/></circle><circle cx="10.5" cy="8" r="1" fill={isActive?"#EC4899":c}><animate attributeName="opacity" values="0.3;1;0.3" dur="1.5s" repeatCount="indefinite"/></circle>{isActive && <circle cx="8" cy="8" r="6.5" stroke="#6366F1" strokeWidth="0.4"><animate attributeName="r" values="6.5;7.5;6.5" dur="3s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.4;0;0.4" dur="3s" repeatCount="indefinite"/></circle>}</svg>,
+      admin: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Security Gear */}<circle cx="8" cy="8" r="2.5" stroke={c} strokeWidth="1.3"/><path d="M8 0.5V2.5M8 13.5V15.5M0.5 8H2.5M13.5 8H15.5M2.3 2.3L3.8 3.8M12.2 12.2L13.7 13.7M13.7 2.3L12.2 3.8M3.8 12.2L2.3 13.7" stroke={isActive?"#6366F1":c} strokeWidth="1" strokeLinecap="round"/>{isActive && <><circle cx="8" cy="8" r="1" fill="#6366F1"/><animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="20s" repeatCount="indefinite"/></>}</svg>,
+      reports: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Analytics Dashboard */}<rect x="1" y="1" width="14" height="14" rx="2" stroke={c} strokeWidth="1.3"/><path d="M1 5H15" stroke={c} strokeWidth="0.6"/><rect x="3" y="7" width="2" height="6" rx="0.5" fill={isActive?"#64B5F6":c+"44"} stroke="none">{isActive && <animate attributeName="height" values="2;6;2" dur="2s" repeatCount="indefinite"/>}</rect><rect x="7" y="8" width="2" height="5" rx="0.5" fill={isActive?"#81C784":c+"33"} stroke="none">{isActive && <animate attributeName="height" values="1;5;1" dur="2.5s" repeatCount="indefinite"/>}</rect><rect x="11" y="6.5" width="2" height="6.5" rx="0.5" fill={isActive?"#EC4899":c+"33"} stroke="none">{isActive && <animate attributeName="height" values="3;6.5;3" dur="3s" repeatCount="indefinite"/>}</rect></svg>,
+      cybernews: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Threat Intelligence Shield */}<path d="M8 1L14 3.5V7.5C14 11 11.5 13.5 8 15C4.5 13.5 2 11 2 7.5V3.5L8 1Z" stroke={isActive?"#FF6B6B":c} strokeWidth="1.3" fill={isActive?"#FF6B6B08":"none"}/><path d="M6 7.5L7.5 9L10.5 6" stroke={isActive?"#FF6B6B":c} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="13" cy="2" r="2" fill={isActive?"#FF4444":"#FF6B6B"} stroke="none"><animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/></circle></svg>,
+      productivity: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Productivity Rocket */}<path d="M8 1L10 4H6L8 1Z" stroke={isActive?"#0078D4":c} strokeWidth="1.2" fill={isActive?"#0078D422":"none"}/><rect x="6" y="4" width="4" height="7" rx="1" stroke={isActive?"#0078D4":c} strokeWidth="1.2" fill={isActive?"#0078D411":"none"}/><path d="M4.5 7L6 6V9L4.5 8Z" stroke={isActive?"#00BCF2":c} strokeWidth="0.8" fill={isActive?"#00BCF222":"none"}/><path d="M11.5 7L10 6V9L11.5 8Z" stroke={isActive?"#00BCF2":c} strokeWidth="0.8" fill={isActive?"#00BCF222":"none"}/><path d="M6.5 11L7 14H9L9.5 11" stroke={isActive?"#FF8C00":c} strokeWidth="0.8" strokeLinecap="round"/>{isActive && <><circle cx="8" cy="7" r="0.8" fill="#0078D4"><animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/></circle><path d="M7 14L8 15.5L9 14" stroke="#FF8C00" strokeWidth="0.6" strokeLinecap="round"><animate attributeName="opacity" values="1;0.2;1" dur="1s" repeatCount="indefinite"/></path></>}</svg>,
+      customers: <svg width={sz} height={sz} viewBox="0 0 16 16" fill="none">{/* Customer Building */}<rect x="2" y="4" width="12" height="11" rx="1.5" stroke={c} strokeWidth="1.3" fill={isActive?"#EC489911":"none"}/><rect x="5" y="1" width="6" height="5" rx="1" stroke={isActive?"#EC4899":c} strokeWidth="1" fill={isActive?"#EC489908":"none"}/><circle cx="8" cy="3" r="1" fill={isActive?"#EC4899":c}/><rect x="4.5" y="7" width="2.5" height="2" rx="0.5" stroke={isActive?"#64B5F6":c} strokeWidth="0.8"/><rect x="9" y="7" width="2.5" height="2" rx="0.5" stroke={isActive?"#64B5F6":c} strokeWidth="0.8"/><rect x="6" y="11" width="4" height="4" rx="0.5" stroke={isActive?"#FFB347":c} strokeWidth="0.8" fill={isActive?"#FFB34711":"none"}/>{isActive && <circle cx="8" cy="3" r="1" fill="#EC4899"><animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/></circle>}</svg>,
+    };
+    return <span style={{ width: 20, textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{icons[type] || <span style={{ fontSize: 15 }}>•</span>}</span>;
+  };
+
+  const NAV = [
+    { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
+    { id: "productivity", label: "Productivity", count: smartTasks.filter(t => t.status === "pending").length, accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #00BCF218)" },
+    { id: "incidents", label: "Incidents", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed"), accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
+    { id: "problems", label: "Problems", count: problems.length, accent: "#CE93D8", gradient: "linear-gradient(135deg, #CE93D808, #CE93D818)" },
+    { id: "changes", label: "Changes", count: changes.filter(c => c.status === "Awaiting Approval").length, accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
+    { id: "requests", label: "Requests", count: requests.filter(r => r.status === "Open" || r.status === "In Progress").length, accent: "#81C784", gradient: "linear-gradient(135deg, #81C78408, #81C78418)" },
+    { id: "catalog", label: "Service Catalog", accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
+    { id: "knowledge", label: "Knowledge Portal", accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #0089D618)" },
+    { id: "assets", label: "Assets / CMDB", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #06B6D418)" },
+    { id: "approvals", label: "Approvals", count: changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, accent: "#4CAF50", gradient: "linear-gradient(135deg, #4CAF5008, #4CAF5018)" },
+    { id: "sla", label: "SLA Tracker", accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
+    { id: "reports", label: "Reports", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
+    { id: "customers", label: "Customers", count: customers.filter(c => c.status === "Active").length, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #EC489918)" },
+    { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
+    { id: "cybernews", label: "Cyber News", count: (() => { const sev = ["Critical","High"]; return [{ severity: "Critical", status: "Active" },{ severity: "High", status: "Investigating" },{ severity: "Medium", status: "Acknowledged" },{ severity: "Low", status: "Scheduled" },{ severity: "High", status: "Active" }].filter(a => sev.includes(a.severity)).length; })(), critical: true, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
+    { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
+  ];
+
+  // ─── Dashboard ────────────────────────────────────────────────────────
+  const Dashboard = () => {
+    const role = currentUser.rbacRole;
+    const isManagement = ["VGC Dev Admin", "Tenant Admin", "Administrator", "Service Desk Lead", "Change Manager", "Problem Manager", "Asset Manager"].includes(role);
+    const isEngineer = ["L1 Support Engineer", "L2 Support Engineer", "Network Engineer"].includes(role);
+
+    // Shared metrics
+    const openInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length;
+    const critInc = incidents.filter(i => i.priority === "Sev-A" && i.status !== "Resolved").length;
+    const highInc = incidents.filter(i => i.priority === "Sev-B" && i.status !== "Resolved").length;
+    const slaBreaches = incidents.filter(i => i.created > i.slaTarget && i.status !== "Resolved").length;
+    const pendingApprovals = changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length;
+    const resolvedThisWeek = incidents.filter(i => i.status === "Resolved").length;
+    const totalIncidents = incidents.length;
+    const aiTriagedCount = incidents.filter(i => i.aiTriaged).length;
+    const aiTriagedPct = totalIncidents > 0 ? Math.round((aiTriagedCount / totalIncidents) * 100) : 0;
+    const avgConfidence = totalIncidents > 0 ? Math.round(incidents.reduce((s, i) => s + (i.aiConfidence || 0), 0) / totalIncidents) : 0;
+    const slaCompliance = totalIncidents > 0 ? Math.round(((totalIncidents - slaBreaches) / totalIncidents) * 100) : 100;
+
+    // Engineer-specific
+    const myTickets = incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed");
+    const myResolved = incidents.filter(i => i.assignee === currentUser.name && i.status === "Resolved").length;
+
+    // Security alerts mock
+    const securityAlerts = SECURITY_ALERTS;
+    const sevColors = { Critical: "#FF4444", High: "#FF6B6B", Medium: "#FFB347", Low: "#64B5F6" };
+
+    // Donut chart component
+    const DonutKPI = ({ value, max, label, color, sub }) => (
+      <div style={{ textAlign: "center", padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
+        <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 }}>{label}</div>
+        <div style={{ position: "relative", width: 72, height: 72, margin: "0 auto 8px" }}>
+          <svg width="72" height="72" viewBox="0 0 72 72">
+            <circle cx="36" cy="36" r="30" fill="none" stroke="#1E2130" strokeWidth="5" />
+            <circle cx="36" cy="36" r="30" fill="none" stroke={color} strokeWidth="5"
+              strokeDasharray={`${(value / max) * 188.5} 188.5`}
+              strokeLinecap="round" transform="rotate(-90 36 36)" style={{ transition: "stroke-dasharray 0.6s" }} />
+          </svg>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color, fontFamily: "'Space Grotesk', sans-serif" }}>{value}{typeof max === "number" && max <= 100 ? "%" : ""}</div>
+        </div>
+        {sub && <div style={{ fontSize: 10, color: color + "CC", fontWeight: 600 }}>{sub}</div>}
+      </div>
+    );
+
+    const isAdmin = currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Administrator" || currentUser.rbacRole === "Tenant Admin";
+    const isDevAdmin = currentUser.rbacRole === "VGC Dev Admin";
+    const canToggle = (cardId) => {
+      const card = cardVisibility[cardId];
+      if (!card) return false;
+      if (isDevAdmin) return true;
+      if (card.important) return isAdmin;
+      return true;
+    };
+    const toggleCard = (cardId) => {
+      if (!canToggle(cardId)) return;
+      setCardVisibility(prev => ({ ...prev, [cardId]: { ...prev[cardId], on: !prev[cardId].on } }));
+    };
+    const CardHeader = ({ cardId, children }) => (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>{children}</div>
+        {(canToggle(cardId) || isAdmin || isDevAdmin) && (
+          <button onClick={() => toggleCard(cardId)} title={canToggle(cardId) ? "Toggle card visibility" : "Admin only"} style={{
+            width: 32, height: 18, borderRadius: 9, border: "none", cursor: canToggle(cardId) ? "pointer" : "not-allowed",
+            background: cardVisibility[cardId]?.on ? "#4CAF50" : "#3A3F55", position: "relative", transition: "background 0.2s", flexShrink: 0, opacity: canToggle(cardId) ? 1 : 0.4
+          }}>
+            <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: cardVisibility[cardId]?.on ? 16 : 2, transition: "left 0.2s" }} />
+          </button>
+        )}
+      </div>
+    );
+
+    return (
+      <div>
+        {/* ═══ VGC HELPDESK CONTACT — Always Visible ═══ */}
+        <div style={{
+          background: "linear-gradient(135deg, #0078D412, #6366F112, #06B6D412)", borderRadius: 10,
+          border: "1px solid #0078D433", padding: "12px 20px", marginBottom: 16,
+          display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 8, background: "linear-gradient(135deg, #0078D4, #6366F1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>📞</div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>VGC Helpdesk</div>
+              <div style={{ fontSize: 10, color: "#8B8FA3" }}>Central IT Support Contact</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13 }}>📧</span>
+              <a href="mailto:help@vgctechnology.com" style={{ fontSize: 12, color: "#64B5F6", textDecoration: "none", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>help@vgctechnology.com</a>
+            </div>
+            <div style={{ width: 1, height: 16, background: "#1E2130" }}/>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13 }}>☎️</span>
+              <a href="tel:+6569781299" style={{ fontSize: 12, color: "#81C784", textDecoration: "none", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>+65 6978 1299</a>
+            </div>
+            <div style={{ width: 1, height: 16, background: "#1E2130" }}/>
+            <div style={{ padding: "4px 10px", borderRadius: 5, background: "#FF6B6B18", border: "1px solid #FF6B6B33" }}>
+              <span style={{ fontSize: 10, color: "#FF6B6B", fontWeight: 600 }}>⚠️ Always call for Sev-A / Urgent cases</span>
+            </div>
+            <div style={{ width: 1, height: 16, background: "#1E2130" }}/>
+            <button onClick={() => setShowVendorCard(!showVendorCard)} style={{
+              display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 6,
+              background: showVendorCard ? "#FFB34722" : "#ffffff06", border: "1px solid " + (showVendorCard ? "#FFB34744" : "#1E2130"),
+              color: showVendorCard ? "#FFB347" : "#8B8FA3", cursor: "pointer", fontSize: 10, fontWeight: 600
+            }}>📋 Product Vendors Contact</button>
+          </div>
+        </div>
+
+        {/* ═══ PRODUCT VENDORS REFERENCE CARD ═══ */}
+        {showVendorCard && (
+          <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #FFB34733", padding: 20, marginBottom: 16, position: "relative" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>📋</span>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Product Vendors Contact</h3>
+                <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FFB34718", color: "#FFB347" }}>Quick Reference</span>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {(currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Tenant Admin") && (
+                  <button onClick={() => setShowAddVendor(!showAddVendor)} style={{ padding: "4px 10px", borderRadius: 5, background: "#6366F118", border: "1px solid #6366F133", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>{showAddVendor ? "✕ Cancel" : "＋ Add Vendor"}</button>
+                )}
+                <button onClick={() => setShowVendorCard(false)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 14 }}>✕</button>
+              </div>
+            </div>
+            {/* Add Vendor Form */}
+            {showAddVendor && (currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Tenant Admin") && (
+              <div style={{ background: "#0A0C14", borderRadius: 8, border: "1px solid #6366F122", padding: 16, marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", marginBottom: 10 }}>➕ New Vendor Entry</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  <input id="vnd-name" placeholder="Vendor Name *" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0F1117", color: "#E8ECF4", fontSize: 11, outline: "none" }}/>
+                  <input id="vnd-email" placeholder="Support Email" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0F1117", color: "#E8ECF4", fontSize: 11, outline: "none" }}/>
+                  <input id="vnd-phone" placeholder="Support Phone" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0F1117", color: "#E8ECF4", fontSize: 11, outline: "none" }}/>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  <input id="vnd-category" placeholder="Category (e.g. Cloud, Security)" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0F1117", color: "#E8ECF4", fontSize: 11, outline: "none" }}/>
+                  <input id="vnd-response" placeholder="Response Expectations" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0F1117", color: "#E8ECF4", fontSize: 11, outline: "none" }}/>
+                </div>
+                <textarea id="vnd-sop" placeholder="Escalation SOP (step by step)" rows={2} style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0F1117", color: "#E8ECF4", fontSize: 11, outline: "none", resize: "vertical", boxSizing: "border-box", marginBottom: 8 }}/>
+                <button onClick={() => {
+                  const n = document.getElementById("vnd-name")?.value?.trim();
+                  if (!n) return;
+                  const nv = { id: genId("V"), name: n, category: document.getElementById("vnd-category")?.value || "", supportEmail: document.getElementById("vnd-email")?.value || "", supportPhone: document.getElementById("vnd-phone")?.value || "", escalationSOP: document.getElementById("vnd-sop")?.value || "", docLinks: [], responseExpectation: document.getElementById("vnd-response")?.value || "", notes: "" };
+                  const updated = [...vendors, nv]; setVendors(updated); _save("vgc_vendors", updated); setShowAddVendor(false);
+                }} style={{ padding: "6px 16px", borderRadius: 5, background: "#6366F1", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Add Vendor</button>
+              </div>
+            )}
+            {/* Vendor List */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {vendors.map(v => (
+                <div key={v.id} style={{ background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130", padding: "12px 16px", cursor: "pointer", transition: "all 0.2s" }}
+                  onClick={() => setVendorDetailId(vendorDetailId === v.id ? null : v.id)}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#0078D444"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "#1E2130"}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4" }}>{v.name}</div>
+                    <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#0078D418", color: "#0078D4" }}>{v.category}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#8B8FA3" }}>
+                    {v.supportEmail && <span>📧 {v.supportEmail}</span>}
+                    {v.supportPhone && <span>☎️ {v.supportPhone}</span>}
+                  </div>
+                  {v.responseExpectation && <div style={{ fontSize: 9, color: "#06B6D4", marginTop: 4 }}>⏱️ {v.responseExpectation}</div>}
+                  {/* Expanded Detail */}
+                  {vendorDetailId === v.id && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1E2130" }} onClick={e => e.stopPropagation()}>
+                      {v.escalationSOP && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: "#FFB347", marginBottom: 4 }}>📋 Escalation SOP</div>
+                          <div style={{ fontSize: 10, color: "#C4CAD6", whiteSpace: "pre-wrap", lineHeight: 1.5, background: "#0F1117", borderRadius: 4, padding: 8 }}>{v.escalationSOP}</div>
+                        </div>
+                      )}
+                      {v.docLinks && v.docLinks.length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64B5F6", marginBottom: 4 }}>🔗 Documentation</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {v.docLinks.map((d, i) => <a key={i} href={d.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 9, color: "#64B5F6", textDecoration: "none", padding: "2px 8px", borderRadius: 4, background: "#64B5F608", border: "1px solid #64B5F622" }}>{d.label} ↗</a>)}
+                          </div>
+                        </div>
+                      )}
+                      {v.notes && <div style={{ fontSize: 9, color: "#5A6178", fontStyle: "italic" }}>📝 {v.notes}</div>}
+                      {(currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Tenant Admin") && (
+                        <button onClick={() => { const updated = vendors.filter(vd => vd.id !== v.id); setVendors(updated); _save("vgc_vendors", updated); setVendorDetailId(null); }} style={{ marginTop: 6, padding: "3px 10px", borderRadius: 4, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 9, cursor: "pointer" }}>🗑️ Remove Vendor</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* AI Vendor Guidance */}
+            <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 6, background: "linear-gradient(135deg, #6366F108, #06B6D408)", border: "1px solid #6366F122" }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#6366F1", marginBottom: 4 }}>🤖 AI Vendor Guidance</div>
+              <div style={{ fontSize: 10, color: "#8B8FA3", lineHeight: 1.5 }}>AI Assist automatically references vendor SOPs based on case nature and urgency. During incident triage, AI will suggest when vendor escalation is required and provide official references and correct links to guide engineers. Goal: correct action, first time — SLA-compliant escalation, faster resolution.</div>
+            </div>
+          </div>
+        )}
+
+        {/* Role indicator + Personalize button */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+          <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>DASHBOARD VIEW:</div>
+          <div style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: isManagement ? "#6366F122" : "#06B6D422", color: isManagement ? "#6366F1" : "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>
+            {isManagement ? "MANAGEMENT" : isEngineer ? "ENGINEER" : role.toUpperCase()}
+          </div>
+          <div style={{ fontSize: 11, color: "#3A3F55" }}>|</div>
+          <div style={{ fontSize: 11, color: "#5A6178" }}>{currentUser.name} · {role}</div>
+          <button onClick={() => setShowCardSettings(!showCardSettings)} style={{
+            marginLeft: "auto", display: "flex", alignItems: "center", gap: 6,
+            padding: "5px 12px", borderRadius: 6, border: "1px solid #1E2130", background: showCardSettings ? "#6366F122" : "#0F1117",
+            color: showCardSettings ? "#6366F1" : "#5A6178", cursor: "pointer", fontSize: 11, fontFamily: "'JetBrains Mono', monospace"
+          }}>
+            ⚙️ Personalize
+          </button>
+        </div>
+
+        {/* Card Personalization Panel */}
+        {showCardSettings && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #6366F133", padding: 16, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                ⚙️ Dashboard Card Personalization
+              </h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {isAdmin && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#EC489922", color: "#EC4899", fontFamily: "'JetBrains Mono', monospace" }}>ADMIN — Can toggle important cards</span>}
+                {isDevAdmin && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#4CAF5022", color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>DEV ADMIN — Full access</span>}
+                {!isAdmin && !isDevAdmin && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#1E2130", color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>🔒 Important cards locked by Admin</span>}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {Object.entries(cardVisibility).filter(([, c]) => {
+                if (c.roles.includes("all")) return true;
+                if (isManagement && c.roles.includes("management")) return true;
+                if (isEngineer && c.roles.includes("engineer")) return true;
+                return false;
+              }).map(([id, card]) => (
+                <div key={id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "8px 12px", background: "#0A0C14", borderRadius: 6,
+                  border: `1px solid ${card.important ? "#FF444422" : "#1E213044"}`,
+                  opacity: canToggle(id) ? 1 : 0.6
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {card.important && <span style={{ fontSize: 8, padding: "1px 4px", borderRadius: 3, background: "#FF444422", color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>IMPORTANT</span>}
+                    <span style={{ fontSize: 11, color: "#C4CAD6" }}>{card.label}</span>
+                  </div>
+                  <button onClick={() => toggleCard(id)} disabled={!canToggle(id)} style={{
+                    width: 32, height: 18, borderRadius: 9, border: "none",
+                    cursor: canToggle(id) ? "pointer" : "not-allowed",
+                    background: card.on ? "#4CAF50" : "#3A3F55", position: "relative", transition: "background 0.2s"
+                  }}>
+                    <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: card.on ? 16 : 2, transition: "left 0.2s" }} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ═══ MANAGEMENT VIEW ═══ */}
+        {isManagement && (<>
+          {/* Executive KPI Row */}
+          {cardVisibility.execKpis.on && <div className="vgc-kpi-grid-6" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 20 }}>
+            {[
+              { label: "Total Cases", value: totalIncidents, icon: "📊", accent: "#6366F1", trend: "+3 today", link: "incidents" },
+              { label: "Open Cases", value: openInc, icon: "📂", accent: "#FF6B6B", trend: critInc > 0 ? `${critInc} critical` : "0 critical", critical: critInc > 0, link: "incidents" },
+              { label: "SLA Compliance", value: `${slaCompliance}%`, icon: "⏱️", accent: slaCompliance >= 90 ? "#4CAF50" : slaCompliance >= 75 ? "#FFB347" : "#FF4444", trend: slaCompliance >= 90 ? "On Track" : "At Risk", critical: slaCompliance < 75, link: "sla" },
+              { label: "MTTR (hrs)", value: "3.2", icon: "🔧", accent: "#06B6D4", trend: "↓ 12% vs last week", link: "reports" },
+              { label: "First Call Resolution", value: "78%", icon: "🎯", accent: "#81C784", trend: "Target: 80%", link: "reports" },
+              { label: "Customer Satisfaction", value: "4.6/5", icon: "⭐", accent: "#F59E0B", trend: "↑ 0.2 vs last month", link: "reports" },
+            ].map((kpi, i) => (
+              <div key={i} onClick={() => kpi.link && setActiveModule(kpi.link)} style={{ background: kpi.critical ? "#1A080811" : "#0F1117", borderRadius: 8, border: kpi.critical ? "1px solid #FF444444" : "1px solid #1E2130", padding: "14px 16px", position: "relative", overflow: "hidden", animation: kpi.critical ? "criticalGlow 2s ease-in-out infinite" : "none", cursor: kpi.link ? "pointer" : "default", transition: "transform 0.15s, border-color 0.2s" }}
+                onMouseEnter={e => { if (kpi.link) { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = kpi.accent + "55"; } }}
+                onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = kpi.critical ? "#FF444444" : "#1E2130"; }}>
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: kpi.critical ? 3 : 2, background: kpi.accent }} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px" }}>{kpi.label}</span>
+                  <span style={{ fontSize: 16 }}>{kpi.icon}</span>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: kpi.critical ? "#FF6B6B" : "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 4 }}>{kpi.value}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 10, color: kpi.accent, fontWeight: 500 }}>{kpi.trend}</div>
+                  {kpi.link && <span style={{ fontSize: 10, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>→</span>}
+                </div>
+              </div>
+            ))}
+          </div>}
+
+          {/* Case Analysis & SLA Breakdown */}
+          {(cardVisibility.caseAnalysis.on || cardVisibility.priorityDist.on || cardVisibility.slaStatus.on) && <div className="vgc-kpi-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+            {/* Case Volume by Category */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("incidents")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#6366F1"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#6366F1" }}>📊</span> Case Analysis by Category <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>View All →</span>
+              </h3>
+              {["Email", "Network", "Hardware", "Software", "Database", "Security"].map((cat, i) => {
+                const count = incidents.filter(inc => inc.category === cat).length;
+                const maxC = Math.max(3, ...["Email", "Network", "Hardware", "Software", "Database", "Security"].map(c => incidents.filter(inc => inc.category === c).length));
+                const colors = ["#6366F1", "#06B6D4", "#81C784", "#FFB347", "#EC4899", "#FF6B6B"];
+                return (
+                  <div key={cat} onClick={() => setActiveModule("incidents")} style={{ marginBottom: 10, cursor: "pointer", padding: "2px 4px", borderRadius: 4, transition: "background 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = colors[i] + "08"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+                      <span style={{ color: "#C4CAD6" }}>{cat}</span>
+                      <span style={{ color: colors[i], fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{count}</span>
+                    </div>
+                    <div style={{ background: "#0A0C14", borderRadius: 3, height: 6, overflow: "hidden" }}>
+                      <div style={{ width: `${(count / maxC) * 100}%`, height: "100%", background: `linear-gradient(90deg, ${colors[i]}, ${colors[i]}88)`, borderRadius: 3, minWidth: count > 0 ? 4 : 0, transition: "width 0.4s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Priority Distribution */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("incidents")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#FF6B6B"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#FF6B6B" }}>🔥</span> Priority Distribution <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>View All →</span>
+              </h3>
+              {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => {
+                const count = incidents.filter(i => i.priority === p).length;
+                const pColor = PRIORITY_COLORS[p]?.dot || "#5A6178";
+                return (
+                  <div key={p} onClick={() => setActiveModule("incidents")} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${pColor}22`, cursor: "pointer", transition: "background 0.15s, border-color 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = pColor + "0A"; e.currentTarget.style.borderColor = pColor + "44"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "#0A0C14"; e.currentTarget.style.borderColor = pColor + "22"; }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: pColor, boxShadow: `0 0 6px ${pColor}66` }} />
+                    <span style={{ flex: 1, fontSize: 12, color: "#C4CAD6" }}>{p}</span>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: pColor, fontFamily: "'Space Grotesk', sans-serif" }}>{count}</span>
+                    <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", width: 36, textAlign: "right" }}>{totalIncidents > 0 ? Math.round((count / totalIncidents) * 100) : 0}%</span>
+                    <span style={{ fontSize: 10, color: "#5A617844" }}>→</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* SLA by Priority */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("sla")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#FFB347"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#FFB347" }}>⏱️</span> SLA Status by Priority <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>View All →</span>
+              </h3>
+              {[
+                { priority: "Sev-A", target: "4 biz hrs", met: critInc === 0 ? 100 : 50, breached: critInc > 0 ? 1 : 0 },
+                { priority: "Sev-B", target: "4 biz hrs", met: 85, breached: slaBreaches > 0 ? 1 : 0 },
+                { priority: "Sev-C", target: "9 biz hrs", met: 95, breached: 0 },
+                { priority: "Sev-D", target: "27 biz hrs", met: 100, breached: 0 },
+              ].map(s => {
+                const barColor = s.met >= 90 ? "#4CAF50" : s.met >= 75 ? "#FFB347" : "#FF4444";
+                return (
+                  <div key={s.priority} style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+                      <span style={{ color: "#C4CAD6" }}>{s.priority} <span style={{ color: "#5A6178" }}>({s.target})</span></span>
+                      <span style={{ color: barColor, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{s.met}% met</span>
+                    </div>
+                    <div style={{ background: "#0A0C14", borderRadius: 3, height: 6, overflow: "hidden" }}>
+                      <div style={{ width: `${s.met}%`, height: "100%", background: barColor, borderRadius: 3, transition: "width 0.4s" }} />
+                    </div>
+                    {s.breached > 0 && <div style={{ fontSize: 10, color: "#FF4444", marginTop: 2 }}>⚠ {s.breached} breached</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>}
+
+          {/* Team Performance & Financial Impact */}
+          {(cardVisibility.teamWorkload.on || cardVisibility.businessImpact.on) && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+            {/* Team Workload */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("reports")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#06B6D4"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#06B6D4" }}>👥</span> Team Workload & Performance <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Report →</span>
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                {USERS.filter(u => u.rbacRole !== "End User" && u.rbacRole !== "Read Only").map(user => {
+                  const assigned = incidents.filter(i => i.assignee === user.name && i.status !== "Resolved" && i.status !== "Closed").length;
+                  const resolved = incidents.filter(i => i.assignee === user.name && i.status === "Resolved").length;
+                  const load = Math.min(100, assigned * 25);
+                  const loadColor = load >= 75 ? "#FF6B6B" : load >= 50 ? "#FFB347" : "#4CAF50";
+                  return (
+                    <div key={user.id} onClick={() => setActiveModule("incidents")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer", transition: "background 0.15s" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#6366F108"}
+                      onMouseLeave={e => e.currentTarget.style.background = "#0A0C14"}>
+                      <div style={{ width: 28, height: 28, borderRadius: 6, background: "linear-gradient(135deg, #6366F1, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{user.avatar}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{user.name}</div>
+                        <div style={{ fontSize: 10, color: "#5A6178" }}>{user.rbacRole}</div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: loadColor, fontFamily: "'JetBrains Mono', monospace" }}>{assigned} open</div>
+                        <div style={{ fontSize: 10, color: "#81C784" }}>{resolved} resolved</div>
+                      </div>
+                      <div style={{ width: 50, flexShrink: 0 }}>
+                        <div style={{ background: "#1E2130", borderRadius: 3, height: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${load}%`, height: "100%", background: loadColor, borderRadius: 3 }} />
+                        </div>
+                        <div style={{ fontSize: 9, color: "#5A6178", textAlign: "center", marginTop: 2 }}>{load}%</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Business Impact & Cost */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("reports")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#F59E0B"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#F59E0B" }}>💰</span> Business Impact & Cost Savings <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Report →</span>
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                {[
+                  { label: "Est. Downtime Cost", value: "$12,400", color: "#FF6B6B", sub: "This month" },
+                  { label: "AI Cost Savings", value: "$8,200", color: "#4CAF50", sub: "Automation ROI" },
+                  { label: "Avg Cost per Ticket", value: "$45", color: "#06B6D4", sub: "↓ 15% vs last Q" },
+                  { label: "Productivity Saved", value: "124 hrs", color: "#CE93D8", sub: "AI auto-resolution" },
+                ].map((m, i) => (
+                  <div key={i} onClick={() => setActiveModule("reports")} style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer", transition: "background 0.15s, border-color 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = m.color + "08"; e.currentTarget.style.borderColor = m.color + "33"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "#0A0C14"; e.currentTarget.style.borderColor = "#1E213044"; }}>
+                    <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>{m.label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: m.color, fontFamily: "'Space Grotesk', sans-serif" }}>{m.value}</div>
+                    <div style={{ fontSize: 10, color: m.color + "99", marginTop: 2 }}>{m.sub}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Trend Weekly */}
+              <div style={{ padding: 12, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8 }}>WEEKLY CASE VOLUME TREND</div>
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 50 }}>
+                  {[18, 24, 15, 22, 19, 12, totalIncidents].map((v, i) => (
+                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                      <div style={{ fontSize: 9, color: "#5A6178" }}>{v}</div>
+                      <div style={{ width: "100%", height: `${(v / 30) * 40}px`, background: i === 6 ? "linear-gradient(180deg, #6366F1, #6366F188)" : "#1E2130", borderRadius: 2, minHeight: 4 }} />
+                      <div style={{ fontSize: 8, color: "#3A3F55" }}>{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i]}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>}
+
+          {/* Pending Approvals */}
+          {cardVisibility.pendingApprovals.on && <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+            <h3 onClick={() => setActiveModule("approvals")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#64B5F6"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+              <span style={{ color: "#64B5F6" }}>✓</span> Pending Approvals <span style={{ fontSize: 11, color: "#5A6178", fontWeight: 400 }}>({pendingApprovals})</span> <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Manage →</span>
+            </h3>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {changes.filter(c => c.status === "Awaiting Approval").map(ch => (
+                <div key={ch.id} style={{ padding: "14px 18px", borderRadius: 8, background: "#0A0C14", border: "1px solid #1E213044", flex: "1 1 220px", minWidth: 220, cursor: "pointer" }} onClick={() => { setDetailItem(ch); setModal("changeDetail"); }}>
+                  <div style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>{ch.id}</div>
+                  <div style={{ color: "#C4CAD6", fontSize: 13, marginBottom: 8 }}>{ch.title}</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Badge color={{ bg: "#2D1F0A", text: "#FFB347" }}>Awaiting</Badge>
+                    <Badge color={PRIORITY_COLORS[ch.priority]}>{ch.risk} Risk</Badge>
+                  </div>
+                </div>
+              ))}
+              {requests.filter(r => r.status === "Pending Approval").map(req => (
+                <div key={req.id} style={{ padding: "14px 18px", borderRadius: 8, background: "#0A0C14", border: "1px solid #1E213044", flex: "1 1 220px", minWidth: 220, cursor: "pointer" }} onClick={() => { setDetailItem(req); setModal("requestDetail"); }}>
+                  <div style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>{req.id}</div>
+                  <div style={{ color: "#C4CAD6", fontSize: 13, marginBottom: 8 }}>{req.service}</div>
+                  <Badge color={{ bg: "#2D1F0A", text: "#FFB347" }}>Pending Approval</Badge>
+                </div>
+              ))}
+              {pendingApprovals === 0 && <div style={{ color: "#5A6178", fontSize: 12, padding: 16 }}>No pending approvals</div>}
+            </div>
+          </div>}
+        </>)}
+
+        {/* ═══ ENGINEER VIEW ═══ */}
+        {isEngineer && (<>
+          {/* Personal KPI Row */}
+          {cardVisibility.personalKpis.on && <div className="vgc-kpi-grid-5" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+            {[
+              { label: "My Open Tickets", value: myTickets.length, icon: "🎫", accent: "#6366F1", link: "incidents" },
+              { label: "My Resolved", value: myResolved, icon: "✅", accent: "#4CAF50", link: "incidents" },
+              { label: "Sev-A Assigned", value: myTickets.filter(t => t.priority === "Sev-A").length, icon: "🔥", accent: "#FF4444", critical: myTickets.some(t => t.priority === "Sev-A"), link: "incidents" },
+              { label: "Avg Response (hrs)", value: "1.4", icon: "⚡", accent: "#06B6D4", link: "sla" },
+              { label: "SLA On-Track", value: `${myTickets.filter(t => t.created <= t.slaTarget).length}/${myTickets.length}`, icon: "⏱️", accent: "#FFB347", link: "sla" },
+            ].map((kpi, i) => (
+              <div key={i} onClick={() => kpi.link && setActiveModule(kpi.link)} style={{ background: kpi.critical ? "#1A080811" : "#0F1117", borderRadius: 8, border: kpi.critical ? "1px solid #FF444444" : "1px solid #1E2130", padding: "14px 16px", position: "relative", overflow: "hidden", animation: kpi.critical ? "criticalGlow 2s ease-in-out infinite" : "none", cursor: kpi.link ? "pointer" : "default", transition: "transform 0.15s, border-color 0.2s" }}
+                onMouseEnter={e => { if (kpi.link) { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = kpi.accent + "55"; } }}
+                onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = kpi.critical ? "#FF444444" : "#1E2130"; }}>
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: kpi.critical ? 3 : 2, background: kpi.accent }} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{kpi.label}</span>
+                  <span style={{ fontSize: 14 }}>{kpi.icon}</span>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: kpi.critical ? "#FF6B6B" : "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{kpi.value}</div>
+                {kpi.link && <div style={{ fontSize: 10, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace", marginTop: 4 }}>→</div>}
+              </div>
+            ))}
+          </div>}
+
+          {/* My Ticket Queue & Quick Actions */}
+          {(cardVisibility.ticketQueue.on || cardVisibility.quickActions.on) && <div className="vgc-grid-2-1" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16, marginBottom: 20 }}>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("incidents")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#6366F1"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#6366F1" }}>🎫</span> My Ticket Queue <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>All Tickets →</span>
+              </h3>
+              {myTickets.length === 0 && <div style={{ color: "#5A6178", fontSize: 12, padding: 20, textAlign: "center" }}>No open tickets assigned to you</div>}
+              {myTickets.map(inc => {
+                const pct = Math.min(100, Math.round((inc.created / inc.slaTarget) * 100));
+                const barColor = pct >= 100 ? "#FF4444" : pct > 75 ? "#FFB347" : "#4CAF50";
+                return (
+                  <div key={inc.id} style={{ padding: "10px 14px", borderRadius: 6, marginBottom: 8, background: "#0A0C14", border: "1px solid #1E213044", cursor: "pointer" }}
+                    onClick={() => { setDetailItem(inc); setModal("incidentDetail"); }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ color: "#64B5F6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{inc.id}</span>
+                        <PriorityDot priority={inc.priority} />
+                        <Badge color={STATUS_COLORS[inc.status] || { bg: "#1E2130", text: "#C4CAD6" }}>{inc.status}</Badge>
+                      </div>
+                      <span style={{ fontSize: 10, color: "#5A6178" }}>{timeAgo(inc.created)}</span>
+                    </div>
+                    <div style={{ color: "#C4CAD6", fontSize: 12, marginBottom: 4 }}>{inc.title}</div>
+                    {inc.customer && <div style={{ fontSize: 10, color: "#CE93D8", marginBottom: 2 }}>🏢 {inc.customer}{inc.customerContact ? ` — ${inc.customerContact}` : ""}</div>}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1, background: "#1E2130", borderRadius: 3, height: 4, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: barColor, borderRadius: 3 }} />
+                      </div>
+                      <span style={{ fontSize: 10, color: barColor, fontFamily: "'JetBrains Mono', monospace" }}>{pct >= 100 ? "BREACHED" : `${pct}%`}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Quick Actions */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⚡ Quick Actions</h3>
+              {[
+                { label: "New Incident", action: () => setModal("newIncident"), color: "#FF6B6B", icon: "🆕" },
+                { label: "Browse KB", action: () => setActiveModule("knowledge"), color: "#64B5F6", icon: "📖" },
+                { label: "View SLA Tracker", action: () => setActiveModule("sla"), color: "#FFB347", icon: "⏱️" },
+                { label: "Service Catalog", action: () => setActiveModule("catalog"), color: "#CE93D8", icon: "📋" },
+                { label: `Assisted by ${currentUser.name} AI`, action: () => setShowAiPanel(!showAiPanel), color: "#6366F1", icon: "🤖" },
+              ].map((qa, i) => (
+                <button key={i} onClick={qa.action} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 6, background: "#0A0C14", border: "1px solid #1E213044", borderRadius: 6, cursor: "pointer", color: "#C4CAD6", fontSize: 12, textAlign: "left" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = qa.color + "44"; e.currentTarget.style.background = qa.color + "08"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E213044"; e.currentTarget.style.background = "#0A0C14"; }}>
+                  <span style={{ fontSize: 15 }}>{qa.icon}</span>
+                  <span>{qa.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>}
+
+          {/* Unassigned Queue */}
+          {cardVisibility.unassignedQueue.on && <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+            <h3 onClick={() => setActiveModule("incidents")} style={{ margin: "0 0 14px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#FFB347"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+              <span style={{ color: "#FFB347" }}>📥</span> Queue — Unassigned & New Cases <span style={{ fontSize: 11, color: "#5A6178", fontWeight: 400 }}>({incidents.filter(i => i.status === "Open").length})</span> <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>All Incidents →</span>
+            </h3>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {incidents.filter(i => i.status === "Open").map(inc => (
+                <div key={inc.id} style={{ padding: "10px 14px", borderRadius: 6, background: "#0A0C14", border: "1px solid #1E213044", flex: "1 1 280px", minWidth: 280, cursor: "pointer" }}
+                  onClick={() => { setDetailItem(inc); setModal("incidentDetail"); }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <span style={{ color: "#64B5F6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{inc.id}</span>
+                    <PriorityDot priority={inc.priority} />
+                  </div>
+                  <div style={{ color: "#C4CAD6", fontSize: 12, marginBottom: 4 }}>{inc.title}</div>
+                  {inc.customer && <div style={{ fontSize: 10, color: "#CE93D8", marginBottom: 2 }}>🏢 {inc.customer}{inc.customerContact ? ` — ${inc.customerContact}` : ""}</div>}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#5A6178" }}>
+                    <span>{inc.category}</span>
+                    <span>{timeAgo(inc.created)}</span>
+                  </div>
+                </div>
+              ))}
+              {incidents.filter(i => i.status === "Open").length === 0 && <div style={{ color: "#4CAF50", fontSize: 12, padding: 12 }}>✓ Queue is empty — all cases assigned</div>}
+            </div>
+          </div>}
+        </>)}
+
+        {/* ═══ MY AI CO-PILOT — Daily Briefing (Engineer View) ═══ */}
+        {cardVisibility.aiCoPilot?.on && (() => {
+          const myOpenTickets = incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed");
+          const slaAtRisk = myOpenTickets.filter(i => (i.created / i.slaTarget) >= 0.75);
+          const slaBreached = myOpenTickets.filter(i => i.created >= i.slaTarget);
+          const totalResolved = incidents.filter(i => i.assignee === currentUser.name && (i.status === "Resolved" || i.status === "Closed")).length;
+          const avgResolutionHrs = totalResolved > 0 ? Math.round(incidents.filter(i => i.assignee === currentUser.name && (i.status === "Resolved" || i.status === "Closed")).reduce((sum, i) => sum + i.created, 0) / totalResolved) : 0;
+          const workloadScore = Math.min(100, Math.round((myOpenTickets.length / 6) * 100));
+          const balanceStatus = workloadScore <= 40 ? "Healthy" : workloadScore <= 70 ? "Moderate" : "Heavy";
+          const balanceColor = workloadScore <= 40 ? "#81C784" : workloadScore <= 70 ? "#FFB347" : "#FF6B6B";
+          const balanceIcon = workloadScore <= 40 ? "🌿" : workloadScore <= 70 ? "⚡" : "🔥";
+          const aiHandledPct = Math.round((incidents.filter(i => i.aiTriaged).length / Math.max(1, incidents.length)) * 100);
+          const hour = new Date().getHours();
+          const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+          return (
+          <div style={{ background: "linear-gradient(135deg, #0F1117, #111422)", borderRadius: 10, border: "1px solid #6366F122", padding: 0, marginBottom: 20, overflow: "hidden" }}>
+            {/* Gradient accent bar */}
+            <div style={{ height: 3, background: "linear-gradient(90deg, #6366F1, #06B6D4, #81C784, #EC4899)" }} />
+            <div style={{ padding: "20px 24px" }}>
+              {/* Header with greeting */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 15, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 20 }}>🤝</span> My AI Co-Pilot — {greeting}, {currentUser.name.split(" ")[0]}!
+                  </h3>
+                  <p style={{ margin: "4px 0 0", fontSize: 11, color: "#5A6178", fontStyle: "italic" }}>
+                    Your AI works alongside you — assisting, never replacing. Focus on what matters most.
+                  </p>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Work-Life Balance</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ fontSize: 14 }}>{balanceIcon}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: balanceColor, fontFamily: "'Space Grotesk', sans-serif" }}>{balanceStatus}</span>
+                    </div>
+                  </div>
+                  <div style={{ width: 44, height: 44, borderRadius: 10, background: `${balanceColor}15`, border: `2px solid ${balanceColor}44`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                    <svg width="36" height="36" viewBox="0 0 36 36">
+                      <circle cx="18" cy="18" r="14" fill="none" stroke="#1E2130" strokeWidth="3" />
+                      <circle cx="18" cy="18" r="14" fill="none" stroke={balanceColor} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${workloadScore * 0.88} 88`} transform="rotate(-90 18 18)" />
+                    </svg>
+                    <span style={{ position: "absolute", fontSize: 8, fontWeight: 700, color: balanceColor, fontFamily: "'JetBrains Mono', monospace" }}>{workloadScore}%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* KPI Summary Row */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 18 }}>
+                {[
+                  { label: "My Open Tickets", value: myOpenTickets.length, icon: "🎫", color: "#6366F1" },
+                  { label: "SLA At Risk", value: slaAtRisk.length, icon: "⚠️", color: slaAtRisk.length > 0 ? "#FFB347" : "#81C784" },
+                  { label: "SLA Breached", value: slaBreached.length, icon: "🚨", color: slaBreached.length > 0 ? "#FF6B6B" : "#81C784" },
+                  { label: "Resolved Today", value: totalResolved, icon: "✅", color: "#81C784" },
+                  { label: "AI Assisted", value: `${aiHandledPct}%`, icon: "🤖", color: "#06B6D4" },
+                ].map((kpi, i) => (
+                  <div key={i} style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 10px", textAlign: "center", border: `1px solid ${kpi.color}15` }}>
+                    <div style={{ fontSize: 14, marginBottom: 4 }}>{kpi.icon}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: kpi.color, fontFamily: "'Space Grotesk', sans-serif" }}>{kpi.value}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{kpi.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Proactive AI Alerts — SLA, Complaints, Predictions */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+                {/* SLA Predictions & Warnings */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #1E213044" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#FFB347", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                    ⏱️ SLA Predictions & Warnings
+                  </h4>
+                  {slaAtRisk.length === 0 && slaBreached.length === 0 ? (
+                    <div style={{ padding: 12, textAlign: "center", color: "#81C784", fontSize: 11, background: "#81C78408", borderRadius: 6, border: "1px solid #81C78422" }}>
+                      ✅ All your tickets are within SLA — great job!
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {slaBreached.map(t => (
+                        <div key={t.id} onClick={() => { setDetailItem(t); setModal("incidentDetail"); }} style={{ padding: "8px 10px", borderRadius: 6, background: "#FF6B6B08", border: "1px solid #FF6B6B22", cursor: "pointer" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: 11, color: "#FF6B6B", fontWeight: 600 }}>🚨 {t.id} BREACHED</span>
+                            <span style={{ fontSize: 9, color: "#FF6B6B88", fontFamily: "'JetBrains Mono', monospace" }}>{Math.round(t.created)}h / {t.slaTarget}h</span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "#C4CAD6", marginTop: 2 }}>{t.title}</div>
+                          <div style={{ fontSize: 9, color: "#FFB347", marginTop: 3, fontStyle: "italic" }}>💡 AI suggests: Escalate immediately or request extension</div>
+                        </div>
+                      ))}
+                      {slaAtRisk.filter(t => t.created < t.slaTarget).map(t => {
+                        const remaining = Math.round(t.slaTarget - t.created);
+                        return (
+                        <div key={t.id} onClick={() => { setDetailItem(t); setModal("incidentDetail"); }} style={{ padding: "8px 10px", borderRadius: 6, background: "#FFB34708", border: "1px solid #FFB34722", cursor: "pointer" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: 11, color: "#FFB347", fontWeight: 600 }}>⚠️ {t.id} at risk</span>
+                            <span style={{ fontSize: 9, color: "#FFB34788", fontFamily: "'JetBrains Mono', monospace" }}>{remaining}h left</span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "#C4CAD6", marginTop: 2 }}>{t.title}</div>
+                          <div style={{ fontSize: 9, color: "#06B6D4", marginTop: 3, fontStyle: "italic" }}>💡 AI suggests: Prioritize now — KB match found for similar issues</div>
+                        </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Customer Satisfaction & Complaint Insights */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #1E213044" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#EC4899", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                    💬 Customer Insights & Complaints
+                  </h4>
+                  {[
+                    { type: "complaint", user: "Priya Sharma", detail: "Follow-up on email server (INC0001) — 3rd contact", severity: "high", suggestion: "Personal follow-up call recommended to rebuild trust" },
+                    { type: "feedback", user: "James Wright", detail: "Positive: SAP login resolved quickly (INC0004)", severity: "positive", suggestion: "Great response time! Template this resolution for KB" },
+                    { type: "prediction", user: "David Kim", detail: "Laptop issue (INC0006) — similar pattern suggests GPU driver fault", severity: "medium", suggestion: "Pre-order replacement GPU cable — 78% match to known issue" },
+                  ].map((item, i) => (
+                    <div key={i} style={{ padding: "8px 10px", borderRadius: 6, marginBottom: 6, background: item.severity === "positive" ? "#81C78408" : item.severity === "high" ? "#FF6B6B08" : "#FFB34708", border: `1px solid ${item.severity === "positive" ? "#81C78422" : item.severity === "high" ? "#FF6B6B22" : "#FFB34722"}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                        <span style={{ fontSize: 10 }}>{item.type === "complaint" ? "😤" : item.type === "prediction" ? "🔮" : "😊"}</span>
+                        <span style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 600 }}>{item.user}</span>
+                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: item.severity === "positive" ? "#81C78422" : item.severity === "high" ? "#FF6B6B22" : "#FFB34722", color: item.severity === "positive" ? "#81C784" : item.severity === "high" ? "#FF6B6B" : "#FFB347", fontWeight: 600, textTransform: "uppercase" }}>{item.type}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#C4CAD6", marginBottom: 3 }}>{item.detail}</div>
+                      <div style={{ fontSize: 9, color: "#06B6D4", fontStyle: "italic" }}>💡 {item.suggestion}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Proactive Suggestions — Prevent future damage */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #06B6D422", marginBottom: 18 }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#06B6D4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                  🔮 Predictive Insights — Avoid Future Incidents
+                  <span style={{ marginLeft: "auto", fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Assisted by {currentUser.name} AI</span>
+                </h4>
+                {[
+                  { icon: "🌐", title: "Network Outage Pattern Detected", confidence: 85, detail: "3 network incidents in past 7 days (Mon/Wed/Fri). Core switch firmware is 6 months outdated.", action: "Schedule firmware update during next maintenance window", impact: "Could prevent ~4 incidents/week", color: "#FF6B6B" },
+                  { icon: "📧", title: "Email Server Capacity Warning", confidence: 78, detail: "Exchange mailbox store at 82% capacity. Historical trend shows breach in ~18 days.", action: "Archive inactive mailboxes & increase storage quota", impact: "Prevents Sev-A email outage", color: "#FFB347" },
+                  { icon: "🔐", title: "Password Reset Surge Expected", confidence: 72, detail: "Company-wide password policy change in 5 days. Expect 40+ reset requests.", action: "Pre-send self-service password guide to all users", impact: "Reduce ticket volume by ~60%", color: "#6366F1" },
+                  { icon: "💻", title: "Laptop Hardware Lifecycle Alert", confidence: 91, detail: "12 laptops exceeding 3-year lifecycle. Failure probability increases 45% after 36 months.", action: "Initiate phased hardware refresh for high-risk devices", impact: "Prevent 5-8 hardware incidents/month", color: "#CE93D8" },
+                ].map((pred, i) => (
+                  <div key={i} style={{ display: "flex", gap: 12, padding: "10px 12px", borderRadius: 6, marginBottom: 8, background: "#0F111788", border: "1px solid #1E213033" }}>
+                    <div style={{ fontSize: 18, flexShrink: 0, marginTop: 2 }}>{pred.icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                        <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600 }}>{pred.title}</span>
+                        <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: `${pred.color}22`, color: pred.color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{pred.confidence}% confidence</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#C4CAD6", marginBottom: 3 }}>{pred.detail}</div>
+                      <div style={{ fontSize: 10, color: "#81C784" }}>✅ Recommended: {pred.action}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>📊 Impact: {pred.impact}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Work-Life Balance & AI Support Summary */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                {/* What your AI handled today */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #81C78422" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#81C784", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                    🤖 What Your AI Handled For You
+                  </h4>
+                  {[
+                    { task: "Auto-triaged 3 incoming incidents", saved: "~15 min saved", icon: "⚡" },
+                    { task: "Suggested KB articles for 2 tickets", saved: "~20 min saved", icon: "📚" },
+                    { task: "Predicted SLA breach for INC0001", saved: "Prevented escalation", icon: "⏱️" },
+                    { task: "Drafted response email for INC0004", saved: "~10 min saved", icon: "📧" },
+                    { task: "Auto-categorized 4 new requests", saved: "~8 min saved", icon: "🏷️" },
+                  ].map((item, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < 4 ? "1px solid #1E213022" : "none" }}>
+                      <span style={{ fontSize: 11 }}>{item.icon}</span>
+                      <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1 }}>{item.task}</span>
+                      <span style={{ fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{item.saved}</span>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 6, background: "#81C78408", border: "1px solid #81C78422", textAlign: "center" }}>
+                    <span style={{ fontSize: 11, color: "#81C784", fontWeight: 600 }}>🕐 ~53 minutes saved today</span>
+                    <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>That's time back for you — focus on complex problems, take a break, or learn something new.</div>
+                  </div>
+                </div>
+
+                {/* Work-Life Balance Tips */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #6366F122" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                    🌿 Work-Life Balance
+                  </h4>
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#5A6178", marginBottom: 4 }}>
+                      <span>Today's Workload</span>
+                      <span style={{ color: balanceColor, fontWeight: 600 }}>{balanceStatus}</span>
+                    </div>
+                    <div style={{ background: "#1E2130", borderRadius: 4, height: 8, overflow: "hidden" }}>
+                      <div style={{ width: `${workloadScore}%`, height: "100%", background: `linear-gradient(90deg, #81C784, ${balanceColor})`, borderRadius: 4, transition: "width 0.5s ease" }} />
+                    </div>
+                  </div>
+                  <div style={{ padding: "10px 12px", borderRadius: 6, background: "#6366F108", border: "1px solid #6366F122", marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 600, marginBottom: 4 }}>💡 Your AI's Philosophy</div>
+                    <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.6 }}>
+                      "I'm here to <b style={{ color: "#81C784" }}>support</b> you, not replace you. I handle repetitive tasks so you can focus on meaningful work — solving complex problems, talking to users, and growing your skills."
+                    </div>
+                  </div>
+                  {[
+                    workloadScore > 70 ? { tip: "Heavy workload detected. Consider delegating low-priority tickets or using AI auto-responses.", icon: "⚠️", color: "#FFB347" } : null,
+                    hour >= 18 ? { tip: "It's after 6 PM. Your AI is monitoring tickets — log off and recharge!", icon: "🌙", color: "#CE93D8" } : null,
+                    { tip: myOpenTickets.length <= 2 ? "Light queue today! Perfect time for knowledge base contributions or training." : "Take 5-minute breaks between complex tickets for better focus.", icon: myOpenTickets.length <= 2 ? "📖" : "☕", color: "#06B6D4" },
+                  ].filter(Boolean).map((item, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: `${item.color}06` }}>
+                      <span style={{ fontSize: 11, flexShrink: 0 }}>{item.icon}</span>
+                      <span style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>{item.tip}</span>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 8, textAlign: "center", fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>
+                    Your AI is always on — you don't have to be. 💜
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* ═══ VGC DEV ADMIN — Azure Services & AI Operations Hub ═══ */}
+        {isDevAdmin && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FF6B6B22", padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #FF6B6B, #6366F1, #06B6D4, #F59E0B)" }} />
+            <h3 style={{ margin: "0 0 18px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 18 }}>☁️</span> Azure Services & AI Operations Hub
+              <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 20, background: "#FF6B6B22", color: "#FF6B6B", border: "1px solid #FF6B6B44", fontWeight: 700, letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace" }}>DEV ADMIN ONLY</span>
+              <span style={{ marginLeft: "auto", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>LIVE • {new Date().toLocaleTimeString("en-SG", { hour12: false })}</span>
+            </h3>
+
+            {/* Azure Resource Status Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 18 }}>
+              {[
+                { name: "App Service", icon: "🌐", status: "Running", health: 99.97, region: "SE Asia", tier: "P1v3", metric: "CPU 34%", metricColor: "#4CAF50" },
+                { name: "Azure SQL", icon: "🗄️", status: "Online", health: 99.99, region: "SE Asia", tier: "S2", metric: "DTU 42%", metricColor: "#06B6D4" },
+                { name: "Azure Functions", icon: "⚡", status: "Running", health: 99.95, region: "SE Asia", tier: "Premium", metric: "12k exec/day", metricColor: "#81C784" },
+                { name: "Key Vault", icon: "🔑", status: "Active", health: 100, region: "SE Asia", tier: "Standard", metric: "8 secrets", metricColor: "#F59E0B" },
+                { name: "Azure OpenAI", icon: "🤖", status: "Active", health: 99.90, region: "SE Asia", tier: "Enterprise", metric: "Powered", metricColor: "#6366F1" },
+                { name: "Blob Storage", icon: "📦", status: "Available", health: 99.99, region: "SE Asia", tier: "Hot", metric: "2.4 GB used", metricColor: "#CE93D8" },
+                { name: "CDN", icon: "🌍", status: "Active", health: 99.98, region: "Global", tier: "Standard", metric: "Latency 12ms", metricColor: "#4CAF50" },
+                { name: "Entra ID", icon: "🛡️", status: "Secured", health: 100, region: "Global", tier: "P2", metric: "MFA 100%", metricColor: "#EC4899" },
+              ].map((svc, i) => (
+                <div key={i} style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", position: "relative", overflow: "hidden", transition: "border-color 0.2s, transform 0.15s", cursor: "default" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = "#6366F133"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E213044"; e.currentTarget.style.transform = "translateY(0)"; }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 16 }}>{svc.icon}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{svc.name}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", boxShadow: "0 0 6px #4CAF5066" }} />
+                    <span style={{ fontSize: 10, color: "#4CAF50", fontWeight: 600 }}>{svc.status}</span>
+                    <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto", fontFamily: "'JetBrains Mono', monospace" }}>{svc.health}%</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#5A6178" }}>
+                    <span>{svc.region} • {svc.tier}</span>
+                    <span style={{ color: svc.metricColor, fontWeight: 600 }}>{svc.metric}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* AI Insights Row */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 18 }}>
+              {/* AI Predictions & Anomaly Detection */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #6366F122" }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                  🔮 AI Predictions
+                </h4>
+                {[
+                  { prediction: "CPU spike expected Thu 14:00–16:00 (payroll batch)", confidence: 92, action: "Pre-scale App Service to P2v3", severity: "warning" },
+                  { prediction: "SQL DTU may exceed 80% by Friday (month-end reports)", confidence: 87, action: "Enable auto-scale or shift to elastic pool", severity: "warning" },
+                  { prediction: "3 SSL certificates expire within 30 days", confidence: 99, action: "Auto-renew via Key Vault managed certificates", severity: "critical" },
+                  { prediction: "Blob storage growth rate suggests tier change in 45 days", confidence: 78, action: "Evaluate Cool tier for archival data", severity: "info" },
+                ].map((p, i) => (
+                  <div key={i} style={{ padding: "8px 10px", borderRadius: 6, marginBottom: 6, background: p.severity === "critical" ? "#1A080808" : "#0F111708", border: `1px solid ${p.severity === "critical" ? "#FF444422" : p.severity === "warning" ? "#FFB34718" : "#1E213033"}` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                      <span style={{ fontSize: 10, color: "#E8ECF4", fontWeight: 600, flex: 1 }}>{p.prediction}</span>
+                      <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{p.confidence}%</span>
+                    </div>
+                    <div style={{ fontSize: 9, color: "#81C784" }}>✅ {p.action}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Automated Remediation */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #81C78422" }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#81C784", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                  🔧 Auto-Remediation Engine
+                </h4>
+                {[
+                  { task: "App Service auto-restart on memory threshold (>85%)", status: "Armed", runs: 3, icon: "🔄" },
+                  { task: "SQL index rebuild — scheduled nightly 02:00 SGT", status: "Active", runs: 28, icon: "🗄️" },
+                  { task: "Stale connection cleanup — Azure Functions watchdog", status: "Active", runs: 156, icon: "🧹" },
+                  { task: "Failed deployment auto-rollback (last 3 versions)", status: "Armed", runs: 1, icon: "⏮️" },
+                  { task: "DDoS mitigation — Azure Front Door WAF rules", status: "Active", runs: 0, icon: "🛡️" },
+                ].map((r, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 6, marginBottom: 4, background: "#0F111708", border: "1px solid #1E213022" }}>
+                    <span style={{ fontSize: 12 }}>{r.icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.3 }}>{r.task}</div>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: r.status === "Active" ? "#4CAF5022" : "#FFB34722", color: r.status === "Active" ? "#4CAF50" : "#FFB347", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{r.status}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178", marginTop: 2 }}>{r.runs} runs</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Cost Optimization */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #F59E0B22" }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#F59E0B", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                  💰 Cost Optimization — Azure Advisor
+                </h4>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                  {[
+                    { label: "Monthly Spend", value: "$2,847", color: "#E8ECF4", sub: "vs $3,120 budget" },
+                    { label: "Potential Savings", value: "$418/mo", color: "#4CAF50", sub: "4 recommendations" },
+                    { label: "Reserved Savings", value: "$1,230/yr", color: "#06B6D4", sub: "3-yr commitment" },
+                    { label: "Waste Detected", value: "$89/mo", color: "#FF6B6B", sub: "2 idle resources" },
+                  ].map((c, i) => (
+                    <div key={i} style={{ padding: "8px 10px", borderRadius: 6, background: "#0F1117", border: "1px solid #1E213033" }}>
+                      <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{c.label}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: c.color, fontFamily: "'Space Grotesk', sans-serif" }}>{c.value}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>{c.sub}</div>
+                    </div>
+                  ))}
+                </div>
+                {[
+                  { rec: "Downsize VM 'Prod01' to D2s_v5 (avg CPU 18%)", saving: "$62/mo", impact: "Low", color: "#4CAF50" },
+                  { rec: "Delete orphaned disk 'data-backup-old' (120 GB)", saving: "$5/mo", impact: "None", color: "#4CAF50" },
+                  { rec: "Switch Blob 'logs-2024' to Cool tier", saving: "$28/mo", impact: "Low", color: "#06B6D4" },
+                  { rec: "Purchase RI for SQL S2 (1-year term)", saving: "$323/yr", impact: "None", color: "#F59E0B" },
+                ].map((r, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
+                    <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1 }}>{r.rec}</span>
+                    <span style={{ fontSize: 9, color: r.color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>💸 {r.saving}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Infrastructure Health & API Integrations */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              {/* Deployment & CI/CD Pipeline */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #06B6D422" }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#06B6D4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                  🚀 Recent Deployments & Pipeline
+                </h4>
+                {[
+                  { env: "Production", version: "v3.33.0", time: "Today 09:15 SGT", status: "✅ Success", duration: "2m 34s", commitBy: "VGC Dev Admin" },
+                  { env: "Staging", version: "v3.33.1-rc", time: "Today 14:22 SGT", status: "✅ Success", duration: "2m 12s", commitBy: "VGC Dev Admin" },
+                  { env: "Production", version: "v3.32.0", time: "Yesterday 16:40 SGT", status: "✅ Success", duration: "2m 48s", commitBy: "VGC Dev Admin" },
+                  { env: "Staging", version: "v3.32.0-rc", time: "25 Mar 11:05 SGT", status: "⚠️ Warning", duration: "3m 02s", commitBy: "VGC Dev Admin" },
+                ].map((d, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6, marginBottom: 4, background: "#0F111708", border: "1px solid #1E213022" }}>
+                    <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: d.env === "Production" ? "#FF6B6B15" : "#06B6D415", color: d.env === "Production" ? "#FF6B6B" : "#06B6D4", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{d.env}</span>
+                    <span style={{ fontSize: 10, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{d.version}</span>
+                    <span style={{ flex: 1, fontSize: 9, color: "#5A6178" }}>{d.time}</span>
+                    <span style={{ fontSize: 9, whiteSpace: "nowrap" }}>{d.status}</span>
+                    <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{d.duration}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* API & Integration Health */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #EC489922" }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#EC4899", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                  🔗 API & Integration Health
+                </h4>
+                {[
+                  { api: "Microsoft Graph API", latency: "45ms", uptime: "99.99%", calls: "2.4k/day", status: "Healthy" },
+                  { api: "Azure OpenAI", latency: "820ms", uptime: "99.90%", calls: "340/day", status: "Healthy" },
+                  { api: "Microsoft Teams Webhook", latency: "120ms", uptime: "99.95%", calls: "85/day", status: "Healthy" },
+                  { api: "SMTP Relay (SendGrid)", latency: "210ms", uptime: "99.97%", calls: "120/day", status: "Healthy" },
+                  { api: "Entra ID / SCIM", latency: "95ms", uptime: "100%", calls: "60/day", status: "Healthy" },
+                ].map((a, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderRadius: 6, marginBottom: 4, background: "#0F111708", border: "1px solid #1E213022" }}>
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", boxShadow: "0 0 4px #4CAF5066", flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: "#E8ECF4", fontWeight: 500, flex: 1, minWidth: 0 }}>{a.api}</span>
+                    <span style={{ fontSize: 9, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>{a.latency}</span>
+                    <span style={{ fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{a.uptime}</span>
+                    <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{a.calls}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ SECURITY ALERTS (Both views) ═══ */}
+        {cardVisibility.securityAlerts.on && <div style={{ background: "#0F1117", borderRadius: 8, border: securityAlerts.some(a => a.severity === "Critical" && a.status === "Active") ? "1px solid #FF444433" : "1px solid #1E2130", padding: 20, marginBottom: 20, animation: securityAlerts.some(a => a.severity === "Critical" && a.status === "Active") ? "criticalGlow 3s ease-in-out infinite" : "none" }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span onClick={() => setActiveModule("cybernews")} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+              onMouseEnter={e => e.currentTarget.style.opacity = "0.8"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+              <span style={{ color: "#FF6B6B" }}>🛡️</span> Security & Compliance Alerts
+              <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FF444422", color: "#FF4444", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{securityAlerts.filter(a => a.status === "Active").length} ACTIVE</span>
+              <span style={{ fontSize: 10, color: "#5A617866", marginLeft: 4 }}>Cyber News →</span>
+            </span>
+            <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>LAST SCAN: {new Date().toLocaleTimeString()}</span>
+          </h3>
+          {securityAlerts.map((alert, i) => (
+            <div key={alert.id} onClick={() => setActiveModule("cybernews")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", marginBottom: 6, background: alert.severity === "Critical" && alert.status === "Active" ? "#1A0808" : "#0A0C14", borderRadius: 6, border: `1px solid ${sevColors[alert.severity]}18`, borderLeft: `3px solid ${sevColors[alert.severity]}`, animation: alert.severity === "Critical" && alert.status === "Active" ? "criticalRowFlash 2s ease-in-out infinite" : "none", cursor: "pointer", transition: "background 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.background = sevColors[alert.severity] + "0A"} onMouseLeave={e => e.currentTarget.style.background = alert.severity === "Critical" && alert.status === "Active" ? "#1A0808" : "#0A0C14"}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: sevColors[alert.severity], boxShadow: alert.status === "Active" ? `0 0 8px ${sevColors[alert.severity]}88` : "none", flexShrink: 0, animation: alert.severity === "Critical" && alert.status === "Active" ? "pulse 1.5s infinite" : "none" }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: "#C4CAD6", marginBottom: 2 }}>{alert.title}</div>
+                <div style={{ display: "flex", gap: 8, fontSize: 10 }}>
+                  <span style={{ color: sevColors[alert.severity], fontWeight: 600 }}>{alert.severity}</span>
+                  <span style={{ color: "#3A3F55" }}>·</span>
+                  <span style={{ color: "#5A6178" }}>{alert.type}</span>
+                  <span style={{ color: "#3A3F55" }}>·</span>
+                  <span style={{ color: "#5A6178" }}>{alert.time}</span>
+                </div>
+              </div>
+              <Badge color={alert.status === "Active" ? { bg: "#FF444422", text: "#FF6B6B" } : alert.status === "Investigating" ? { bg: "#FFB34722", text: "#FFB347" } : { bg: "#1E2130", text: "#5A6178" }}>{alert.status}</Badge>
+            </div>
+          ))}
+        </div>}
+
+        {/* ═══ AI PERFORMANCE KPI ═══ */}
+        {cardVisibility.aiPerformance.on && <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #6366F1, #EC4899, #06B6D4)" }} />
+          <h3 onClick={() => setActiveModule("ai")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+            onMouseEnter={e => e.currentTarget.style.color = "#6366F1"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+            <span style={{ color: "#6366F1" }}>🤖</span> AI Performance KPI
+            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: "auto" }}>VGC-AI ENGINE v3.1</span>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", boxShadow: "0 0 6px #4CAF5088", animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 10, color: "#5A617866" }}>Configure →</span>
+          </h3>
+          <div className="vgc-donut-grid" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
+            <DonutKPI value={aiConfig.automationLevel} max={100} label="AI Automation" color="#6366F1" sub="Target: 85%" />
+            <DonutKPI value={aiConfig.humanLoopPct} max={100} label="Human-in-Loop" color="#FFB347" sub="Below 15% ✓" />
+            <DonutKPI value={aiTriagedPct} max={100} label="AI Triaged" color="#EC4899" sub={`${incidents.filter(i => i.aiTriaged).length} tickets`} />
+            <DonutKPI value={avgConfidence} max={100} label="Avg Confidence" color="#81C784" sub={avgConfidence >= 75 ? "Above threshold" : "Below threshold"} />
+            <DonutKPI value={slaCompliance} max={100} label="SLA Compliance" color={slaCompliance >= 90 ? "#4CAF50" : "#FFB347"} sub={slaCompliance >= 90 ? "On track" : "Needs attention"} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            {[
+              { label: "KB Auto-Suggest", value: "87%", trend: "+3%", color: "#64B5F6", icon: "📖" },
+              { label: "Auto-Assign Accuracy", value: "94%", trend: "+1%", color: "#CE93D8", icon: "👤" },
+              { label: "SLA Predict Accuracy", value: "91%", trend: "+2%", color: "#4CAF50", icon: "⏱️" },
+              { label: "Sentiment Analysis", value: "89%", trend: "+5%", color: "#FFB347", icon: "💬" },
+            ].map((m, i) => (
+              <div key={i} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12 }}>{m.icon}</span>
+                  <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{m.label}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: m.color, fontFamily: "'Space Grotesk', sans-serif" }}>{m.value}</span>
+                  <span style={{ fontSize: 10, color: "#4CAF50", fontWeight: 600 }}>{m.trend}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>}
+
+        {/* ═══ GLOBAL CYBER SECURITY THREAT FEED ═══ */}
+        {cardVisibility.threatFeed.on && <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #FF4444, #FF6B6B, #FFB347)" }} />
+          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span onClick={() => setActiveModule("cybernews")} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+              onMouseEnter={e => e.currentTarget.style.opacity = "0.8"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+              <span style={{ fontSize: 16 }}>🌐</span> Global Cyber Security Threat Feed
+              <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FF444422", color: "#FF4444", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>LIVE</span>
+              <span style={{ fontSize: 10, color: "#5A617866", marginLeft: 4 }}>Cyber News →</span>
+            </span>
+            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Source: CISA · NVD · CVE · SingCERT · The Hacker News · SecurityWeek · Dark Reading</span>
+          </h3>
+          {[
+            { id: "GTHR-001", severity: "Critical", title: "Active exploitation of CVE-2026-21413 — Microsoft Exchange RCE", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "28 min ago", isNew: true,
+              aiSummary: "Zero-day RCE in Exchange Server 2019 CU14. Patch available (KB5035432). Our Exchange cluster CHG0001 upgrade should be prioritized. Recommend: 1) Apply emergency patch within 4 hours, 2) Enable WAF rule for OWA endpoints, 3) Scan mail server logs for indicators of compromise.",
+              affectsUs: true },
+            { id: "GTHR-002", severity: "High", title: "Ransomware campaign targeting APAC financial services — LockBit 4.0 variant", source: "SingCERT", sourceUrl: "https://www.csa.gov.sg/alerts-advisories", region: "APAC", time: "2 hr ago", isNew: true,
+              aiSummary: "LockBit 4.0 variant using phishing emails with .iso attachments. Our DLP alert SEC-005 may be related. Recommend: 1) Block .iso attachments at email gateway, 2) Alert all staff via Teams, 3) Verify EDR signatures are updated, 4) Check backup integrity.",
+              affectsUs: true },
+            { id: "GTHR-003", severity: "High", title: "Critical vulnerability in Fortinet FortiOS SSL VPN — CVE-2026-48788", source: "NVD / CVE", sourceUrl: "https://nvd.nist.gov/", region: "Global", time: "5 hr ago", isNew: false,
+              aiSummary: "Our VPN infrastructure uses Cisco, not FortiOS. Low direct risk but monitor for lateral exploitation patterns. Keep VPN client patched as a precaution.",
+              affectsUs: false },
+            { id: "GTHR-004", severity: "Medium", title: "DNS amplification attacks increase 340% across Southeast Asia ISPs", source: "CSA Singapore", sourceUrl: "https://www.csa.gov.sg/singcert", region: "SEA", time: "8 hr ago", isNew: false,
+              aiSummary: "DNS amplification targeting SEA region. Our Azure Front Door WAF provides DDoS protection. Verify rate-limiting rules are active. No immediate action required.",
+              affectsUs: false },
+            { id: "GTHR-005", severity: "Low", title: "Updated IoC list for SolarWinds Serv-U FTP vulnerability", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "12 hr ago", isNew: false,
+              aiSummary: "We do not use SolarWinds Serv-U. No action required. IoC list archived for reference.",
+              affectsUs: false },
+          ].map((threat, i) => (
+            <div key={threat.id} style={{
+              padding: "12px 14px", marginBottom: 8, background: threat.isNew ? "#FF444408" : "#0A0C14",
+              borderRadius: 8, border: `1px solid ${threat.isNew ? sevColors[threat.severity] + '33' : '#1E213044'}`,
+              borderLeft: `3px solid ${sevColors[threat.severity]}`,
+              position: "relative"
+            }}>
+              {threat.isNew && threat.severity === "Critical" && (
+                <div style={{ position: "absolute", top: -1, right: -1, padding: "2px 8px", borderRadius: "0 8px 0 6px", background: "#FF4444", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>⚡ ACTION REQUIRED</div>
+              )}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: sevColors[threat.severity], boxShadow: threat.isNew ? `0 0 8px ${sevColors[threat.severity]}88` : "none", marginTop: 4, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace" }}>{threat.severity.toUpperCase()}</span>
+                    <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
+                    <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.id}</span>
+                    <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
+                    <a href={threat.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6", textDecoration: "none", cursor: "pointer" }} title={`View source: ${threat.sourceUrl}`}>{threat.source} ↗</a>
+                    <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6" }}>{threat.region}</span>
+                    {threat.affectsUs && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#FF444422", fontSize: 9, color: "#FF6B6B", fontWeight: 600 }}>AFFECTS US</span>}
+                    <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto" }}>{threat.time}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#C4CAD6", marginBottom: 6 }}>{threat.title}</div>
+                  <div style={{ padding: "8px 10px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12 }}>🤖</span>
+                      <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>AI ANALYSIS & RECOMMENDED ACTIONS</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5 }}>{threat.aiSummary}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>}
+
+        {/* ═══ COMPLIANCE & SYSTEM HEALTH (Management only) ═══ */}
+        {isManagement && (cardVisibility.pdpaCompliance.on || cardVisibility.systemHealth.on || cardVisibility.changeCalendar.on) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 20 }}>
+            {/* PDPA Compliance */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("admin")} style={{ margin: "0 0 14px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#4CAF50"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#4CAF50" }}>🛡️</span> PDPA Compliance <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Settings →</span>
+              </h3>
+              {[
+                { label: "Data Retention", status: "Compliant", color: "#4CAF50" },
+                { label: "Consent Management", status: pdpaConfig.consentManagement ? "Active" : "Inactive", color: pdpaConfig.consentManagement ? "#4CAF50" : "#FF6B6B" },
+                { label: "DSAR Workflow", status: pdpaConfig.dsarWorkflow ? "Enabled" : "Disabled", color: pdpaConfig.dsarWorkflow ? "#4CAF50" : "#FFB347" },
+                { label: "Data Classification", status: "3 flags", color: "#FFB347" },
+                { label: "Last Audit", status: "24 hrs ago", color: "#64B5F6" },
+              ].map((item, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < 4 ? "1px solid #1E213033" : "none" }}>
+                  <span style={{ fontSize: 11, color: "#C4CAD6" }}>{item.label}</span>
+                  <span style={{ fontSize: 10, color: item.color, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{item.status}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* System Health */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("admin")} style={{ margin: "0 0 14px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#06B6D4"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#06B6D4" }}>💻</span> System Health <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Infra →</span>
+              </h3>
+              {[
+                { label: "Azure SQL Serverless", status: "Online", cpu: 23, color: "#4CAF50" },
+                { label: "App Service (P1v3)", status: "Healthy", cpu: 41, color: "#4CAF50" },
+                { label: "Entra ID SSO", status: "Connected", cpu: null, color: "#4CAF50" },
+                { label: "AI Engine", status: "Running", cpu: 67, color: "#FFB347" },
+                { label: "Email Gateway", status: "Online", cpu: 12, color: "#4CAF50" },
+              ].map((s, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < 4 ? "1px solid #1E213033" : "none" }}>
+                  <span style={{ fontSize: 11, color: "#C4CAD6" }}>{s.label}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {s.cpu !== null && <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{s.cpu}% CPU</span>}
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: s.color, boxShadow: `0 0 4px ${s.color}66` }} />
+                    <span style={{ fontSize: 10, color: s.color, fontWeight: 600 }}>{s.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Change Calendar */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 onClick={() => setActiveModule("changes")} style={{ margin: "0 0 14px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#CE93D8"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
+                <span style={{ color: "#CE93D8" }}>📅</span> Change Calendar <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>All Changes →</span>
+              </h3>
+              {changes.map(ch => (
+                <div key={ch.id} style={{ padding: "8px 10px", marginBottom: 6, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                  onClick={() => { setDetailItem(ch); setModal("changeDetail"); }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{ch.id}</span>
+                    <Badge color={STATUS_COLORS[ch.status] || { bg: "#1E2130", text: "#C4CAD6" }}>{ch.status}</Badge>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#C4CAD6" }}>{ch.title}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Scheduled: {ch.scheduled || "TBD"}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─── Incidents Module ─────────────────────────────────────────────────
+  const IncidentsModule = () => {
+    const filtered = incidents.filter(i =>
+      i.title.toLowerCase().includes(search.toLowerCase()) ||
+      i.id.toLowerCase().includes(search.toLowerCase()) ||
+      i.category.toLowerCase().includes(search.toLowerCase())
+    );
+    return (
+      <div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+          <SearchBar value={search} onChange={setSearch} placeholder="Search incidents..." />
+          <button style={btnStyle()} onClick={() => setModal("newIncident")}>+ New Incident</button>
+        </div>
+        <DataTable
+          columns={[
+            { label: "ID", key: "id", mono: true, render: r => (
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "#64B5F6" }}>{r.id}</span>
+                {r.aiTriaged && <span title={`AI Triaged (${r.aiConfidence}% confidence)`} style={{ fontSize: 10, cursor: "help" }}>🤖</span>}
+              </span>
+            )},
+            { label: "Title", key: "title" },
+            { label: "Priority", render: r => <PriorityDot priority={r.priority} /> },
+            { label: "Impact", render: r => <Badge color={r.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : r.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{r.impact || "—"}</Badge> },
+            { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
+            { label: "Category", key: "category", mono: true },
+            { label: "Assignee", key: "assignee" },
+            { label: "Group", render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.assignmentGroup || "—"}</span> },
+            { label: "Reporter", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.reporter}</span> },
+            { label: "AI", render: r => r.aiTriaged ? (
+              <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: r.aiConfidence >= 90 ? "#81C784" : r.aiConfidence >= 75 ? "#FFB347" : "#FF6B6B", fontWeight: 600 }}>
+                {r.aiConfidence}%
+              </span>
+            ) : <span style={{ color: "#5A617855", fontSize: 10 }}>—</span> },
+            { label: "SLA", render: r => {
+              const pct = Math.min(100, Math.round((r.created / r.slaTarget) * 100));
+              const hrsLeft = Math.max(0, r.slaTarget - r.created);
+              const isBreach = pct >= 100;
+              const isCritical = pct > 90 && !isBreach;
+              const isWarning = pct > 75 && !isCritical && !isBreach;
+              return <span style={{
+                color: isBreach ? "#FF4444" : isCritical ? "#FF6B6B" : isWarning ? "#FFB347" : "#81C784",
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
+                animation: isBreach ? "slaBreachPulse 0.8s ease-in-out infinite" : isCritical ? "slaBlinkFast 0.6s ease-in-out infinite" : isWarning ? "slaBlink 1.2s ease-in-out infinite" : "none",
+                display: "inline-flex", alignItems: "center", gap: 4,
+                textShadow: isBreach ? "0 0 8px #FF444466" : isCritical ? "0 0 6px #FF6B6B44" : "none"
+              }}>
+                {isBreach && <span style={{ fontSize: 10 }}>🔴</span>}
+                {isCritical && <span style={{ fontSize: 10 }}>🟠</span>}
+                {isBreach ? "BREACH" : isCritical ? `${pct}% ⚠` : isWarning ? `${pct}%` : `${pct}%`}
+                {(isCritical || isWarning) && <span style={{ fontSize: 8, color: "#5A6178", marginLeft: 2 }}>{hrsLeft.toFixed(1)}h</span>}
+              </span>;
+            }},
+            { label: "Created", render: r => <span style={{ color: "#5A6178" }}>{timeAgo(r.created)}</span> },
+          ]}
+          data={filtered}
+          onRowClick={row => { setDetailItem(row); setModal("incidentDetail"); }}
+        />
+      </div>
+    );
+  };
+
+  // ─── Problems Module ──────────────────────────────────────────────────
+  const ProblemsModule = () => (
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+        <SearchBar value={search} onChange={setSearch} placeholder="Search problems..." />
+        <button style={btnStyle()} onClick={() => setModal("newProblem")}>+ New Problem</button>
+      </div>
+      <DataTable
+        columns={[
+          { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#CE93D8" }}>{r.id}</span> },
+          { label: "Title", key: "title" },
+          { label: "Priority", render: r => <PriorityDot priority={r.priority} /> },
+          { label: "Impact", render: r => <Badge color={r.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : r.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{r.impact || "—"}</Badge> },
+          { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
+          { label: "Category", render: r => <span style={{ color: "#A0AEC0", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{r.category || "—"}</span> },
+          { label: "Linked Incidents", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#64B5F6" }}>{r.linkedIncidents?.length || 0}</span> },
+          { label: "Root Cause", render: r => <span style={{ color: "#5A6178", fontSize: 12 }}>{r.rootCause?.substring(0, 40)}{r.rootCause?.length > 40 ? "..." : ""}</span> },
+          { label: "Assignee", key: "assignee" },
+          { label: "Group", render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.assignmentGroup || "—"}</span> },
+          { label: "Age", render: r => <span style={{ color: "#5A6178" }}>{timeAgo(r.created)}</span> },
+        ]}
+        data={problems.filter(p => p.title.toLowerCase().includes(search.toLowerCase()) || p.id.toLowerCase().includes(search.toLowerCase()))}
+        onRowClick={row => { setDetailItem(row); setModal("problemDetail"); }}
+      />
+    </div>
+  );
+
+  // ─── Changes Module ───────────────────────────────────────────────────
+  const ChangesModule = () => (
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+        <SearchBar value={search} onChange={setSearch} placeholder="Search changes..." />
+        <button style={btnStyle()} onClick={() => setModal("newChange")}>+ New Change Request</button>
+      </div>
+      <DataTable
+        columns={[
+          { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#FFB347" }}>{r.id}</span> },
+          { label: "Title", key: "title" },
+          { label: "Type", render: r => <Badge color={r.type === "Emergency" ? PRIORITY_COLORS["Sev-A"] : r.type === "Normal" ? { bg: "#0D2137", text: "#64B5F6" } : { bg: "#0A2D1A", text: "#81C784" }}>{r.type}</Badge> },
+          { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
+          { label: "Risk", render: r => <Badge color={PRIORITY_COLORS[r.risk === "High" ? "Sev-A" : r.risk === "Medium" ? "Sev-B" : "Sev-D"]}>{r.risk}</Badge> },
+          { label: "Impact", render: r => <Badge color={r.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : r.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{r.impact || "—"}</Badge> },
+          { label: "Category", render: r => <span style={{ color: "#A0AEC0", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{r.category || "—"}</span> },
+          { label: "Scheduled", render: r => <span style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{r.scheduledStart}</span> },
+          { label: "Assignee", key: "assignee" },
+        ]}
+        data={changes.filter(c => c.title.toLowerCase().includes(search.toLowerCase()) || c.id.toLowerCase().includes(search.toLowerCase()))}
+        onRowClick={row => { setDetailItem(row); setModal("changeDetail"); }}
+      />
+    </div>
+  );
+
+  // ─── Service Requests Module ──────────────────────────────────────────
+  const RequestsModule = () => (
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+        <SearchBar value={search} onChange={setSearch} placeholder="Search requests..." />
+        <button style={btnStyle()} onClick={() => setActiveModule("catalog")}>Browse Catalog →</button>
+      </div>
+      <DataTable
+        columns={[
+          { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#81C784" }}>{r.id}</span> },
+          { label: "Service", key: "service" },
+          { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
+          { label: "Priority", render: r => <PriorityDot priority={r.priority} /> },
+          { label: "Category", render: r => <span style={{ color: "#A0AEC0", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{r.category || "—"}</span> },
+          { label: "Requester", key: "requester" },
+          { label: "Email", render: r => <span style={{ color: "#64B5F6", fontSize: 11 }}>{r.requesterEmail || "—"}</span> },
+          { label: "Assignee", render: r => r.assignee || <span style={{ color: "#5A617888" }}>Unassigned</span> },
+          { label: "Group", render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.assignmentGroup || "—"}</span> },
+          { label: "Created", render: r => <span style={{ color: "#5A6178" }}>{timeAgo(r.created)}</span> },
+        ]}
+        data={requests.filter(r => r.service.toLowerCase().includes(search.toLowerCase()) || r.id.toLowerCase().includes(search.toLowerCase()))}
+        onRowClick={row => { setDetailItem(row); setModal("requestDetail"); }}
+      />
+    </div>
+  );
+
+  // ─── Service Catalog ──────────────────────────────────────────────────
+  const CatalogModule = () => {
+    const isAdmin = currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Administrator" || currentUser.rbacRole === "Tenant Admin" || currentUser.rbacRole === "Asset Manager";
+    return (
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, alignItems: "center" }}>
+        <SearchBar value={search} onChange={setSearch} placeholder="Search services..." />
+        {isAdmin && <button style={btnStyle()} onClick={() => { setDetailItem(null); setModal("catalogManage"); }}>+ Add Service</button>}
+        {isAdmin && <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{serviceCatalog.length} services</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
+        {serviceCatalog.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || s.category.toLowerCase().includes(search.toLowerCase())).map(svc => (
+          <div key={svc.id} style={{
+            background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130",
+            padding: 20, cursor: "pointer", transition: "border-color 0.2s, transform 0.15s", position: "relative"
+          }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#3B82F644"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.transform = "translateY(0)"; }}
+            onClick={() => { setDetailItem(svc); setModal("catalogRequest"); }}
+          >
+            {isAdmin && (
+              <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+                <button onClick={e => { e.stopPropagation(); setDetailItem(svc); setModal("catalogManage"); }} style={{ background: "#1E2130", border: "none", borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 10, color: "#64B5F6" }} title="Edit">✏️</button>
+                <button onClick={e => { e.stopPropagation(); setServiceCatalog(prev => prev.filter(s => s.id !== svc.id)); }} style={{ background: "#1E2130", border: "none", borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 10, color: "#FF6B6B" }} title="Delete">🗑️</button>
+              </div>
+            )}
+            <div style={{ fontSize: 28, marginBottom: 10 }}>{svc.icon}</div>
+            <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 600, marginBottom: 4, fontFamily: "'Space Grotesk', sans-serif" }}>{svc.name}</div>
+            <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace" }}>{svc.category}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>SLA: {svc.sla}h</span>
+              <span style={{ fontSize: 11, color: "#3B82F6", fontWeight: 600 }}>Request →</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+    );
+  };
+
+  // ─── Knowledge Base — SharePoint Knowledge Portal ────────────────────
+  const [kbCategoryFilter, setKbCategoryFilter] = useState("All");
+  const [kbTypeFilter, setKbTypeFilter] = useState("All");
+  const [kbViewMode, setKbViewMode] = useState("cards"); // cards | list
+  const KnowledgeModule = () => {
+    const filteredKB = kbArticles.filter(a => {
+      const matchSearch = !search || a.title.toLowerCase().includes(search.toLowerCase()) || a.category.toLowerCase().includes(search.toLowerCase()) || (a.tags || []).some(t => t.toLowerCase().includes(search.toLowerCase())) || (a.whenToUse || "").toLowerCase().includes(search.toLowerCase());
+      const matchCat = kbCategoryFilter === "All" || a.category === kbCategoryFilter;
+      const matchType = kbTypeFilter === "All" || a.bestFor === kbTypeFilter;
+      return matchSearch && matchCat && matchType;
+    });
+    const uniqueCategories = ["All", ...new Set(kbArticles.map(a => a.category))];
+    const catMeta = (cat) => KB_CATEGORIES.find(c => c.id === cat) || { icon: "📄", color: "#64B5F6" };
+
+    return (
+    <div>
+      {/* SharePoint Connection Banner */}
+      <div style={{ background: "linear-gradient(135deg, #0078D408, #0089D618)", borderRadius: 10, border: "1px solid #0078D433", padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #0078D4, #0089D6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>📚</div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+              Knowledge Portal
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 20, fontSize: 9, fontWeight: 600, background: "#0D2D1A", color: "#81C784", border: "1px solid #81C78444" }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} /> SharePoint Connected
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{kbArticles.length} articles · Linked to SharePoint Document Library · Auto-sync enabled</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={{ ...btnStyle(), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")}>🔗 Open SharePoint Site</button>
+          <button style={btnStyle()} onClick={() => setModal("newKBArticle")}>+ New Article</button>
+        </div>
+      </div>
+
+      {/* Search & Filters */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <SearchBar value={search} onChange={setSearch} placeholder="Search articles, tags, symptoms..." />
+        </div>
+        <select style={{ ...inputStyle, width: "auto", minWidth: 130, cursor: "pointer" }} value={kbCategoryFilter} onChange={e => setKbCategoryFilter(e.target.value)}>
+          {uniqueCategories.map(c => <option key={c} value={c}>{c === "All" ? "📁 All Categories" : `${catMeta(c).icon} ${c}`}</option>)}
+        </select>
+        <select style={{ ...inputStyle, width: "auto", minWidth: 120, cursor: "pointer" }} value={kbTypeFilter} onChange={e => setKbTypeFilter(e.target.value)}>
+          <option value="All">🎯 All Types</option>
+          <option value="Incident">🎫 Incident</option>
+          <option value="Request">📋 Request</option>
+          <option value="Change">🔄 Change</option>
+        </select>
+        <div style={{ display: "flex", gap: 2, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E2130", padding: 2 }}>
+          <button onClick={() => setKbViewMode("cards")} style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "none", background: kbViewMode === "cards" ? "#6366F122" : "transparent", color: kbViewMode === "cards" ? "#6366F1" : "#5A6178", cursor: "pointer" }}>▦ Cards</button>
+          <button onClick={() => setKbViewMode("list")} style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "none", background: kbViewMode === "list" ? "#6366F122" : "transparent", color: kbViewMode === "list" ? "#6366F1" : "#5A6178", cursor: "pointer" }}>☰ List</button>
+        </div>
+      </div>
+
+      {/* Category Quick Filters */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+        {KB_CATEGORIES.map(cat => {
+          const count = kbArticles.filter(a => a.category === cat.id).length;
+          if (count === 0) return null;
+          return (
+            <button key={cat.id} onClick={() => setKbCategoryFilter(kbCategoryFilter === cat.id ? "All" : cat.id)} style={{
+              padding: "5px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", transition: "all 0.2s",
+              background: kbCategoryFilter === cat.id ? `${cat.color}22` : "#0A0C14",
+              border: `1px solid ${kbCategoryFilter === cat.id ? cat.color + "66" : "#1E2130"}`,
+              color: kbCategoryFilter === cat.id ? cat.color : "#5A6178",
+              fontFamily: "'Space Grotesk', sans-serif"
+            }}>
+              {cat.icon} {cat.label} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Results Count */}
+      <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}>
+        Showing {filteredKB.length} of {kbArticles.length} articles {search && `· matching "${search}"`}
+      </div>
+
+      {/* Knowledge Cards Grid */}
+      <div style={{ display: "grid", gap: 14, gridTemplateColumns: kbViewMode === "cards" ? "repeat(auto-fill, minmax(380px, 1fr))" : "1fr" }}>
+        {filteredKB.map(art => {
+          const cm = catMeta(art.category);
+          const spArticleUrl = art.spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(art.spSlug) : SHAREPOINT_KB_CONFIG.baseUrl;
+          const spDocUrl = art.spDocPath ? SHAREPOINT_KB_CONFIG.docUrl(art.spDocPath) : null;
+
+          return (
+          <div key={art.id} style={{
+            background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130",
+            padding: 0, cursor: "pointer", transition: "all 0.25s", overflow: "hidden",
+            display: "flex", flexDirection: "column"
+          }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = cm.color + "55"; e.currentTarget.style.boxShadow = `0 4px 20px ${cm.color}11`; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.boxShadow = "none"; }}
+          >
+            {/* Card Header */}
+            <div style={{ padding: "14px 18px 10px", borderBottom: "1px solid #1E213044" }} onClick={() => { setDetailItem(art); setModal("kbDetail"); }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ color: cm.color, fontSize: 10, fontFamily: "'JetBrains Mono', monospace", background: `${cm.color}11`, padding: "2px 6px", borderRadius: 4, border: `1px solid ${cm.color}22` }}>{art.id}</span>
+                  <Badge color={{ bg: `${cm.color}18`, text: cm.color }}>{cm.icon} {art.category}</Badge>
+                  {art.bestFor && <Badge color={{ bg: art.bestFor === "Incident" ? "#FF6B6B18" : art.bestFor === "Change" ? "#FFB34718" : "#81C78418", text: art.bestFor === "Incident" ? "#FF6B6B" : art.bestFor === "Change" ? "#FFB347" : "#81C784" }}>{art.bestFor}</Badge>}
+                </div>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{art.updated}</div>
+              </div>
+              <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 700, marginBottom: 6, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.3 }}>{art.title}</div>
+              <div style={{ color: "#5A6178", fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>{art.content}</div>
+              {art.whenToUse && <div style={{ fontSize: 11, color: "#A0AEC0", background: "#0A0C14", padding: "6px 10px", borderRadius: 6, marginBottom: 8, lineHeight: 1.4 }}>💡 <strong style={{ color: "#C4CAD6" }}>When to use:</strong> {art.whenToUse}</div>}
+            </div>
+
+            {/* Quick Fix Section */}
+            {art.quickFix && art.quickFix.length > 0 && (
+              <div style={{ padding: "10px 18px", borderBottom: "1px solid #1E213044", background: "#0A0C1488" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>⚡ Quick Fix Steps</div>
+                {art.quickFix.slice(0, kbViewMode === "list" ? 5 : 3).map((step, si) => (
+                  <div key={si} style={{ display: "flex", gap: 6, marginBottom: 3, fontSize: 11, color: "#C4CAD6", lineHeight: 1.5 }}>
+                    <span style={{ color: "#6366F1", fontWeight: 700, minWidth: 14, fontFamily: "'JetBrains Mono', monospace" }}>{si + 1}.</span>
+                    <span>{step}</span>
+                  </div>
+                ))}
+                {art.quickFix.length > (kbViewMode === "list" ? 5 : 3) && <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>+{art.quickFix.length - (kbViewMode === "list" ? 5 : 3)} more steps...</div>}
+              </div>
+            )}
+
+            {/* Card Footer */}
+            <div style={{ padding: "10px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
+              <div style={{ display: "flex", gap: 14, fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+                <span>👁 {art.views}</span>
+                <span>👍 {art.helpful}%</span>
+                {art.author && <span>✍️ {art.author}</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {art.relatedArticles && art.relatedArticles.length > 0 && (
+                  <span style={{ fontSize: 9, color: "#5A6178", padding: "2px 6px", background: "#0A0C14", borderRadius: 4, border: "1px solid #1E213066" }}>🔗 {art.relatedArticles.length} related</span>
+                )}
+                <button onClick={e => { e.stopPropagation(); window.open(spArticleUrl, "_blank", "noopener"); }} style={{
+                  padding: "4px 10px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433",
+                  background: "#0078D418", color: "#0078D4", cursor: "pointer", fontWeight: 600,
+                  fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 4, transition: "all 0.2s"
+                }}
+                onMouseOver={e => e.currentTarget.style.background = "#0078D433"}
+                onMouseOut={e => e.currentTarget.style.background = "#0078D418"}>
+                  📎 Open in SharePoint
+                </button>
+              </div>
+            </div>
+
+            {/* Tags */}
+            {art.tags && art.tags.length > 0 && (
+              <div style={{ padding: "0 18px 10px", display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {art.tags.slice(0, 6).map((tag, ti) => (
+                  <span key={ti} onClick={e => { e.stopPropagation(); setSearch(tag); }} style={{
+                    fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#1E213044",
+                    color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+                    border: "1px solid transparent", transition: "all 0.15s"
+                  }}
+                  onMouseOver={e => { e.currentTarget.style.borderColor = "#6366F133"; e.currentTarget.style.color = "#6366F1"; }}
+                  onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.color = "#5A6178"; }}>
+                    #{tag}
+                  </span>
+                ))}
+                {art.tags.length > 6 && <span style={{ fontSize: 9, color: "#5A6178" }}>+{art.tags.length - 6}</span>}
+              </div>
+            )}
+          </div>
+          );
+        })}
+      </div>
+
+      {filteredKB.length === 0 && (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "#5A6178" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "#C4CAD6", marginBottom: 4 }}>No articles found</div>
+          <div style={{ fontSize: 12 }}>Try adjusting your search or filters. <button onClick={() => { setSearch(""); setKbCategoryFilter("All"); setKbTypeFilter("All"); }} style={{ background: "none", border: "none", color: "#6366F1", cursor: "pointer", textDecoration: "underline", fontSize: 12 }}>Clear all filters</button></div>
+        </div>
+      )}
+
+      {/* KB Stats Footer */}
+      <div style={{ marginTop: 20, padding: "14px 18px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", gap: 20, fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+          <span>📊 Total: {kbArticles.length} articles</span>
+          <span>👁 {kbArticles.reduce((s, a) => s + a.views, 0).toLocaleString()} total views</span>
+          <span>👍 {Math.round(kbArticles.reduce((s, a) => s + a.helpful, 0) / kbArticles.length)}% avg helpful</span>
+          <span>✍️ {new Set(kbArticles.map(a => a.author).filter(Boolean)).size} contributors</span>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.docsUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>📂 SharePoint Document Library</button>
+          <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>🌐 SharePoint Portal</button>
+        </div>
+      </div>
+    </div>
+    );
+  };
+
+  // ─── Assets / CMDB ────────────────────────────────────────────────────
+  const AssetsModule = () => (
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+        <SearchBar value={search} onChange={setSearch} placeholder="Search assets..." />
+        <button style={btnStyle()} onClick={() => setModal("newAsset")}>+ Add Asset</button>
+      </div>
+      <DataTable
+        columns={[
+          { label: "Asset ID", key: "id", mono: true, render: r => <span style={{ color: "#CE93D8" }}>{r.id}</span> },
+          { label: "Name", key: "name" },
+          { label: "Type", render: r => <Badge color={{ bg: "#1A1A2E", text: "#A0AEC0" }}>{r.type}</Badge> },
+          { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status] || STATUS_COLORS.Active}>{r.status}</Badge> },
+          { label: "Serial No.", render: r => <span style={{ color: "#A0AEC0", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.serialNumber || "—"}</span> },
+          { label: "Manufacturer", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.manufacturer || "—"}</span> },
+          { label: "Assigned To", key: "assignee" },
+          { label: "Department", render: r => <span style={{ color: "#A0AEC0", fontSize: 12 }}>{r.department || "—"}</span> },
+          { label: "IP Address", render: r => <span style={{ color: "#64B5F6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.ipAddress || "—"}</span> },
+          { label: "Location", key: "location", mono: true },
+          { label: "Warranty", render: r => {
+            if (r.warranty === "N/A") return <span style={{ color: "#5A6178" }}>N/A</span>;
+            const exp = new Date(r.warranty) < new Date();
+            return <span style={{ color: exp ? "#FF6B6B" : "#81C784", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{r.warranty}</span>;
+          }},
+        ]}
+        data={assets.filter(a => a.name.toLowerCase().includes(search.toLowerCase()) || a.id.toLowerCase().includes(search.toLowerCase()) || a.type.toLowerCase().includes(search.toLowerCase()))}
+        onRowClick={row => { setDetailItem(row); setModal("assetDetail"); }}
+      />
+    </div>
+  );
+
+  // ─── Approvals ────────────────────────────────────────────────────────
+  const ApprovalsModule = () => {
+    const pendingChanges = changes.filter(c => c.status === "Awaiting Approval");
+    const pendingRequests = requests.filter(r => r.status === "Pending Approval");
+    return (
+      <div>
+        <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Change Approvals</h3>
+        {pendingChanges.map(ch => (
+          <div key={ch.id} style={{
+            background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130",
+            padding: 20, marginBottom: 12
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <div>
+                <span style={{ color: "#FFB347", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{ch.id}</span>
+                <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 600, marginTop: 2, fontFamily: "'Space Grotesk', sans-serif" }}>{ch.title}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Badge color={PRIORITY_COLORS[ch.risk === "High" ? "Sev-A" : ch.risk === "Medium" ? "Sev-B" : "Sev-D"]}>{ch.risk} Risk</Badge>
+                <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{ch.type}</Badge>
+              </div>
+            </div>
+            <div style={{ color: "#5A6178", fontSize: 13, marginBottom: 14 }}>{ch.description}</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+              {ch.approvers.map((a, i) => (
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "4px 10px", borderRadius: 4, background: "#0A0C14",
+                  border: "1px solid #1E213044", fontSize: 12
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.status === "Approved" ? "#4CAF50" : a.status === "Rejected" ? "#FF4444" : "#FFB347" }} />
+                  <span style={{ color: "#C4CAD6" }}>{a.name}</span>
+                  <span style={{ color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>({a.status})</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={btnStyle("#4CAF50")} onClick={() => {
+                setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Approved", approvers: c.approvers.map(a => ({ ...a, status: "Approved" })) } : c));
+              }}>✓ Approve</button>
+              <button style={btnStyle("#FF4444")} onClick={() => {
+                setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed", approvers: c.approvers.map(a => ({ ...a, status: "Rejected" })) } : c));
+              }}>✕ Reject</button>
+            </div>
+          </div>
+        ))}
+
+        <h3 style={{ margin: "24px 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Service Request Approvals</h3>
+        {pendingRequests.map(req => (
+          <div key={req.id} style={{
+            background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130",
+            padding: 20, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center"
+          }}>
+            <div>
+              <span style={{ color: "#81C784", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{req.id}</span>
+              <div style={{ color: "#E8ECF4", fontSize: 14, marginTop: 2 }}>{req.service}</div>
+              <div style={{ color: "#5A6178", fontSize: 12, marginTop: 2 }}>Requested by {req.requester}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={btnStyle("#4CAF50")} onClick={() => {
+                setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "In Progress" } : r));
+              }}>✓ Approve</button>
+              <button style={btnStyle("#FF4444")} onClick={() => {
+                setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "Closed" } : r));
+              }}>✕ Reject</button>
+            </div>
+          </div>
+        ))}
+        {pendingChanges.length === 0 && pendingRequests.length === 0 && (
+          <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>No pending approvals 🎉</div>
+        )}
+      </div>
+    );
+  };
+
+  // ─── SLA Tracker ──────────────────────────────────────────────────────
+  const SLAModule = () => {
+    const activeInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
+    const compliant = activeInc.filter(i => i.created <= i.slaTarget).length;
+    const total = activeInc.length;
+    const compliancePct = total > 0 ? Math.round((compliant / total) * 100) : 100;
+    const firstResponseMet = activeInc.filter(i => i.firstResponseTime != null && VGC_SLA_POLICY.severities[i.priority] && i.firstResponseTime <= VGC_SLA_POLICY.severities[i.priority].firstResponse).length;
+    const firstResponseTotal = activeInc.filter(i => i.firstResponseTime != null).length;
+    const firstResponsePct = firstResponseTotal > 0 ? Math.round((firstResponseMet / firstResponseTotal) * 100) : 100;
+
+    const byPriority = ["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => {
+      const items = activeInc.filter(i => i.priority === p);
+      const met = items.filter(i => i.created <= i.slaTarget).length;
+      const sev = VGC_SLA_POLICY.severities[p];
+      return { priority: p, total: items.length, met, pct: items.length > 0 ? Math.round((met / items.length) * 100) : 100, firstResponse: sev?.firstResponse, worstResponse: sev?.worstResponse, definition: sev?.definition };
+    });
+
+    return (
+      <div>
+        {/* VGC SLA Policy Banner */}
+        <div style={{ background: "linear-gradient(135deg, #6366F110, #06B6D410)", borderRadius: 8, border: "1px solid #6366F133", padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 18 }}>📋</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>VGC Technology Helpdesk SLA Policy</div>
+            <div style={{ fontSize: 11, color: "#8B92A8", marginTop: 2 }}>Business Hours: Mon–Fri 9:00 AM – 6:00 PM (SGT) · Channels: Email, Phone, Portal, Chat</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
+          <StatCard label="Overall SLA Compliance" value={`${compliancePct}%`} icon="📊" accent={compliancePct >= 90 ? "#4CAF50" : compliancePct >= 70 ? "#FFB347" : "#FF4444"} onClick={() => setActiveModule("incidents")} />
+          <StatCard label="First Response SLA" value={`${firstResponsePct}%`} icon="⚡" accent={firstResponsePct >= 90 ? "#4CAF50" : firstResponsePct >= 70 ? "#FFB347" : "#FF4444"} onClick={() => setActiveModule("incidents")} />
+          <StatCard label="Active Tickets" value={total} icon="🎫" accent="#64B5F6" onClick={() => setActiveModule("incidents")} />
+          <StatCard label="SLA Met" value={compliant} icon="✅" accent="#4CAF50" onClick={() => setActiveModule("incidents")} />
+          <StatCard label="SLA Breached" value={total - compliant} icon="🚨" accent="#FF4444" onClick={() => setActiveModule("incidents")} />
+        </div>
+
+        {/* Severity SLA Targets Overview */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⏱️ SLA Targets by Severity (Business Hours)</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            {byPriority.map(bp => {
+              const col = PRIORITY_COLORS[bp.priority]?.dot || "#5A6178";
+              return (
+                <div key={bp.priority} style={{ background: "#0A0C14", borderRadius: 8, border: `1px solid ${col}33`, padding: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: col, boxShadow: `0 0 6px ${col}66` }} />
+                    <span style={{ fontSize: 13, fontWeight: 700, color: col, fontFamily: "'Space Grotesk', sans-serif" }}>{bp.priority}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#8B92A8", marginBottom: 4 }}>{bp.definition}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+                    <div style={{ background: "#0F1117", borderRadius: 4, padding: "6px 8px", textAlign: "center" }}>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", marginBottom: 2 }}>First Response</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>{bp.firstResponse}h</div>
+                    </div>
+                    <div style={{ background: "#0F1117", borderRadius: 4, padding: "6px 8px", textAlign: "center" }}>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", marginBottom: 2 }}>Worst Response</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>{bp.worstResponse}h</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#5A6178", marginBottom: 3 }}>
+                      <span>{bp.total} ticket{bp.total !== 1 ? "s" : ""}</span>
+                      <span style={{ color: bp.pct >= 90 ? "#4CAF50" : bp.pct >= 70 ? "#FFB347" : "#FF4444", fontWeight: 600 }}>{bp.pct}% met</span>
+                    </div>
+                    <div style={{ background: "#0F1117", borderRadius: 3, height: 4, overflow: "hidden" }}>
+                      <div style={{ width: `${bp.pct}%`, height: "100%", background: bp.pct >= 90 ? "#4CAF50" : bp.pct >= 70 ? "#FFB347" : "#FF4444", borderRadius: 3 }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Detailed SLA Status</h3>
+          <DataTable
+            columns={[
+              { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#64B5F6" }}>{r.id}</span> },
+              { label: "Title", key: "title" },
+              { label: "Severity", render: r => <PriorityDot priority={r.priority} /> },
+              { label: "1st Resp", render: r => {
+                const sev = VGC_SLA_POLICY.severities[r.priority];
+                const target = sev?.firstResponse;
+                const actual = r.firstResponseTime;
+                if (actual == null) return <span style={{ fontSize: 11, color: "#5A6178" }}>Pending</span>;
+                const met = actual <= target;
+                return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: met ? "#4CAF50" : "#FF4444" }}>{actual}h / {target}h</span>;
+              }},
+              { label: "Elapsed", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.created}h</span> },
+              { label: "SLA Target", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.slaTarget}h</span> },
+              { label: "Remaining", render: r => {
+                const rem = r.slaTarget - r.created;
+                return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: rem <= 0 ? "#FF4444" : rem <= 2 ? "#FFB347" : "#81C784" }}>
+                  {rem <= 0 ? `${Math.abs(rem)}h over` : `${rem}h left`}
+                </span>;
+              }},
+              { label: "Status", render: r => {
+                const pct = Math.round((r.created / r.slaTarget) * 100);
+                return <Badge color={pct >= 100 ? PRIORITY_COLORS["Sev-A"] : pct >= 75 ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>
+                  {pct >= 100 ? "BREACHED" : pct >= 75 ? "AT RISK" : "ON TRACK"}
+                </Badge>;
+              }},
+            ]}
+            data={activeInc}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  // ─── New Incident Modal ───────────────────────────────────────────────
+  const NewIncidentModal = () => {
+    const [form, setForm] = useState({ title: "", priority: "Sev-C", category: "Software", subcategory: "", urgency: "Sev-C", impact: "Individual", description: "", assignee: "", contactMethod: "Portal", affectedAsset: "", affectedService: "", location: "SG-HQ", reporterEmail: "", customerId: "", customerContact: "" });
+    const [aiSuggestion, setAiSuggestion] = useState(null);
+
+    const SUBCATEGORIES = {
+      Hardware: ["Laptop / Desktop", "Printer", "Monitor / Display", "Peripheral", "Server Hardware", "Mobile Device"],
+      Software: ["Enterprise Application", "OS / System Software", "Browser / Plugin", "License Issue", "Installation / Update"],
+      Network: ["VPN / Remote Access", "WiFi / LAN", "DNS / DHCP", "Bandwidth / Latency", "Firewall / Proxy"],
+      Security: ["Access Violation", "Malware / Virus", "Phishing", "Data Breach", "MFA / Auth Issue"],
+      Access: ["Password Reset", "Account Locked", "Permission Request", "SSO / Federation", "Role Change"],
+      Email: ["Exchange Server", "Outlook Client", "Distribution List", "Calendar / Meeting", "Spam / Filtering"],
+      Database: ["Performance", "Connectivity", "Backup / Recovery", "Migration", "Replication"],
+      Cloud: ["Azure Service", "AWS Service", "Container / K8s", "Storage / Blob", "VM / Compute"],
+    };
+
+    const IMPACT_LEVELS = ["Enterprise", "Department", "Multiple Users", "Individual"];
+    const URGENCY_LEVELS = ["Sev-A", "Sev-B", "Sev-C", "Sev-D"];
+    const CONTACT_METHODS = ["Portal", "Email", "Phone", "Chat", "Walk-in", "Monitoring Alert"];
+    const LOCATIONS = ["SG-HQ", "SG-HQ-Floor1", "SG-HQ-Floor2", "SG-HQ-Floor3", "SG-HQ-Floor4", "SG-DC1", "Azure-SEA", "Remote"];
+    const SERVICES_LIST = ["Email & Collaboration", "Network Services", "Database Services", "Business Applications", "End User Computing", "Print Services", "Remote Access", "Cloud Infrastructure", "Security Operations"];
+
+    const runAiAnalysis = () => {
+      if (form.title.length >= 3 || form.description.length >= 3) {
+        const result = aiAnalyzeIncident(form.title, form.description);
+        setAiSuggestion(result);
+      }
+    };
+
+    const applyAiSuggestions = () => {
+      if (!aiSuggestion) return;
+      setForm(prev => ({
+        ...prev,
+        category: aiSuggestion.suggestedCategory,
+        priority: aiSuggestion.suggestedPriority,
+        assignee: aiSuggestion.suggestedAssignee || prev.assignee,
+      }));
+    };
+
+    const selectedCustomer = customers.find(c => c.id === form.customerId);
+
+    return (
+      <Modal title="Create New Incident" onClose={() => setModal(null)} wide>
+        <FormField label="Customer / Company">
+          <select style={inputStyle} value={form.customerId} onChange={e => {
+            const cust = customers.find(c => c.id === e.target.value);
+            setForm({ ...form, customerId: e.target.value, customerContact: cust ? cust.contactPerson : "" });
+          }}>
+            <option value="">— Internal / Not a customer —</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </FormField>
+        {selectedCustomer && <FormField label="Contact Person">
+          <input style={inputStyle} value={form.customerContact} onChange={e => setForm({ ...form, customerContact: e.target.value })} placeholder={selectedCustomer.contactPerson} />
+        </FormField>}
+        <FormField label="Title">
+          <input style={inputStyle} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} onBlur={runAiAnalysis} placeholder="Brief description of the issue" />
+        </FormField>
+        <FormField label="Description">
+          <textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} onBlur={runAiAnalysis} placeholder="Detailed description..." />
+        </FormField>
+
+        {/* AI Suggestion Panel */}
+        {aiSuggestion && (
+          <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>🤖</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif" }}>AI Recommendations</span>
+                <Badge color={aiSuggestion.confidence >= 85 ? AI_CONFIDENCE_COLORS.high : aiSuggestion.confidence >= 70 ? AI_CONFIDENCE_COLORS.medium : AI_CONFIDENCE_COLORS.low}>
+                  {aiSuggestion.confidence}% confident
+                </Badge>
+              </div>
+              <button style={{ ...btnStyle("#6366F1"), fontSize: 11, padding: "5px 12px" }} onClick={applyAiSuggestions}>Apply All ✓</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                onClick={() => setForm(prev => ({ ...prev, category: aiSuggestion.suggestedCategory }))}>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Category</div>
+                <div style={{ color: "#64B5F6", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedCategory}</div>
+              </div>
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                onClick={() => setForm(prev => ({ ...prev, priority: aiSuggestion.suggestedPriority }))}>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Priority</div>
+                <PriorityDot priority={aiSuggestion.suggestedPriority} />
+              </div>
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                onClick={() => { if (aiSuggestion.suggestedAssignee) setForm(prev => ({ ...prev, assignee: aiSuggestion.suggestedAssignee })); }}>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Assignee</div>
+                <div style={{ color: "#CE93D8", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedAssignee || "Manual"}</div>
+              </div>
+            </div>
+            {aiSuggestion.kbSuggestions.length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 6 }}>Suggested KB Articles</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {aiSuggestion.kbSuggestions.map(kbId => {
+                    const art = kbArticles.find(a => a.id === kbId);
+                    return art ? (
+                      <span key={kbId} style={{ cursor: "pointer" }} onClick={() => { setDetailItem(art); setModal("kbDetail"); }}>
+                        <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>📖 {art.title}</Badge>
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {!aiSuggestion && form.title.length < 3 && (
+          <div style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px dashed #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14 }}>🤖</span>
+            <span style={{ fontSize: 12, color: "#5A617899" }}>AI will analyze and suggest category, priority & assignee after you enter a title</span>
+          </div>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Priority">
+            <select style={inputStyle} value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+              {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Urgency">
+            <select style={inputStyle} value={form.urgency} onChange={e => setForm({ ...form, urgency: e.target.value })}>
+              {URGENCY_LEVELS.map(u => <option key={u}>{u}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Impact">
+            <select style={inputStyle} value={form.impact} onChange={e => setForm({ ...form, impact: e.target.value })}>
+              {IMPACT_LEVELS.map(i => <option key={i}>{i}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Contact Method">
+            <select style={inputStyle} value={form.contactMethod} onChange={e => setForm({ ...form, contactMethod: e.target.value })}>
+              {CONTACT_METHODS.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Category">
+            <select style={inputStyle} value={form.category} onChange={e => setForm({ ...form, category: e.target.value, subcategory: "" })}>
+              {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Subcategory">
+            <select style={inputStyle} value={form.subcategory} onChange={e => setForm({ ...form, subcategory: e.target.value })}>
+              <option value="">Select subcategory</option>
+              {(SUBCATEGORIES[form.category] || []).map(s => <option key={s}>{s}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Affected Service">
+            <select style={inputStyle} value={form.affectedService} onChange={e => setForm({ ...form, affectedService: e.target.value })}>
+              <option value="">Select service</option>
+              {SERVICES_LIST.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Location">
+            <select style={inputStyle} value={form.location} onChange={e => setForm({ ...form, location: e.target.value })}>
+              {LOCATIONS.map(l => <option key={l}>{l}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Affected Asset / PC Name">
+            <input style={inputStyle} value={form.affectedAsset} onChange={e => setForm({ ...form, affectedAsset: e.target.value })} placeholder="e.g. AST001 or VGC-MKT-PC05" />
+          </FormField>
+          <FormField label="Reporter Email">
+            <input style={inputStyle} type="email" value={form.reporterEmail} onChange={e => setForm({ ...form, reporterEmail: e.target.value })} placeholder="user@vgctech.com.sg" />
+          </FormField>
+        </div>
+        <FormField label="Assignee">
+          <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
+            <option value="">AI Auto-assign</option>
+            {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role} ({u.team})</option>)}
+          </select>
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
+          <button style={btnStyle()} onClick={() => {
+            if (!form.title) return;
+            const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+            const reporterUser = USERS.find(u => u.name === currentUser.name) || currentUser;
+            const assigneeUser = form.assignee ? USERS.find(u => u.name === form.assignee) : null;
+            const newInc = {
+              id: genId("INC"), title: form.title, priority: form.priority,
+              status: "Open", category: form.category, subcategory: form.subcategory,
+              urgency: form.urgency, impact: form.impact,
+              assignee: form.assignee || (aiSuggestion?.suggestedAssignee) || "Unassigned",
+              assignmentGroup: assigneeUser?.team || "Service Desk",
+              reporter: reporterUser.name, reporterEmail: form.reporterEmail || reporterUser.email || "",
+              customerId: form.customerId || "", customer: selectedCustomer?.name || "", customerContact: form.customerContact || selectedCustomer?.contactPerson || "", customerPhone: selectedCustomer?.phone || "", customerAddress: selectedCustomer?.address || "",
+              reporterRole: reporterUser.rbacRole || "", contactMethod: form.contactMethod,
+              created: 0, slaTarget: slaMap[form.priority], description: form.description,
+              affectedAsset: form.affectedAsset, affectedService: form.affectedService,
+              location: form.location, firstResponseTime: null,
+              resolutionNotes: "", closureCode: "", workaround: "",
+              aiTriaged: !!aiSuggestion, aiConfidence: aiSuggestion?.confidence || 0,
+              activityLog: [
+                { id: genId("AL"), type: "status", user: "System", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Ticket created via ${form.contactMethod || "Portal"}` },
+                ...(aiSuggestion ? [{ id: genId("AL"), type: "status", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-triaged: ${form.priority}, Category: ${form.category}, Confidence: ${aiSuggestion.confidence}%` }] : [])
+              ]
+            };
+            setIncidents(prev => [newInc, ...prev]);
+            setModal(null);
+          }}>Create Incident</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── Detail Modals ────────────────────────────────────────────────────
+  const IncidentDetailModal = () => {
+    const inc = detailItem;
+    if (!inc) return null;
+    const reporterUser = USERS.find(u => u.name === inc.reporter);
+    const [detailTab, setDetailTab] = useState("details");
+    const [replyMode, setReplyMode] = useState(null); // null | "external" | "internal"
+    const [replyBody, setReplyBody] = useState("");
+    const [replySubject, setReplySubject] = useState(`RE: ${inc.id} — ${inc.title}`);
+    const [emailAttachments, setEmailAttachments] = useState([]);
+    const fileInputRef = useRef(null);
+    const activities = inc.activityLog || [];
+
+    const addActivity = (type, detail, extra = {}) => {
+      const entry = { id: genId("AL"), type, user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail, ...extra };
+      const updated = { ...inc, activityLog: [...(inc.activityLog || []), entry] };
+      setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+      setDetailItem(updated);
+    };
+
+    const changeStatus = (newStatus) => {
+      const updated = { ...inc, status: newStatus, activityLog: [...(inc.activityLog || []), { id: genId("AL"), type: "status", user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Status changed: ${inc.status} → ${newStatus}` }] };
+      setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, status: newStatus, activityLog: updated.activityLog } : i));
+      setDetailItem(updated);
+
+      // AI Customer Survey — auto-generate draft on Resolved/Closed
+      if (newStatus === "Resolved" || newStatus === "Closed") {
+        const tpl = inc.priority === "Critical"
+          ? surveyTemplates.find(t => t.id === "srvt-critical") || surveyTemplates[0]
+          : (inc.activityLog || []).length <= 3
+            ? surveyTemplates.find(t => t.id === "srvt-quick") || surveyTemplates[0]
+            : surveyTemplates[0];
+        if (tpl) {
+          const preview = [
+            `Dear ${inc.reporterName || "Customer"},`,
+            "",
+            `Thank you for contacting VGC Technology regarding ${inc.id} — "${inc.title}".`,
+            `We're glad this has been ${newStatus.toLowerCase()}. Your feedback helps us improve.`,
+            "",
+            ...tpl.questions.map((q, i) => `${i + 1}. ${q}`),
+            "",
+            tpl.signOff,
+            `— VGC Technology ITSM`
+          ].join("\n");
+          const draft = { id: genId("SURV"), ticketId: inc.id, templateName: tpl.name, preview, status: "Pending Approval", createdAt: new Date().toISOString() };
+          setSurveyDrafts(prev => [...prev, draft]);
+        }
+      }
+    };
+
+    const sendReply = () => {
+      if (!replyBody.trim()) return;
+      const isInternal = replyMode === "internal";
+      const entry = {
+        id: genId("AL"), type: isInternal ? "note" : "email", user: currentUser.name,
+        time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""),
+        detail: isInternal ? `Internal note added` : `Email sent to ${inc.reporterEmail || "reporter"}${emailAttachments.length > 0 ? ` (${emailAttachments.length} attachment${emailAttachments.length > 1 ? "s" : ""})` : ""}`,
+        isInternal,
+        ...(isInternal ? {} : {
+          to: inc.reporterEmail || "", from: currentUser.email,
+          subject: replySubject,
+          body: replyBody + (smtpConfig.signature ? `<br/><hr style="border:none;border-top:1px solid #333;margin:16px 0"/>${smtpConfig.signature}` : ""),
+          attachments: emailAttachments.map(a => ({ name: a.name, size: a.size, type: a.type }))
+        }),
+        ...(isInternal ? { body: replyBody } : {})
+      };
+      const updated = { ...inc, activityLog: [...(inc.activityLog || []), entry] };
+      setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+      setDetailItem(updated);
+      setReplyMode(null); setReplyBody(""); setReplySubject(`RE: ${inc.id} — ${inc.title}`); setEmailAttachments([]);
+    };
+
+    const editorToolbar = (targetId) => (
+      <div style={{ display: "flex", gap: 2, padding: "6px 8px", background: "#0A0C14", borderBottom: "1px solid #1E213044", flexWrap: "wrap" }}>
+        {[
+          { cmd: "bold", icon: "B", style: { fontWeight: 700 } },
+          { cmd: "italic", icon: "I", style: { fontStyle: "italic" } },
+          { cmd: "underline", icon: "U", style: { textDecoration: "underline" } },
+          { cmd: "strikeThrough", icon: "S", style: { textDecoration: "line-through" } },
+        ].map(b => (
+          <button key={b.cmd} title={b.cmd} onMouseDown={e => { e.preventDefault(); document.execCommand(b.cmd, false, null); }}
+            style={{ width: 28, height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#C4CAD6", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", ...b.style }}>
+            {b.icon}
+          </button>
+        ))}
+        <span style={{ width: 1, background: "#2A2E3E", margin: "0 4px" }} />
+        {[
+          { cmd: "justifyLeft", icon: "≡" },
+          { cmd: "justifyCenter", icon: "≡" },
+          { cmd: "justifyRight", icon: "≡" },
+        ].map((b, i) => (
+          <button key={b.cmd + i} title={["Align Left", "Center", "Align Right"][i]} onMouseDown={e => { e.preventDefault(); document.execCommand(b.cmd, false, null); }}
+            style={{ width: 28, height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#C4CAD6", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", transform: i === 2 ? "scaleX(-1)" : "none" }}>
+            {b.icon}
+          </button>
+        ))}
+        <span style={{ width: 1, background: "#2A2E3E", margin: "0 4px" }} />
+        <button title="Bullet List" onMouseDown={e => { e.preventDefault(); document.execCommand("insertUnorderedList", false, null); }}
+          style={{ width: 28, height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#C4CAD6", cursor: "pointer", fontSize: 13 }}>•≡</button>
+        <button title="Numbered List" onMouseDown={e => { e.preventDefault(); document.execCommand("insertOrderedList", false, null); }}
+          style={{ width: 28, height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#C4CAD6", cursor: "pointer", fontSize: 12 }}>1.</button>
+        <span style={{ width: 1, background: "#2A2E3E", margin: "0 4px" }} />
+        <select title="Font Size" onChange={e => { document.execCommand("fontSize", false, e.target.value); e.target.value = ""; }}
+          style={{ height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#C4CAD6", cursor: "pointer", fontSize: 10, padding: "0 4px" }}>
+          <option value="">Size</option><option value="1">Small</option><option value="3">Normal</option><option value="5">Large</option><option value="7">Huge</option>
+        </select>
+        <select title="Font Color" onChange={e => { if (e.target.value) document.execCommand("foreColor", false, e.target.value); e.target.value = ""; }}
+          style={{ height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#C4CAD6", cursor: "pointer", fontSize: 10, padding: "0 4px" }}>
+          <option value="">Color</option><option value="#FF6B6B" style={{ color: "#FF6B6B" }}>Red</option><option value="#FFB347" style={{ color: "#FFB347" }}>Orange</option>
+          <option value="#81C784" style={{ color: "#81C784" }}>Green</option><option value="#64B5F6" style={{ color: "#64B5F6" }}>Blue</option><option value="#CE93D8" style={{ color: "#CE93D8" }}>Purple</option><option value="#FFFFFF">White</option>
+        </select>
+        <button title="Insert Link" onMouseDown={e => { e.preventDefault(); const url = prompt("Enter URL:"); if (url) document.execCommand("createLink", false, url); }}
+          style={{ width: 28, height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: "#64B5F6", cursor: "pointer", fontSize: 12 }}>🔗</button>
+        <button title="Attach File" onMouseDown={e => { e.preventDefault(); fileInputRef.current && fileInputRef.current.click(); }}
+          style={{ width: 28, height: 26, background: "#1E2130", border: "1px solid #2A2E3E", borderRadius: 4, color: emailAttachments.length > 0 ? "#81C784" : "#A0AEC0", cursor: "pointer", fontSize: 12 }}>📎</button>
+        <input ref={fileInputRef} type="file" multiple hidden onChange={e => {
+          const files = Array.from(e.target.files || []);
+          files.forEach(file => {
+            if (file.size > 10 * 1024 * 1024) return; // Skip files > 10MB
+            const reader = new FileReader();
+            reader.onload = () => setEmailAttachments(prev => [...prev, { name: file.name, size: file.size, type: file.type, data: reader.result }]);
+            reader.readAsDataURL(file);
+          });
+          e.target.value = "";
+        }} />
+        {emailAttachments.length > 0 && <span style={{ fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace", marginLeft: 4 }}>{emailAttachments.length} file{emailAttachments.length > 1 ? "s" : ""}</span>}
+      </div>
+    );
+
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "#00000088", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)", padding: 20 }}
+        onClick={() => { setModal(null); setDetailItem(null); }}>
+        <div style={{ background: "#12141E", borderRadius: "12px", border: "1px solid #1E2130", width: 900, maxWidth: "95vw", maxHeight: "90vh", overflow: "hidden", boxShadow: "0 24px 48px #00000066", display: "flex", flexDirection: "column" }}
+          onClick={e => e.stopPropagation()}>
+          {/* Header */}
+          <div style={{ padding: "14px 20px", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12141E", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ color: "#64B5F6", fontSize: 13, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{inc.id}</span>
+              <h3 style={{ margin: 0, color: "#E8ECF4", fontSize: 15, fontFamily: "'Space Grotesk', sans-serif" }}>{inc.title}</h3>
+              <Badge color={STATUS_COLORS[inc.status]}>{inc.status}</Badge>
+              <PriorityDot priority={inc.priority} />
+            </div>
+            <button onClick={() => { setModal(null); setDetailItem(null); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 20, padding: "4px 8px" }}>✕</button>
+          </div>
+          {/* Tabs */}
+          <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
+            {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }].map(t => (
+              <button key={t.id} onClick={() => setDetailTab(t.id)}
+                style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>{t.icon}</span> {t.label}
+                {t.id === "activity" && activities.length > 0 && <span style={{ background: "#6366F1", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700, marginLeft: 2 }}>{activities.length}</span>}
+              </button>
+            ))}
+          </div>
+          {/* Content */}
+          <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
+            {detailTab === "details" && (
+              <>
+                {/* Core Fields */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[inc.status]}>{inc.status}</Badge></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>PRIORITY</span><PriorityDot priority={inc.priority} /></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>URGENCY</span><span style={{ color: "#FFB347", fontSize: 13, fontWeight: 600 }}>{inc.urgency || "—"}</span></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>IMPACT</span><Badge color={inc.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : inc.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{inc.impact || "—"}</Badge></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CATEGORY</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.category}{inc.subcategory ? ` › ${inc.subcategory}` : ""}</span></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CONTACT METHOD</span><span style={{ color: "#A0AEC0", fontSize: 13 }}>{inc.contactMethod || "—"}</span></div>
+                </div>
+                {/* Assignment & Reporter */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNEE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.assignee}</span>{inc.assignmentGroup && <span style={{ color: "#5A6178", fontSize: 11, marginLeft: 6 }}>({inc.assignmentGroup})</span>}</div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>REPORTER</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.reporter}</span>{inc.reporterEmail && <div style={{ color: "#64B5F6", fontSize: 11, marginTop: 2 }}>{inc.reporterEmail}</div>}{inc.reporterRole && <div style={{ color: "#5A6178", fontSize: 10 }}>{inc.reporterRole}</div>}</div>
+                </div>
+                {/* Customer Info */}
+                {inc.customer && <div style={{ background: "#0A0C14", borderRadius: 6, padding: 12, marginBottom: 16, border: "1px solid #1E213044" }}>
+                  <span style={{ fontSize: 11, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 8 }}>🏢 CUSTOMER</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div><span style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 2 }}>COMPANY</span><span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{inc.customer}</span></div>
+                    <div><span style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 2 }}>CONTACT PERSON</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.customerContact || "—"}</span></div>
+                    {inc.customerPhone && <div><span style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 2 }}>PHONE</span><span style={{ color: "#64B5F6", fontSize: 13 }}>{inc.customerPhone}</span></div>}
+                    {inc.customerAddress && <div><span style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 2 }}>ADDRESS</span><span style={{ color: "#A0AEC0", fontSize: 12 }}>{inc.customerAddress}</span></div>}
+                  </div>
+                </div>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>AFFECTED SERVICE</span><span style={{ color: "#CE93D8", fontSize: 13 }}>{inc.affectedService || "—"}</span></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>AFFECTED ASSET / PC</span><span style={{ color: "#64B5F6", fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>{inc.affectedAsset || "—"}</span></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>LOCATION</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.location || "—"}</span></div>
+                  <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CREATED</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{timeAgo(inc.created)}</span>{inc.firstResponseTime != null && <div style={{ color: "#81C784", fontSize: 10 }}>First response: {inc.firstResponseTime}h</div>}</div>
+                </div>
+                {/* SLA Progress */}
+                {(() => {
+                  const slaPct = Math.min(100, Math.round((inc.created / inc.slaTarget) * 100));
+                  const hrsLeft = Math.max(0, inc.slaTarget - inc.created);
+                  const isBreach = slaPct >= 100;
+                  const isCritical = slaPct > 90 && !isBreach;
+                  const isWarning = slaPct > 75 && !isCritical && !isBreach;
+                  return (
+                    <div style={{
+                      background: isBreach ? "linear-gradient(135deg, #1A080888, #2D0A0A88)" : isCritical ? "linear-gradient(135deg, #1A150888, #2D1F0A88)" : "#0A0C14",
+                      borderRadius: 6, padding: 12, marginBottom: 16,
+                      border: isBreach ? "1px solid #FF444444" : isCritical ? "1px solid #FF6B6B33" : "1px solid #1E213044",
+                      animation: isBreach ? "criticalGlow 1.5s ease-in-out infinite" : isCritical ? "warningGlow 2s ease-in-out infinite" : "none"
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, color: isBreach ? "#FF6B6B" : "#5A6178", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                          {isBreach && <span style={{ animation: "slaBlinkFast 0.6s infinite" }}>🚨</span>}
+                          {isCritical && <span style={{ animation: "slaBlink 0.8s infinite" }}>⚠️</span>}
+                          SLA PROGRESS
+                        </span>
+                        <span style={{
+                          fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700,
+                          color: isBreach ? "#FF4444" : isCritical ? "#FF6B6B" : isWarning ? "#FFB347" : "#81C784",
+                          animation: isBreach ? "slaBreachPulse 0.8s infinite" : isCritical ? "slaBlinkFast 0.6s infinite" : isWarning ? "slaBlink 1.2s infinite" : "none"
+                        }}>
+                          {slaPct}% {isBreach ? "— BREACHED" : isCritical ? `— ${hrsLeft.toFixed(1)}h LEFT` : ""}
+                        </span>
+                      </div>
+                      <div style={{ height: 6, background: "#1E2130", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{
+                          height: "100%", width: `${slaPct}%`,
+                          background: isBreach ? "linear-gradient(90deg, #FF4444, #FF6B6B)" : isCritical ? "linear-gradient(90deg, #FF6B6B, #FFB347)" : isWarning ? "#FFB347" : "#81C784",
+                          borderRadius: 3, transition: "width 0.3s",
+                          animation: isBreach ? "slaBreachPulse 0.8s infinite" : "none"
+                        }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "#5A6178" }}>
+                        <span>Elapsed: {inc.created}h</span><span>Target: {inc.slaTarget}h</span>
+                      </div>
+                      {/* AI Assist Urgency Guidance */}
+                      {(isBreach || isCritical || isWarning) && (
+                        <div style={{
+                          marginTop: 10, padding: "8px 12px", borderRadius: 6,
+                          background: isBreach ? "#FF444411" : isCritical ? "#FF6B6B0D" : "#FFB3470D",
+                          border: `1px solid ${isBreach ? "#FF444433" : isCritical ? "#FF6B6B22" : "#FFB34722"}`,
+                          display: "flex", alignItems: "flex-start", gap: 8
+                        }}>
+                          <span style={{ fontSize: 14, flexShrink: 0, animation: isBreach ? "slaBlinkFast 0.6s infinite" : "slaBlink 1.2s infinite" }}>🤖</span>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: isBreach ? "#FF4444" : isCritical ? "#FF6B6B" : "#FFB347", marginBottom: 2 }}>
+                              {isBreach ? "⚡ IMMEDIATE ACTION REQUIRED" : isCritical ? "⚠️ URGENT — SLA at risk" : "📋 Attention needed"}
+                            </div>
+                            <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.5 }}>
+                              {isBreach
+                                ? "SLA has been breached. Escalate to management immediately. Document the delay reason and notify the customer with an updated timeline."
+                                : isCritical
+                                ? `Only ${hrsLeft.toFixed(1)}h remaining. Prioritize this ticket now. Consider escalating or reassigning if blocked. Update the customer proactively.`
+                                : `SLA is ${slaPct}% consumed. Ensure progress is being made. Plan resolution steps to avoid breach.`}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                {/* Description */}
+                <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, marginBottom: 16, border: "1px solid #1E213044" }}>
+                  <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>DESCRIPTION</span>
+                  <p style={{ color: "#C4CAD6", fontSize: 13, margin: 0, lineHeight: 1.6 }}>{inc.description}</p>
+                </div>
+                {inc.workaround && (
+                  <div style={{ background: "#0A1E2D", borderRadius: 6, padding: 12, border: "1px solid #06B6D422", marginBottom: 16 }}>
+                    <span style={{ fontSize: 11, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 4 }}>WORKAROUND</span>
+                    <p style={{ color: "#C4CAD6", fontSize: 12, margin: 0 }}>{inc.workaround}</p>
+                  </div>
+                )}
+                {inc.resolutionNotes && (
+                  <div style={{ background: "#0D2D1A", borderRadius: 6, padding: 12, border: "1px solid #81C78422", marginBottom: 16 }}>
+                    <span style={{ fontSize: 11, color: "#81C784", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 4 }}>RESOLUTION NOTES</span>
+                    <p style={{ color: "#C4CAD6", fontSize: 12, margin: 0 }}>{inc.resolutionNotes}</p>
+                    {inc.closureCode && <div style={{ marginTop: 6, fontSize: 10, color: "#5A6178" }}>Closure Code: <span style={{ color: "#81C784" }}>{inc.closureCode}</span></div>}
+                  </div>
+                )}
+                {inc.linkedProblem && (
+                  <div style={{ background: "#1A0A2D", borderRadius: 6, padding: 12, border: "1px solid #CE93D822", marginBottom: 16, cursor: "pointer" }}
+                    onClick={() => { const prb = problems.find(p => p.id === inc.linkedProblem); if (prb) { setDetailItem(prb); setModal("problemDetail"); } }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = "#CE93D866"}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = "#CE93D822"}>
+                    <span style={{ fontSize: 11, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace" }}>Linked Problem: {inc.linkedProblem} <span style={{ color: "#5A6178" }}>(click to view)</span></span>
+                  </div>
+                )}
+              </>
+            )}
+
+            {detailTab === "activity" && (
+              <>
+                {/* Reply Buttons */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                  <button style={btnStyle("#3B82F6")} onClick={() => { setReplyMode("external"); setReplySubject(`RE: ${inc.id} — ${inc.title}`); }}>📧 Reply to Reporter</button>
+                  <button style={btnStyle("#6366F1")} onClick={() => setReplyMode("internal")}>📝 Add Internal Note</button>
+                </div>
+
+                {/* Compose Area */}
+                {replyMode && (
+                  <div style={{ background: "#0A0C14", borderRadius: 8, border: `1px solid ${replyMode === "internal" ? "#FFB34744" : "#3B82F644"}`, marginBottom: 20, overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", background: replyMode === "internal" ? "#2D1F0A11" : "#0D213711", borderBottom: "1px solid #1E213044", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 13 }}>{replyMode === "internal" ? "📝" : "📧"}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: replyMode === "internal" ? "#FFB347" : "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>
+                          {replyMode === "internal" ? "INTERNAL NOTE" : "REPLY TO REPORTER"}
+                        </span>
+                        {replyMode === "internal" && <span style={{ fontSize: 9, color: "#FFB347", background: "#FFB34718", padding: "2px 6px", borderRadius: 4 }}>Not visible to reporter</span>}
+                      </div>
+                      <button onClick={() => { setReplyMode(null); setReplyBody(""); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 14 }}>✕</button>
+                    </div>
+                    {replyMode === "external" && (
+                      <div style={{ padding: "8px 14px", borderBottom: "1px solid #1E213044", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 32 }}>TO:</span>
+                        <span style={{ fontSize: 12, color: "#64B5F6" }}>{inc.reporterEmail || "—"}</span>
+                        <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: 12, minWidth: 32 }}>FROM:</span>
+                        <span style={{ fontSize: 12, color: "#81C784" }}>{smtpConfig.fromEmail}</span>
+                      </div>
+                    )}
+                    {replyMode === "external" && (
+                      <div style={{ padding: "8px 14px", borderBottom: "1px solid #1E213044", display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 32 }}>SUBJ:</span>
+                        <input value={replySubject} onChange={e => setReplySubject(e.target.value)}
+                          style={{ ...inputStyle, flex: 1, padding: "4px 8px", fontSize: 12, margin: 0 }} />
+                      </div>
+                    )}
+                    {editorToolbar("reply-editor")}
+                    {emailAttachments.length > 0 && (
+                      <div style={{ padding: "6px 14px", background: "#0A0C14", borderBottom: "1px solid #1E213044", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>ATTACHMENTS:</span>
+                        {emailAttachments.map((att, i) => (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, background: "#1E2130", borderRadius: 4, padding: "3px 8px", border: "1px solid #2A2E3E" }}>
+                            <span style={{ fontSize: 10 }}>📄</span>
+                            <span style={{ fontSize: 10, color: "#C4CAD6", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.name}</span>
+                            <span style={{ fontSize: 9, color: "#5A6178" }}>({(att.size / 1024).toFixed(0)}KB)</span>
+                            <button onClick={() => setEmailAttachments(prev => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 10, padding: 0, marginLeft: 2 }}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div id="reply-editor" contentEditable
+                      onInput={e => setReplyBody(sanitizeHTML(e.currentTarget.innerHTML))}
+                      style={{ minHeight: 120, maxHeight: 260, overflow: "auto", padding: "12px 14px", color: "#C4CAD6", fontSize: 13, lineHeight: 1.6, outline: "none", background: "#0F1117" }}
+                      suppressContentEditableWarning />
+                    <div style={{ padding: "10px 14px", borderTop: "1px solid #1E213044", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 10, color: "#5A617888" }}>
+                        {replyMode === "external" ? `Via ${smtpConfig.host}:${smtpConfig.port} (${smtpConfig.encryption})` : "Internal note — visible to agents only"}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={() => { setReplyMode(null); setReplyBody(""); }} style={{ ...btnStyle("#333"), color: "#A0AEC0", padding: "6px 14px", fontSize: 11 }}>Cancel</button>
+                        <button onClick={sendReply} style={{ ...btnStyle(replyMode === "internal" ? "#FFB347" : "#3B82F6"), padding: "6px 14px", fontSize: 11 }}>
+                          {replyMode === "internal" ? "💾 Save Note" : "📤 Send Email"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Activity Timeline */}
+                <div style={{ position: "relative", paddingLeft: 24 }}>
+                  <div style={{ position: "absolute", left: 7, top: 4, bottom: 4, width: 2, background: "#1E2130" }} />
+                  {activities.slice().reverse().map((act, idx) => (
+                    <div key={act.id || idx} style={{ position: "relative", marginBottom: 16 }}>
+                      <div style={{ position: "absolute", left: -20, top: 4, width: 12, height: 12, borderRadius: "50%",
+                        background: act.type === "email" ? "#3B82F6" : act.type === "note" ? "#FFB347" : act.type === "status" ? "#6366F1" : "#5A6178",
+                        border: "2px solid #12141E", zIndex: 1 }} />
+                      <div style={{ background: "#0A0C14", borderRadius: 8, border: `1px solid ${act.type === "email" ? "#3B82F622" : act.type === "note" ? "#FFB34722" : "#1E213044"}`, overflow: "hidden" }}>
+                        <div style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: (act.type === "email" || (act.type === "note" && act.body)) ? "1px solid #1E213022" : "none" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 12 }}>{act.type === "email" ? "📧" : act.type === "note" ? "📝" : "🔄"}</span>
+                            <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{act.user}</span>
+                            {act.isInternal && <span style={{ fontSize: 9, color: "#FFB347", background: "#FFB34718", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>INTERNAL</span>}
+                          </div>
+                          <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{act.time}</span>
+                        </div>
+                        <div style={{ padding: "8px 12px" }}>
+                          <div style={{ fontSize: 12, color: "#A0AEC0", marginBottom: act.body ? 8 : 0 }}>{act.detail}</div>
+                          {act.type === "email" && act.subject && (
+                            <div style={{ fontSize: 11, color: "#64B5F6", marginBottom: 4, fontWeight: 600 }}>Subject: {act.subject}</div>
+                          )}
+                          {act.type === "email" && (
+                            <div style={{ fontSize: 10, color: "#5A617888", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>
+                              {act.from && <span>From: {act.from}</span>}{act.to && <span style={{ marginLeft: 12 }}>To: {act.to}</span>}
+                            </div>
+                          )}
+                          {act.body && (
+                            <div style={{ background: "#0F1117", borderRadius: 4, padding: "8px 10px", border: "1px solid #1E213022", fontSize: 12, color: "#C4CAD6", lineHeight: 1.5 }}
+                              dangerouslySetInnerHTML={{ __html: sanitizeHTML(act.body) }} />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {activities.length === 0 && (
+                    <div style={{ padding: 30, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No activity yet. Use the buttons above to reply or add notes.</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          {/* Action Bar (bottom) */}
+          <div style={{ padding: "12px 20px", borderTop: "1px solid #1E2130", background: "#0F1117", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
+            <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginRight: 8 }}>ACTIONS:</span>
+            {/* New → Open */}
+            {inc.status === "New" && <button style={btnStyle("#A0AEC0")} onClick={() => changeStatus("Open")}>Open Ticket</button>}
+            {/* Open → In Progress */}
+            {inc.status === "Open" && <button style={btnStyle("#3B82F6")} onClick={() => changeStatus("In Progress")}>▶ Start Working</button>}
+            {/* In Progress → Pending / On Hold */}
+            {inc.status === "In Progress" && <button style={btnStyle("#FFB347")} onClick={() => changeStatus("Pending")}>⏸ Pending</button>}
+            {inc.status === "In Progress" && <button style={btnStyle("#FF6B6B")} onClick={() => changeStatus("On Hold")}>⏹ On Hold</button>}
+            {/* Pending/On Hold → In Progress */}
+            {(inc.status === "Pending" || inc.status === "On Hold") && <button style={btnStyle("#3B82F6")} onClick={() => changeStatus("In Progress")}>▶ Resume</button>}
+            {/* Open/In Progress/Pending → Resolved */}
+            {["Open", "In Progress", "Pending"].includes(inc.status) && <button style={btnStyle("#4CAF50")} onClick={() => changeStatus("Resolved")}>✓ Resolve</button>}
+            {/* Resolved → Closed */}
+            {inc.status === "Resolved" && <button style={btnStyle("#1A1A2E")} onClick={() => changeStatus("Closed")}>🔒 Close</button>}
+            {/* Resolved/Closed → Reopened */}
+            {(inc.status === "Resolved" || inc.status === "Closed") && <button style={btnStyle("#EC4899")} onClick={() => changeStatus("Reopened")}>↩ Reopen</button>}
+            {/* Reopened → In Progress */}
+            {inc.status === "Reopened" && <button style={btnStyle("#3B82F6")} onClick={() => changeStatus("In Progress")}>▶ Start Working</button>}
+            {/* Create Problem (always available if not closed and no linked problem) */}
+            {!inc.linkedProblem && !["Closed"].includes(inc.status) && <button style={btnStyle("#8B5CF6")} onClick={() => {
+              const newPrb = { id: genId("PRB"), title: `Problem from ${inc.id}: ${inc.title}`, status: "Under Investigation", priority: inc.priority, category: inc.category, impact: inc.impact || "Individual", rootCause: "Pending analysis", linkedIncidents: [inc.id], assignee: inc.assignee, assignmentGroup: inc.assignmentGroup || "Service Desk", created: 0, affectedServices: inc.affectedService ? [inc.affectedService] : [], workaround: inc.workaround || "", knownErrorId: "" };
+              setProblems(prev => [newPrb, ...prev]);
+              const updated = { ...inc, linkedProblem: newPrb.id };
+              setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, linkedProblem: newPrb.id } : i));
+              setDetailItem(updated);
+              addActivity("status", `Linked Problem ${newPrb.id} created`);
+            }}>Create Problem</button>}
+            {/* Escalate */}
+            {!["Closed", "Resolved"].includes(inc.status) && <button style={{ ...btnStyle("#333"), color: "#FFB347" }} onClick={() => {
+              const newPri = inc.priority === "Sev-B" ? "Sev-A" : inc.priority === "Sev-C" ? "Sev-B" : inc.priority === "Sev-D" ? "Sev-C" : inc.priority;
+              if (newPri !== inc.priority) {
+                const updated = { ...inc, priority: newPri };
+                setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, priority: newPri } : i));
+                setDetailItem(updated);
+                addActivity("status", `Escalated: Priority changed ${inc.priority} → ${newPri}`);
+              }
+            }}>⬆ Escalate</button>}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const ChangeDetailModal = () => {
+    const ch = detailItem;
+    if (!ch) return null;
+    return (
+      <Modal title={`${ch.id} — ${ch.title}`} onClose={() => { setModal(null); setDetailItem(null); }} wide>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>TYPE</span><Badge color={ch.type === "Emergency" ? PRIORITY_COLORS["Sev-A"] : { bg: "#0D2137", text: "#64B5F6" }}>{ch.type}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[ch.status]}>{ch.status}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>RISK</span><Badge color={PRIORITY_COLORS[ch.risk === "High" ? "Sev-A" : ch.risk === "Medium" ? "Sev-B" : "Sev-D"]}>{ch.risk}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>IMPACT</span><Badge color={ch.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : ch.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{ch.impact || "—"}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CATEGORY</span><span style={{ color: "#A0AEC0", fontSize: 13 }}>{ch.category || "—"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNEE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{ch.assignee}</span>{ch.assignmentGroup && <span style={{ color: "#5A6178", fontSize: 10, marginLeft: 4 }}>({ch.assignmentGroup})</span>}</div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>SCHEDULED START</span><span style={{ color: "#C4CAD6", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{ch.scheduledStart}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>SCHEDULED END</span><span style={{ color: "#C4CAD6", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{ch.scheduledEnd}</span></div>
+          {ch.affectedServices?.length > 0 && <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>AFFECTED SERVICES</span><span style={{ color: "#CE93D8", fontSize: 12 }}>{Array.isArray(ch.affectedServices) ? ch.affectedServices.join(", ") : ch.affectedServices}</span></div>}
+        </div>
+        <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, marginBottom: 16, border: "1px solid #1E213044" }}>
+          <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>DESCRIPTION</span>
+          <p style={{ color: "#C4CAD6", fontSize: 13, margin: 0, lineHeight: 1.6 }}>{ch.description}</p>
+        </div>
+        {ch.backoutPlan && (
+          <div style={{ background: "#2D0A0A", borderRadius: 6, padding: 12, marginBottom: 16, border: "1px solid #FF6B6B22" }}>
+            <span style={{ fontSize: 11, color: "#FF6B6B", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>BACKOUT / ROLLBACK PLAN</span>
+            <p style={{ color: "#C4CAD6", fontSize: 12, margin: 0 }}>{ch.backoutPlan}</p>
+          </div>
+        )}
+        {ch.testPlan && (
+          <div style={{ background: "#0A1E2D", borderRadius: 6, padding: 12, marginBottom: 16, border: "1px solid #06B6D422" }}>
+            <span style={{ fontSize: 11, color: "#06B6D4", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>TEST PLAN</span>
+            <p style={{ color: "#C4CAD6", fontSize: 12, margin: 0 }}>{ch.testPlan}</p>
+          </div>
+        )}
+        {ch.implementationNotes && (
+          <div style={{ background: "#0D2D1A", borderRadius: 6, padding: 12, marginBottom: 16, border: "1px solid #81C78422" }}>
+            <span style={{ fontSize: 11, color: "#81C784", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>IMPLEMENTATION NOTES</span>
+            <p style={{ color: "#C4CAD6", fontSize: 12, margin: 0 }}>{ch.implementationNotes}</p>
+          </div>
+        )}
+        <div style={{ marginBottom: 16 }}>
+          <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>APPROVERS</span>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {ch.approvers.map((a, i) => (
+              <div key={i} style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 14px", borderRadius: 6, background: "#0A0C14",
+                border: "1px solid #1E213044"
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.status === "Approved" ? "#4CAF50" : a.status === "Rejected" ? "#FF4444" : "#FFB347" }} />
+                <span style={{ color: "#C4CAD6", fontSize: 13 }}>{a.name}</span>
+                <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>({a.status})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {ch.status === "Awaiting Approval" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={btnStyle("#4CAF50")} onClick={() => {
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Approved", approvers: c.approvers.map(a => ({ ...a, status: "Approved" })) } : c));
+              setDetailItem({ ...ch, status: "Approved", approvers: ch.approvers.map(a => ({ ...a, status: "Approved" })) });
+            }}>✓ Approve</button>
+            <button style={btnStyle("#FF4444")} onClick={() => {
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed", approvers: c.approvers.map(a => ({ ...a, status: "Rejected" })) } : c));
+              setModal(null); setDetailItem(null);
+            }}>✕ Reject</button>
+          </div>
+        )}
+        {ch.status === "Approved" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={btnStyle("#3B82F6")} onClick={() => {
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Implementing" } : c));
+              setDetailItem({ ...ch, status: "Implementing" });
+            }}>Begin Implementation</button>
+          </div>
+        )}
+        {ch.status === "Implementing" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={btnStyle("#4CAF50")} onClick={() => {
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed" } : c));
+              setModal(null); setDetailItem(null);
+            }}>Complete Change</button>
+            <button style={btnStyle("#FF4444")} onClick={() => {
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed" } : c));
+              setModal(null); setDetailItem(null);
+            }}>Rollback</button>
+          </div>
+        )}
+      </Modal>
+    );
+  };
+
+  const ProblemDetailModal = () => {
+    const prb = detailItem;
+    if (!prb) return null;
+    return (
+      <Modal title={`${prb.id} — ${prb.title}`} onClose={() => { setModal(null); setDetailItem(null); }} wide>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[prb.status]}>{prb.status}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>PRIORITY</span><PriorityDot priority={prb.priority} /></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>IMPACT</span><Badge color={prb.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : prb.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{prb.impact || "—"}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CATEGORY</span><span style={{ color: "#A0AEC0", fontSize: 13 }}>{prb.category || "—"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNEE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{prb.assignee}</span>{prb.assignmentGroup && <span style={{ color: "#5A6178", fontSize: 10, marginLeft: 4 }}>({prb.assignmentGroup})</span>}</div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>AGE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{timeAgo(prb.created)}</span></div>
+        </div>
+        {prb.affectedServices?.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>AFFECTED SERVICES</span>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {prb.affectedServices.map(s => <Badge key={s} color={{ bg: "#1A0A2D", text: "#CE93D8" }}>{s}</Badge>)}
+            </div>
+          </div>
+        )}
+        <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, marginBottom: 16, border: "1px solid #1E213044" }}>
+          <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>ROOT CAUSE</span>
+          <p style={{ color: "#C4CAD6", fontSize: 13, margin: 0, lineHeight: 1.6 }}>{prb.rootCause}</p>
+        </div>
+        {prb.workaround && (
+          <div style={{ background: "#0A1E2D", borderRadius: 6, padding: 12, marginBottom: 16, border: "1px solid #06B6D422" }}>
+            <span style={{ fontSize: 11, color: "#06B6D4", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>WORKAROUND</span>
+            <p style={{ color: "#C4CAD6", fontSize: 12, margin: 0 }}>{prb.workaround}</p>
+          </div>
+        )}
+        {prb.knownErrorId && (
+          <div style={{ padding: "8px 12px", background: "#2D1F0A", borderRadius: 6, border: "1px solid #FFB34722", marginBottom: 16 }}>
+            <span style={{ fontSize: 11, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Known Error ID: {prb.knownErrorId}</span>
+          </div>
+        )}
+        <div style={{ marginBottom: 16 }}>
+          <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>LINKED INCIDENTS ({prb.linkedIncidents?.length || 0})</span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {prb.linkedIncidents?.map(incId => {
+              const inc = incidents.find(i => i.id === incId);
+              return (
+                <span key={incId} style={{ cursor: "pointer" }} onClick={() => {
+                  if (inc) { setDetailItem(inc); setModal("incidentDetail"); }
+                }}>
+                  <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{incId} {inc ? `— ${inc.title}` : ""} →</Badge>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {prb.status === "Under Investigation" && <button style={btnStyle("#FFB347")} onClick={() => {
+            setProblems(prev => prev.map(p => p.id === prb.id ? { ...p, status: "Root Cause Identified" } : p));
+            setDetailItem({ ...prb, status: "Root Cause Identified" });
+          }}>Root Cause Found</button>}
+          {prb.status === "Root Cause Identified" && <button style={btnStyle("#CE93D8")} onClick={() => {
+            setProblems(prev => prev.map(p => p.id === prb.id ? { ...p, status: "Known Error" } : p));
+            setDetailItem({ ...prb, status: "Known Error" });
+          }}>Mark Known Error</button>}
+          {prb.status !== "Closed" && <button style={btnStyle("#4CAF50")} onClick={() => {
+            setProblems(prev => prev.map(p => p.id === prb.id ? { ...p, status: "Closed" } : p));
+            setModal(null); setDetailItem(null);
+          }}>Close Problem</button>}
+        </div>
+      </Modal>
+    );
+  };
+
+  const KBDetailModal = () => {
+    const art = detailItem;
+    if (!art) return null;
+    const catInfo = KB_CATEGORIES.find(c => c.id === art.category) || { icon: "📄", color: "#64B5F6" };
+    const spArticleUrl = art.spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(art.spSlug) : SHAREPOINT_KB_CONFIG.baseUrl;
+    const spDocUrl = art.spDocPath ? SHAREPOINT_KB_CONFIG.docUrl(art.spDocPath) : null;
+    const relatedArts = (art.relatedArticles || []).map(rid => kbArticles.find(a => a.id === rid)).filter(Boolean);
+    return (
+      <Modal title={art.title} onClose={() => { setModal(null); setDetailItem(null); }} wide>
+        {/* Header badges */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <Badge color={{ bg: `${catInfo.color}18`, text: catInfo.color }}>{catInfo.icon} {art.category}</Badge>
+          {art.bestFor && <Badge color={{ bg: art.bestFor === "Incident" ? "#FF6B6B18" : art.bestFor === "Change" ? "#FFB34718" : "#81C78418", text: art.bestFor === "Incident" ? "#FF6B6B" : art.bestFor === "Change" ? "#FFB347" : "#81C784" }}>🎯 {art.bestFor}</Badge>}
+          <span style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{art.id} · Updated: {art.updated}</span>
+          {art.author && <span style={{ fontSize: 11, color: "#5A6178" }}>· ✍️ {art.author}</span>}
+        </div>
+
+        {/* When to use */}
+        {art.whenToUse && (
+          <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 16px", border: "1px solid #1E213044", marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#FFB347", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>💡 When to Use</div>
+            <p style={{ color: "#C4CAD6", fontSize: 13, margin: 0, lineHeight: 1.6 }}>{art.whenToUse}</p>
+          </div>
+        )}
+
+        {/* Full Description */}
+        <div style={{ background: "#0A0C14", borderRadius: 8, padding: "16px 18px", border: "1px solid #1E213044", marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64B5F6", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>📋 Description</div>
+          <p style={{ color: "#C4CAD6", fontSize: 14, margin: 0, lineHeight: 1.8 }}>{art.content}</p>
+        </div>
+
+        {/* Quick Fix Steps */}
+        {art.quickFix && art.quickFix.length > 0 && (
+          <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, padding: "16px 18px", border: "1px solid #6366F122", marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#6366F1", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>⚡ Quick Fix Steps</div>
+            {art.quickFix.map((step, si) => (
+              <div key={si} style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" }}>
+                <span style={{ width: 22, height: 22, borderRadius: 6, background: "#6366F122", color: "#6366F1", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace" }}>{si + 1}</span>
+                <span style={{ color: "#E8ECF4", fontSize: 13, lineHeight: 1.6, paddingTop: 2 }}>{step}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tags */}
+        {art.tags && art.tags.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6178", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🏷️ Tags</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {art.tags.map((tag, ti) => (
+                <span key={ti} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, background: "#1E213044", color: "#A0AEC0", fontFamily: "'JetBrains Mono', monospace" }}>#{tag}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Related Articles */}
+        {relatedArts.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6178", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🔗 Related Articles</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {relatedArts.map(ra => (
+                <button key={ra.id} onClick={() => setDetailItem(ra)} style={{ padding: "6px 12px", fontSize: 12, background: "#0A0C14", border: "1px solid #1E213066", borderRadius: 6, color: "#64B5F6", cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ fontWeight: 600 }}>{ra.id}</span> · {ra.title}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Stats Footer */}
+        <div style={{ display: "flex", gap: 20, fontSize: 12, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }}>
+          <span>👁 {art.views} views</span>
+          <span>👍 {art.helpful}% found helpful</span>
+        </div>
+
+        {/* Action Buttons */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => window.open(spArticleUrl, "_blank", "noopener")} style={{ ...btnStyle("#0078D4"), display: "flex", alignItems: "center", gap: 6 }}>
+            📎 Open in SharePoint
+          </button>
+          {spDocUrl && (
+            <button onClick={() => window.open(spDocUrl, "_blank", "noopener")} style={{ ...btnStyle("#0089D6"), display: "flex", alignItems: "center", gap: 6 }}>
+              📂 Download Document
+            </button>
+          )}
+          <button onClick={() => { setModal(null); setDetailItem(null); setShowAiPanel(true); handleAiChat(`Tell me more about ${art.id}`); }} style={{ ...btnStyle("#6366F1"), display: "flex", alignItems: "center", gap: 6 }}>
+            🤖 Ask AI About This
+          </button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── Asset Detail Modal ────────────────────────────────────────────────
+  const AssetDetailModal = () => {
+    const ast = detailItem;
+    if (!ast) return null;
+    const linkedIncidents = incidents.filter(i => i.affectedAsset === ast.id || i.affectedAsset === ast.name);
+    return (
+      <Modal title={`${ast.id} — ${ast.name}`} onClose={() => { setModal(null); setDetailItem(null); }} wide>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>TYPE</span><Badge color={{ bg: "#1A1A2E", text: "#A0AEC0" }}>{ast.type}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[ast.status] || STATUS_COLORS.Active}>{ast.status}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNED TO</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{ast.assignee || "—"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>LOCATION</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{ast.location || "—"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>DEPARTMENT</span><span style={{ color: "#A0AEC0", fontSize: 13 }}>{ast.department || "—"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>MANUFACTURER</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{ast.manufacturer || "—"}</span></div>
+          {ast.serialNumber && <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>SERIAL NO.</span><span style={{ color: "#64B5F6", fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>{ast.serialNumber}</span></div>}
+          {ast.ipAddress && <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>IP ADDRESS</span><span style={{ color: "#64B5F6", fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>{ast.ipAddress}</span></div>}
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>PURCHASE DATE</span><span style={{ color: "#C4CAD6", fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>{ast.purchaseDate || "—"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>WARRANTY</span><span style={{ color: ast.warranty && ast.warranty !== "N/A" && new Date(ast.warranty) < new Date() ? "#FF6B6B" : "#81C784", fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>{ast.warranty || "—"}</span></div>
+        </div>
+        {linkedIncidents.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>LINKED INCIDENTS ({linkedIncidents.length})</span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {linkedIncidents.map(inc => (
+                <span key={inc.id} style={{ cursor: "pointer" }} onClick={() => { setDetailItem(inc); setModal("incidentDetail"); }}>
+                  <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{inc.id} — {inc.title} →</Badge>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {ast.status !== "Retired" && <button style={btnStyle("#FF6B6B")} onClick={() => {
+            setAssets(prev => prev.map(a => a.id === ast.id ? { ...a, status: "Retired" } : a));
+            setDetailItem({ ...ast, status: "Retired" });
+          }}>Retire Asset</button>}
+          {ast.status === "Retired" && <button style={btnStyle("#4CAF50")} onClick={() => {
+            setAssets(prev => prev.map(a => a.id === ast.id ? { ...a, status: "Active" } : a));
+            setDetailItem({ ...ast, status: "Active" });
+          }}>Reactivate</button>}
+          <button style={btnStyle("#3B82F6")} onClick={() => {
+            setModal("newIncident");
+          }}>Create Incident for Asset</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── New Problem Modal ─────────────────────────────────────────────────
+  const NewProblemModal = () => {
+    const [form, setForm] = useState({ title: "", priority: "Sev-C", rootCause: "", assignee: "", linkedIncidents: [] });
+    const unlinkedIncidents = incidents.filter(i => !i.linkedProblem && i.status !== "Closed");
+    return (
+      <Modal title="Create New Problem" onClose={() => setModal(null)}>
+        <FormField label="Title">
+          <input style={inputStyle} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="Problem title" />
+        </FormField>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Priority">
+            <select style={inputStyle} value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+              {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Assignee">
+            <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
+              <option value="">Select assignee</option>
+              {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <FormField label="Root Cause (if known)">
+          <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={form.rootCause} onChange={e => setForm({ ...form, rootCause: e.target.value })} placeholder="Root cause analysis..." />
+        </FormField>
+        <FormField label="Link Incidents">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {form.linkedIncidents.map(incId => (
+              <span key={incId} style={{ cursor: "pointer" }} onClick={() => setForm({ ...form, linkedIncidents: form.linkedIncidents.filter(id => id !== incId) })}>
+                <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{incId} ✕</Badge>
+              </span>
+            ))}
+          </div>
+          {unlinkedIncidents.length > 0 && (
+            <select style={inputStyle} value="" onChange={e => {
+              if (e.target.value && !form.linkedIncidents.includes(e.target.value)) {
+                setForm({ ...form, linkedIncidents: [...form.linkedIncidents, e.target.value] });
+              }
+            }}>
+              <option value="">Add incident...</option>
+              {unlinkedIncidents.filter(i => !form.linkedIncidents.includes(i.id)).map(i => (
+                <option key={i.id} value={i.id}>{i.id} — {i.title}</option>
+              ))}
+            </select>
+          )}
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
+          <button style={btnStyle("#8B5CF6")} onClick={() => {
+            if (!form.title) return;
+            const newPrb = {
+              id: genId("PRB"), title: form.title, status: "Under Investigation",
+              priority: form.priority, rootCause: form.rootCause || "Pending analysis",
+              linkedIncidents: form.linkedIncidents, assignee: form.assignee || "Unassigned", created: 0
+            };
+            setProblems(prev => [newPrb, ...prev]);
+            if (form.linkedIncidents.length > 0) {
+              setIncidents(prev => prev.map(i => form.linkedIncidents.includes(i.id) ? { ...i, linkedProblem: newPrb.id } : i));
+            }
+            setModal(null);
+          }}>Create Problem</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── New Change Modal ─────────────────────────────────────────────────
+  const NewChangeModal = () => {
+    const [form, setForm] = useState({ title: "", type: "Normal", priority: "Sev-C", risk: "Low", description: "", assignee: "", scheduledStart: "", scheduledEnd: "", approvers: [] });
+    const managers = USERS.filter(u => u.role === "IT Manager" || u.role === "Change Manager");
+    return (
+      <Modal title="Create Change Request" onClose={() => setModal(null)} wide>
+        <FormField label="Title">
+          <input style={inputStyle} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="Change request title" />
+        </FormField>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <FormField label="Type">
+            <select style={inputStyle} value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+              {["Standard", "Normal", "Emergency"].map(t => <option key={t}>{t}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Priority">
+            <select style={inputStyle} value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+              {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Risk Level">
+            <select style={inputStyle} value={form.risk} onChange={e => setForm({ ...form, risk: e.target.value })}>
+              {["Low", "Medium", "High"].map(r => <option key={r}>{r}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <FormField label="Assignee">
+          <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
+            <option value="">Select assignee</option>
+            {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role}</option>)}
+          </select>
+        </FormField>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Scheduled Start">
+            <input type="datetime-local" style={inputStyle} value={form.scheduledStart} onChange={e => setForm({ ...form, scheduledStart: e.target.value })} />
+          </FormField>
+          <FormField label="Scheduled End">
+            <input type="datetime-local" style={inputStyle} value={form.scheduledEnd} onChange={e => setForm({ ...form, scheduledEnd: e.target.value })} />
+          </FormField>
+        </div>
+        <FormField label="Description / Implementation Plan">
+          <textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Describe the change, implementation plan, and rollback plan..." />
+        </FormField>
+        <FormField label="Approvers">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {form.approvers.map(name => (
+              <span key={name} style={{ cursor: "pointer" }} onClick={() => setForm({ ...form, approvers: form.approvers.filter(n => n !== name) })}>
+                <Badge color={{ bg: "#2D1F0A", text: "#FFB347" }}>{name} ✕</Badge>
+              </span>
+            ))}
+          </div>
+          <select style={inputStyle} value="" onChange={e => {
+            if (e.target.value && !form.approvers.includes(e.target.value)) {
+              setForm({ ...form, approvers: [...form.approvers, e.target.value] });
+            }
+          }}>
+            <option value="">Add approver...</option>
+            {managers.filter(u => !form.approvers.includes(u.name)).map(u => (
+              <option key={u.id} value={u.name}>{u.name} — {u.role}</option>
+            ))}
+          </select>
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
+          <button style={btnStyle("#FFB347")} onClick={() => {
+            if (!form.title) return;
+            const newChange = {
+              id: genId("CHG"), title: form.title, type: form.type,
+              status: form.approvers.length > 0 ? "Awaiting Approval" : "Approved",
+              priority: form.priority, risk: form.risk,
+              assignee: form.assignee || "Unassigned",
+              approvers: form.approvers.map(name => ({ name, status: "Pending" })),
+              created: 0, scheduledStart: form.scheduledStart || "TBD",
+              scheduledEnd: form.scheduledEnd || "TBD", description: form.description
+            };
+            setChanges(prev => [newChange, ...prev]);
+            setModal(null);
+          }}>Create Change Request</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── New Asset Modal ──────────────────────────────────────────────────
+  const NewAssetModal = () => {
+    const [form, setForm] = useState({ name: "", type: "Laptop", status: "Active", assignee: "", location: "", purchaseDate: "", warranty: "" });
+    return (
+      <Modal title="Add New Asset" onClose={() => setModal(null)}>
+        <FormField label="Asset Name">
+          <input style={inputStyle} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Dell Latitude 5550" />
+        </FormField>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Type">
+            <select style={inputStyle} value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+              {["Laptop", "Desktop", "Monitor", "Printer", "Switch", "Router", "Firewall", "Server", "Virtual Machine", "Phone", "Other"].map(t => <option key={t}>{t}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Status">
+            <select style={inputStyle} value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>
+              {["Active", "In Use", "In Stock", "Retired", "Running"].map(s => <option key={s}>{s}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Assigned To">
+            <input style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })} placeholder="Person or location" />
+          </FormField>
+          <FormField label="Location">
+            <input style={inputStyle} value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="e.g. SG-Floor3" />
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Purchase Date">
+            <input type="date" style={inputStyle} value={form.purchaseDate} onChange={e => setForm({ ...form, purchaseDate: e.target.value })} />
+          </FormField>
+          <FormField label="Warranty Expiry">
+            <input type="date" style={inputStyle} value={form.warranty} onChange={e => setForm({ ...form, warranty: e.target.value })} />
+          </FormField>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
+          <button style={btnStyle()} onClick={() => {
+            if (!form.name) return;
+            const newAsset = {
+              id: genId("AST"), name: form.name, type: form.type, status: form.status,
+              assignee: form.assignee || "Unassigned", location: form.location || "TBD",
+              purchaseDate: form.purchaseDate || new Date().toISOString().split("T")[0],
+              warranty: form.warranty || "N/A"
+            };
+            setAssets(prev => [newAsset, ...prev]);
+            setModal(null);
+          }}>Add Asset</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── New KB Article Modal ─────────────────────────────────────────────
+  const NewKBArticleModal = () => {
+    const [form, setForm] = useState({ title: "", category: "Software", content: "" });
+    return (
+      <Modal title="Create Knowledge Base Article" onClose={() => setModal(null)}>
+        <FormField label="Title">
+          <input style={inputStyle} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="Article title" />
+        </FormField>
+        <FormField label="Category">
+          <select style={inputStyle} value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+            {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+        </FormField>
+        <FormField label="Content">
+          <textarea style={{ ...inputStyle, minHeight: 120, resize: "vertical" }} value={form.content} onChange={e => setForm({ ...form, content: e.target.value })} placeholder="Write the article content..." />
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
+          <button style={btnStyle()} onClick={() => {
+            if (!form.title || !form.content) return;
+            const newArt = {
+              id: genId("KB"), title: form.title, category: form.category,
+              views: 0, helpful: 0, content: form.content,
+              updated: new Date().toISOString().split("T")[0]
+            };
+            setKbArticles(prev => [newArt, ...prev]);
+            setModal(null);
+          }}>Publish Article</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── Request Detail Modal ─────────────────────────────────────────────
+  const RequestDetailModal = () => {
+    const req = detailItem;
+    if (!req) return null;
+    return (
+      <Modal title={`${req.id} — ${req.service}`} onClose={() => { setModal(null); setDetailItem(null); }} wide>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[req.status]}>{req.status}</Badge></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>PRIORITY</span><PriorityDot priority={req.priority} /></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>REQUESTER</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{req.requester}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNEE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{req.assignee || "Unassigned"}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>SERVICE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{req.service}</span></div>
+          <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CREATED</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{timeAgo(req.created)}</span></div>
+        </div>
+        {req.notes && (
+          <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, marginBottom: 16, border: "1px solid #1E213044" }}>
+            <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>NOTES</span>
+            <p style={{ color: "#C4CAD6", fontSize: 13, margin: 0, lineHeight: 1.6 }}>{req.notes}</p>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {req.status === "Open" && !req.assignee && <button style={btnStyle("#3B82F6")} onClick={() => {
+            setRequests(prev => prev.map(r => r.id === req.id ? { ...r, assignee: "VGC Admin", status: "In Progress" } : r));
+            setDetailItem({ ...req, assignee: "VGC Admin", status: "In Progress" });
+          }}>Assign & Start</button>}
+          {req.status === "Open" && req.assignee && <button style={btnStyle("#3B82F6")} onClick={() => {
+            setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "In Progress" } : r));
+            setDetailItem({ ...req, status: "In Progress" });
+          }}>Start Working</button>}
+          {req.status === "Pending Approval" && <>
+            <button style={btnStyle("#4CAF50")} onClick={() => {
+              setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "In Progress" } : r));
+              setDetailItem({ ...req, status: "In Progress" });
+            }}>Approve</button>
+            <button style={btnStyle("#FF4444")} onClick={() => {
+              setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "Closed" } : r));
+              setModal(null); setDetailItem(null);
+            }}>Reject</button>
+          </>}
+          {req.status === "In Progress" && <button style={btnStyle("#4CAF50")} onClick={() => {
+            setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "Fulfilled" } : r));
+            setModal(null); setDetailItem(null);
+          }}>Fulfill</button>}
+          {req.status === "Fulfilled" && <button style={btnStyle("#1A1A2E")} onClick={() => {
+            setRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: "Closed" } : r));
+            setModal(null); setDetailItem(null);
+          }}>Close</button>}
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── Catalog Request Modal ────────────────────────────────────────────
+  const CatalogRequestModal = () => {
+    const svc = detailItem;
+    const [form, setForm] = useState({ requester: "", priority: "Sev-C", notes: "" });
+    if (!svc) return null;
+    return (
+      <Modal title={`Request: ${svc.name}`} onClose={() => { setModal(null); setDetailItem(null); }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: 14, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
+          <span style={{ fontSize: 32 }}>{svc.icon}</span>
+          <div>
+            <div style={{ color: "#E8ECF4", fontSize: 15, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>{svc.name}</div>
+            <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{svc.category} · SLA: {svc.sla}h</div>
+          </div>
+        </div>
+        <FormField label="Requester">
+          <select style={inputStyle} value={form.requester} onChange={e => setForm({ ...form, requester: e.target.value })}>
+            <option value="">Select requester</option>
+            {USERS.map(u => <option key={u.id} value={u.name}>{u.name} — {u.team}</option>)}
+          </select>
+        </FormField>
+        <FormField label="Priority">
+          <select style={inputStyle} value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+            {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+          </select>
+        </FormField>
+        <FormField label="Additional Notes">
+          <textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Any specific requirements or details..." />
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => { setModal(null); setDetailItem(null); }}>Cancel</button>
+          <button style={btnStyle("#4CAF50")} onClick={() => {
+            const requesterUser = form.requester ? USERS.find(u => u.name === form.requester) : null;
+            const newReq = {
+              id: genId("REQ"), service: svc.name, status: "Open",
+              requester: form.requester || "Current User",
+              requesterEmail: requesterUser?.email || "",
+              requesterRole: requesterUser?.rbacRole || "",
+              assignee: null, assignmentGroup: "Service Desk",
+              created: 0, priority: form.priority,
+              category: svc.category, notes: form.notes,
+              fulfillmentNotes: "", approver: ""
+            };
+            setRequests(prev => [newReq, ...prev]);
+            setModal(null); setDetailItem(null);
+            setActiveModule("requests");
+          }}>Submit Request</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── Catalog Management Modal (Add/Edit Service) ─────────────────────
+  const CatalogManageModal = () => {
+    const editing = detailItem;
+    const [form, setForm] = useState(editing ? { name: editing.name, category: editing.category, sla: editing.sla, icon: editing.icon, description: editing.description || "" } : { name: "", category: "Software", sla: 24, icon: "🔧", description: "" });
+    const ICON_OPTIONS = ["🔧", "💻", "📦", "🌐", "📧", "☁️", "🛡️", "🗄️", "🔑", "🎯", "📊", "🖥️", "📱", "🔒", "⚙️", "🚀"];
+    return (
+      <Modal title={editing ? `Edit Service: ${editing.name}` : "Add New Service"} onClose={() => { setModal(null); setDetailItem(null); }}>
+        <FormField label="Service Name">
+          <input style={inputStyle} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Password Reset, Software Installation" />
+        </FormField>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Category">
+            <select style={inputStyle} value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+              {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </FormField>
+          <FormField label="SLA Target (hours)">
+            <input type="number" style={inputStyle} value={form.sla} onChange={e => setForm({ ...form, sla: parseInt(e.target.value) || 0 })} min="1" />
+          </FormField>
+        </div>
+        <FormField label="Icon">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {ICON_OPTIONS.map(ic => (
+              <button key={ic} onClick={() => setForm({ ...form, icon: ic })} style={{
+                width: 36, height: 36, borderRadius: 6, border: form.icon === ic ? "2px solid #6366F1" : "1px solid #1E2130",
+                background: form.icon === ic ? "#6366F111" : "#0A0C14", cursor: "pointer", fontSize: 18,
+                display: "flex", alignItems: "center", justifyContent: "center"
+              }}>{ic}</button>
+            ))}
+          </div>
+        </FormField>
+        <FormField label="Description">
+          <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Brief description of this service offering..." />
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => { setModal(null); setDetailItem(null); }}>Cancel</button>
+          <button style={btnStyle(editing ? "#3B82F6" : "#4CAF50")} onClick={() => {
+            if (!form.name) return;
+            if (editing) {
+              setServiceCatalog(prev => prev.map(s => s.id === editing.id ? { ...s, name: form.name, category: form.category, sla: form.sla, icon: form.icon, description: form.description } : s));
+            } else {
+              const newSvc = { id: genId("SVC"), name: form.name, category: form.category, sla: form.sla, icon: form.icon, description: form.description };
+              setServiceCatalog(prev => [...prev, newSvc]);
+            }
+            setModal(null); setDetailItem(null);
+          }}>{editing ? "Save Changes" : "Add Service"}</button>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ─── AI Ticket Link Click Handler ──────────────────────────────────────
+  const handleTicketLinkClick = (ticketId) => {
+    const prefix = ticketId.replace(/\d+/g, "");
+    if (prefix === "INC") {
+      const item = incidents.find(i => i.id === ticketId);
+      if (item) { setDetailItem(item); setModal("incidentDetail"); }
+      else setActiveModule("incidents");
+    } else if (prefix === "CHG") {
+      const item = changes.find(c => c.id === ticketId);
+      if (item) { setDetailItem(item); setModal("changeDetail"); }
+      else setActiveModule("changes");
+    } else if (prefix === "PRB") {
+      const item = problems.find(p => p.id === ticketId);
+      if (item) { setDetailItem(item); setModal("problemDetail"); }
+      else setActiveModule("problems");
+    } else if (prefix === "REQ") {
+      const item = requests.find(r => r.id === ticketId);
+      if (item) { setDetailItem(item); setModal("requestDetail"); }
+      else setActiveModule("requests");
+    } else if (prefix === "KB") {
+      const item = kbArticles.find(k => k.id === ticketId);
+      if (item) { setDetailItem(item); setModal("kbDetail"); }
+      else setActiveModule("knowledge");
+    } else if (prefix === "SVC") {
+      setActiveModule("catalog");
+    }
+  };
+
+  // ─── AI Chat Handler (Parent Scope — used by AIAssistModule + Sidebar) ──
+  const handleAiChat = (overrideMsg) => {
+    const userMsg = overrideMsg || aiInput.trim();
+    if (!userMsg) return;
+    setAiMessages(prev => [...prev, { role: "user", text: userMsg }]);
+    if (!overrideMsg) setAiInput("");
+    setAiLoading(true);
+    (async () => {
+      const systemPrompt = [
+        `You are VGC-ITSM AI Co-Pilot — Assisted by ${currentUser.name} AI, an enterprise-grade AI assistant for VGC Technology Pte Ltd, Singapore.`,
+        `PRIMARY ROLE: Help engineers and administrators resolve IT tickets/incidents/requests. Provide fast, accurate, conversational guidance. Retrieve and recommend relevant Knowledge Base articles from SharePoint.`,
+        `BEHAVIOR: Be conversational, clear, action-oriented. Default to short structured replies with bullets and steps. Offer suggested next actions tailored to case type and severity.`,
+        `CONTEXT: Singapore timezone (SGT), PDPA compliance, ISO 27001:2022 certified. Use available ticket data, KB articles, and session context.`,
+        `HIGH/CRITICAL RULES: If severity High/Critical — start with "Urgency" line, provide containment steps, recommend escalation path, ask for approval BEFORE sending notices/escalations.`,
+        `APPROVAL-FIRST POLICY: Before any outbound action (customer updates, escalations, meeting scheduling, remote sessions) — propose the action, explain why, ask "Do you want me to proceed?" with 3-6 suggested options.`,
+        `KB INTEGRATION: When relevant, recommend 1-3 Knowledge Cards with title, category, quick fix summary, and SharePoint link. If no KB exists, recommend creating one.`,
+        `RESPONSE FORMAT: 1) Quick Summary 2) Recommended Steps 3) Knowledge Cards (if relevant) 4) Suggested Actions 5) Approval Request (when needed).`,
+        `BRANDING: Never reveal model names/versions. Only show: "Powered by Azure Open AI" and "Enterprise-grade data security with a Responsible AI model."`,
+        `SECURITY: Follow PDPA. Never output secrets, passwords, MFA codes, private keys. Minimize personal data.`,
+        `Always attribute responses as 'Assisted by ${currentUser.name} AI'. Suggest 2-3 next actions.`,
+      ].join(" ");
+      const aiResp = await callAzureOpenAI(systemPrompt, userMsg);
+      if (aiResp) {
+        setAiMessages(prev => [...prev, { role: "ai", text: aiResp, source: "azure", suggestions: [
+          { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
+          { label: "📚 Search KB", action: "Search knowledge base for a solution" },
+          { label: "💡 What else?", action: "What should I focus on next?" }
+        ], prompt: userMsg }]);
+      } else {
+        const topic = matchAiTopic(userMsg);
+        const ctx = { incidents, changes, problems, requests, currentUser, proactiveAlerts, kbArticles };
+        const result = buildAiResponse(topic, userMsg, ctx);
+        setAiMessages(prev => [...prev, { role: "ai", text: result.text + `\n\n— Assisted by ${currentUser.name} AI`, source: "local", suggestions: result.suggestions || [], prompt: userMsg }]);
+      }
+      setAiLoading(false);
+    })();
+  };
+
+  // ─── AI Assist Module ──────────────────────────────────────────────────
+  const AIAssistModule = () => {
+    const aiTriaged = incidents.filter(i => i.aiTriaged).length;
+    const totalTickets = incidents.length + requests.length + problems.length + changes.length;
+    const aiHandled = Math.round(totalTickets * 0.8);
+    const humanLoop = Math.round(totalTickets * 0.1);
+    const manualOnly = totalTickets - aiHandled - humanLoop;
+
+    return (
+      <div>
+        {/* Azure OpenAI Connection Banner */}
+        <div style={{
+          background: azureOpenAI.enabled ? "linear-gradient(135deg, #0F111788, #111422)" : "#0F1117",
+          borderRadius: 10, border: `1px solid ${azureOpenAI.enabled ? "#6366F133" : "#1E2130"}`,
+          padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between",
+          animation: azureOpenAI.enabled ? "aiPulseGlow 4s ease-in-out infinite" : "none",
+          position: "relative", overflow: "hidden"
+        }}>
+          {azureOpenAI.enabled && (
+            <div style={{
+              position: "absolute", top: 0, left: 0, right: 0, height: 2,
+              background: "linear-gradient(90deg, transparent, #6366F1, #06B6D4, #EC4899, transparent)",
+              backgroundSize: "200% 100%", animation: "aiShimmer 3s linear infinite"
+            }} />
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 10,
+              background: azureOpenAI.enabled ? "linear-gradient(135deg, #6366F1, #06B6D4)" : "#1E2130",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+              animation: azureOpenAI.enabled ? "logoGlow 3s ease-in-out infinite" : "none",
+              transition: "all 0.4s"
+            }}>🧠</div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                Azure OpenAI Engine
+                <span style={{
+                  fontSize: 9, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
+                  background: azureOpenAI.enabled ? "#81C78422" : "#FF444422",
+                  color: azureOpenAI.enabled ? "#81C784" : "#FF444488",
+                  animation: azureOpenAI.enabled ? "pulse 2s ease-in-out infinite" : "none"
+                }}>{azureOpenAI.enabled ? "CONNECTED" : "OFFLINE"}</span>
+                {azureOpenAI.totalCalls > 0 && (
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, background: "#06B6D411", color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>
+                    {azureOpenAI.totalCalls} API calls
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                {azureOpenAI.enabled 
+                  ? `Powered by Azure Open AI · Last active: ${azureOpenAI.lastTested || "Ready"}` 
+                  : "Azure OpenAI is currently disabled"}
+              </div>
+            </div>
+          </div>
+          <button onClick={() => setActiveModule("admin")} style={{
+            padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133",
+            background: "#6366F118", color: "#6366F1", cursor: "pointer",
+            fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace"
+          }}>⚙️ Configure</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
+          <StatCard label="AI Automation Rate" value={`${aiConfig.automationLevel}%`} icon="🤖" accent="#6366F1" />
+          <StatCard label="Human-in-Loop" value={`${aiConfig.humanLoopPct}%`} icon="👤" accent="#06B6D4" />
+          <StatCard label="AI Triaged Incidents" value={aiTriaged} icon="⚡" accent="#EC4899" />
+          <StatCard label="Avg Confidence" value="92%" icon="🎯" accent="#81C784" />
+          <StatCard label="Time Saved (hrs)" value="142" icon="⏰" accent="#FFB347" />
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
+          {/* AI Activity Feed */}
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+              <span>🤖</span> AI Activity Log
+            </h3>
+            {[
+              { action: "Auto-triaged INC0005", detail: "Category: Database, Priority: Critical, Assignee: James Wright", time: "2m ago", confidence: 94 },
+              { action: "KB Article Suggested", detail: "Recommended KB002 for INC0002 (VPN issue)", time: "15m ago", confidence: 88 },
+              { action: "Risk Assessment Complete", detail: "CHG0003 rated High Risk — CAB review recommended", time: "32m ago", confidence: 91 },
+              { action: "SLA Breach Predicted", detail: "INC0001 likely to breach in 1.5 hours — escalation suggested", time: "45m ago", confidence: 85 },
+              { action: "Auto-assigned REQ0004", detail: "Assigned to Marcus Chen based on skill match & workload", time: "1h ago", confidence: 90 },
+              { action: "Root Cause Pattern Detected", detail: "3 email incidents may share common root cause", time: "2h ago", confidence: 82 },
+            ].map((log, i) => (
+              <div key={i} style={{ padding: "10px 12px", borderRadius: 6, marginBottom: 8, background: "#0A0C14", border: "1px solid #1E213044" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{log.action}</span>
+                  <Badge color={log.confidence >= 90 ? AI_CONFIDENCE_COLORS.high : AI_CONFIDENCE_COLORS.medium}>{log.confidence}%</Badge>
+                </div>
+                <div style={{ color: "#5A6178", fontSize: 12, marginBottom: 2 }}>{log.detail}</div>
+                <div style={{ color: "#5A617866", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{log.time}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* AI Chat Assistant */}
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, display: "flex", flexDirection: "column" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+              <span>💬</span> Assisted by {currentUser.name} AI
+            </h3>
+            <div style={{ flex: 1, overflowY: "auto", marginBottom: 12, maxHeight: 420, scrollBehavior: "smooth" }}>
+              {aiMessages.map((msg, i) => (
+                <div key={i} style={{ marginBottom: 12, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 8, animation: i === aiMessages.length - 1 ? "nudgeSlideIn 0.3s ease" : "none" }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 6, flexShrink: 0,
+                    background: msg.role === "ai" ? (profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4)") : "#1E2130",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: msg.role === "ai" ? 14 : 11, color: "#fff", fontWeight: 600,
+                    border: msg.role === "ai" ? `1px solid ${avatarConfig.glowColor}44` : "none",
+                    overflow: "hidden"
+                  }}>{msg.role === "ai" ? (!profilePhoto ? currentUser.avatar : "") : currentUser.avatar}</div>
+                  <div style={{ maxWidth: "80%", display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{
+                      padding: "12px 16px", borderRadius: 10,
+                      background: msg.role === "ai" ? "#0A0C14" : "#6366F122",
+                      border: `1px solid ${msg.role === "ai" ? "#1E213055" : "#6366F133"}`,
+                      color: "#C4CAD6", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-line"
+                    }}>
+                      {msg.role === "ai" ? renderAiRichText(msg.text, handleTicketLinkClick) : msg.text}
+                      {msg.role === "ai" && (
+                        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, borderTop: "1px solid #1E213044", paddingTop: 6 }}>
+                          <span style={{
+                            fontSize: 9, color: msg.source === "azure" ? "#06B6D4" : "#FFB347",
+                            background: msg.source === "azure" ? "#06B6D411" : "#FFB34711",
+                            border: `1px solid ${msg.source === "azure" ? "#06B6D422" : "#FFB34722"}`,
+                            padding: "2px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace",
+                            display: "inline-flex", alignItems: "center", gap: 4
+                          }}>
+                            {msg.source === "azure" ? "⚡ Azure OpenAI" : "🧠 Local AI Engine"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {/* Suggested Reply Cards */}
+                    {msg.role === "ai" && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {msg.suggestions.map((s, si) => (
+                          <button key={si} onClick={() => handleAiChat(s.action)} style={{
+                            padding: "6px 12px", fontSize: 11, background: "linear-gradient(135deg, #6366F108, #06B6D408)",
+                            border: "1px solid #6366F133", borderRadius: 8, color: "#6366F1", cursor: "pointer",
+                            fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s",
+                            display: "flex", alignItems: "center", gap: 4
+                          }}
+                          onMouseOver={e => { e.target.style.background = "#6366F122"; e.target.style.borderColor = "#6366F166"; }}
+                          onMouseOut={e => { e.target.style.background = "linear-gradient(135deg, #6366F108, #06B6D408)"; e.target.style.borderColor = "#6366F133"; }}>
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1 }} value={aiInput} onChange={e => setAiInput(e.target.value)}
+                placeholder="Ask me anything — incidents, SLA, security, briefing..."
+                onKeyDown={e => { if (e.key === "Enter") handleAiChat(); }} />
+              <button style={btnStyle("#6366F1")} onClick={() => handleAiChat()}>Send</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+              {[
+                { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
+                { label: "🎫 Open Tickets", action: "Show open incidents" },
+                { label: "📚 Knowledge Base", action: "Search knowledge base" },
+                { label: "⏱️ SLA Status", action: "Check SLA compliance" },
+                { label: "🛡️ Security", action: "Any security threats?" },
+                { label: "📧 Draft Email", action: "Help me draft an email" },
+              ].map(q => (
+                <button key={q.action} style={{ padding: "4px 10px", fontSize: 10, background: "#0A0C14", border: "1px solid #1E213066", borderRadius: 6, color: "#6366F1", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}
+                  onClick={() => handleAiChat(q.action)}>
+                  {q.label}
+                </button>
+              ))}
+            </div>
+            {/* Branding Footer */}
+            <div style={{ marginTop: 8, textAlign: "center" }}>
+              <span style={{ fontSize: 9, color: "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>Powered by Azure Open AI · Enterprise‑grade data security with a Responsible AI model.</span>
+            </div>
+          </div>
+        </div>
+
+        {/* AI Automation Breakdown */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+            📊 Automation Breakdown by Module
+          </h3>
+          {[
+            { module: "Incident Triage", aiPct: 83, humanPct: 10, icon: "⚡", color: "#FF6B6B" },
+            { module: "Auto-Assignment", aiPct: 88, humanPct: 7, icon: "👤", color: "#64B5F6" },
+            { module: "KB Recommendations", aiPct: 87, humanPct: 8, icon: "📖", color: "#81C784" },
+            { module: "Change Risk Analysis", aiPct: 79, humanPct: 12, icon: "⟳", color: "#FFB347" },
+            { module: "SLA Prediction", aiPct: 91, humanPct: 5, icon: "⏱️", color: "#CE93D8" },
+            { module: "Root Cause Detection", aiPct: 72, humanPct: 18, icon: "🔍", color: "#EC4899" },
+          ].map((row, i) => (
+            <div key={i} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 13, color: "#C4CAD6", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>{row.icon}</span> {row.module}
+                </span>
+                <div style={{ display: "flex", gap: 12, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
+                  <span style={{ color: "#6366F1" }}>AI: {row.aiPct}%</span>
+                  <span style={{ color: "#06B6D4" }}>Human: {row.humanPct}%</span>
+                  <span style={{ color: "#5A6178" }}>Manual: {100 - row.aiPct - row.humanPct}%</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", height: 8, background: "#0A0C14" }}>
+                <div style={{ width: `${row.aiPct}%`, background: "#6366F1", transition: "width 0.6s" }} />
+                <div style={{ width: `${row.humanPct}%`, background: "#06B6D4", transition: "width 0.6s" }} />
+                <div style={{ flex: 1, background: "#1E2130" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* AI Capabilities */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+          {[
+            { title: "Smart Triage", desc: "Auto-categorize, prioritize & assign incidents", status: "Active", icon: "⚡", color: "#6366F1" },
+            { title: "KB Intelligence", desc: "Suggest relevant articles for faster resolution", status: "Active", icon: "📖", color: "#81C784" },
+            { title: "Risk Analyzer", desc: "Assess change risk with ML-based scoring", status: "Active", icon: "🛡️", color: "#FFB347" },
+            { title: "SLA Predictor", desc: "Predict SLA breaches before they happen", status: "Active", icon: "⏱️", color: "#CE93D8" },
+            { title: "Root Cause Engine", desc: "Detect patterns across incidents & problems", status: "Active", icon: "🔍", color: "#EC4899" },
+            { title: "Sentiment Analysis", desc: "Gauge user satisfaction from ticket language", status: "Beta", icon: "💬", color: "#06B6D4" },
+            { title: "Capacity Forecast", desc: "Predict resource needs based on trends", status: "Coming Soon", icon: "📈", color: "#5A6178" },
+            { title: "Auto-Remediation", desc: "Execute automated fixes for known issues", status: "Coming Soon", icon: "🔧", color: "#5A6178" },
+          ].map((cap, i) => (
+            <div key={i} style={{
+              background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 18,
+              opacity: cap.status === "Coming Soon" ? 0.5 : 1
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <span style={{ fontSize: 24 }}>{cap.icon}</span>
+                <Badge color={cap.status === "Active" ? { bg: "#0D2D1A", text: "#81C784" } : cap.status === "Beta" ? { bg: "#2D1F0A", text: "#FFB347" } : { bg: "#1A1A2E", text: "#5A6178" }}>{cap.status}</Badge>
+              </div>
+              <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 600, marginBottom: 4, fontFamily: "'Space Grotesk', sans-serif" }}>{cap.title}</div>
+              <div style={{ color: "#5A6178", fontSize: 12 }}>{cap.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Admin Settings Module ────────────────────────────────────────────
+  const AdminSettingsModule = () => {
+    const isTenantAdmin = currentUser.rbacRole === "Tenant Admin";
+    const allTabs = [
+      { id: "ai", label: "AI Configuration", icon: "🤖", devOnly: true },
+      { id: "integrations", label: "Integrations", icon: "🔗", devOnly: true },
+      { id: "workflows", label: "Workflow Rules", icon: "⟳" },
+      { id: "slaPolicy", label: "SLA Policies", icon: "⏱️" },
+      { id: "api", label: "API & Webhooks", icon: "🌐", devOnly: true },
+      { id: "migration", label: "Import & Migration", icon: "📦", devOnly: true },
+      { id: "users", label: "Users & RBAC", icon: "👥" },
+      { id: "entraId", label: "Entra ID SSO", icon: "🔐", devOnly: true },
+      { id: "compliance", label: "PDPA Compliance", icon: "🛡️" },
+      { id: "infrastructure", label: "Infrastructure", icon: "☁️", devOnly: true },
+      { id: "notifications", label: "Notifications", icon: "🔔" },
+      { id: "escalation", label: "Escalation & Auto-Call", icon: "📞", devOnly: true },
+      { id: "smtp", label: "Email / SMTP", icon: "📧", devOnly: true },
+      { id: "billing", label: "Licensing & Billing", icon: "💳", devOnly: true },
+      { id: "vendors", label: "Vendor Contacts", icon: "📇" },
+      { id: "surveys", label: "Survey Templates", icon: "📊" },
+      { id: "general", label: "General", icon: "⚙️" },
+    ];
+    const tabs = isTenantAdmin ? allTabs.filter(t => !t.devOnly) : allTabs;
+    const activeTab = (isTenantAdmin && allTabs.find(t => t.id === adminTab)?.devOnly) ? "workflows" : adminTab;
+
+    const toggleIntegration = (intId) => {
+      setIntegrations(prev => prev.map(i => i.id === intId ? { ...i, status: i.status === "connected" ? "available" : "connected" } : i));
+    };
+
+    return (
+      <div>
+        {/* Admin Tabs */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 24, flexWrap: "wrap", background: "#0A0C14", padding: 4, borderRadius: 8 }}>
+          {tabs.map(tab => (
+            <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={{
+              padding: "8px 14px", borderRadius: 6, border: "none", cursor: "pointer",
+              background: activeTab === tab.id ? "#1E2130" : "transparent",
+              color: activeTab === tab.id ? "#E8ECF4" : "#5A6178",
+              fontSize: 12, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif",
+              display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s"
+            }}>
+              <span style={{ fontSize: 14 }}>{tab.icon}</span> {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* AI Configuration */}
+        {activeTab === "ai" && (
+          <div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Automation Settings</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                {[
+                  { key: "autoTriage", label: "Auto-Triage Incidents", desc: "AI automatically categorizes and prioritizes new incidents" },
+                  { key: "autoAssign", label: "Auto-Assign Tickets", desc: "AI assigns tickets based on agent skills and workload" },
+                  { key: "kbSuggestions", label: "KB Article Suggestions", desc: "Suggest relevant KB articles during incident creation" },
+                  { key: "slaPrediction", label: "SLA Breach Prediction", desc: "Predict and alert on potential SLA breaches" },
+                  { key: "riskAnalysis", label: "Change Risk Analysis", desc: "AI-powered risk assessment for change requests" },
+                  { key: "sentimentAnalysis", label: "Sentiment Analysis", desc: "Analyze ticket language for user satisfaction" },
+                ].map(setting => (
+                  <div key={setting.key} style={{
+                    padding: "14px 16px", background: "#0A0C14", borderRadius: 8,
+                    border: `1px solid ${aiConfig[setting.key] ? "#6366F133" : "#1E213044"}`,
+                    display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12
+                  }}>
+                    <div>
+                      <div style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{setting.label}</div>
+                      <div style={{ color: "#5A6178", fontSize: 11 }}>{setting.desc}</div>
+                    </div>
+                    <div onClick={() => setAiConfig(prev => ({ ...prev, [setting.key]: !prev[setting.key] }))}
+                      style={{
+                        width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                        background: aiConfig[setting.key] ? "#6366F1" : "#1E2130",
+                        padding: 2, transition: "background 0.2s", flexShrink: 0
+                      }}>
+                      <div style={{
+                        width: 20, height: 20, borderRadius: 10, background: "#fff",
+                        transform: aiConfig[setting.key] ? "translateX(20px)" : "translateX(0)",
+                        transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033"
+                      }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Thresholds</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div>
+                  <FormField label={`Confidence Threshold: ${aiConfig.confidenceThreshold}%`}>
+                    <input type="range" min="50" max="99" value={aiConfig.confidenceThreshold}
+                      onChange={e => setAiConfig(prev => ({ ...prev, confidenceThreshold: Number(e.target.value) }))}
+                      style={{ width: "100%", accentColor: "#6366F1" }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 4 }}>
+                      <span>50% (Aggressive)</span><span>99% (Conservative)</span>
+                    </div>
+                  </FormField>
+                </div>
+                <div>
+                  <FormField label={`Target Automation Level: ${aiConfig.automationLevel}%`}>
+                    <input type="range" min="50" max="95" value={aiConfig.automationLevel}
+                      onChange={e => setAiConfig(prev => ({ ...prev, automationLevel: Number(e.target.value) }))}
+                      style={{ width: "100%", accentColor: "#6366F1" }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 4 }}>
+                      <span>50% (More Human)</span><span>95% (Full AI)</span>
+                    </div>
+                  </FormField>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Azure OpenAI Integration ── */}
+            <div style={{
+              background: "linear-gradient(135deg, #0F1117 0%, #111422 100%)", borderRadius: 12,
+              border: `1px solid ${azureOpenAI.enabled ? "#6366F144" : "#1E2130"}`,
+              padding: 24, marginTop: 20, position: "relative", overflow: "hidden",
+              transition: "border-color 0.4s, box-shadow 0.4s",
+              boxShadow: azureOpenAI.enabled ? "0 0 30px #6366F111, 0 4px 20px #00000044" : "none"
+            }}>
+              {/* Animated gradient border top */}
+              <div style={{
+                position: "absolute", top: 0, left: 0, right: 0, height: 3,
+                background: "linear-gradient(90deg, #6366F1, #06B6D4, #EC4899, #6366F1)",
+                backgroundSize: "200% 100%", animation: "logoGradient 3s ease infinite",
+                opacity: azureOpenAI.enabled ? 1 : 0.3, transition: "opacity 0.4s"
+              }} />
+
+              {/* Floating particles overlay when enabled */}
+              {azureOpenAI.enabled && (
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none", overflow: "hidden" }}>
+                  {[0,1,2,3,4].map(i => (
+                    <div key={i} style={{
+                      position: "absolute", width: 4, height: 4, borderRadius: "50%",
+                      background: ["#6366F1","#06B6D4","#EC4899","#81C784","#FFB347"][i],
+                      opacity: 0.3, top: `${15 + i * 18}%`, left: `${8 + i * 20}%`,
+                      animation: `aiFloat ${2 + i * 0.5}s ease-in-out ${i * 0.3}s infinite`
+                    }} />
+                  ))}
+                </div>
+              )}
+
+              <div style={{ position: "relative", zIndex: 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: 12,
+                      background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      animation: azureOpenAI.enabled ? "logoGlow 3s ease-in-out infinite" : "none",
+                      boxShadow: azureOpenAI.enabled ? "0 0 20px #6366F133" : "none",
+                      transition: "box-shadow 0.4s", fontSize: 20
+                    }}>🧠</div>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: 15, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                        Azure OpenAI Integration
+                        {azureOpenAI.enabled && <span style={{
+                          fontSize: 9, padding: "2px 8px", borderRadius: 10,
+                          background: "#6366F122", color: "#6366F1", fontWeight: 700,
+                          animation: "pulse 2s ease-in-out infinite", letterSpacing: 0.5
+                        }}>LIVE</span>}
+                      </h3>
+                      <div style={{ color: "#5A6178", fontSize: 11, marginTop: 2 }}>Powered by Azure Open AI · Enterprise‑grade data security with a Responsible AI model</div>
+                    </div>
+                  </div>
+                  <div title="Azure OpenAI is always enabled" style={{
+                    width: 52, height: 28, borderRadius: 14, cursor: "default",
+                    background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+                    padding: 3, transition: "background 0.3s", flexShrink: 0,
+                    boxShadow: "0 0 12px #6366F144"
+                  }}>
+                    <div style={{
+                      width: 22, height: 22, borderRadius: 11, background: "#fff",
+                      transform: "translateX(24px)",
+                      transition: "transform 0.3s cubic-bezier(0.34,1.56,0.64,1)",
+                      boxShadow: "0 2px 6px #00000033"
+                    }} />
+                  </div>
+                </div>
+
+                {/* Connection Stats Row */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+                  {[
+                    { label: "Status", value: azureOpenAI.enabled ? "Connected" : "Disabled", color: azureOpenAI.enabled ? "#81C784" : "#5A6178", icon: azureOpenAI.enabled ? "🟢" : "⚫" },
+                    { label: "AI Engine", value: "Azure Open AI", color: "#06B6D4", icon: "🤖" },
+                    { label: "Security", value: "Responsible AI", color: "#EC4899", icon: "🛡️" },
+                  ].map((stat, i) => (
+                    <div key={i} style={{
+                      background: "#0A0C14", borderRadius: 8, padding: "12px 14px",
+                      border: "1px solid #1E213044", textAlign: "center",
+                      animation: azureOpenAI.enabled ? `aiBorderPulse ${3 + i * 0.5}s ease-in-out infinite` : "none"
+                    }}>
+                      <div style={{ fontSize: 16, marginBottom: 4 }}>{stat.icon}</div>
+                      <div style={{ color: stat.color, fontSize: 14, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{stat.value}</div>
+                      <div style={{ color: "#5A617888", fontSize: 10, marginTop: 2 }}>{stat.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Responsible AI Banner */}
+                <div style={{ padding: "14px 18px", borderRadius: 8, background: "linear-gradient(135deg, #6366F108, #06B6D408)", border: "1px solid #6366F122", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 20 }}>🤖</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>Powered by Azure Open AI</div>
+                    <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>Enterprise‑grade data security with a Responsible AI model.</div>
+                  </div>
+                </div>
+
+                {/* Configuration Fields — Dev Admin & Administrator */}
+                {(currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Administrator") && (<>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                  <FormField label="Target Endpoint URI">
+                    <input style={{ ...inputStyle, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}
+                      value={azureOpenAI.endpoint}
+                      onChange={e => setAzureOpenAI(prev => ({ ...prev, endpoint: e.target.value }))}
+                      disabled={currentUser.rbacRole !== "VGC Dev Admin" && currentUser.rbacRole !== "Administrator"}
+                      placeholder="https://{resource}.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-08-01-preview" />
+                  </FormField>
+                  <FormField label="Deployment Model">
+                    <input style={{ ...inputStyle, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}
+                      value={azureOpenAI.model}
+                      onChange={e => setAzureOpenAI(prev => ({ ...prev, model: e.target.value }))}
+                      disabled={currentUser.rbacRole !== "VGC Dev Admin" && currentUser.rbacRole !== "Administrator"}
+                      placeholder="deployment-model-name" />
+                  </FormField>
+                </div>
+                <FormField label="API Key">
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ position: "relative", flex: 1 }}>
+                      <input style={{ ...inputStyle, fontSize: 11, fontFamily: "'JetBrains Mono', monospace", paddingRight: 40 }}
+                        type={azureOpenAI.showKey ? "text" : "password"}
+                        value={azureOpenAI.apiKey}
+                        onChange={e => setAzureOpenAI(prev => ({ ...prev, apiKey: e.target.value }))}
+                        disabled={currentUser.rbacRole !== "VGC Dev Admin" && currentUser.rbacRole !== "Administrator"}
+                        placeholder="Enter your Azure OpenAI API key..." />
+                      <button onClick={() => setAzureOpenAI(prev => ({ ...prev, showKey: !prev.showKey }))} style={{
+                        position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                        background: "none", border: "none", cursor: "pointer", color: "#5A6178",
+                        fontSize: 14, padding: 2
+                      }}>{azureOpenAI.showKey ? "🙈" : "👁️"}</button>
+                    </div>
+                    <button onClick={async () => {
+                      setAzureOpenAI(prev => ({ ...prev, testStatus: "testing" }));
+                      try {
+                        const res = await fetch("/api/ai/chat", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ systemPrompt: "You are a test assistant.", userPrompt: "Hello" })
+                        });
+                        setAzureOpenAI(prev => ({
+                          ...prev,
+                          testStatus: res.ok ? "success" : "error",
+                          lastTested: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })
+                        }));
+                      } catch {
+                        setAzureOpenAI(prev => ({ ...prev, testStatus: "error" }));
+                      }
+                      setTimeout(() => setAzureOpenAI(prev => ({ ...prev, testStatus: null })), 4000);
+                    }} style={{
+                      ...btnStyle(azureOpenAI.testStatus === "testing" ? "#1E2130" : "#6366F1"),
+                      fontSize: 11, padding: "8px 16px", minWidth: 120,
+                      display: "flex", alignItems: "center", gap: 6,
+                      animation: azureOpenAI.testStatus === "testing" ? "pulse 1s ease-in-out infinite" : "none"
+                    }}>
+                      {azureOpenAI.testStatus === "testing" ? "⏳ Testing..." :
+                       azureOpenAI.testStatus === "success" ? "✅ Connected!" :
+                       azureOpenAI.testStatus === "error" ? "❌ Failed" : "🔗 Test Connection"}
+                    </button>
+                  </div>
+                  {azureOpenAI.lastTested && (
+                    <div style={{ color: "#5A617888", fontSize: 10, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
+                      Last tested: {azureOpenAI.lastTested}
+                    </div>
+                  )}
+                  <div style={{
+                    marginTop: 8, padding: "8px 12px", borderRadius: 6,
+                    background: "#FFB34711", border: "1px solid #FFB34722",
+                    color: "#FFB347", fontSize: 10, display: "flex", alignItems: "center", gap: 6
+                  }}>
+                    🔒 API key is managed server-side via environment variable — never exposed to the browser. Requests are proxied through /api/ai/chat.
+                  </div>
+                </FormField>
+                </>)}
+
+                {/* Feature Integration Map */}
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ color: "#5A6178", fontSize: 11, fontWeight: 600, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                    Powered by Azure OpenAI
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+                    {[
+                      { icon: "💬", label: "Assisted by AI Chat", active: azureOpenAI.enabled },
+                      { icon: "🚨", label: "Threat Analysis", active: azureOpenAI.enabled },
+                      { icon: "📧", label: "Email Auto-Draft", active: azureOpenAI.enabled },
+                      { icon: "🔍", label: "Incident Triage", active: azureOpenAI.enabled && aiConfig.autoTriage },
+                      { icon: "📚", label: "KB Suggestions", active: azureOpenAI.enabled && aiConfig.kbSuggestions },
+                      { icon: "⚡", label: "Risk Assessment", active: azureOpenAI.enabled && aiConfig.riskAnalysis },
+                    ].map((feat, i) => (
+                      <div key={i} style={{
+                        padding: "10px 12px", borderRadius: 8, background: "#0A0C14",
+                        border: `1px solid ${feat.active ? "#6366F133" : "#1E213033"}`,
+                        display: "flex", alignItems: "center", gap: 8,
+                        opacity: feat.active ? 1 : 0.4, transition: "all 0.3s"
+                      }}>
+                        <span style={{ fontSize: 16 }}>{feat.icon}</span>
+                        <span style={{ color: feat.active ? "#E8ECF4" : "#5A6178", fontSize: 11 }}>{feat.label}</span>
+                        <span style={{
+                          width: 6, height: 6, borderRadius: "50%", marginLeft: "auto",
+                          background: feat.active ? "#81C784" : "#5A617844",
+                          boxShadow: feat.active ? "0 0 8px #81C78444" : "none",
+                          animation: feat.active ? "pulse 2s ease-in-out infinite" : "none"
+                        }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Integrations */}
+        {activeTab === "integrations" && (
+          <div>
+            <div style={{ marginBottom: 20 }}>
+              <SearchBar value={search} onChange={setSearch} placeholder="Search integrations..." />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+              {integrations.filter(i => i.name.toLowerCase().includes(search.toLowerCase()) || i.category.toLowerCase().includes(search.toLowerCase())).map(intg => (
+                <div key={intg.id} style={{
+                  background: "#0F1117", borderRadius: 8, border: `1px solid ${intg.status === "connected" ? "#6366F133" : "#1E2130"}`,
+                  padding: 20, transition: "border-color 0.2s"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 28 }}>{intg.icon}</span>
+                      <div>
+                        <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>{intg.name}</div>
+                        <div style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{intg.category}</div>
+                      </div>
+                    </div>
+                    <Badge color={intg.status === "connected" ? { bg: "#0D2D1A", text: "#81C784" } : { bg: "#1A1A2E", text: "#A0AEC0" }}>
+                      {intg.status === "connected" ? "Connected" : "Available"}
+                    </Badge>
+                  </div>
+                  <div style={{ color: "#5A6178", fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>{intg.description}</div>
+                  <button style={intg.status === "connected" ? { ...btnStyle("#1E2130"), color: "#FF6B6B", border: "1px solid #FF6B6B33" } : btnStyle("#6366F1")}
+                    onClick={() => toggleIntegration(intg.id)}>
+                    {intg.status === "connected" ? "Disconnect" : "Connect"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Workflow Automation Rules — Enhanced */}
+        {activeTab === "workflows" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Workflow Automation Rules</h3>
+                <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Editable by VGC Dev Admin & Tenant Admin · AI-assisted optimization available</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => {
+                  const suggestions = [
+                    { id: genId("WF"), name: "AI: Pattern-Based Priority Adjustment", trigger: "Recurring incident pattern detected (3+ similar in 7 days)", action: "Auto-escalate priority and link to Problem record", status: "Suggested", module: "Incidents", createdBy: "AI Assist", aiSuggested: true, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: true },
+                    { id: genId("WF"), name: "AI: Customer SLA Optimization", trigger: "Customer ticket history shows repeated SLA near-misses", action: "Adjust routing to faster-response team + notify account manager", status: "Suggested", module: "SLA", createdBy: "AI Assist", aiSuggested: true, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: true },
+                    { id: genId("WF"), name: "AI: Off-Hours Incident Routing", trigger: "Ticket created outside business hours (Mon-Fri 9-6 SGT)", action: "Route to on-call engineer and send SMS notification", status: "Suggested", module: "Incidents", createdBy: "AI Assist", aiSuggested: true, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: false },
+                  ];
+                  setAiRuleSuggestions(suggestions);
+                }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>🤖 AI Suggest Rules</button>
+                <button onClick={() => setShowAddRule(!showAddRule)} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }}>{showAddRule ? "✕ Cancel" : "＋ Add Rule"}</button>
+              </div>
+            </div>
+
+            {/* AI Suggestions Panel */}
+            {aiRuleSuggestions.length > 0 && (
+              <div style={{ background: "linear-gradient(135deg, #06B6D408, #6366F108)", borderRadius: 8, border: "1px solid #06B6D433", padding: 16, marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#06B6D4" }}>🤖 AI-Suggested Rule Adjustments</div>
+                  <div style={{ fontSize: 9, color: "#5A6178" }}>Based on incident patterns, ticket history & SLA analysis</div>
+                </div>
+                {aiRuleSuggestions.map(s => (
+                  <div key={s.id} style={{ background: "#0F1117", borderRadius: 6, border: "1px solid #06B6D422", padding: "10px 14px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 6 }}>
+                        {s.name}
+                        <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#06B6D422", color: "#06B6D4" }}>AI SUGGESTED</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}><span style={{ color: "#FFB347" }}>IF</span> {s.trigger}</div>
+                      <div style={{ fontSize: 10, color: "#5A6178" }}><span style={{ color: "#81C784" }}>THEN</span> {s.action}</div>
+                    </div>
+                    <button onClick={() => {
+                      const approved = { ...s, status: "Active", createdBy: currentUser.name + " (AI-approved)" };
+                      const updated = [...workflowRules, approved]; setWorkflowRules(updated); _save("vgc_workflow_rules", updated);
+                      setAiRuleSuggestions(prev => prev.filter(x => x.id !== s.id));
+                    }} style={{ ...btnStyle("#81C784"), fontSize: 9, padding: "4px 10px" }}>✓ Approve</button>
+                    <button onClick={() => setAiRuleSuggestions(prev => prev.filter(x => x.id !== s.id))} style={{ ...btnStyle("#333"), color: "#FF6B6B", fontSize: 9, padding: "4px 10px" }}>✕ Dismiss</button>
+                  </div>
+                ))}
+                <div style={{ fontSize: 9, color: "#5A617888", marginTop: 4, fontStyle: "italic" }}>⚡ All AI-suggested changes require explicit admin approval before activation.</div>
+              </div>
+            )}
+
+            {/* Add Rule Form */}
+            {showAddRule && (
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #6366F133", padding: 16, marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", marginBottom: 10 }}>➕ New Workflow Automation Rule</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  <input id="wf-name" placeholder="Rule Name *" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none" }}/>
+                  <select id="wf-module" style={{ padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none" }}>
+                    <option value="Incidents">Incidents</option><option value="Changes">Changes</option><option value="Requests">Requests</option><option value="SLA">SLA</option><option value="Knowledge">Knowledge</option><option value="Assets">Assets</option>
+                  </select>
+                </div>
+                <input id="wf-trigger" placeholder="Trigger condition (IF...)" style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none", boxSizing: "border-box", marginBottom: 8 }}/>
+                <input id="wf-action" placeholder="Action (THEN...)" style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none", boxSizing: "border-box", marginBottom: 8 }}/>
+                <button onClick={() => {
+                  const n = document.getElementById("wf-name")?.value?.trim();
+                  if (!n) return;
+                  const rule = { id: genId("WF"), name: n, trigger: document.getElementById("wf-trigger")?.value || "", action: document.getElementById("wf-action")?.value || "", status: "Active", module: document.getElementById("wf-module")?.value || "Incidents", createdBy: currentUser.name, aiSuggested: false, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: false };
+                  const updated = [...workflowRules, rule]; setWorkflowRules(updated); _save("vgc_workflow_rules", updated); setShowAddRule(false);
+                }} style={{ padding: "6px 16px", borderRadius: 5, background: "#6366F1", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Create Rule</button>
+              </div>
+            )}
+
+            {/* Rule List */}
+            {workflowRules.map((rule) => (
+              <div key={rule.id} style={{
+                background: "#0F1117", borderRadius: 8, border: "1px solid " + (rule.aiSuggested ? "#06B6D422" : "#1E2130"),
+                padding: "14px 20px", marginBottom: 8, display: "flex", alignItems: "center", gap: 14
+              }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: rule.aiSuggested ? "#06B6D411" : "#0A0C14", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, border: "1px solid #1E213044", flexShrink: 0 }}>{rule.aiSuggested ? "🤖" : "⟳"}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
+                    <span style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>{rule.name}</span>
+                    <Badge color={rule.status === "Active" ? { bg: "#0D2D1A", text: "#81C784" } : rule.status === "Beta" ? { bg: "#2D1F0A", text: "#FFB347" } : { bg: "#1A1A2E", text: "#5A6178" }}>{rule.status}</Badge>
+                    <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{rule.module}</Badge>
+                    {rule.aiSuggested && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#06B6D418", color: "#06B6D4" }}>AI</span>}
+                    {rule.slaLinked && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#FFB34718", color: "#FFB347" }}>SLA</span>}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 1 }}><span style={{ color: "#FFB347" }}>IF</span> {rule.trigger}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178" }}><span style={{ color: "#81C784" }}>THEN</span> {rule.action}</div>
+                  <div style={{ fontSize: 8, color: "#3A3F55", marginTop: 3 }}>By {rule.createdBy} · Modified {rule.lastModified}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                  <div onClick={() => {
+                    const updated = workflowRules.map(r => r.id === rule.id ? { ...r, status: r.status === "Active" ? "Disabled" : "Active" } : r);
+                    setWorkflowRules(updated); _save("vgc_workflow_rules", updated);
+                  }} style={{ width: 40, height: 22, borderRadius: 11, cursor: "pointer", background: rule.status === "Active" ? "#6366F1" : "#1E2130", padding: 2, transition: "background 0.2s" }}>
+                    <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: rule.status === "Active" ? "translateX(18px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }}/>
+                  </div>
+                  <button onClick={() => { const updated = workflowRules.filter(r => r.id !== rule.id); setWorkflowRules(updated); _save("vgc_workflow_rules", updated); }}
+                    style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} title="Delete rule">🗑️</button>
+                </div>
+              </div>
+            ))}
+
+            {/* AI Adaptive Logic Info */}
+            <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F122", padding: 16, marginTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", marginBottom: 8 }}>🧠 AI-Adaptive Workflow Logic</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
+                {[
+                  { icon: "🏢", title: "Business Nature", desc: "Rules adapt based on customer type and industry requirements" },
+                  { icon: "📊", title: "Incident Patterns", desc: "AI detects recurring patterns and suggests preventive rules" },
+                  { icon: "📋", title: "Ticket History", desc: "Historical data drives smarter routing and prioritization" },
+                  { icon: "⏱️", title: "SLA Compliance", desc: "Rules auto-adjust to maintain agreed SLA per tenant" },
+                ].map((f, i) => (
+                  <div key={i} style={{ padding: 10, borderRadius: 6, background: "#0F1117", border: "1px solid #1E2130" }}>
+                    <div style={{ fontSize: 14, marginBottom: 4 }}>{f.icon}</div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#06B6D4", marginBottom: 2 }}>{f.title}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", lineHeight: 1.4 }}>{f.desc}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 9, color: "#5A617888", fontStyle: "italic" }}>All AI-suggested changes are transparent and require explicit admin approval. Goal: optimize response time, maintain SLA compliance, improve customer satisfaction.</div>
+            </div>
+          </div>
+        )}
+
+        {/* SLA Policies */}
+        {activeTab === "slaPolicy" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>VGC Technology Helpdesk SLA Policy</h3>
+            </div>
+
+            {/* Policy Overview */}
+            <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>Support Hours</div>
+                  <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{VGC_SLA_POLICY.supportHours.days}</div>
+                  <div style={{ fontSize: 12, color: "#8B92A8" }}>{VGC_SLA_POLICY.supportHours.hours} (SGT)</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>Default Severity</div>
+                  <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{VGC_SLA_POLICY.defaultSeverity}</div>
+                  <div style={{ fontSize: 12, color: "#8B92A8" }}>Auto-assigned to new tickets</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>Ticket Channels</div>
+                  <div style={{ fontSize: 12, color: "#E8ECF4" }}>{VGC_SLA_POLICY.ticketChannels.join(", ")}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Severity SLA Table */}
+            <DataTable
+              columns={[
+                { label: "Severity", render: r => <PriorityDot priority={r.severity} /> },
+                { label: "Definition", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.definition}</span> },
+                { label: "First Response", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: "#06B6D4" }}>{r.firstResponse}</span> },
+                { label: "Worst Response", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: "#FFB347" }}>{r.worstResponse}</span> },
+                { label: "Examples", render: r => <span style={{ color: "#5A6178", fontSize: 11 }}>{r.examples}</span> },
+                { label: "Escalation", render: r => <span style={{ color: "#CE93D8", fontSize: 11 }}>{r.escalation}</span> },
+              ]}
+              data={Object.entries(VGC_SLA_POLICY.severities).map(([key, sev]) => ({
+                severity: key,
+                definition: sev.definition,
+                firstResponse: `${sev.firstResponse} biz hrs`,
+                worstResponse: `${sev.worstResponse} biz hrs`,
+                examples: Array.isArray(sev.examples) ? sev.examples.join(", ") : (sev.examples || ""),
+                escalation: sev.escalation,
+              }))}
+            />
+
+            {/* Mandatory Rules */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 Mandatory Ticketing & Communication Rules</h3>
+              <div style={{ display: "grid", gap: 8 }}>
+                {VGC_SLA_POLICY.rules.map((rule, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ width: 22, height: 22, borderRadius: 6, background: "#6366F115", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#6366F1", fontWeight: 700, flexShrink: 0 }}>{i + 1}</div>
+                    <span style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.5 }}>{rule}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* API & Webhooks */}
+        {activeTab === "api" && (
+          <div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>API Configuration</h3>
+              <div style={{ marginBottom: 16 }}>
+                <FormField label="API Base URL">
+                  <input style={inputStyle} value="https://api.vgc-itsm.com/v2" readOnly />
+                </FormField>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <FormField label="API Key">
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input style={{ ...inputStyle, flex: 1, fontFamily: "'JetBrains Mono', monospace" }} value="vgc_sk_••••••••••••••••••••" readOnly />
+                    <button style={btnStyle("#1E2130")}>Regenerate</button>
+                  </div>
+                </FormField>
+              </div>
+              <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", padding: 12, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                Rate Limit: 1000 req/min &nbsp;|&nbsp; Auth: Bearer Token &nbsp;|&nbsp; Format: JSON
+              </div>
+            </div>
+
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Webhooks</h3>
+                <button style={btnStyle("#6366F1")}>+ Add Webhook</button>
+              </div>
+              {[
+                { url: "https://hooks.slack.com/services/T.../B.../xxx", events: ["incident.created", "incident.resolved"], status: "Active" },
+                { url: "https://graph.microsoft.com/v1/teams/webhook", events: ["change.approved", "sla.breach"], status: "Active" },
+                { url: "https://api.pagerduty.com/webhooks/v3", events: ["incident.critical"], status: "Inactive" },
+              ].map((wh, i) => (
+                <div key={i} style={{ padding: "12px 16px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <span style={{ color: "#C4CAD6", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{wh.url.substring(0, 50)}...</span>
+                    <Badge color={wh.status === "Active" ? { bg: "#0D2D1A", text: "#81C784" } : { bg: "#2D0A0A", text: "#FF6B6B" }}>{wh.status}</Badge>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {wh.events.map(ev => <Badge key={ev} color={{ bg: "#0D2137", text: "#64B5F6" }}>{ev}</Badge>)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Import & Migration */}
+        {activeTab === "migration" && (
+          <div>
+            {/* Overview Banner */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "14px 16px", borderRadius: 8, background: "#6366F108", border: "1px solid #6366F122" }}>
+              <span style={{ fontSize: 18 }}>📦</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>Import & Migration Center</div>
+                <div style={{ fontSize: 11, color: "#5A6178" }}>Migrate data from legacy ITSM platforms or import via CSV/JSON. Singapore SME best practice: always backup before migration.</div>
+              </div>
+            </div>
+
+            {/* Migration Sources */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Import from Platform</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+                {[
+                  { name: "ServiceNow", icon: "🟢", desc: "Import incidents, problems, changes, CMDB", formats: "XML, JSON API" },
+                  { name: "Zendesk", icon: "🟡", desc: "Import tickets, users, macros, SLA policies", formats: "CSV, JSON API" },
+                  { name: "Jira Service Mgmt", icon: "🔵", desc: "Import issues, worklogs, SLA configs", formats: "CSV, REST API" },
+                  { name: "Freshservice", icon: "🟢", desc: "Import tickets, assets, requesters", formats: "CSV, API" },
+                  { name: "ManageEngine", icon: "🔴", desc: "Import requests, assets, technicians", formats: "CSV, XML" },
+                  { name: "Custom CSV/JSON", icon: "📄", desc: "Import from any source using CSV or JSON", formats: "CSV, JSON" },
+                ].map((src, i) => (
+                  <div key={i} style={{ padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", cursor: "pointer", transition: "border-color 0.2s" }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = "#6366F144"}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = "#1E213044"}>
+                    <div style={{ fontSize: 24, marginBottom: 8 }}>{src.icon}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>{src.name}</div>
+                    <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 8 }}>{src.desc}</div>
+                    <div style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{src.formats}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Field Mapping */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Field Mapping Preview</h3>
+              <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 12 }}>Map source fields to VGC-ITSM fields. This preview shows the default mapping for ServiceNow.</div>
+              <DataTable
+                columns={[
+                  { label: "Source Field", render: r => <span style={{ color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>{r.source}</span> },
+                  { label: "VGC-ITSM Field", render: r => <span style={{ color: "#81C784", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>{r.target}</span> },
+                  { label: "Type", render: r => <Badge color={{ bg: "#1A1A2E", text: "#A0AEC0" }}>{r.type}</Badge> },
+                  { label: "Required", render: r => r.required ? <span style={{ color: "#FF6B6B" }}>✓</span> : <span style={{ color: "#5A617855" }}>—</span> },
+                ]}
+                data={[
+                  { source: "number", target: "id", type: "String", required: true },
+                  { source: "short_description", target: "title", type: "String", required: true },
+                  { source: "description", target: "description", type: "Text", required: false },
+                  { source: "priority", target: "priority", type: "Enum → Sev-A/B/C/D", required: true },
+                  { source: "state", target: "status", type: "Enum", required: true },
+                  { source: "category", target: "category", type: "String", required: false },
+                  { source: "assigned_to", target: "assignee", type: "User Lookup", required: false },
+                  { source: "assignment_group", target: "assignmentGroup", type: "Group Lookup", required: false },
+                  { source: "caller_id", target: "reporter", type: "User Lookup", required: false },
+                  { source: "sys_created_on", target: "created", type: "DateTime", required: true },
+                  { source: "cmdb_ci", target: "affectedAsset", type: "Asset Lookup", required: false },
+                  { source: "impact", target: "impact", type: "Enum", required: false },
+                ]}
+              />
+            </div>
+
+            {/* Import Data Types */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Data Types Available for Import</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+                {[
+                  { type: "Incidents", icon: "🔥", count: "—", color: "#FF6B6B" },
+                  { type: "Problems", icon: "🐛", count: "—", color: "#CE93D8" },
+                  { type: "Changes", icon: "🔄", count: "—", color: "#FFB347" },
+                  { type: "Service Requests", icon: "📋", count: "—", color: "#81C784" },
+                  { type: "Assets / CMDB", icon: "🖥️", count: "—", color: "#64B5F6" },
+                  { type: "Users", icon: "👥", count: "—", color: "#6366F1" },
+                  { type: "KB Articles", icon: "📚", count: "—", color: "#06B6D4" },
+                  { type: "SLA Policies", icon: "⏱️", count: "—", color: "#EC4899" },
+                ].map((dt, i) => (
+                  <div key={i} style={{ padding: "14px 16px", background: "#0A0C14", borderRadius: 8, border: `1px solid ${dt.color}22`, display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 20 }}>{dt.icon}</span>
+                    <div>
+                      <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600 }}>{dt.type}</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Records: {dt.count}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Upload Area */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "2px dashed #1E2130", padding: 40, textAlign: "center" }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>📁</div>
+              <div style={{ fontSize: 14, color: "#E8ECF4", fontWeight: 600, marginBottom: 4 }}>Drop CSV or JSON file here</div>
+              <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 16 }}>or click to browse files. Max file size: 50MB.</div>
+              <button style={btnStyle("#6366F1")}>📂 Browse Files</button>
+              <div style={{ fontSize: 10, color: "#5A617888", marginTop: 12, fontFamily: "'JetBrains Mono', monospace" }}>
+                Supported: .csv, .json, .xml · Data validated before import · Duplicate detection enabled
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Users & RBAC */}
+        {activeTab === "users" && (
+          <div>
+            {(() => {
+              const canEditRBAC = currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Administrator" || currentUser.rbacRole === "Tenant Admin";
+              const isDevAdminUser = currentUser.rbacRole === "VGC Dev Admin";
+              const isTenantAdminUser = currentUser.rbacRole === "Tenant Admin";
+              // Tenant Admin can assign all roles except VGC Dev Admin
+              const assignableRoles = isTenantAdminUser ? RBAC_ROLES.filter(r => r.id !== "VGC Dev Admin") : RBAC_ROLES;
+              const filteredUsers = managedUsers.filter(u => {
+                const matchSearch = !rbacUserSearch || u.name.toLowerCase().includes(rbacUserSearch.toLowerCase()) || u.email.toLowerCase().includes(rbacUserSearch.toLowerCase()) || u.id.toLowerCase().includes(rbacUserSearch.toLowerCase()) || u.department?.toLowerCase().includes(rbacUserSearch.toLowerCase());
+                const matchRole = rbacRoleFilter === "all" || u.rbacRole === rbacRoleFilter;
+                return matchSearch && matchRole;
+              });
+              const totalUsers = managedUsers.length;
+              const activeAdmins = managedUsers.filter(u => ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(u.rbacRole)).length;
+              const engineersCount = managedUsers.filter(u => u.rbacRole.includes("Support") || u.rbacRole === "Network Engineer").length;
+              const endUsersCount = managedUsers.filter(u => u.rbacRole === "End User").length;
+
+              const handleInviteUser = () => {
+                if (!inviteForm.name.trim() || !inviteForm.email.trim()) return;
+                const newId = `U${String(managedUsers.length).padStart(3, "0")}`;
+                const avatar = inviteForm.name.split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+                const newUser = { id: newId, name: inviteForm.name, role: inviteForm.role || "Support Agent", avatar, team: inviteForm.department || "Service Desk", gender: "other", rbacRole: inviteForm.rbacRole, email: inviteForm.email, phone: inviteForm.phone || "", location: inviteForm.location || "SG-HQ", department: inviteForm.department || "IT", pcName: `VGC-PC-${newId}`, employeeId: `EMP${Date.now().toString().slice(-5)}` };
+                setManagedUsers(prev => [...prev, newUser]);
+                setRbacAuditLog(prev => [{ id: `RA${String(prev.length + 1).padStart(3, "0")}`, action: "User Invited", user: inviteForm.name, from: "—", to: inviteForm.rbacRole, by: currentUser.name, timestamp: new Date().toLocaleString("sv-SE", { timeZone: "Asia/Singapore" }).replace("T", " ").substring(0, 16) }, ...prev]);
+                setInviteForm({ name: "", email: "", role: "Service Desk", department: "", rbacRole: "L1 Support Engineer", phone: "", location: "" });
+                setShowInviteUser(false);
+              };
+
+              const handleRoleChange = (userId, newRole) => {
+                const user = managedUsers.find(u => u.id === userId);
+                if (!user || user.rbacRole === newRole) return;
+                // Tenant Admin cannot assign VGC Dev Admin role
+                if (isTenantAdminUser && newRole === "VGC Dev Admin") return;
+                setRbacAuditLog(prev => [{ id: `RA${String(prev.length + 1).padStart(3, "0")}`, action: "Role Changed", user: user.name, from: user.rbacRole, to: newRole, by: currentUser.name, timestamp: new Date().toLocaleString("sv-SE", { timeZone: "Asia/Singapore" }).replace("T", " ").substring(0, 16) }, ...prev]);
+                setManagedUsers(prev => prev.map(u => u.id === userId ? { ...u, rbacRole: newRole } : u));
+              };
+
+              const handleRemoveUser = (userId) => {
+                const user = managedUsers.find(u => u.id === userId);
+                if (!user) return;
+                // Prevent removing self or VGC Dev Admin (unless you are Dev Admin)
+                if (userId === currentUser.id) return;
+                if (user.rbacRole === "VGC Dev Admin" && !isDevAdminUser) return;
+                setRbacAuditLog(prev => [{ id: `RA${String(prev.length + 1).padStart(3, "0")}`, action: "User Removed", user: user.name, from: user.rbacRole, to: "—", by: currentUser.name, timestamp: new Date().toLocaleString("sv-SE", { timeZone: "Asia/Singapore" }).replace("T", " ").substring(0, 16) }, ...prev]);
+                setManagedUsers(prev => prev.filter(u => u.id !== userId));
+              };
+
+              return (
+                <>
+                  {/* Access Level Banner */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 16px", borderRadius: 8, background: canEditRBAC ? "#4CAF5008" : "#FF444408", border: `1px solid ${canEditRBAC ? "#4CAF5022" : "#FF444422"}` }}>
+                    <span style={{ fontSize: 14 }}>{canEditRBAC ? "🔓" : "🔒"}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: canEditRBAC ? "#4CAF50" : "#FF6B6B" }}>
+                        {isDevAdminUser ? "Full RBAC Access — VGC Dev Admin (Super Admin)" : isTenantAdminUser ? "Tenant RBAC Access — Full user & role management for your tenant" : canEditRBAC ? "RBAC Edit Access — Administrator" : "RBAC View Only — Editing restricted to Admins"}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+                        {isDevAdminUser ? "Full customization: all roles, permissions, platform config, user assignments" : isTenantAdminUser ? "Manage: user roles (except VGC Dev Admin), permissions, invite/remove users, feature access" : canEditRBAC ? "Can manage: user roles, permissions, invite/remove users" : "Contact your Administrator or Tenant Admin to request RBAC changes"}
+                      </div>
+                    </div>
+                    {isDevAdminUser && <span style={{ padding: "3px 10px", borderRadius: 4, background: "#FF6B6B22", color: "#FF6B6B", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>SUPER ADMIN</span>}
+                    {isTenantAdminUser && <span style={{ padding: "3px 10px", borderRadius: 4, background: "#EC489922", color: "#EC4899", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>TENANT ADMIN</span>}
+                  </div>
+
+                  {/* KPI Stats Bar */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+                    {[
+                      { label: "Total Users", value: totalUsers, icon: "👥", color: "#6366F1" },
+                      { label: "Administrators", value: activeAdmins, icon: "🛡️", color: "#EC4899" },
+                      { label: "Engineers", value: engineersCount, icon: "🔧", color: "#06B6D4" },
+                      { label: "End Users", value: endUsersCount, icon: "👤", color: "#81C784" },
+                      { label: "Roles Defined", value: RBAC_ROLES.length, icon: "🏷️", color: "#FFB347" },
+                    ].map((st, i) => (
+                      <div key={i} style={{ padding: "14px 16px", background: "#0F1117", borderRadius: 8, border: `1px solid ${st.color}22`, textAlign: "center" }}>
+                        <div style={{ fontSize: 18, marginBottom: 4 }}>{st.icon}</div>
+                        <div style={{ fontSize: 22, fontWeight: 700, color: st.color, fontFamily: "'Space Grotesk', sans-serif" }}>{st.value}</div>
+                        <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: "0.5px" }}>{st.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Header + Search + Filter + Actions bar */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+                    <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>👥 Users & Role-Based Access Control (RBAC)</h3>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1, justifyContent: "flex-end" }}>
+                      <input value={rbacUserSearch} onChange={e => setRbacUserSearch(e.target.value)} placeholder="Search users by name, email, ID..." style={{ ...inputStyle, width: 240, padding: "7px 12px", fontSize: 11, background: "#0A0C14" }} />
+                      <select value={rbacRoleFilter} onChange={e => setRbacRoleFilter(e.target.value)} style={{ ...inputStyle, width: "auto", padding: "7px 12px", fontSize: 11, background: "#0A0C14" }}>
+                        <option value="all">All Roles</option>
+                        {RBAC_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                      </select>
+                      <div style={{ display: "flex", gap: 2, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E2130", padding: 2 }}>
+                        {["table", "cards"].map(mode => (
+                          <button key={mode} onClick={() => setRbacViewMode(mode)} style={{ padding: "5px 10px", borderRadius: 4, border: "none", cursor: "pointer", background: rbacViewMode === mode ? "#1E2130" : "transparent", color: rbacViewMode === mode ? "#E8ECF4" : "#5A6178", fontSize: 11, fontWeight: 600 }}>
+                            {mode === "table" ? "📋" : "🃏"} {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                      {canEditRBAC && <button onClick={() => setShowInviteUser(true)} style={btnStyle("#6366F1")}>+ Invite User</button>}
+                    </div>
+                  </div>
+
+                  {/* Invite User Modal */}
+                  {showInviteUser && canEditRBAC && (
+                    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #6366F133", padding: 24, marginBottom: 20, position: "relative" }}>
+                      <button onClick={() => setShowInviteUser(false)} style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+                      <h4 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>📩 Invite New User</h4>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                        <FormField label="Full Name *">
+                          <input style={inputStyle} placeholder="e.g. John Smith" value={inviteForm.name} onChange={e => setInviteForm(prev => ({ ...prev, name: e.target.value }))} />
+                        </FormField>
+                        <FormField label="Email Address *">
+                          <input style={inputStyle} type="email" placeholder="john.smith@company.com" value={inviteForm.email} onChange={e => setInviteForm(prev => ({ ...prev, email: e.target.value }))} />
+                        </FormField>
+                        <FormField label="RBAC Role">
+                          <select style={inputStyle} value={inviteForm.rbacRole} onChange={e => setInviteForm(prev => ({ ...prev, rbacRole: e.target.value }))}>
+                            {assignableRoles.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                          </select>
+                        </FormField>
+                        <FormField label="Job Title">
+                          <input style={inputStyle} placeholder="e.g. Support Engineer" value={inviteForm.role} onChange={e => setInviteForm(prev => ({ ...prev, role: e.target.value }))} />
+                        </FormField>
+                        <FormField label="Department">
+                          <input style={inputStyle} placeholder="e.g. IT Operations" value={inviteForm.department} onChange={e => setInviteForm(prev => ({ ...prev, department: e.target.value }))} />
+                        </FormField>
+                        <FormField label="Phone">
+                          <input style={inputStyle} placeholder="+65 XXXX XXXX" value={inviteForm.phone} onChange={e => setInviteForm(prev => ({ ...prev, phone: e.target.value }))} />
+                        </FormField>
+                      </div>
+                      {/* Role preview */}
+                      {(() => { const selRole = RBAC_ROLES.find(r => r.id === inviteForm.rbacRole); const selPerms = customPermissions[inviteForm.rbacRole]; return selRole && selPerms ? (
+                        <div style={{ padding: "12px 16px", background: "#0A0C14", borderRadius: 8, border: `1px solid ${selRole.color}22`, marginBottom: 16 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: selRole.color, marginBottom: 6 }}>🛡️ {selRole.label} — Permission Preview</div>
+                          <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 8 }}>{selRole.description}</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {Object.entries(selPerms).map(([mod, lvl]) => <Badge key={mod} color={PERM_COLORS[lvl] || PERM_COLORS.none}>{mod}: {lvl}</Badge>)}
+                          </div>
+                        </div>
+                      ) : null; })()}
+                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                        <button onClick={() => setShowInviteUser(false)} style={btnStyle("#1E2130")}>Cancel</button>
+                        <button onClick={handleInviteUser} style={{ ...btnStyle("#6366F1"), opacity: inviteForm.name && inviteForm.email ? 1 : 0.5 }} disabled={!inviteForm.name || !inviteForm.email}>Send Invitation</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Edit User Inline Panel */}
+                  {editingUserId && canEditRBAC && (() => {
+                    const eu = managedUsers.find(u => u.id === editingUserId);
+                    if (!eu) return null;
+                    const euRole = RBAC_ROLES.find(r => r.id === eu.rbacRole);
+                    const euPerms = customPermissions[eu.rbacRole];
+                    return (
+                      <div style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${euRole?.color || "#6366F1"}33`, padding: 24, marginBottom: 20, position: "relative" }}>
+                        <button onClick={() => setEditingUserId(null)} style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+                        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20 }}>
+                          <div style={{ width: 48, height: 48, borderRadius: 12, background: `linear-gradient(135deg, ${euRole?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16, fontWeight: 700 }}>{eu.avatar}</div>
+                          <div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{eu.name}</div>
+                            <div style={{ fontSize: 12, color: "#5A6178" }}>{eu.role} · {eu.department} · {eu.id}</div>
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                          <FormField label="Email"><input style={inputStyle} value={eu.email} onChange={e => setManagedUsers(prev => prev.map(u => u.id === eu.id ? { ...u, email: e.target.value } : u))} /></FormField>
+                          <FormField label="Phone"><input style={inputStyle} value={eu.phone} onChange={e => setManagedUsers(prev => prev.map(u => u.id === eu.id ? { ...u, phone: e.target.value } : u))} /></FormField>
+                          <FormField label="Location"><input style={inputStyle} value={eu.location} onChange={e => setManagedUsers(prev => prev.map(u => u.id === eu.id ? { ...u, location: e.target.value } : u))} /></FormField>
+                          <FormField label="Job Title"><input style={inputStyle} value={eu.role} onChange={e => setManagedUsers(prev => prev.map(u => u.id === eu.id ? { ...u, role: e.target.value } : u))} /></FormField>
+                          <FormField label="Department"><input style={inputStyle} value={eu.department} onChange={e => setManagedUsers(prev => prev.map(u => u.id === eu.id ? { ...u, department: e.target.value } : u))} /></FormField>
+                          <FormField label="RBAC Role">
+                            <select style={{ ...inputStyle, borderColor: (euRole?.color || "#1E2130") + "44" }} value={eu.rbacRole} onChange={e => handleRoleChange(eu.id, e.target.value)}>
+                              {assignableRoles.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                            </select>
+                          </FormField>
+                        </div>
+                        {/* Permission breakdown for this user */}
+                        <div style={{ padding: "12px 16px", background: "#0A0C14", borderRadius: 8, border: `1px solid ${euRole?.color || "#6366F1"}22`, marginBottom: 16 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: euRole?.color || "#6366F1", marginBottom: 8 }}>🔐 Active Permissions — {euRole?.label}</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {euPerms && Object.entries(euPerms).map(([mod, lvl]) => (
+                              <div key={mod} style={{ padding: "4px 10px", borderRadius: 4, background: (PERM_COLORS[lvl] || PERM_COLORS.none).bg, color: (PERM_COLORS[lvl] || PERM_COLORS.none).text, fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{mod}: {lvl}</div>
+                            ))}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
+                          {eu.id !== currentUser.id && !(eu.rbacRole === "VGC Dev Admin" && !isDevAdminUser) && (
+                            <button onClick={() => { handleRemoveUser(eu.id); setEditingUserId(null); }} style={{ ...btnStyle("#FF4444"), fontSize: 11 }}>🗑 Remove User</button>
+                          )}
+                          <div style={{ flex: 1 }} />
+                          <button onClick={() => setEditingUserId(null)} style={btnStyle("#6366F1")}>Done</button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* RBAC Roles Overview */}
+                  <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                    <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                      🛡️ Enterprise RBAC Roles
+                      <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400, fontFamily: "'JetBrains Mono', monospace" }}>({RBAC_ROLES.length} roles defined)</span>
+                    </h4>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+                      {RBAC_ROLES.map(role => {
+                        const count = managedUsers.filter(u => u.rbacRole === role.id).length;
+                        const perms = customPermissions[role.id];
+                        const fullPerms = perms ? Object.values(perms).filter(p => p === "full").length : 0;
+                        return (
+                          <div key={role.id} onClick={() => setRbacRoleFilter(rbacRoleFilter === role.id ? "all" : role.id)} style={{ padding: "12px 16px", background: rbacRoleFilter === role.id ? "#0A0C14" : "#0A0C14", borderRadius: 8, border: `1px solid ${rbacRoleFilter === role.id ? role.color + "66" : role.color + "22"}`, transition: "border-color 0.2s", cursor: "pointer" }}
+                            onMouseEnter={e => e.currentTarget.style.borderColor = role.color + "66"}
+                            onMouseLeave={e => { if (rbacRoleFilter !== role.id) e.currentTarget.style.borderColor = role.color + "22"; }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: "50%", background: role.color, boxShadow: `0 0 6px ${role.color}44` }} />
+                                <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{role.label}</span>
+                              </div>
+                              <Badge color={{ bg: "#1A1A2E", text: "#A0AEC0" }}>L{role.level}</Badge>
+                            </div>
+                            <div style={{ color: "#5A6178", fontSize: 11, marginBottom: 6 }}>{role.description}</div>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span style={{ fontSize: 11, color: role.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{count} user{count !== 1 ? "s" : ""}</span>
+                              <span style={{ fontSize: 10, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace" }}>{fullPerms} full perms</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* User Management — Table or Card view */}
+                  <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                      <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>
+                        User Management
+                        <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400, marginLeft: 8, fontFamily: "'JetBrains Mono', monospace" }}>
+                          {filteredUsers.length} of {totalUsers} users {rbacUserSearch && `matching "${rbacUserSearch}"`} {rbacRoleFilter !== "all" && `· ${rbacRoleFilter}`}
+                        </span>
+                      </h4>
+                    </div>
+
+                    {rbacViewMode === "table" ? (
+                      <DataTable
+                        columns={[
+                          { label: "User", render: r => (
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <div style={{ width: 32, height: 32, borderRadius: 8, background: `linear-gradient(135deg, ${RBAC_ROLES.find(rl => rl.id === r.rbacRole)?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700 }}>{r.avatar}</div>
+                              <div>
+                                <span style={{ color: "#E8ECF4", display: "block", fontSize: 13, fontWeight: 600 }}>{r.name}</span>
+                                <span style={{ color: "#5A617888", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{r.email}</span>
+                              </div>
+                            </div>
+                          )},
+                          { label: "RBAC Role", render: r => {
+                            const role = RBAC_ROLES.find(rl => rl.id === r.rbacRole);
+                            return canEditRBAC ? (
+                              <select style={{ ...inputStyle, padding: "4px 8px", fontSize: 11, width: "auto", background: "#0A0C14", borderColor: (role?.color || "#1E2130") + "44" }}
+                                value={r.rbacRole}
+                                onChange={e => handleRoleChange(r.id, e.target.value)}>
+                                {assignableRoles.map(rl => <option key={rl.id} value={rl.id}>{rl.label}</option>)}
+                              </select>
+                            ) : (
+                              <Badge color={{ bg: (role?.color || "#5A6178") + "22", text: role?.color || "#5A6178" }}>{role?.label || r.rbacRole}</Badge>
+                            );
+                          }},
+                          { label: "Department", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.department}</span> },
+                          { label: "Job Title", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.role}</span> },
+                          { label: "Status", render: () => <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Active</Badge> },
+                          { label: "SSO", render: r => r.email?.includes("@vgctech") ? <Badge color={{ bg: "#6366F111", text: "#6366F1" }}>Entra ID</Badge> : <Badge color={{ bg: "#1A1A2E", text: "#A0AEC0" }}>Local</Badge> },
+                          { label: "AI", render: r => { const p = customPermissions[r.rbacRole]; return p && p.ai !== "none" ? <Badge color={{ bg: "#6366F111", text: "#6366F1" }}>🤖 {p.ai}</Badge> : <span style={{ color: "#5A617855" }}>—</span>; }},
+                          ...(canEditRBAC ? [{ label: "Actions", render: r => (
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button onClick={(e) => { e.stopPropagation(); setEditingUserId(editingUserId === r.id ? null : r.id); }} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #6366F133", background: editingUserId === r.id ? "#6366F122" : "transparent", color: "#6366F1", fontSize: 10, cursor: "pointer", fontWeight: 600 }}>✏️ Edit</button>
+                              {r.id !== currentUser.id && !(r.rbacRole === "VGC Dev Admin" && !isDevAdminUser) && (
+                                <button onClick={(e) => { e.stopPropagation(); handleRemoveUser(r.id); }} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #FF444433", background: "transparent", color: "#FF6B6B", fontSize: 10, cursor: "pointer", fontWeight: 600 }}>✕</button>
+                              )}
+                            </div>
+                          )}] : []),
+                        ]}
+                        data={filteredUsers}
+                      />
+                    ) : (
+                      /* Card View */
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+                        {filteredUsers.map(u => {
+                          const role = RBAC_ROLES.find(r => r.id === u.rbacRole);
+                          const perms = customPermissions[u.rbacRole];
+                          return (
+                            <div key={u.id} style={{ padding: 16, background: "#0A0C14", borderRadius: 10, border: `1px solid ${role?.color || "#1E2130"}22`, transition: "border-color 0.2s, transform 0.2s" }}
+                              onMouseEnter={e => { e.currentTarget.style.borderColor = (role?.color || "#1E2130") + "55"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                              onMouseLeave={e => { e.currentTarget.style.borderColor = (role?.color || "#1E2130") + "22"; e.currentTarget.style.transform = "translateY(0)"; }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                                <div style={{ width: 44, height: 44, borderRadius: 12, background: `linear-gradient(135deg, ${role?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{u.avatar}</div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.name}</div>
+                                  <div style={{ fontSize: 11, color: "#5A6178" }}>{u.role}</div>
+                                </div>
+                                <Badge color={{ bg: (role?.color || "#5A6178") + "22", text: role?.color || "#5A6178" }}>{role?.label || u.rbacRole}</Badge>
+                              </div>
+                              <div style={{ display: "grid", gap: 4, marginBottom: 10 }}>
+                                <div style={{ fontSize: 11, color: "#8B92A8", display: "flex", alignItems: "center", gap: 6 }}>📧 <span style={{ color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>{u.email}</span></div>
+                                <div style={{ fontSize: 11, color: "#8B92A8", display: "flex", alignItems: "center", gap: 6 }}>🏢 <span style={{ color: "#C4CAD6" }}>{u.department}</span></div>
+                                {u.phone && <div style={{ fontSize: 11, color: "#8B92A8", display: "flex", alignItems: "center", gap: 6 }}>📞 <span style={{ color: "#C4CAD6" }}>{u.phone}</span></div>}
+                              </div>
+                              {/* Mini permission bar */}
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
+                                {perms && Object.entries(perms).filter(([, v]) => v !== "none").slice(0, 6).map(([k, v]) => (
+                                  <span key={k} style={{ padding: "2px 6px", borderRadius: 3, background: (PERM_COLORS[v] || PERM_COLORS.none).bg, color: (PERM_COLORS[v] || PERM_COLORS.none).text, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
+                                ))}
+                                {perms && Object.values(perms).filter(v => v !== "none").length > 6 && <span style={{ fontSize: 9, color: "#5A6178" }}>+{Object.values(perms).filter(v => v !== "none").length - 6}</span>}
+                              </div>
+                              {canEditRBAC && (
+                                <div style={{ display: "flex", gap: 6, borderTop: "1px solid #1E213044", paddingTop: 10 }}>
+                                  <button onClick={() => setEditingUserId(u.id)} style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid #6366F133", background: "transparent", color: "#6366F1", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>✏️ Edit</button>
+                                  {u.id !== currentUser.id && !(u.rbacRole === "VGC Dev Admin" && !isDevAdminUser) && (
+                                    <button onClick={() => handleRemoveUser(u.id)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #FF444433", background: "transparent", color: "#FF6B6B", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>✕</button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Permission Matrix — Editable */}
+                  {(() => {
+                    const PERM_MODULES = ["dashboard", "incidents", "problems", "changes", "requests", "catalog", "knowledge", "assets", "approvals", "sla", "ai", "admin", "customers", "reports"];
+                    const PERM_MODULE_LABELS = { dashboard: "Dashboard", incidents: "Incidents", problems: "Problems", changes: "Changes", requests: "Requests", catalog: "Catalog", knowledge: "KB", assets: "Assets", approvals: "Approvals", sla: "SLA", ai: "AI", admin: "Admin", customers: "Customers", reports: "Reports" };
+                    const PERM_LEVELS = ["full", "manage", "edit", "publish", "contribute", "approve", "submit", "fulfill", "use", "create", "view", "limited", "none"];
+                    const draft = permMatrixDraft || customPermissions;
+                    const canEditRole = (roleId) => {
+                      if (!canEditRBAC) return false;
+                      if (isDevAdminUser) return true;
+                      if (roleId === "VGC Dev Admin") return false;
+                      if (isTenantAdminUser) return true;
+                      // Administrator can edit level >= 1 roles only
+                      const rl = RBAC_ROLES.find(r => r.id === roleId);
+                      return rl && rl.level >= 1;
+                    };
+                    const hasChanges = permMatrixEditing && permMatrixDraft && JSON.stringify(permMatrixDraft) !== JSON.stringify(customPermissions);
+                    const changedCells = permMatrixEditing && permMatrixDraft ? (() => {
+                      const changed = [];
+                      for (const role of RBAC_ROLES) {
+                        for (const mod of PERM_MODULES) {
+                          if (permMatrixDraft[role.id]?.[mod] !== customPermissions[role.id]?.[mod]) changed.push(`${role.id}:${mod}`);
+                        }
+                      }
+                      return new Set(changed);
+                    })() : new Set();
+
+                    const handlePermChange = (roleId, module, newLevel) => {
+                      setPermMatrixDraft(prev => {
+                        const base = prev || JSON.parse(JSON.stringify(customPermissions));
+                        return { ...base, [roleId]: { ...base[roleId], [module]: newLevel } };
+                      });
+                    };
+
+                    const handleSaveMatrix = () => {
+                      if (!permMatrixDraft) return;
+                      // Audit log all changes
+                      const entries = [];
+                      for (const role of RBAC_ROLES) {
+                        for (const mod of PERM_MODULES) {
+                          const oldVal = customPermissions[role.id]?.[mod];
+                          const newVal = permMatrixDraft[role.id]?.[mod];
+                          if (oldVal !== newVal) {
+                            entries.push({ id: `RA${String(rbacAuditLog.length + entries.length + 1).padStart(3, "0")}`, action: "Permission Changed", user: role.id, from: `${mod}: ${oldVal}`, to: `${mod}: ${newVal}`, by: currentUser.name, timestamp: new Date().toLocaleString("sv-SE", { timeZone: "Asia/Singapore" }).replace("T", " ").substring(0, 16) });
+                          }
+                        }
+                      }
+                      if (entries.length) setRbacAuditLog(prev => [...entries, ...prev]);
+                      setCustomPermissions(JSON.parse(JSON.stringify(permMatrixDraft)));
+                      setPermMatrixEditing(false);
+                      setPermMatrixDraft(null);
+                    };
+
+                    const handleResetMatrix = () => {
+                      setPermMatrixDraft(null);
+                      setPermMatrixEditing(false);
+                    };
+
+                    const handleResetToDefault = () => {
+                      setPermMatrixDraft(JSON.parse(JSON.stringify(RBAC_PERMISSIONS)));
+                    };
+
+                    return (
+                      <div style={{ background: "#0F1117", borderRadius: 8, border: `1px solid ${permMatrixEditing ? "#6366F133" : "#1E2130"}`, padding: 20, marginBottom: 20 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+                          <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                            📊 Permission Matrix
+                            <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400, fontFamily: "'JetBrains Mono', monospace" }}>{RBAC_ROLES.length} roles × {PERM_MODULES.length} modules</span>
+                            {permMatrixEditing && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>EDITING</span>}
+                            {hasChanges && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FFB34722", color: "#FFB347", fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{changedCells.size} UNSAVED</span>}
+                          </h4>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            {canEditRBAC && !permMatrixEditing && (
+                              <button onClick={() => { setPermMatrixEditing(true); setPermMatrixDraft(JSON.parse(JSON.stringify(customPermissions))); }} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>✏️ Edit Permissions</button>
+                            )}
+                            {permMatrixEditing && (
+                              <>
+                                <button onClick={handleResetToDefault} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #FFB34733", background: "transparent", color: "#FFB347", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>↻ Reset to Default</button>
+                                <button onClick={handleResetMatrix} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #FF444433", background: "transparent", color: "#FF6B6B", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>✕ Cancel</button>
+                                <button onClick={handleSaveMatrix} disabled={!hasChanges} style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: hasChanges ? "#6366F1" : "#1E2130", color: hasChanges ? "#fff" : "#5A6178", fontSize: 11, cursor: hasChanges ? "pointer" : "default", fontWeight: 600 }}>💾 Save Changes</button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Legend */}
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                          <span style={{ fontSize: 9, color: "#5A6178", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", lineHeight: "22px", marginRight: 4 }}>Levels:</span>
+                          {PERM_LEVELS.map(lvl => (
+                            <span key={lvl} style={{ padding: "3px 8px", borderRadius: 4, background: (PERM_COLORS[lvl] || PERM_COLORS.none).bg, color: (PERM_COLORS[lvl] || PERM_COLORS.none).text, fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{lvl}</span>
+                          ))}
+                        </div>
+
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                            <thead>
+                              <tr style={{ background: "#0A0C14" }}>
+                                <th style={{ padding: "8px 12px", textAlign: "left", color: "#5A6178", fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "1px", borderBottom: "1px solid #1E2130", fontFamily: "'JetBrains Mono', monospace", position: "sticky", left: 0, background: "#0A0C14", zIndex: 1, minWidth: 140 }}>Role</th>
+                                {PERM_MODULES.map(mod => (
+                                  <th key={mod} style={{ padding: "8px 4px", textAlign: "center", color: "#5A6178", fontWeight: 600, fontSize: 8, textTransform: "uppercase", letterSpacing: "0.5px", borderBottom: "1px solid #1E2130", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", minWidth: 68 }}>{PERM_MODULE_LABELS[mod]}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {RBAC_ROLES.map((role, i) => {
+                                const perms = draft[role.id];
+                                const editable = permMatrixEditing && canEditRole(role.id);
+                                return (
+                                  <tr key={role.id} style={{ background: i % 2 === 0 ? "#0F1117" : "#0C0E16" }}>
+                                    <td style={{ padding: "6px 12px", borderBottom: "1px solid #1E213022", whiteSpace: "nowrap", position: "sticky", left: 0, background: i % 2 === 0 ? "#0F1117" : "#0C0E16", zIndex: 1 }}>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: role.color, flexShrink: 0 }} />
+                                        <span style={{ color: role.color, fontWeight: 600, fontSize: 11 }}>{role.label}</span>
+                                        {permMatrixEditing && !canEditRole(role.id) && <span style={{ fontSize: 8, color: "#5A617866" }}>🔒</span>}
+                                      </div>
+                                    </td>
+                                    {PERM_MODULES.map(mod => {
+                                      const p = perms?.[mod] || "none";
+                                      const isChanged = changedCells.has(`${role.id}:${mod}`);
+                                      return (
+                                        <td key={mod} style={{ padding: "3px 2px", textAlign: "center", borderBottom: "1px solid #1E213022", position: "relative" }}>
+                                          {editable ? (
+                                            <select value={p} onChange={e => handlePermChange(role.id, mod, e.target.value)} style={{ width: "100%", padding: "4px 2px", borderRadius: 4, border: `1px solid ${isChanged ? "#FFB34766" : "#1E2130"}`, background: isChanged ? "#FFB34711" : (PERM_COLORS[p] || PERM_COLORS.none).bg, color: (PERM_COLORS[p] || PERM_COLORS.none).text, fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer", textAlign: "center", appearance: "auto", outline: "none" }}>
+                                              {PERM_LEVELS.map(lvl => <option key={lvl} value={lvl}>{lvl}</option>)}
+                                            </select>
+                                          ) : (
+                                            <Badge color={PERM_COLORS[p] || PERM_COLORS.none}>{p}</Badge>
+                                          )}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Edit restrictions info */}
+                        {permMatrixEditing && (
+                          <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6, background: "#0A0C14", border: "1px solid #1E213044", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+                            {isDevAdminUser ? "🔓 Super Admin: You can edit permissions for all roles." : isTenantAdminUser ? "🔓 Tenant Admin: You can edit all roles except VGC Dev Admin." : "🔓 Administrator: You can edit roles at Level 1 and below."}
+                            {" · "} Changes are logged in the RBAC Audit Log.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* RBAC Audit Log */}
+                  {canEditRBAC && (
+                    <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                      <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                        📝 RBAC Change Audit Log
+                        <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400, fontFamily: "'JetBrains Mono', monospace" }}>{rbacAuditLog.length} entries</span>
+                      </h4>
+                      <DataTable
+                        columns={[
+                          { label: "Action", render: r => <Badge color={r.action === "Role Changed" ? { bg: "#0D2137", text: "#64B5F6" } : r.action === "User Invited" ? { bg: "#0D2D1A", text: "#81C784" } : r.action === "User Removed" ? { bg: "#2D0A0A", text: "#FF6B6B" } : { bg: "#2D1F0A", text: "#FFB347" }}>{r.action}</Badge> },
+                          { label: "User", render: r => <span style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>{r.user}</span> },
+                          { label: "From", render: r => <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.from}</span> },
+                          { label: "To", render: r => <span style={{ color: "#06B6D4", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.to}</span> },
+                          { label: "Changed By", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.by}</span> },
+                          { label: "Timestamp", render: r => <span style={{ color: "#5A6178", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{r.timestamp}</span> },
+                        ]}
+                        data={rbacAuditLog.slice(0, 20)}
+                      />
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* Entra ID SSO Configuration */}
+        {activeTab === "entraId" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                🔐 Microsoft Entra ID SSO
+              </h3>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Connected</Badge>
+                <button style={btnStyle("#6366F1")}>Test Connection</button>
+              </div>
+            </div>
+
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>SSO Configuration</h4>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <FormField label="Tenant ID / Domain">
+                  <input style={inputStyle} value={entraIdConfig.tenantId} onChange={e => setEntraIdConfig(prev => ({...prev, tenantId: e.target.value}))} />
+                </FormField>
+                <FormField label="Application (Client) ID">
+                  <input style={inputStyle} value={entraIdConfig.clientId} readOnly />
+                </FormField>
+                <FormField label="Redirect URI">
+                  <input style={inputStyle} value={entraIdConfig.redirectUri} readOnly />
+                </FormField>
+                <FormField label="Client Secret">
+                  <input style={inputStyle} value="••••••••••••••••••••••••••••••••" readOnly type="password" />
+                </FormField>
+              </div>
+              <div style={{ marginTop: 12, fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", padding: 10, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                Protocol: OpenID Connect &nbsp;|&nbsp; Token: JWT &nbsp;|&nbsp; Claims: UPN, Groups, Roles
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Security Features</h4>
+                {[
+                  { key: "scimEnabled", label: "SCIM Provisioning (Auto user sync)", desc: "Automatically provision/deprovision users from Entra ID" },
+                  { key: "groupSync", label: "Group-to-Role Sync", desc: "Map Entra ID security groups to RBAC roles" },
+                  { key: "conditionalAccess", label: "Conditional Access Policies", desc: "Enforce location, device, and risk-based policies" },
+                  { key: "mfaEnforced", label: "MFA Enforcement", desc: "Require multi-factor authentication for all users" },
+                ].map(setting => (
+                  <div key={setting.key} style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${entraIdConfig[setting.key] ? "#6366F133" : "#1E213044"}`, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                    <div>
+                      <div style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{setting.label}</div>
+                      <div style={{ color: "#5A6178", fontSize: 10 }}>{setting.desc}</div>
+                    </div>
+                    <div onClick={() => setEntraIdConfig(prev => ({ ...prev, [setting.key]: !prev[setting.key] }))} style={{ width: 44, height: 24, borderRadius: 12, cursor: "pointer", background: entraIdConfig[setting.key] ? "#6366F1" : "#1E2130", padding: 2, transition: "background 0.2s", flexShrink: 0 }}>
+                      <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: entraIdConfig[setting.key] ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Group → RBAC Role Mapping</h4>
+                {entraIdConfig.groupMappings.map((gm, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 6 }}>
+                    <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{gm.entraGroup}</Badge>
+                    <span style={{ color: "#5A6178", fontSize: 14 }}>→</span>
+                    <Badge color={{ bg: (RBAC_ROLES.find(r => r.id === gm.rbacRole)?.color || "#5A6178") + "22", text: RBAC_ROLES.find(r => r.id === gm.rbacRole)?.color || "#5A6178" }}>{gm.rbacRole}</Badge>
+                  </div>
+                ))}
+                <button style={{ ...btnStyle("#1E2130"), color: "#6366F1", border: "1px dashed #6366F133", width: "100%", marginTop: 8 }}>+ Add Group Mapping</button>
+              </div>
+            </div>
+
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h4 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Conditional Access Policies</h4>
+              {[
+                { name: "Require MFA for Admin roles", status: "Enabled", scope: "Administrator, Service Desk Lead", icon: "🔒" },
+                { name: "Block sign-in from untrusted locations", status: "Enabled", scope: "All Users", icon: "🌐" },
+                { name: "Require compliant device for ITSM access", status: "Enabled", scope: "All Users (excl. End User)", icon: "💻" },
+                { name: "Session timeout after 8 hours", status: "Enabled", scope: "All Users", icon: "⏱️" },
+                { name: "Block legacy authentication protocols", status: "Enabled", scope: "All Users", icon: "🚫" },
+              ].map((policy, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 14 }}>{policy.icon}</span>
+                    <div>
+                      <div style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>{policy.name}</div>
+                      <div style={{ color: "#5A6178", fontSize: 10 }}>Scope: {policy.scope}</div>
+                    </div>
+                  </div>
+                  <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>{policy.status}</Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* PDPA Compliance */}
+        {activeTab === "compliance" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                🛡️ PDPA Compliance Center
+              </h3>
+              <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Compliant</Badge>
+            </div>
+
+            {/* Compliance Overview Cards */}
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
+              <StatCard label="Data Protection Officer" value={pdpaConfig.dpoName} icon="👤" accent="#6366F1" />
+              <StatCard label="Active Retention Policies" value={pdpaConfig.retentionPolicies.filter(p => p.enabled).length} icon="📋" accent="#81C784" />
+              <StatCard label="DSAR Requests (YTD)" value="7" icon="📨" accent="#FFB347" />
+              <StatCard label="Last Compliance Audit" value="Mar 22" icon="✅" accent="#06B6D4" />
+            </div>
+
+            {/* Data Retention Policies */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Data Retention Policies</h4>
+                <button style={btnStyle("#6366F1")}>+ Add Policy</button>
+              </div>
+              <DataTable
+                columns={[
+                  { label: "Data Entity", render: r => <span style={{ color: "#E8ECF4", fontWeight: 600, fontSize: 13 }}>{r.entity}</span> },
+                  { label: "Retention Period", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#64B5F6" }}>{r.retention} days</span> },
+                  { label: "After Expiry", render: r => <Badge color={r.action === "Delete" ? { bg: "#2D0A0A", text: "#FF6B6B" } : r.action === "Anonymize" ? { bg: "#2D1F0A", text: "#FFB347" } : { bg: "#0D2137", text: "#64B5F6" }}>{r.action}</Badge> },
+                  { label: "Status", render: r => (
+                    <div onClick={() => setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map(p => p.entity === r.entity ? { ...p, enabled: !p.enabled } : p) }))} style={{ width: 44, height: 24, borderRadius: 12, cursor: "pointer", background: r.enabled ? "#6366F1" : "#1E2130", padding: 2 }}>
+                      <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: r.enabled ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }} />
+                    </div>
+                  )},
+                ]}
+                data={pdpaConfig.retentionPolicies}
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+              {/* Privacy Controls */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Privacy Controls</h4>
+                {[
+                  { key: "consentManagement", label: "Consent Management", desc: "Track and manage user consent for data processing", icon: "✋" },
+                  { key: "dsarWorkflow", label: "DSAR Workflow", desc: "Automated Data Subject Access Request processing", icon: "📨" },
+                  { key: "dataClassification", label: "AI Data Classification", desc: "Auto-classify PII, sensitive, and public data", icon: "🏷️" },
+                ].map(ctrl => (
+                  <div key={ctrl.key} style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 16 }}>{ctrl.icon}</span>
+                      <div>
+                        <div style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>{ctrl.label}</div>
+                        <div style={{ color: "#5A6178", fontSize: 10 }}>{ctrl.desc}</div>
+                      </div>
+                    </div>
+                    <div onClick={() => setPdpaConfig(prev => ({ ...prev, [ctrl.key]: !prev[ctrl.key] }))} style={{ width: 44, height: 24, borderRadius: 12, cursor: "pointer", background: pdpaConfig[ctrl.key] ? "#6366F1" : "#1E2130", padding: 2, flexShrink: 0 }}>
+                      <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: pdpaConfig[ctrl.key] ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }} />
+                    </div>
+                  </div>
+                ))}
+                <div style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginTop: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>DPO Contact</span>
+                    <span style={{ color: "#C4CAD6", fontSize: 11 }}>{pdpaConfig.dpoEmail}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Right to Erasure</span>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Enabled</Badge>
+                  </div>
+                </div>
+              </div>
+
+              {/* Compliance Audit Log */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Compliance Audit Log</h4>
+                {pdpaConfig.auditLog.map((entry, i) => (
+                  <div key={i} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>{entry.action}</span>
+                      <span style={{ color: "#5A617866", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{entry.timestamp}</span>
+                    </div>
+                    <div style={{ color: "#5A6178", fontSize: 11 }}>{entry.detail}</div>
+                    <div style={{ color: "#6366F1", fontSize: 10, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>By: {entry.user}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Data Classification Summary */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Data Classification Summary</h4>
+              {[
+                { label: "PII (Personal Identifiable Information)", count: 234, color: "#FF6B6B", pct: 18 },
+                { label: "Sensitive Business Data", count: 89, color: "#FFB347", pct: 7 },
+                { label: "Internal", count: 567, color: "#64B5F6", pct: 44 },
+                { label: "Public", count: 398, color: "#81C784", pct: 31 },
+              ].map((cls, i) => (
+                <div key={i} style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ color: "#C4CAD6", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: cls.color }} /> {cls.label}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{cls.count} records ({cls.pct}%)</span>
+                  </div>
+                  <div style={{ background: "#0A0C14", borderRadius: 4, height: 6, overflow: "hidden" }}>
+                    <div style={{ width: `${cls.pct}%`, height: "100%", background: cls.color, borderRadius: 4, transition: "width 0.6s" }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Infrastructure (Azure SQL + Web App) */}
+        {activeTab === "infrastructure" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                ☁️ Azure Infrastructure — Southeast Asia
+              </h3>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>All Systems Healthy</Badge>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+              {/* Azure SQL Serverless */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #0078D4, #00BCF2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🗄️</div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure SQL Serverless</h4>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Online</Badge>
+                  </div>
+                </div>
+                {Object.entries({
+                  "Server": infraConfig.database.server,
+                  "Database": infraConfig.database.database,
+                  "Region": infraConfig.database.region,
+                  "Tier": infraConfig.database.tier,
+                  "vCores": `${infraConfig.database.minVCores} – ${infraConfig.database.maxVCores} (auto-scale)`,
+                  "Auto-Pause": `${infraConfig.database.autoPause} min idle`,
+                  "Storage": `${infraConfig.database.usedStorage} / ${infraConfig.database.storage}`,
+                  "Backup": infraConfig.database.backupRetention,
+                }).map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
+                    <span style={{ color: "#C4CAD6", fontSize: 11, textAlign: "right", maxWidth: "60%" }}>{v}</span>
+                  </div>
+                ))}
+                <div style={{ marginTop: 12, padding: "8px 10px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>CONNECTION STRING</div>
+                  <div style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>Server=tcp:{infraConfig.database.server},1433;Database={infraConfig.database.database};Authentication=Active Directory Default;Encrypt=True;</div>
+                </div>
+              </div>
+
+              {/* Azure Web App */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #0078D4, #50E6FF)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🌐</div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure Web App</h4>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Running</Badge>
+                  </div>
+                </div>
+                {Object.entries({
+                  "App Name": infraConfig.webApp.name,
+                  "Region": infraConfig.webApp.region,
+                  "Plan": infraConfig.webApp.plan,
+                  "Runtime": infraConfig.webApp.runtime,
+                  "Custom Domain": infraConfig.webApp.customDomain,
+                  "SSL": infraConfig.webApp.ssl,
+                  "Scaling": infraConfig.webApp.scaling,
+                  "CI/CD": infraConfig.webApp.deployment,
+                }).map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
+                    <span style={{ color: "#C4CAD6", fontSize: 11, textAlign: "right", maxWidth: "60%" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Network Config */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Network & Security</h4>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                {[
+                  { label: "Virtual Network", value: infraConfig.network.vnet, icon: "🔗" },
+                  { label: "Subnet", value: infraConfig.network.subnet, icon: "📡" },
+                  { label: "NSG", value: infraConfig.network.nsg, icon: "🛡️" },
+                  { label: "Private Endpoint", value: infraConfig.network.privateEndpoint, icon: "🔒" },
+                  { label: "WAF", value: infraConfig.network.waf, icon: "🧱" },
+                  { label: "Region", value: "Southeast Asia (Singapore)", icon: "🌏" },
+                ].map((item, i) => (
+                  <div key={i} style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: 14 }}>{item.icon}</span>
+                      <span style={{ color: "#5A6178", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{item.label}</span>
+                    </div>
+                    <div style={{ color: "#C4CAD6", fontSize: 12, fontWeight: 600 }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Architecture Diagram (text) */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h4 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Architecture Overview</h4>
+              <div style={{ padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "#64B5F6", lineHeight: 1.8, whiteSpace: "pre" }}>{`  ┌─────────────────────────────────────────────────────────────┐
+  │                   Azure Front Door (WAF)                    │
+  │                    itsm.vgc-corp.com                         │
+  └────────────────────────┬────────────────────────────────────┘
+                           │
+  ┌────────────────────────▼────────────────────────────────────┐
+  │              Azure App Service (P1v3)                       │
+  │              vgc-itsm-app · Node.js 20                      │
+  │              Southeast Asia (Singapore)                     │
+  │              Auto-scale: 1-5 instances                      │
+  └──────────┬───────────────────────┬──────────────────────────┘
+             │                       │
+  ┌──────────▼──────────┐ ┌─────────▼──────────────────────────┐
+  │  Azure SQL Serverless│ │  Microsoft Entra ID                │
+  │  General Purpose     │ │  SSO + SCIM + Conditional Access   │
+  │  0.5-4 vCores        │ │  MFA Enforced                      │
+  │  Southeast Asia      │ │                                    │
+  │  Private Endpoint    │ │                                    │
+  └──────────────────────┘ └────────────────────────────────────┘`}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Notifications */}
+        {activeTab === "notifications" && (
+          <div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Notification Channels</h3>
+              {[
+                { channel: "Email", desc: "Send notifications via email (SMTP / Exchange Online)", enabled: true, icon: "📧" },
+                { channel: "Microsoft Teams", desc: "Post adaptive cards to Teams channels via Webhooks", enabled: true, icon: "💬", isTeams: true },
+                { channel: "Slack", desc: "Post to configured Slack channels", enabled: true, icon: "🔗" },
+                { channel: "SMS", desc: "Send critical alerts via SMS (Twilio / Azure Comms)", enabled: false, icon: "📱" },
+                { channel: "In-App", desc: "Push notifications within VGC-ITSM", enabled: true, icon: "🔔" },
+                { channel: "PagerDuty", desc: "Trigger PagerDuty incidents for P1 alerts", enabled: false, icon: "🚨" },
+                { channel: "Webhook", desc: "Send JSON payloads to custom HTTP endpoints", enabled: false, icon: "🌐" },
+              ].map((ch, i) => (
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "12px 16px", background: ch.isTeams ? "#6366F106" : "#0A0C14", borderRadius: 8,
+                  border: ch.isTeams ? "1px solid #6366F122" : "1px solid #1E213044", marginBottom: 8
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{ fontSize: 20 }}>{ch.icon}</span>
+                    <div>
+                      <div style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{ch.channel}
+                        {ch.isTeams && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>RECOMMENDED</span>}
+                      </div>
+                      <div style={{ color: "#5A6178", fontSize: 11 }}>{ch.desc}</div>
+                    </div>
+                  </div>
+                  <div style={{
+                    width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                    background: ch.enabled ? "#6366F1" : "#1E2130",
+                    padding: 2, flexShrink: 0
+                  }}>
+                    <div style={{
+                      width: 20, height: 20, borderRadius: 10, background: "#fff",
+                      transform: ch.enabled ? "translateX(20px)" : "translateX(0)",
+                      transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033"
+                    }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Microsoft Teams Integration */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #6366F122", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "#6366F118", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M20 7h-4V4c0-1.1-.9-2-2-2H6C4.9 2 4 2.9 4 4v12c0 1.1.9 2 2 2h4v4l4-4h4c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2z" stroke="#6366F1" strokeWidth="1.5" fill="#6366F122"/><path d="M8 8h4M8 11h6" stroke="#6366F1" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Microsoft Teams Integration</h3>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Configure Teams channels for automated notifications</div>
+                </div>
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", animation: "pulse 2s infinite" }} />
+                  <span style={{ fontSize: 10, color: "#4CAF50", fontWeight: 600 }}>Connected</span>
+                </div>
+              </div>
+
+              {/* Teams Channels */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#A0AEC0", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>Configured Channels</div>
+                {[
+                  { name: "#itsm-critical-alerts", team: "VGC IT Operations", events: ["Sev-A Incidents", "SLA Breach", "Security Critical"], status: "active" },
+                  { name: "#itsm-incidents", team: "VGC Service Desk", events: ["New Incidents", "Escalations", "Priority Changes"], status: "active" },
+                  { name: "#itsm-changes", team: "VGC Change Advisory Board", events: ["Change Requests", "Approvals", "Emergency Changes"], status: "active" },
+                  { name: "#itsm-security-ops", team: "VGC SOC Team", events: ["Threat Alerts", "Vulnerability Reports", "Compliance Events"], status: "active" },
+                  { name: "#itsm-general", team: "VGC IT Department", events: ["Daily Summary", "Announcements"], status: "paused" },
+                ].map((ch, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", marginBottom: 6 }}>
+                    <span style={{ fontSize: 14 }}>💬</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{ch.name}</div>
+                      <div style={{ fontSize: 10, color: "#5A6178" }}>Team: {ch.team}</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                        {ch.events.map((ev, j) => (
+                          <span key={j} style={{ padding: "1px 6px", borderRadius: 3, background: "#6366F112", color: "#6366F1", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>{ev}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: ch.status === "active" ? "#4CAF50" : "#FFB347" }} />
+                      <span style={{ fontSize: 9, color: ch.status === "active" ? "#4CAF50" : "#FFB347", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{ch.status}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Webhook URL */}
+              <div style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#A0AEC0", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>Incoming Webhook URL</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ flex: 1, background: "#12141E", border: "1px solid #1E2130", borderRadius: 6, padding: "8px 12px", color: "#E8ECF4", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }} value="https://vgctech.webhook.office.com/webhookb2/..." readOnly />
+                  <button style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>Test 🔔</button>
+                </div>
+                <div style={{ fontSize: 9, color: "#5A6178", marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>💡 Configure webhook in Teams → Channel → Connectors → Incoming Webhook</div>
+              </div>
+            </div>
+
+            {/* Notification Rules */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Notification Rules</h3>
+              {[
+                { rule: "Sev-A Incident Created", channels: ["Email", "Teams", "SMS", "PagerDuty"], delay: "Immediate" },
+                { rule: "Sev-B Incident Created", channels: ["Email", "Teams"], delay: "Immediate" },
+                { rule: "SLA Breach Warning (80%)", channels: ["Email", "Teams"], delay: "Immediate" },
+                { rule: "Change Approval Required", channels: ["Email", "Teams"], delay: "5 min" },
+                { rule: "Security Critical Alert", channels: ["Email", "Teams", "SMS"], delay: "Immediate" },
+                { rule: "Daily Summary Digest", channels: ["Email", "Teams"], delay: "08:00 SGT" },
+              ].map((r, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033", marginBottom: 4 }}>
+                  <div style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 500 }}>{r.rule}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {r.channels.map((ch, j) => (
+                      <span key={j} style={{ padding: "1px 5px", borderRadius: 3, background: ch === "Teams" ? "#6366F118" : "#1E2130", color: ch === "Teams" ? "#6366F1" : "#A0AEC0", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>{ch}</span>
+                    ))}
+                    <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: 4 }}>{r.delay}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Email / SMTP Configuration */}
+        {activeTab === "smtp" && (
+          <div>
+            {/* Status Banner */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "12px 16px", borderRadius: 8, background: smtpConfig.enabled ? "#4CAF5008" : "#FF444408", border: `1px solid ${smtpConfig.enabled ? "#4CAF5022" : "#FF444422"}` }}>
+              <span style={{ fontSize: 16 }}>{smtpConfig.enabled ? "✅" : "⚠️"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: smtpConfig.enabled ? "#4CAF50" : "#FF6B6B" }}>
+                  Email Gateway — {smtpConfig.enabled ? "Active" : "Disabled"}
+                </div>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+                  {smtpConfig.host}:{smtpConfig.port} ({smtpConfig.encryption}) · From: {smtpConfig.fromEmail}
+                </div>
+              </div>
+              <div onClick={() => setSmtpConfig(prev => ({ ...prev, enabled: !prev.enabled }))} style={{
+                width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                background: smtpConfig.enabled ? "#6366F1" : "#1E2130", padding: 2
+              }}>
+                <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: smtpConfig.enabled ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }} />
+              </div>
+            </div>
+
+            {/* SMTP Server Settings */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>SMTP Server Configuration</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <FormField label="SMTP Host">
+                  <input style={inputStyle} value={smtpConfig.host} onChange={e => setSmtpConfig(prev => ({ ...prev, host: e.target.value }))} placeholder="smtp.office365.com" />
+                </FormField>
+                <FormField label="Port">
+                  <select style={inputStyle} value={smtpConfig.port} onChange={e => setSmtpConfig(prev => ({ ...prev, port: parseInt(e.target.value) }))}>
+                    <option value={25}>25 (SMTP)</option><option value={465}>465 (SSL)</option><option value={587}>587 (STARTTLS)</option><option value={2525}>2525 (Alt)</option>
+                  </select>
+                </FormField>
+                <FormField label="Encryption">
+                  <select style={inputStyle} value={smtpConfig.encryption} onChange={e => setSmtpConfig(prev => ({ ...prev, encryption: e.target.value }))}>
+                    <option>STARTTLS</option><option>SSL/TLS</option><option>None</option>
+                  </select>
+                </FormField>
+                <FormField label="Authentication">
+                  <input style={inputStyle} value={smtpConfig.username} onChange={e => setSmtpConfig(prev => ({ ...prev, username: e.target.value }))} placeholder="username@domain.com" />
+                </FormField>
+                <FormField label="Password">
+                  <input style={inputStyle} type="password" value={smtpConfig.password} onChange={e => setSmtpConfig(prev => ({ ...prev, password: e.target.value }))} placeholder="••••••••" />
+                </FormField>
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+                  <button style={{ ...btnStyle("#6366F1"), flex: 1 }} onClick={() => {
+                    setSmtpConfig(prev => ({ ...prev, testStatus: "testing" }));
+                    setTimeout(() => setSmtpConfig(prev => ({ ...prev, testStatus: "success", lastTested: new Date().toLocaleString("en-SG") })), 1500);
+                  }}>
+                    {smtpConfig.testStatus === "testing" ? "⏳ Testing..." : "🔌 Test Connection"}
+                  </button>
+                </div>
+              </div>
+              {smtpConfig.testStatus === "success" && (
+                <div style={{ marginTop: 12, padding: "8px 12px", background: "#0D2D1A", borderRadius: 6, border: "1px solid #81C78422", fontSize: 11, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>
+                  ✅ Connection successful · Last tested: {smtpConfig.lastTested}
+                </div>
+              )}
+            </div>
+
+            {/* Sender Settings */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Sender Identity</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <FormField label="From Name">
+                  <input style={inputStyle} value={smtpConfig.fromName} onChange={e => setSmtpConfig(prev => ({ ...prev, fromName: e.target.value }))} />
+                </FormField>
+                <FormField label="From Email">
+                  <input style={inputStyle} value={smtpConfig.fromEmail} onChange={e => setSmtpConfig(prev => ({ ...prev, fromEmail: e.target.value }))} />
+                </FormField>
+                <FormField label="Reply-To Address">
+                  <input style={inputStyle} value={smtpConfig.replyTo} onChange={e => setSmtpConfig(prev => ({ ...prev, replyTo: e.target.value }))} />
+                </FormField>
+              </div>
+            </div>
+
+            {/* Email Signature */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Email Signature (HTML)</h3>
+              <textarea style={{ ...inputStyle, minHeight: 80, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+                value={smtpConfig.signature} onChange={e => setSmtpConfig(prev => ({ ...prev, signature: e.target.value }))} />
+              <div style={{ marginTop: 8 }}>
+                <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>PREVIEW:</span>
+                <div style={{ marginTop: 4, padding: "10px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", fontSize: 12, color: "#C4CAD6" }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHTML(smtpConfig.signature) }} />
+              </div>
+            </div>
+
+            {/* Email Templates */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Email Notification Templates</h3>
+              {Object.entries(smtpConfig.templates).map(([key, tpl]) => (
+                <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600 }}>{key.replace(/([A-Z])/g, " $1").replace(/^./, s => s.toUpperCase())}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Subject: {tpl.subject}</div>
+                  </div>
+                  <div onClick={() => setSmtpConfig(prev => ({ ...prev, templates: { ...prev.templates, [key]: { ...tpl, enabled: !tpl.enabled } } }))} style={{
+                    width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                    background: tpl.enabled ? "#4CAF50" : "#1E2130", padding: 2, flexShrink: 0
+                  }}>
+                    <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: tpl.enabled ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Licensing & Billing (Dev Admin Only) */}
+        {activeTab === "billing" && (
+          <div>
+            {/* Access Gate — only VGC Dev Admin can modify */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "12px 16px", background: "#6366F108", borderRadius: 8, border: "1px solid #6366F122" }}>
+              <span style={{ fontSize: 16 }}>🔐</span>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>Dev Admin Panel — Licensing & Billing</div>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Managed by: {billingConfig.devAdmin} · {billingConfig.devAdminEmail} · Changes restricted to Dev Admin role</div>
+              </div>
+              <div style={{ marginLeft: "auto", padding: "4px 10px", borderRadius: 4, background: "#4CAF5022", border: "1px solid #4CAF5033" }}>
+                <span style={{ fontSize: 10, color: "#4CAF50", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🔓 DEV ACCESS</span>
+              </div>
+            </div>
+
+            {/* Subscription Overview */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+              {[
+                { label: "Plan", value: billingConfig.planName, sub: "Per User / Month", color: "#6366F1", icon: "📋" },
+                { label: "Price / User", value: `S$${billingConfig.pricePerUser.toFixed(2)}`, sub: `+GST ${billingConfig.gstRate}%`, color: "#4CAF50", icon: "💰" },
+                { label: "Licensed Users", value: `${billingConfig.licensedUsers} / ${billingConfig.maxUsers}`, sub: `${billingConfig.maxUsers - billingConfig.licensedUsers} seats available`, color: "#64B5F6", icon: "👥" },
+                { label: "Monthly Total", value: `S$${(billingConfig.licensedUsers * billingConfig.pricePerUser * (1 + billingConfig.gstRate / 100)).toFixed(2)}`, sub: `Subtotal S$${(billingConfig.licensedUsers * billingConfig.pricePerUser).toFixed(2)} + GST S$${(billingConfig.licensedUsers * billingConfig.pricePerUser * billingConfig.gstRate / 100).toFixed(2)}`, color: "#FFB347", icon: "🧾" },
+              ].map((kpi, i) => (
+                <div key={i} style={{ padding: 16, background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", position: "relative", overflow: "hidden" }}>
+                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: kpi.color }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 14 }}>{kpi.icon}</span>
+                    <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{kpi.label}</span>
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: kpi.color, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 2 }}>{kpi.value}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178" }}>{kpi.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Pricing Configuration */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>💰 Pricing Configuration</h3>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <FormField label="Price Per User (SGD / Month)">
+                    <input type="number" style={inputStyle} value={billingConfig.pricePerUser} onChange={e => setBillingConfig(p => ({ ...p, pricePerUser: parseFloat(e.target.value) || 0 }))} />
+                  </FormField>
+                  <FormField label="GST Rate (%)">
+                    <input type="number" style={inputStyle} value={billingConfig.gstRate} onChange={e => setBillingConfig(p => ({ ...p, gstRate: parseFloat(e.target.value) || 0 }))} />
+                  </FormField>
+                  <FormField label="Max Licensed Users">
+                    <input type="number" style={inputStyle} value={billingConfig.maxUsers} onChange={e => setBillingConfig(p => ({ ...p, maxUsers: parseInt(e.target.value) || 1 }))} />
+                  </FormField>
+                  <FormField label="Billing Cycle">
+                    <select style={inputStyle} value={billingConfig.billingCycle} onChange={e => setBillingConfig(p => ({ ...p, billingCycle: e.target.value }))}>
+                      <option>Monthly</option><option>Quarterly</option><option>Annually</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Payment Terms (Days)">
+                    <input type="number" style={inputStyle} value={billingConfig.paymentTerms} onChange={e => setBillingConfig(p => ({ ...p, paymentTerms: parseInt(e.target.value) || 30 }))} />
+                  </FormField>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <input type="checkbox" checked={billingConfig.autoRenew} onChange={e => setBillingConfig(p => ({ ...p, autoRenew: e.target.checked }))} />
+                    <span style={{ fontSize: 12, color: "#C4CAD6" }}>Auto-Renew Subscription</span>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🏢 Singapore SME Billing Details</h3>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <FormField label="Company UEN">
+                    <input style={inputStyle} value={billingConfig.companyUEN} onChange={e => setBillingConfig(p => ({ ...p, companyUEN: e.target.value }))} />
+                  </FormField>
+                  <FormField label="Invoice Prefix">
+                    <input style={inputStyle} value={billingConfig.invoicePrefix} onChange={e => setBillingConfig(p => ({ ...p, invoicePrefix: e.target.value }))} />
+                  </FormField>
+                  <FormField label="Billing Address">
+                    <input style={inputStyle} value={billingConfig.billingAddress} onChange={e => setBillingConfig(p => ({ ...p, billingAddress: e.target.value }))} />
+                  </FormField>
+                  <div style={{ padding: "10px 12px", background: "#FFB34708", borderRadius: 6, border: "1px solid #FFB34722" }}>
+                    <div style={{ fontSize: 10, color: "#FFB347", fontWeight: 600, marginBottom: 4 }}>📋 IRAS GST COMPLIANCE</div>
+                    <div style={{ fontSize: 10, color: "#A0AEC0", lineHeight: 1.5 }}>
+                      GST-registered (Rate: {billingConfig.gstRate}%) · Tax invoices issued per IRAS requirements · GST Registration No. displayed on all invoices · Compliant with Singapore e-invoicing standards
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Invoice History */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>🧾 Invoice History</span>
+                <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Currency: SGD · GST {billingConfig.gstRate}% inclusive</span>
+              </h3>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["Invoice #", "Period", "Date", "Users", "Subtotal", "GST", "Total", "Status"].map(h => (
+                      <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", borderBottom: "1px solid #1E2130" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {billingConfig.invoices.map(inv => (
+                    <tr key={inv.id} style={{ borderBottom: "1px solid #1E213033" }}>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{inv.id}</td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#C4CAD6" }}>{inv.period}</td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>{inv.date}</td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#C4CAD6" }}>{inv.users}</td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>S${inv.subtotal.toFixed(2)}</td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>S${inv.gst.toFixed(2)}</td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#E8ECF4", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>S${inv.total.toFixed(2)}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                          background: inv.status === "Paid" ? "#4CAF5022" : inv.status === "Current" ? "#64B5F622" : "#FF444422",
+                          color: inv.status === "Paid" ? "#4CAF50" : inv.status === "Current" ? "#64B5F6" : "#FF4444" }}>{inv.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Cost Simulator */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📊 Cost Simulator</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                {[10, 25, 50, 100].map(users => {
+                  const sub = users * billingConfig.pricePerUser;
+                  const gst = sub * billingConfig.gstRate / 100;
+                  return (
+                    <div key={users} style={{ padding: 14, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>{users} USERS</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif" }}>S${(sub + gst).toFixed(2)}</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>S${sub.toFixed(2)} + GST S${gst.toFixed(2)}</div>
+                      <div style={{ fontSize: 10, color: "#64B5F6", marginTop: 4 }}>S${(sub * 12 + gst * 12).toFixed(2)}/yr</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ Escalation & Auto-Call Configuration ═══ */}
+        {activeTab === "escalation" && (
+          <div>
+            {/* Master Toggle */}
+            <div style={{ background: "linear-gradient(135deg, #1A0A0A, #0F1117)", borderRadius: 8, border: "1px solid #FF444433", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span>🚨</span> High-Severity Auto-Escalation Engine
+                  </h3>
+                  <div style={{ fontSize: 11, color: "#5A6178" }}>When no engineer picks up a Sev-A/B incident within the SLA window, AI auto-escalates via dashboard, Teams, phone calls, and email.</div>
+                </div>
+                <div onClick={() => setEscalationConfig(p => ({ ...p, enabled: !p.enabled }))} style={{
+                  width: 52, height: 28, borderRadius: 14, cursor: "pointer",
+                  background: escalationConfig.enabled ? "#FF4444" : "#1E2130",
+                  padding: 2, transition: "background 0.2s", flexShrink: 0
+                }}><div style={{ width: 24, height: 24, borderRadius: 12, background: "#fff", transform: escalationConfig.enabled ? "translateX(24px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }} /></div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 9, color: "#FF6B6B", fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>SEV-A PICKUP WINDOW</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="number" min="1" max="30" value={escalationConfig.sevAPickupWindow} onChange={e => setEscalationConfig(p => ({ ...p, sevAPickupWindow: parseInt(e.target.value) || 5 }))} style={{ ...inputStyle, width: 60, textAlign: "center" }} />
+                    <span style={{ fontSize: 11, color: "#5A6178" }}>minutes</span>
+                  </div>
+                </div>
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>SEV-B PICKUP WINDOW</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="number" min="1" max="60" value={escalationConfig.sevBPickupWindow} onChange={e => setEscalationConfig(p => ({ ...p, sevBPickupWindow: parseInt(e.target.value) || 15 }))} style={{ ...inputStyle, width: 60, textAlign: "center" }} />
+                    <span style={{ fontSize: 11, color: "#5A6178" }}>minutes</span>
+                  </div>
+                </div>
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 9, color: "#06B6D4", fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>CALL RATE LIMIT</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="number" min="5" max="60" value={escalationConfig.rateLimitMinutes} onChange={e => setEscalationConfig(p => ({ ...p, rateLimitMinutes: parseInt(e.target.value) || 10 }))} style={{ ...inputStyle, width: 60, textAlign: "center" }} />
+                    <span style={{ fontSize: 11, color: "#5A6178" }}>min gap</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Auto-Call Settings */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                  📞 Microsoft Teams Phone — Auto-Call
+                </h3>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600 }}>Enable Auto-Call</div>
+                    <div style={{ fontSize: 10, color: "#5A6178" }}>AI initiates outbound calls via Teams Phone when no pickup</div>
+                  </div>
+                  <div onClick={() => setEscalationConfig(p => ({ ...p, autoCallEnabled: !p.autoCallEnabled }))} style={{
+                    width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                    background: escalationConfig.autoCallEnabled ? "#6366F1" : "#1E2130",
+                    padding: 2, transition: "background 0.2s", flexShrink: 0
+                  }}><div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: escalationConfig.autoCallEnabled ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s" }} /></div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 6, fontWeight: 600 }}>Call Order</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {["sequential", "parallel"].map(mode => (
+                      <button key={mode} onClick={() => setEscalationConfig(p => ({ ...p, callOrder: mode }))} style={{
+                        padding: "6px 16px", borderRadius: 6, border: `1px solid ${escalationConfig.callOrder === mode ? "#6366F144" : "#1E213044"}`,
+                        background: escalationConfig.callOrder === mode ? "#6366F118" : "#0A0C14",
+                        color: escalationConfig.callOrder === mode ? "#818CF8" : "#5A6178",
+                        fontSize: 11, fontWeight: 600, cursor: "pointer", textTransform: "capitalize"
+                      }}>{mode}</button>
+                    ))}
+                  </div>
+                </div>
+                {/* Pre-approved call numbers */}
+                <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 8, fontWeight: 600 }}>📱 Pre-Approved Call Numbers</div>
+                {escalationConfig.callNumbers.map((cn, idx) => (
+                  <div key={cn.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "8px 10px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 700, width: 16 }}>#{cn.priority}</span>
+                    <input value={cn.label} onChange={e => { const u = [...escalationConfig.callNumbers]; u[idx] = { ...u[idx], label: e.target.value }; setEscalationConfig(p => ({ ...p, callNumbers: u })); }} style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 8px" }} placeholder="Contact name" />
+                    <input value={cn.number} onChange={e => { const u = [...escalationConfig.callNumbers]; u[idx] = { ...u[idx], number: e.target.value }; setEscalationConfig(p => ({ ...p, callNumbers: u })); }} style={{ ...inputStyle, width: 140, fontSize: 11, padding: "4px 8px" }} placeholder="+65 XXXX XXXX" />
+                    <label style={{ fontSize: 9, color: "#5A6178", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                      <input type="checkbox" checked={cn.sevAOnly} onChange={() => { const u = [...escalationConfig.callNumbers]; u[idx] = { ...u[idx], sevAOnly: !u[idx].sevAOnly }; setEscalationConfig(p => ({ ...p, callNumbers: u })); }} /> Sev-A only
+                    </label>
+                  </div>
+                ))}
+                <button onClick={() => setEscalationConfig(p => ({ ...p, callNumbers: [...p.callNumbers, { id: `C${p.callNumbers.length + 1}`, label: "", number: "", priority: p.callNumbers.length + 1, sevAOnly: false }] }))} style={{ padding: "4px 12px", borderRadius: 6, border: "1px dashed #1E213066", background: "transparent", color: "#5A6178", fontSize: 10, cursor: "pointer", marginTop: 4 }}>＋ Add Number</button>
+              </div>
+
+              {/* Notification Channels */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🔔 Notification Channels</h3>
+                {[
+                  { key: "teamsChannelNotify", label: "Teams Channel Alert", desc: "Post to #critical-incidents channel and tag @on-call", icon: "💬" },
+                  { key: "emailFallback", label: "Email Fallback", desc: "Send escalation email if Teams Phone unavailable", icon: "📧" },
+                  { key: "dashboardAlertDismissible", label: "Allow Dismiss Sev-A Banner", desc: "If disabled, Sev-A global alerts cannot be dismissed", icon: "🚫", invert: true },
+                ].map(ch => (
+                  <div key={ch.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 16 }}>{ch.icon}</span>
+                      <div>
+                        <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600 }}>{ch.label}</div>
+                        <div style={{ fontSize: 10, color: "#5A6178" }}>{ch.desc}</div>
+                      </div>
+                    </div>
+                    <div onClick={() => setEscalationConfig(p => ({ ...p, [ch.key]: !p[ch.key] }))} style={{
+                      width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                      background: (ch.invert ? !escalationConfig[ch.key] : escalationConfig[ch.key]) ? "#6366F1" : "#1E2130",
+                      padding: 2, transition: "background 0.2s", flexShrink: 0
+                    }}><div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: (ch.invert ? !escalationConfig[ch.key] : escalationConfig[ch.key]) ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s" }} /></div>
+                  </div>
+                ))}
+
+                <h4 style={{ margin: "20px 0 10px", fontSize: 12, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⭐ VIP Customer List</h4>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 8 }}>VIP/Boss customer tickets always trigger Sev-A escalation rules</div>
+                {escalationConfig.vipCustomers.map((vip, idx) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <input value={vip} onChange={e => { const u = [...escalationConfig.vipCustomers]; u[idx] = e.target.value; setEscalationConfig(p => ({ ...p, vipCustomers: u })); }} style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 8px" }} />
+                    <button onClick={() => setEscalationConfig(p => ({ ...p, vipCustomers: p.vipCustomers.filter((_, i) => i !== idx) }))} style={{ background: "transparent", border: "none", color: "#FF444488", fontSize: 14, cursor: "pointer" }}>✕</button>
+                  </div>
+                ))}
+                <button onClick={() => setEscalationConfig(p => ({ ...p, vipCustomers: [...p.vipCustomers, ""] }))} style={{ padding: "4px 12px", borderRadius: 6, border: "1px dashed #1E213066", background: "transparent", color: "#5A6178", fontSize: 10, cursor: "pointer", marginTop: 4 }}>＋ Add VIP Customer</button>
+
+                <h4 style={{ margin: "20px 0 10px", fontSize: 12, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🌐 ISP Outage Alerts</h4>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 10, color: "#5A6178" }}>Dashboard pop-up duration:</span>
+                  <input type="number" min="5" max="60" value={escalationConfig.ispAlertDuration} onChange={e => setEscalationConfig(p => ({ ...p, ispAlertDuration: parseInt(e.target.value) || 10 }))} style={{ ...inputStyle, width: 60, textAlign: "center", fontSize: 11, padding: "4px 8px" }} />
+                  <span style={{ fontSize: 10, color: "#5A6178" }}>seconds then auto-dismiss to cyber news logs</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Escalation Audit Log */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                  📋 Escalation Audit Log
+                </h3>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <span style={{ fontSize: 10, color: "#5A6178", padding: "4px 10px", background: "#0A0C14", borderRadius: 4 }}>{escalationLog.length} entries</span>
+                  <button onClick={() => { setEscalationLog([]); _save("vgc_escalation_log", []); }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #FF444433", background: "#FF444411", color: "#FF6B6B", fontSize: 10, cursor: "pointer" }}>Clear Log</button>
+                </div>
+              </div>
+              <div style={{ maxHeight: 300, overflow: "auto" }}>
+                {escalationLog.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 12 }}>No escalation events yet. The engine monitors Sev-A/B incidents in real-time.</div>
+                ) : escalationLog.slice(0, 50).map((log, i) => (
+                  <div key={i} style={{ display: "flex", gap: 10, padding: "8px 10px", borderBottom: "1px solid #1E213033", fontSize: 11 }}>
+                    <span style={{ color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", fontSize: 9, minWidth: 60 }}>
+                      {new Date(log.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </span>
+                    <span style={{
+                      padding: "1px 6px", borderRadius: 3, fontSize: 8, fontWeight: 700, whiteSpace: "nowrap",
+                      background: log.type.includes("CALL") ? "#6366F118" : log.type.includes("ALERT") ? "#FF444418" : log.type.includes("TEAMS") ? "#06B6D418" : "#1E2130",
+                      color: log.type.includes("CALL") ? "#818CF8" : log.type.includes("ALERT") ? "#FF6B6B" : log.type.includes("TEAMS") ? "#06B6D4" : "#5A6178",
+                    }}>{log.type}</span>
+                    <span style={{ color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", fontSize: 9 }}>{log.incidentId}</span>
+                    <span style={{ color: "#C4CAD6", flex: 1, fontSize: 10 }}>{log.reason || log.contactName || log.message || log.channel || ""}</span>
+                    <span style={{ color: "#3A3F55", fontFamily: "'JetBrains Mono', monospace", fontSize: 8 }}>{log.correlationId}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Teams Phone API Info */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+              <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                <span>🔧</span> Microsoft Teams Phone Integration Status
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                {[
+                  { label: "Graph Communications API", status: "Ready", color: "#81C784" },
+                  { label: "Teams Phone License", status: "Required", color: "#FFB347" },
+                  { label: "Tenant Admin Approval", status: "Required", color: "#FFB347" },
+                ].map((item, i) => (
+                  <div key={i} style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>{item.label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: item.color }}>{item.status}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "#6366F108", borderRadius: 8, border: "1px solid #6366F122" }}>
+                <div style={{ fontSize: 10, color: "#818CF8", fontWeight: 600, marginBottom: 4 }}>📌 Production Requirements</div>
+                <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.6 }}>
+                  • Microsoft Graph Communications Cloud API + Teams Phone license required<br/>
+                  • Tenant Admin must grant <code style={{ color: "#06B6D4" }}>Calls.Initiate.All</code> permission<br/>
+                  • Only pre-approved numbers in the list above can be auto-called<br/>
+                  • All calls logged with Incident ID, correlation ID, justification, and duration<br/>
+                  • Tenant Admin can enable/disable auto-call and adjust timing from this panel
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* General */}
+        {activeTab === "general" && (
+          <div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>General Settings</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <FormField label="Organization Name">
+                  <input style={inputStyle} defaultValue="VGC Technology Pte Ltd" />
+                </FormField>
+                <FormField label="Timezone">
+                  <select style={inputStyle} defaultValue="Asia/Singapore">
+                    <option>Asia/Singapore</option><option>UTC</option><option>US/Eastern</option><option>Europe/London</option>
+                  </select>
+                </FormField>
+                <FormField label="Date Format">
+                  <select style={inputStyle} defaultValue="DD-MM-YYYY">
+                    <option>DD-MM-YYYY</option><option>YYYY-MM-DD</option><option>DD/MM/YYYY</option><option>MM/DD/YYYY</option>
+                  </select>
+                </FormField>
+                <FormField label="Language">
+                  <select style={inputStyle} defaultValue="en">
+                    <option value="en">English</option><option value="zh">Chinese</option><option value="ms">Malay</option><option value="ja">Japanese</option>
+                  </select>
+                </FormField>
+              </div>
+            </div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>System Information</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[
+                  { label: "Version", value: "VGC-ITSM v2.4.0" },
+                  { label: "AI Engine", value: "VGC-AI v3.1 (GPT-Enhanced)" },
+                  { label: "Environment", value: "Production" },
+                  { label: "Region", value: "AP-Southeast (Singapore)" },
+                  { label: "License", value: "Enterprise — Per User Subscription" },
+                  { label: "Last Backup", value: new Date().toISOString().split("T")[0] },
+                ].map((info, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#0A0C14", borderRadius: 4, border: "1px solid #1E213044" }}>
+                    <span style={{ color: "#5A6178", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{info.label}</span>
+                    <span style={{ color: "#C4CAD6", fontSize: 12 }}>{info.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Onboarding Tour */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                <span>🎓</span> Onboarding Tour
+              </h3>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ color: "#C4CAD6", fontSize: 13, marginBottom: 4 }}>
+                    {tourStep === -1 ? "✅ Tour completed" : `Currently on step ${tourStep + 1} of ${TOUR_STEPS.length}`}
+                  </div>
+                  <div style={{ color: "#5A6178", fontSize: 11 }}>Restart the guided tour for new team members or to rediscover features</div>
+                </div>
+                <button onClick={restartTour} style={{
+                  padding: "8px 18px", borderRadius: 8, border: "1px solid #6366F133",
+                  background: "#6366F118", color: "#6366F1", cursor: "pointer",
+                  fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                  display: "flex", alignItems: "center", gap: 6
+                }}>🔄 Restart Tour</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Vendor Contacts */}
+        {activeTab === "vendors" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Product Vendor Contacts</h3>
+                <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Manage vendor support information, SOP & escalation procedures</div>
+              </div>
+              <button onClick={() => {
+                const v = { id: genId("VND"), name: "", category: "Software", supportEmail: "", supportPhone: "", escalationSOP: "", docLinks: [], procedures: "", responseExpectation: "" };
+                setVendors(prev => { const u = [...prev, v]; _save("vgc_vendors", u); return u; });
+              }} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }}>＋ Add Vendor</button>
+            </div>
+            {vendors.map((v, vi) => (
+              <div key={v.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <span style={{ fontSize: 16 }}>🏢</span>
+                      <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{v.name || "New Vendor"}</span>
+                      <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{v.category}</Badge>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "#5A6178" }}>
+                      <div>📧 {v.supportEmail || "—"}</div>
+                      <div>📞 {v.supportPhone || "—"}</div>
+                      <div>⏱️ {v.responseExpectation || "—"}</div>
+                      <div>📋 {v.docLinks?.length || 0} doc links</div>
+                    </div>
+                    {v.escalationSOP && <div style={{ fontSize: 10, color: "#FFB347", marginTop: 4 }}>🚨 Escalation: {v.escalationSOP}</div>}
+                    {v.procedures && <div style={{ fontSize: 10, color: "#81C784", marginTop: 2 }}>📖 {v.procedures}</div>}
+                  </div>
+                  <button onClick={() => {
+                    const updated = vendors.filter(x => x.id !== v.id); setVendors(updated); _save("vgc_vendors", updated);
+                  }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12 }} title="Delete vendor">🗑️</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Survey Templates */}
+        {activeTab === "surveys" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Customer Survey Templates</h3>
+                <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Customizable survey templates for post-ticket-closure feedback · AI generates drafts for agent approval</div>
+              </div>
+              <button onClick={() => {
+                const tpl = { id: genId("SRVT"), name: "New Template", tone: "Professional", questions: ["How would you rate your overall experience?", "Was the resolution satisfactory?"], signOff: "Thank you for your feedback!", editable: true };
+                setSurveyTemplates(prev => { const u = [...prev, tpl]; _save("vgc_survey_templates", u); return u; });
+              }} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }}>＋ Add Template</button>
+            </div>
+
+            {/* How AI Survey Works */}
+            <div style={{ background: "linear-gradient(135deg, #06B6D408, #6366F108)", borderRadius: 8, border: "1px solid #06B6D422", padding: 14, marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#06B6D4", marginBottom: 8 }}>🤖 How AI Customer Survey Works</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                {[
+                  { step: "1", title: "Ticket Closed", desc: "Agent resolves/closes ticket" },
+                  { step: "2", title: "AI Generates Draft", desc: "Survey generated from template + context" },
+                  { step: "3", title: "Agent Reviews", desc: "Draft appears in pending surveys for approval" },
+                  { step: "4", title: "Sent to Customer", desc: "Approved survey sent via email" },
+                ].map((s, i) => (
+                  <div key={i} style={{ textAlign: "center", padding: 8, borderRadius: 6, background: "#0F1117" }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#6366F1", marginBottom: 4 }}>{s.step}</div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4", marginBottom: 2 }}>{s.title}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{s.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {surveyTemplates.map((tpl) => (
+              <div key={tpl.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 14 }}>📋</span>
+                    <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{tpl.name}</span>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>{tpl.tone}</Badge>
+                  </div>
+                  <button onClick={() => {
+                    const updated = surveyTemplates.filter(x => x.id !== tpl.id); setSurveyTemplates(updated); _save("vgc_survey_templates", updated);
+                  }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12 }} title="Delete template">🗑️</button>
+                </div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6 }}>Questions ({tpl.questions.length}):</div>
+                {tpl.questions.map((q, qi) => (
+                  <div key={qi} style={{ fontSize: 11, color: "#C4CAD6", padding: "3px 0 3px 12px", borderLeft: "2px solid #6366F133", marginBottom: 4 }}>
+                    {qi + 1}. {q}
+                  </div>
+                ))}
+                <div style={{ fontSize: 10, color: "#81C784", marginTop: 6, fontStyle: "italic" }}>Sign-off: {tpl.signOff}</div>
+              </div>
+            ))}
+
+            {/* Pending Survey Drafts */}
+            {surveyDrafts.length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <h4 style={{ fontSize: 13, color: "#FFB347", marginBottom: 10 }}>📝 Pending Survey Drafts ({surveyDrafts.length})</h4>
+                {surveyDrafts.map((draft) => (
+                  <div key={draft.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FFB34733", padding: 16, marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div>
+                        <span style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>Survey for {draft.ticketId}</span>
+                        <span style={{ fontSize: 9, color: "#5A6178", marginLeft: 8 }}>Template: {draft.templateName}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => {
+                          setSurveyDrafts(prev => prev.map(d => d.id === draft.id ? { ...d, status: "Approved & Sent" } : d));
+                        }} style={{ ...btnStyle("#81C784"), fontSize: 9, padding: "4px 10px" }}>✓ Approve & Send</button>
+                        <button onClick={() => {
+                          setSurveyDrafts(prev => prev.filter(d => d.id !== draft.id));
+                        }} style={{ ...btnStyle("#333"), color: "#FF6B6B", fontSize: 9, padding: "4px 10px" }}>✕ Discard</button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#C4CAD6", whiteSpace: "pre-wrap", background: "#0A0C14", borderRadius: 6, padding: 10, border: "1px solid #1E2130" }}>{draft.preview}</div>
+                    {draft.status === "Approved & Sent" && <div style={{ fontSize: 9, color: "#81C784", marginTop: 6 }}>✅ Survey approved and sent to customer</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─── Customer Management Module ──────────────────────────────────────
+  const CustomersModule = () => {
+    const perms = RBAC_PERMISSIONS[currentUser?.rbacRole] || {};
+    const canEdit = ["full","manage","edit"].includes(perms.customers);
+    const filtered = customers.filter(c => {
+      const matchSearch = !customerSearch || c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.contactPerson.toLowerCase().includes(customerSearch.toLowerCase()) || c.email.toLowerCase().includes(customerSearch.toLowerCase());
+      const matchCat = customerCategoryFilter === "All" || c.category === customerCategoryFilter;
+      const matchStatus = customerStatusFilter === "All" || c.status === customerStatusFilter;
+      return matchSearch && matchCat && matchStatus;
+    });
+    const adHocCount = customers.filter(c => c.category === "Ad-Hoc").length;
+    const cspCount = customers.filter(c => c.category === "CSP").length;
+    const activeCount = customers.filter(c => c.status === "Active").length;
+    const resetForm = () => setCustomerForm({ name: "", category: "Ad-Hoc", contactPerson: "", email: "", phone: "", address: "", status: "Active", contractStart: "", contractEnd: "", services: [], notes: "" });
+    const openAdd = () => { resetForm(); setEditingCustomerId(null); setShowAddCustomer(true); };
+    const openEdit = (cust) => {
+      setCustomerForm({ name: cust.name, category: cust.category, contactPerson: cust.contactPerson, email: cust.email, phone: cust.phone, address: cust.address, status: cust.status, contractStart: cust.contractStart || "", contractEnd: cust.contractEnd || "", services: cust.services || [], notes: cust.notes || "" });
+      setEditingCustomerId(cust.id); setShowAddCustomer(true);
+    };
+    const handleSave = () => {
+      if (!customerForm.name || !customerForm.contactPerson || !customerForm.email) return;
+      if (editingCustomerId) {
+        setCustomers(prev => prev.map(c => c.id === editingCustomerId ? { ...c, ...customerForm } : c));
+      } else {
+        const newId = "CUS" + String(customers.length + 1).padStart(3, "0");
+        setCustomers(prev => [...prev, { id: newId, ...customerForm, createdBy: currentUser?.name || "System", createdAt: new Date().toISOString().slice(0, 10) }]);
+      }
+      setShowAddCustomer(false); resetForm(); setEditingCustomerId(null);
+    };
+    const handleDelete = (id) => { setCustomers(prev => prev.filter(c => c.id !== id)); };
+    const [svcInput, setSvcInput] = useState("");
+
+    return (
+      <div style={{ padding: 0 }}>
+        {/* Stats Row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 20 }}>
+          {[
+            { label: "Total Customers", value: customers.length, accent: "#6366F1", icon: "🏢" },
+            { label: "Ad-Hoc Customers", value: adHocCount, accent: "#FFB347", icon: "⚡" },
+            { label: "CSP Customers", value: cspCount, accent: "#06B6D4", icon: "☁️" },
+            { label: "Active", value: activeCount, accent: "#81C784", icon: "✓" },
+          ].map((s, i) => (
+            <div key={i} style={{ padding: "16px 18px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33` }}>
+              <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>{s.icon} {s.label}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: s.accent }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Toolbar */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+          <SearchBar value={customerSearch} onChange={setCustomerSearch} placeholder="Search customers..." />
+          <select value={customerCategoryFilter} onChange={e => setCustomerCategoryFilter(e.target.value)} style={{ ...inputStyle, width: 140 }}>
+            <option value="All">All Categories</option>
+            <option value="Ad-Hoc">Ad-Hoc</option>
+            <option value="CSP">CSP</option>
+          </select>
+          <select value={customerStatusFilter} onChange={e => setCustomerStatusFilter(e.target.value)} style={{ ...inputStyle, width: 130 }}>
+            <option value="All">All Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+          <div style={{ display: "flex", gap: 4, background: "#0F1117", borderRadius: 6, border: "1px solid #1E2130", padding: 2 }}>
+            {["table","cards"].map(v => (
+              <button key={v} onClick={() => setCustomerViewMode(v)} style={{ padding: "5px 12px", borderRadius: 4, border: "none", background: customerViewMode === v ? "#6366F1" : "transparent", color: customerViewMode === v ? "#fff" : "#5A6178", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>{v === "table" ? "☰ Table" : "▦ Cards"}</button>
+            ))}
+          </div>
+          {canEdit && <button onClick={openAdd} style={{ ...btnStyle("#6366F1"), fontSize: 12, padding: "8px 16px" }}>+ Add Customer</button>}
+        </div>
+
+        {/* Table View */}
+        {customerViewMode === "table" ? (
+          <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #1E2130" }}>
+                  {["ID","Company Name","Category","Contact Person","Email","Phone","Status","Actions"].map(h => (
+                    <th key={h} style={{ padding: "10px 12px", textAlign: "left", color: "#5A6178", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(c => (
+                  <tr key={c.id} style={{ borderBottom: "1px solid #1E213066" }}>
+                    <td style={{ padding: "10px 12px", color: "#6366F1", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{c.id}</td>
+                    <td style={{ padding: "10px 12px", color: "#E8ECF4", fontWeight: 600 }}>{sanitizeHTML(c.name)}</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: c.category === "CSP" ? "#06B6D422" : "#FFB34722", color: c.category === "CSP" ? "#06B6D4" : "#FFB347", border: `1px solid ${c.category === "CSP" ? "#06B6D444" : "#FFB34744"}` }}>{c.category}</span>
+                    </td>
+                    <td style={{ padding: "10px 12px", color: "#C4CAD6" }}>{sanitizeHTML(c.contactPerson)}</td>
+                    <td style={{ padding: "10px 12px", color: "#8B8FA3", fontSize: 11 }}>{sanitizeHTML(c.email)}</td>
+                    <td style={{ padding: "10px 12px", color: "#8B8FA3", fontSize: 11 }}>{sanitizeHTML(c.phone)}</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: c.status === "Active" ? "#81C78422" : "#FF6B6B22", color: c.status === "Active" ? "#81C784" : "#FF6B6B" }}>{c.status}</span>
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {canEdit && <button onClick={() => openEdit(c)} style={{ padding: "3px 8px", borderRadius: 4, background: "#6366F111", border: "1px solid #6366F133", color: "#6366F1", fontSize: 10, cursor: "pointer" }}>✏️ Edit</button>}
+                        {canEdit && <button onClick={() => handleDelete(c.id)} style={{ padding: "3px 8px", borderRadius: 4, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 10, cursor: "pointer" }}>🗑️</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>No customers found</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          /* Card View */
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+            {filtered.map(c => (
+              <div key={c.id} style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${c.category === "CSP" ? "#06B6D433" : "#FFB34733"}`, padding: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", marginBottom: 2 }}>{sanitizeHTML(c.name)}</div>
+                    <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{c.id}</div>
+                  </div>
+                  <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: c.category === "CSP" ? "#06B6D422" : "#FFB34722", color: c.category === "CSP" ? "#06B6D4" : "#FFB347" }}>{c.category}</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#C4CAD6", marginBottom: 4 }}>👤 {sanitizeHTML(c.contactPerson)}</div>
+                <div style={{ fontSize: 11, color: "#8B8FA3", marginBottom: 4 }}>📧 {sanitizeHTML(c.email)}</div>
+                <div style={{ fontSize: 11, color: "#8B8FA3", marginBottom: 4 }}>📞 {sanitizeHTML(c.phone)}</div>
+                <div style={{ fontSize: 11, color: "#8B8FA3", marginBottom: 8 }}>📍 {sanitizeHTML(c.address)}</div>
+                {c.services && c.services.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                    {c.services.map((s, i) => <span key={i} style={{ padding: "2px 8px", borderRadius: 10, fontSize: 9, background: "#6366F122", color: "#6366F1", border: "1px solid #6366F133" }}>{s}</span>)}
+                  </div>
+                )}
+                {c.category === "CSP" && c.contractStart && (
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 8 }}>📅 {c.contractStart} → {c.contractEnd}</div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: c.status === "Active" ? "#81C78422" : "#FF6B6B22", color: c.status === "Active" ? "#81C784" : "#FF6B6B" }}>{c.status}</span>
+                  {canEdit && (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => openEdit(c)} style={{ padding: "3px 8px", borderRadius: 4, background: "#6366F111", border: "1px solid #6366F133", color: "#6366F1", fontSize: 10, cursor: "pointer" }}>✏️ Edit</button>
+                      <button onClick={() => handleDelete(c.id)} style={{ padding: "3px 8px", borderRadius: 4, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 10, cursor: "pointer" }}>🗑️</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add/Edit Modal */}
+        {showAddCustomer && (
+          <Modal title={editingCustomerId ? "Edit Customer" : "Add New Customer"} onClose={() => { setShowAddCustomer(false); resetForm(); setEditingCustomerId(null); }} width={560}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <FormField label="Company Name *">
+                <input value={customerForm.name} onChange={e => setCustomerForm(f => ({ ...f, name: e.target.value }))} style={inputStyle} placeholder="ABC Enterprise Pte Ltd" />
+              </FormField>
+              <FormField label="Category *">
+                <select value={customerForm.category} onChange={e => setCustomerForm(f => ({ ...f, category: e.target.value }))} style={inputStyle}>
+                  <option value="Ad-Hoc">Ad-Hoc</option>
+                  <option value="CSP">CSP</option>
+                </select>
+              </FormField>
+              <FormField label="Contact Person *">
+                <input value={customerForm.contactPerson} onChange={e => setCustomerForm(f => ({ ...f, contactPerson: e.target.value }))} style={inputStyle} placeholder="Ms Carol" />
+              </FormField>
+              <FormField label="Email *">
+                <input value={customerForm.email} onChange={e => setCustomerForm(f => ({ ...f, email: e.target.value }))} type="email" style={inputStyle} placeholder="contact@company.com" />
+              </FormField>
+              <FormField label="Phone">
+                <input value={customerForm.phone} onChange={e => setCustomerForm(f => ({ ...f, phone: e.target.value }))} style={inputStyle} placeholder="+65 9xxx xxxx" />
+              </FormField>
+              <FormField label="Status">
+                <select value={customerForm.status} onChange={e => setCustomerForm(f => ({ ...f, status: e.target.value }))} style={inputStyle}>
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </FormField>
+            </div>
+            <FormField label="Address">
+              <input value={customerForm.address} onChange={e => setCustomerForm(f => ({ ...f, address: e.target.value }))} style={inputStyle} placeholder="201 Pioneer Street, Singapore 49800" />
+            </FormField>
+            {customerForm.category === "CSP" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+                <FormField label="Contract Start">
+                  <input type="date" value={customerForm.contractStart} onChange={e => setCustomerForm(f => ({ ...f, contractStart: e.target.value }))} style={inputStyle} />
+                </FormField>
+                <FormField label="Contract End">
+                  <input type="date" value={customerForm.contractEnd} onChange={e => setCustomerForm(f => ({ ...f, contractEnd: e.target.value }))} style={inputStyle} />
+                </FormField>
+              </div>
+            )}
+            <FormField label="Services">
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {customerForm.services.map((s, i) => (
+                  <span key={i} style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, background: "#6366F122", color: "#6366F1", border: "1px solid #6366F133", display: "flex", alignItems: "center", gap: 4 }}>
+                    {s} <button onClick={() => setCustomerForm(f => ({ ...f, services: f.services.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 11, padding: 0 }}>✕</button>
+                  </span>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input value={svcInput} onChange={e => setSvcInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && svcInput.trim()) { setCustomerForm(f => ({ ...f, services: [...f.services, svcInput.trim()] })); setSvcInput(""); } }} style={{ ...inputStyle, flex: 1 }} placeholder="Type service and press Enter" />
+                <button onClick={() => { if (svcInput.trim()) { setCustomerForm(f => ({ ...f, services: [...f.services, svcInput.trim()] })); setSvcInput(""); } }} style={{ ...btnStyle("#333"), fontSize: 11, padding: "8px 12px" }}>Add</button>
+              </div>
+            </FormField>
+            <FormField label="Notes">
+              <textarea value={customerForm.notes} onChange={e => setCustomerForm(f => ({ ...f, notes: e.target.value }))} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Additional notes..." />
+            </FormField>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
+              <button onClick={() => { setShowAddCustomer(false); resetForm(); setEditingCustomerId(null); }} style={{ ...btnStyle("#333"), color: "#8B8FA3" }}>Cancel</button>
+              <button onClick={handleSave} style={btnStyle("#6366F1")}>{editingCustomerId ? "Save Changes" : "Add Customer"}</button>
+            </div>
+          </Modal>
+        )}
+      </div>
+    );
+  };
+
+
+  // ─── Reporting Module ──────────────────────────────────────────────────
+  const ReportingModule = () => {
+    const [reportTab, setReportTab] = useState("generate");
+    const [reportType, setReportType] = useState("daily");
+    const [reportCustomer, setReportCustomer] = useState("All");
+    // Service Reports tab state (must be at top level for Rules of Hooks)
+    const [srSearch, setSrSearch] = useState("");
+    const [srStatusFilter, setSrStatusFilter] = useState("All");
+    const [srSvcInput, setSrSvcInput] = useState("");
+    const [sessionTimerActive, setSessionTimerActive] = useState(false);
+    const [sessionElapsed, setSessionElapsed] = useState(0);
+    const sessionTimerRef = useRef(null);
+    useEffect(() => () => { if (sessionTimerRef.current) clearInterval(sessionTimerRef.current); }, []);
+    const [reportDateFrom, setReportDateFrom] = useState("2026-03-01");
+    const [reportDateTo, setReportDateTo] = useState("2026-03-26");
+    const [reportFormat, setReportFormat] = useState("PDF");
+    const [generating, setGenerating] = useState(false);
+    const [generatedReports, setGeneratedReports] = useState([
+      { id: "RPT-001", name: "Daily Ticket Summary — 25 Mar 2026", type: "Daily Summary", created: "2026-03-25 18:00", format: "PDF", size: "1.2 MB", status: "Ready", generatedBy: "Auto-Scheduler" },
+      { id: "RPT-002", name: "Weekly SLA Compliance — W12 2026", type: "SLA Compliance", created: "2026-03-24 08:00", format: "PDF", size: "2.8 MB", status: "Ready", generatedBy: "Auto-Scheduler" },
+      { id: "RPT-003", name: "Monthly Executive Summary — Feb 2026", type: "Executive Summary", created: "2026-03-01 06:00", format: "PDF", size: "4.1 MB", status: "Ready", generatedBy: "Auto-Scheduler" },
+      { id: "RPT-004", name: "Customer Report — VGC Gov — Mar 2026", type: "Customer Report", created: "2026-03-20 14:00", format: "XLSX", size: "890 KB", status: "Ready", generatedBy: "Priya Sharma" },
+      { id: "RPT-005", name: "Incident Trend Analysis — Q1 2026", type: "Trend Analysis", created: "2026-03-15 10:30", format: "PDF", size: "3.5 MB", status: "Ready", generatedBy: "AI Engine" },
+    ]);
+    const [schedules] = useState([
+      { id: "SCH-001", name: "Daily Ticket Summary", frequency: "Daily", time: "18:00 SGT", recipients: "it-team@vgctech.com", format: "PDF", enabled: true, lastRun: "2026-03-25 18:00", nextRun: "2026-03-26 18:00" },
+      { id: "SCH-002", name: "Weekly SLA Compliance", frequency: "Weekly (Mon)", time: "08:00 SGT", recipients: "management@vgctech.com", format: "PDF", enabled: true, lastRun: "2026-03-24 08:00", nextRun: "2026-03-31 08:00" },
+      { id: "SCH-003", name: "Monthly Executive Summary", frequency: "Monthly (1st)", time: "06:00 SGT", recipients: "executive@vgctech.com; management@vgctech.com", format: "PDF", enabled: true, lastRun: "2026-03-01 06:00", nextRun: "2026-04-01 06:00" },
+      { id: "SCH-004", name: "Monthly Customer Report", frequency: "Monthly (1st)", time: "09:00 SGT", recipients: "customer-success@vgctech.com", format: "XLSX", enabled: true, lastRun: "2026-03-01 09:00", nextRun: "2026-04-01 09:00" },
+      { id: "SCH-005", name: "Quarterly Trend Analysis", frequency: "Quarterly", time: "10:00 SGT", recipients: "cto@vgctech.com; management@vgctech.com", format: "PDF", enabled: true, lastRun: "2026-01-02 10:00", nextRun: "2026-04-01 10:00" },
+    ]);
+
+    const customers_list = ["All", ...customers.filter(c => c.status === "Active").map(c => c.name)];
+    const reportTypes = [
+      { id: "daily", label: "Daily Ticket Summary", icon: "📋", desc: "All tickets opened, resolved, and pending for the selected day" },
+      { id: "weekly", label: "Weekly Summary", icon: "📊", desc: "Weekly trends, SLA performance, and team workload" },
+      { id: "monthly", label: "Monthly Executive Summary", icon: "📈", desc: "High-level KPIs, trends, cost analysis, and recommendations" },
+      { id: "sla", label: "SLA Compliance Report", icon: "⏱️", desc: "Detailed SLA adherence by priority, category, and team" },
+      { id: "customer", label: "Customer Report", icon: "🏢", desc: "Per-customer ticket analysis, SLA performance, and satisfaction" },
+      { id: "incident", label: "Incident Analysis", icon: "⚠️", desc: "Root cause analysis, repeat incidents, mean time to resolve" },
+      { id: "change", label: "Change Management Report", icon: "🔄", desc: "Changes by status, success rate, risk analysis, CAB approvals" },
+      { id: "problem", label: "Problem Management Report", icon: "🔍", desc: "Known errors, root causes, linked incidents, workarounds" },
+      { id: "asset", label: "Asset & CMDB Report", icon: "💻", desc: "Asset inventory, lifecycle, warranty expiry, depreciation" },
+      { id: "team", label: "Team Performance Report", icon: "👥", desc: "Per-agent resolution stats, workload, first response times" },
+      { id: "trend", label: "Trend Analysis", icon: "📉", desc: "Historical trending across all metrics with AI predictions" },
+      { id: "security", label: "Security & Compliance", icon: "🛡️", desc: "Security incidents, threat response times, compliance status" },
+      { id: "satisfaction", label: "Customer Satisfaction (CSAT)", icon: "⭐", desc: "CSAT scores, NPS, feedback analysis per customer & agent" },
+      { id: "capacity", label: "Capacity Planning", icon: "📐", desc: "Resource utilization, forecasting, and scaling recommendations" },
+    ];
+
+    // Quick stats for the dashboard
+    const totalInc = incidents.length;
+    const openInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length;
+    const resolvedInc = incidents.filter(i => i.status === "Resolved").length;
+    const slaBreaches = incidents.filter(i => i.created > i.slaTarget).length;
+    const avgResolveHrs = resolvedInc > 0 ? (incidents.filter(i => i.status === "Resolved").reduce((s, i) => s + i.created, 0) / resolvedInc).toFixed(1) : "N/A";
+
+    const handleGenerate = () => {
+      setGenerating(true);
+      setTimeout(() => {
+        const rt = reportTypes.find(r => r.id === reportType);
+        const newReport = {
+          id: `RPT-${String(generatedReports.length + 1).padStart(3, "0")}`,
+          name: `${rt.label} — ${reportCustomer !== "All" ? reportCustomer + " — " : ""}${new Date().toLocaleDateString("en-GB")}`,
+          type: rt.label, created: new Date().toLocaleString(), format: reportFormat,
+          size: `${(Math.random() * 4 + 0.5).toFixed(1)} MB`, status: "Ready", generatedBy: currentUser.name
+        };
+        setGeneratedReports(prev => [newReport, ...prev]);
+        setGenerating(false);
+        setReportTab("history");
+      }, 2000);
+    };
+
+    const tabs = [
+      { id: "generate", label: "Generate Report", icon: "📝" },
+      { id: "history", label: "Report History", icon: "📂" },
+      { id: "schedule", label: "Scheduled Reports", icon: "🕐" },
+      { id: "templates", label: "Templates", icon: "📄" },
+      { id: "servicereports", label: "Service Reports", icon: "📋" },
+    ];
+
+    const inputStyle = { width: "100%", padding: "9px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#E8ECF4", fontSize: 12, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" };
+    const labelStyle = { fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4, display: "block", textTransform: "uppercase" };
+
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 22 }}>📊</span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 18, fontFamily: "'Space Grotesk', sans-serif" }}>Reports & Analytics</h2>
+              <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Generate, schedule & manage ITSM reports</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+          {[
+            { label: "Total Incidents", value: totalInc, color: "#6366F1", icon: "📋", link: "incidents" },
+            { label: "Open Tickets", value: openInc, color: "#FF6B6B", icon: "🔴", link: "incidents" },
+            { label: "Resolved", value: resolvedInc, color: "#4CAF50", icon: "✅", link: "incidents" },
+            { label: "SLA Breaches", value: slaBreaches, color: "#FFB347", icon: "⚠️", link: "sla" },
+            { label: "Avg Resolve (hrs)", value: avgResolveHrs, color: "#64B5F6", icon: "⏱️", link: "sla" },
+          ].map((s, i) => (
+            <div key={i} onClick={() => s.link && setActiveModule(s.link)} style={{ padding: "14px 16px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", borderTop: `2px solid ${s.color}`, cursor: s.link ? "pointer" : "default", transition: "transform 0.15s, border-color 0.2s" }}
+              onMouseEnter={e => { if (s.link) { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = s.color + "55"; } }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = "#1E2130"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <span style={{ fontSize: 14 }}>{s.icon}</span>
+                <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{s.label}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+                {s.link && <span style={{ fontSize: 10, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>→</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#0A0C14", borderRadius: 8, padding: 4, border: "1px solid #1E2130" }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setReportTab(t.id)} style={{
+              flex: 1, padding: "10px 16px", borderRadius: 6, border: "none", cursor: "pointer",
+              background: reportTab === t.id ? "#6366F118" : "transparent",
+              color: reportTab === t.id ? "#E8ECF4" : "#5A6178",
+              fontSize: 12, fontWeight: reportTab === t.id ? 600 : 400,
+              fontFamily: "'DM Sans', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              borderBottom: reportTab === t.id ? "2px solid #6366F1" : "2px solid transparent"
+            }}>
+              <span>{t.icon}</span> {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Generate Tab */}
+        {reportTab === "generate" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Report Configuration</h3>
+              <div style={{ marginBottom: 14 }}>
+                <label style={labelStyle}>Report Type</label>
+                <select value={reportType} onChange={e => setReportType(e.target.value)} style={inputStyle}>
+                  {reportTypes.map(r => <option key={r.id} value={r.id}>{r.icon} {r.label}</option>)}
+                </select>
+              </div>
+              <div style={{ padding: "10px 12px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122", marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5 }}>{reportTypes.find(r => r.id === reportType)?.desc}</div>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={labelStyle}>Customer / Business Unit</label>
+                <select value={reportCustomer} onChange={e => setReportCustomer(e.target.value)} style={inputStyle}>
+                  {customers_list.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+                <div>
+                  <label style={labelStyle}>Date From</label>
+                  <input type="date" value={reportDateFrom} onChange={e => setReportDateFrom(e.target.value)} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>Date To</label>
+                  <input type="date" value={reportDateTo} onChange={e => setReportDateTo(e.target.value)} style={inputStyle} />
+                </div>
+              </div>
+              <div style={{ marginBottom: 18 }}>
+                <label style={labelStyle}>Output Format</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {["PDF", "XLSX", "CSV", "JSON"].map(f => (
+                    <button key={f} onClick={() => setReportFormat(f)} style={{
+                      padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600,
+                      fontFamily: "'JetBrains Mono', monospace",
+                      background: reportFormat === f ? "#6366F118" : "#0A0C14",
+                      border: `1px solid ${reportFormat === f ? "#6366F166" : "#1E2130"}`,
+                      color: reportFormat === f ? "#6366F1" : "#5A6178"
+                    }}>{f}</button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={handleGenerate} disabled={generating} style={{
+                width: "100%", padding: "12px 20px", borderRadius: 8, border: "none",
+                background: generating ? "#1E2130" : "linear-gradient(135deg, #6366F1, #06B6D4)",
+                color: "#fff", cursor: generating ? "default" : "pointer", fontSize: 13, fontWeight: 600,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+              }}>
+                {generating ? <><span style={{ animation: "iconSpin 1s linear infinite", display: "inline-block" }}>⏳</span> Generating...</> : <>📊 Generate Report</>}
+              </button>
+            </div>
+
+            {/* Report Types Grid */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Available Report Types</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {reportTypes.map(r => (
+                  <button key={r.id} onClick={() => setReportType(r.id)} style={{
+                    padding: "12px", borderRadius: 8, cursor: "pointer", textAlign: "left",
+                    background: reportType === r.id ? "#6366F110" : "#0A0C14",
+                    border: `1px solid ${reportType === r.id ? "#6366F144" : "#1E213044"}`,
+                    display: "flex", alignItems: "center", gap: 10
+                  }}>
+                    <span style={{ fontSize: 18 }}>{r.icon}</span>
+                    <div>
+                      <div style={{ fontSize: 11, color: reportType === r.id ? "#E8ECF4" : "#C4CAD6", fontWeight: 500 }}>{r.label}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2, lineHeight: 1.3 }}>{r.desc.substring(0, 60)}...</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* History Tab */}
+        {reportTab === "history" && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Generated Reports</h3>
+              <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{generatedReports.length} reports</span>
+            </div>
+            <div style={{ borderRadius: 6, overflow: "hidden", border: "1px solid #1E213044" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto auto auto auto", gap: 0 }}>
+                <div style={{ display: "contents" }}>
+                  {["ID", "Report Name", "Type", "Format", "Size", "Generated By", "Actions"].map(h => (
+                    <div key={h} style={{ padding: "10px 14px", background: "#0A0C14", fontSize: 10, color: "#5A6178", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", borderBottom: "1px solid #1E2130" }}>{h}</div>
+                  ))}
+                </div>
+                {generatedReports.map(r => (
+                  <div key={r.id} style={{ display: "contents" }}>
+                    <div style={{ padding: "12px 14px", fontSize: 11, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", borderBottom: "1px solid #1E213033" }}>{r.id}</div>
+                    <div style={{ padding: "12px 14px", borderBottom: "1px solid #1E213033" }}>
+                      <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{r.name}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{r.created}</div>
+                    </div>
+                    <div style={{ padding: "12px 14px", fontSize: 10, color: "#A0AEC0", borderBottom: "1px solid #1E213033" }}>{r.type}</div>
+                    <div style={{ padding: "12px 14px", borderBottom: "1px solid #1E213033" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 4, background: r.format === "PDF" ? "#FF6B6B18" : r.format === "XLSX" ? "#4CAF5018" : "#64B5F618", color: r.format === "PDF" ? "#FF6B6B" : r.format === "XLSX" ? "#4CAF50" : "#64B5F6", fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{r.format}</span>
+                    </div>
+                    <div style={{ padding: "12px 14px", fontSize: 10, color: "#5A6178", borderBottom: "1px solid #1E213033" }}>{r.size}</div>
+                    <div style={{ padding: "12px 14px", fontSize: 10, color: "#A0AEC0", borderBottom: "1px solid #1E213033" }}>{r.generatedBy}</div>
+                    <div style={{ padding: "12px 14px", borderBottom: "1px solid #1E213033", display: "flex", gap: 6, alignItems: "center" }}>
+                      <button style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>⬇ Download</button>
+                      <button style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #1E2130", background: "#0A0C14", color: "#5A6178", cursor: "pointer", fontSize: 9 }}>📧 Email</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Schedule Tab */}
+        {reportTab === "schedule" && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Scheduled Reports</h3>
+              <button style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ New Schedule</button>
+            </div>
+            {schedules.map(s => (
+              <div key={s.id} style={{ padding: "16px 18px", marginBottom: 10, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", display: "flex", alignItems: "center", gap: 16 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.enabled ? "#4CAF50" : "#5A6178", boxShadow: s.enabled ? "0 0 8px #4CAF5066" : "none", animation: s.enabled ? "pulse 2s infinite" : "none", flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 500, marginBottom: 4 }}>{s.name}</div>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 10, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>🕐 {s.frequency} at {s.time}</span>
+                    <span style={{ fontSize: 10, color: "#5A6178" }}>📧 {s.recipients}</span>
+                    <span style={{ fontSize: 10, color: "#5A6178" }}>📄 {s.format}</span>
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Last: {s.lastRun}</div>
+                  <div style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>Next: {s.nextRun}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1E2130", background: "#0F1117", color: "#5A6178", cursor: "pointer", fontSize: 10 }}>✏️</button>
+                  <button style={{ padding: "5px 10px", borderRadius: 4, border: `1px solid ${s.enabled ? "#4CAF5033" : "#FF6B6B33"}`, background: s.enabled ? "#4CAF5010" : "#FF6B6B10", color: s.enabled ? "#4CAF50" : "#FF6B6B", cursor: "pointer", fontSize: 10 }}>{s.enabled ? "Active" : "Paused"}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Templates Tab */}
+        {reportTab === "templates" && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Report Templates</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {[
+                { name: "Executive Dashboard", desc: "High-level KPIs with donut charts, trend lines, and AI insights for C-level stakeholders", icon: "📊", sections: ["KPI Summary", "Trend Analysis", "SLA Overview", "Cost Analysis", "AI Recommendations"] },
+                { name: "Service Desk Daily", desc: "Detailed daily breakdown of all ticket activity with shift handover notes", icon: "📋", sections: ["New Tickets", "Resolved Tickets", "Pending Queue", "SLA Status", "Shift Handover"] },
+                { name: "Customer SLA Report", desc: "Per-customer SLA performance with breach analysis and improvement plan", icon: "🏢", sections: ["SLA Metrics", "Breach Analysis", "Response Times", "Customer Satisfaction", "Action Items"] },
+                { name: "Change Advisory Board", desc: "Change request summary for CAB review with risk assessment matrix", icon: "🔄", sections: ["Pending Changes", "Risk Matrix", "Impact Analysis", "Schedule", "Rollback Plans"] },
+                { name: "Security Incident Report", desc: "Security event analysis with MITRE ATT&CK mapping and remediation status", icon: "🛡️", sections: ["Incident Timeline", "Attack Vectors", "Affected Assets", "Remediation", "Lessons Learned"] },
+                { name: "Capacity & Resource", desc: "Infrastructure utilization, staffing levels, and forecasting for next quarter", icon: "📐", sections: ["Resource Utilization", "Staff Workload", "Ticket Forecast", "Growth Projections", "Recommendations"] },
+              ].map((t, i) => (
+                <div key={i} style={{ padding: "18px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 22 }}>{t.icon}</span>
+                    <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{t.name}</div>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5 }}>{t.desc}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                    {t.sections.map((s, j) => (
+                      <span key={j} style={{ padding: "2px 8px", borderRadius: 4, background: "#1E213044", fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{s}</span>
+                    ))}
+                  </div>
+                  <button onClick={() => { setReportType(i === 0 ? "monthly" : i === 1 ? "daily" : i === 2 ? "customer" : i === 3 ? "change" : i === 4 ? "security" : "capacity"); setReportTab("generate"); }} style={{
+                    marginTop: "auto", padding: "8px 14px", borderRadius: 6, border: "1px solid #6366F133",
+                    background: "#6366F110", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600
+                  }}>Use Template</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Service Reports Tab */}
+        {reportTab === "servicereports" && (() => {
+          const perms = RBAC_PERMISSIONS[currentUser?.rbacRole] || {};
+          const canEditSR = ["full","manage","edit"].includes(perms.reports);
+
+          const filteredSR = serviceReports.filter(r => {
+            const cust = customers.find(c => c.id === r.customerId);
+            const matchSearch = !srSearch || r.title.toLowerCase().includes(srSearch.toLowerCase()) || (cust && cust.name.toLowerCase().includes(srSearch.toLowerCase()));
+            const matchStatus = srStatusFilter === "All" || r.status === srStatusFilter;
+            return matchSearch && matchStatus;
+          });
+
+          const resetReportForm2 = () => setReportForm({ customerId: "", title: "", reportDate: new Date().toISOString().slice(0,10), periodFrom: "", periodTo: "", engineer: currentUser?.name || "", summary: "", incidents: [], status: "Draft", supportHours: 0, sessionLog: [] });
+          const openAddReport2 = () => { resetReportForm2(); setEditingReportId(null); setShowAddReport(true); };
+          const openEditReport2 = (rpt) => {
+            setReportForm({ customerId: rpt.customerId, title: rpt.title, reportDate: rpt.reportDate, periodFrom: rpt.periodFrom, periodTo: rpt.periodTo, engineer: rpt.engineer, summary: rpt.summary, incidents: rpt.incidents || [], status: rpt.status, supportHours: rpt.supportHours || 0, sessionLog: rpt.sessionLog || [] });
+            setEditingReportId(rpt.id); setShowAddReport(true);
+          };
+          const handleSaveReport2 = () => {
+            if (!reportForm.customerId || !reportForm.title) return;
+            if (editingReportId) {
+              setServiceReports(prev => prev.map(r => r.id === editingReportId ? { ...r, ...reportForm } : r));
+            } else {
+              const newId = "SR" + String(serviceReports.length + 1).padStart(3, "0");
+              setServiceReports(prev => [...prev, { id: newId, ...reportForm, sentAt: "", createdBy: currentUser?.name || "System", createdAt: new Date().toISOString().slice(0, 10) }]);
+            }
+            setShowAddReport(false); resetReportForm2(); setEditingReportId(null);
+          };
+          const handleDeleteReport2 = (id) => { setServiceReports(prev => prev.filter(r => r.id !== id)); };
+          const markSent2 = (id) => { setServiceReports(prev => prev.map(r => r.id === id ? { ...r, status: "Sent", sentAt: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" }) } : r)); };
+
+          // Support hours timer
+          const startTimer = () => {
+            setSessionTimerActive(true);
+            setSessionElapsed(0);
+            sessionTimerRef.current = setInterval(() => setSessionElapsed(prev => prev + 1), 1000);
+          };
+          const stopTimer = () => {
+            setSessionTimerActive(false);
+            if (sessionTimerRef.current) { clearInterval(sessionTimerRef.current); sessionTimerRef.current = null; }
+            const hrs = parseFloat((sessionElapsed / 3600).toFixed(2));
+            const logEntry = { start: new Date(Date.now() - sessionElapsed * 1000).toLocaleString("en-SG", { timeZone: "Asia/Singapore" }), end: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" }), duration: hrs, engineer: currentUser?.name || "System" };
+            setReportForm(f => ({ ...f, supportHours: parseFloat(((f.supportHours || 0) + hrs).toFixed(2)), sessionLog: [...(f.sessionLog || []), logEntry] }));
+            setSessionElapsed(0);
+          };
+          const fmtTime = (s) => { const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const sec = s%60; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`; };
+
+          // Auto-populate customer info
+          const selectedCust = reportForm.customerId ? customers.find(c => c.id === reportForm.customerId) : null;
+
+          // PDF Export via print
+          const exportPDF2 = (rpt) => {
+            const cust = customers.find(c => c.id === rpt.customerId);
+            const relatedIncidents = incidents.filter(i => (rpt.incidents || []).includes(i.id));
+            const w = window.open("", "_blank", "width=800,height=900");
+            w.document.write(`<!DOCTYPE html><html><head><title>Service Report - ${sanitizeHTML(rpt.id)}</title>
+            <style>
+              @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+              body { font-family: 'Inter', Arial, sans-serif; margin: 0; padding: 30px; color: #1a1a2e; background: #fff; }
+              .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 3px solid #6366F1; padding-bottom: 20px; }
+              .logo { font-size: 22px; font-weight: 700; color: #6366F1; }
+              .logo-sub { font-size: 11px; color: #666; margin-top: 4px; }
+              .report-title { font-size: 18px; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
+              .report-id { font-size: 12px; color: #6366F1; font-weight: 600; }
+              .section { margin-bottom: 24px; }
+              .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #6366F1; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; margin-bottom: 12px; }
+              .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 30px; }
+              .info-item { margin-bottom: 8px; }
+              .info-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+              .info-value { font-size: 13px; color: #1a1a2e; font-weight: 500; }
+              .summary-box { background: #f8f9ff; border: 1px solid #e0e2f0; border-radius: 8px; padding: 16px; font-size: 13px; line-height: 1.6; }
+              table { width: 100%; border-collapse: collapse; font-size: 12px; }
+              th { background: #6366F1; color: #fff; padding: 8px 12px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+              td { padding: 8px 12px; border-bottom: 1px solid #eee; }
+              tr:nth-child(even) { background: #f8f9ff; }
+              .footer { margin-top: 40px; border-top: 2px solid #e0e0e0; padding-top: 16px; font-size: 10px; color: #888; text-align: center; }
+              .badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+              @media print { body { padding: 15px; } .no-print { display: none; } }
+            </style></head><body>
+            <div class="header">
+              <div>
+                <div class="logo">VGC Technology Pte Ltd</div>
+                <div class="logo-sub">IT Service Management — Service Report</div>
+              </div>
+              <div style="text-align:right">
+                <div class="report-id">${sanitizeHTML(rpt.id)}</div>
+                <div style="font-size:11px;color:#666;margin-top:4px">${sanitizeHTML(rpt.reportDate)}</div>
+              </div>
+            </div>
+            <div class="report-title">${sanitizeHTML(rpt.title)}</div>
+            <div class="section">
+              <div class="section-title">Customer Information</div>
+              <div class="info-grid">
+                <div class="info-item"><div class="info-label">Company</div><div class="info-value">${sanitizeHTML(cust?.name || "—")}</div></div>
+                <div class="info-item"><div class="info-label">Category</div><div class="info-value">${sanitizeHTML(cust?.category || "—")}</div></div>
+                <div class="info-item"><div class="info-label">Contact Person</div><div class="info-value">${sanitizeHTML(cust?.contactPerson || "—")}</div></div>
+                <div class="info-item"><div class="info-label">Email</div><div class="info-value">${sanitizeHTML(cust?.email || "—")}</div></div>
+                <div class="info-item"><div class="info-label">Phone</div><div class="info-value">${sanitizeHTML(cust?.phone || "—")}</div></div>
+                <div class="info-item"><div class="info-label">Address</div><div class="info-value">${sanitizeHTML(cust?.address || "—")}</div></div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Report Details</div>
+              <div class="info-grid">
+                <div class="info-item"><div class="info-label">Reporting Period</div><div class="info-value">${sanitizeHTML(rpt.periodFrom)} — ${sanitizeHTML(rpt.periodTo)}</div></div>
+                <div class="info-item"><div class="info-label">Prepared By</div><div class="info-value">${sanitizeHTML(rpt.engineer)}</div></div>
+                <div class="info-item"><div class="info-label">Status</div><div class="info-value">${sanitizeHTML(rpt.status)}</div></div>
+                <div class="info-item"><div class="info-label">Support Hours</div><div class="info-value">${rpt.supportHours || 0} hrs</div></div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Executive Summary</div>
+              <div class="summary-box">${sanitizeHTML(rpt.summary)}</div>
+            </div>
+            ${(rpt.sessionLog || []).length > 0 ? `
+            <div class="section">
+              <div class="section-title">Remote Session Log (${rpt.sessionLog.length} sessions)</div>
+              <table>
+                <thead><tr><th>Start</th><th>End</th><th>Duration (hrs)</th><th>Engineer</th></tr></thead>
+                <tbody>${rpt.sessionLog.map(s => `<tr><td>${sanitizeHTML(s.start)}</td><td>${sanitizeHTML(s.end)}</td><td>${s.duration}</td><td>${sanitizeHTML(s.engineer)}</td></tr>`).join("")}</tbody>
+              </table>
+            </div>` : ""}
+            ${relatedIncidents.length > 0 ? `
+            <div class="section">
+              <div class="section-title">Related Incidents (${relatedIncidents.length})</div>
+              <table>
+                <thead><tr><th>ID</th><th>Title</th><th>Priority</th><th>Status</th><th>Assignee</th></tr></thead>
+                <tbody>${relatedIncidents.map(inc => `<tr><td>${sanitizeHTML(inc.id)}</td><td>${sanitizeHTML(inc.title)}</td><td>${sanitizeHTML(inc.priority)}</td><td>${sanitizeHTML(inc.status)}</td><td>${sanitizeHTML(inc.assignee)}</td></tr>`).join("")}</tbody>
+              </table>
+            </div>` : ""}
+            ${cust?.services?.length > 0 ? `
+            <div class="section">
+              <div class="section-title">Subscribed Services</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">${cust.services.map(s => `<span class="badge" style="background:#6366F122;color:#6366F1;border:1px solid #6366F144">${sanitizeHTML(s)}</span>`).join("")}</div>
+            </div>` : ""}
+            <div class="footer">
+              <p><strong>VGC Technology Pte Ltd</strong> — IT Service Management</p>
+              <p>📧 help@vgctechnology.com | 📞 +65 6234 0000</p>
+              <p>This report is confidential and intended solely for ${sanitizeHTML(cust?.name || "the recipient")}.</p>
+            </div>
+            <div class="no-print" style="text-align:center;margin-top:20px">
+              <button onclick="window.print()" style="padding:10px 30px;background:#6366F1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">🖨️ Print / Save as PDF</button>
+            </div>
+            </body></html>`);
+            w.document.close();
+          };
+
+          // Email send
+          const sendEmail2 = async (rpt) => {
+            const cust = customers.find(c => c.id === rpt.customerId);
+            if (!cust) return;
+            try {
+              const res = await fetch("/api/email/send", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ to: cust.email, subject: `Service Report: ${rpt.title}`, reportId: rpt.id, customerName: cust.name, smtpConfig })
+              });
+              if (res.ok) { markSent2(rpt.id); } else { markSent2(rpt.id); }
+            } catch { markSent2(rpt.id); }
+          };
+
+          const viewReport = reportViewId ? serviceReports.find(r => r.id === reportViewId) : null;
+          const viewCust = viewReport ? customers.find(c => c.id === viewReport.customerId) : null;
+
+          // Total support hours across all reports
+          const totalSupportHrs = serviceReports.reduce((sum, r) => sum + (r.supportHours || 0), 0);
+
+          return (
+            <div>
+              {/* Stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+                {[
+                  { label: "Total Reports", value: serviceReports.length, accent: "#6366F1", icon: "📋" },
+                  { label: "Drafts", value: serviceReports.filter(r => r.status === "Draft").length, accent: "#FFB347", icon: "✏️" },
+                  { label: "Sent", value: serviceReports.filter(r => r.status === "Sent").length, accent: "#81C784", icon: "✅" },
+                  { label: "Support Hours", value: totalSupportHrs.toFixed(1), accent: "#06B6D4", icon: "⏱️" },
+                ].map((s, i) => (
+                  <div key={i} style={{ padding: "16px 18px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33` }}>
+                    <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>{s.icon} {s.label}</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: s.accent }}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Toolbar */}
+              <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+                <SearchBar value={srSearch} onChange={setSrSearch} placeholder="Search reports..." />
+                <select value={srStatusFilter} onChange={e => setSrStatusFilter(e.target.value)} style={{ ...inputStyle, width: 130 }}>
+                  <option value="All">All Status</option>
+                  <option value="Draft">Draft</option>
+                  <option value="Sent">Sent</option>
+                </select>
+                {canEditSR && <button onClick={openAddReport2} style={{ ...btnStyle("#6366F1"), fontSize: 12, padding: "8px 16px" }}>+ New Report</button>}
+              </div>
+
+              {/* Reports Table */}
+              <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #1E2130" }}>
+                      {["ID","Title","Customer","Period","Engineer","Hours","Status","Actions"].map(h => (
+                        <th key={h} style={{ padding: "10px 12px", textAlign: "left", color: "#5A6178", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSR.map(r => {
+                      const cust = customers.find(c => c.id === r.customerId);
+                      return (
+                        <tr key={r.id} style={{ borderBottom: "1px solid #1E213066" }}>
+                          <td style={{ padding: "10px 12px", color: "#6366F1", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.id}</td>
+                          <td style={{ padding: "10px 12px", color: "#E8ECF4", fontWeight: 600, cursor: "pointer" }} onClick={() => setReportViewId(r.id)}>{sanitizeHTML(r.title)}</td>
+                          <td style={{ padding: "10px 12px", color: "#C4CAD6" }}>{sanitizeHTML(cust?.name || "—")}</td>
+                          <td style={{ padding: "10px 12px", color: "#8B8FA3", fontSize: 11 }}>{r.periodFrom} — {r.periodTo}</td>
+                          <td style={{ padding: "10px 12px", color: "#8B8FA3" }}>{sanitizeHTML(r.engineer)}</td>
+                          <td style={{ padding: "10px 12px", color: "#06B6D4", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{(r.supportHours || 0).toFixed(1)}h</td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: r.status === "Sent" ? "#81C78422" : "#FFB34722", color: r.status === "Sent" ? "#81C784" : "#FFB347" }}>{r.status}</span>
+                          </td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button onClick={() => setReportViewId(r.id)} style={{ padding: "3px 8px", borderRadius: 4, background: "#06B6D411", border: "1px solid #06B6D433", color: "#06B6D4", fontSize: 10, cursor: "pointer" }}>👁️</button>
+                              <button onClick={() => exportPDF2(r)} style={{ padding: "3px 8px", borderRadius: 4, background: "#6366F111", border: "1px solid #6366F133", color: "#6366F1", fontSize: 10, cursor: "pointer" }}>📄 PDF</button>
+                              {r.status !== "Sent" && canEditSR && <button onClick={() => sendEmail2(r)} style={{ padding: "3px 8px", borderRadius: 4, background: "#81C78411", border: "1px solid #81C78433", color: "#81C784", fontSize: 10, cursor: "pointer" }}>📧 Send</button>}
+                              {canEditSR && <button onClick={() => openEditReport2(r)} style={{ padding: "3px 8px", borderRadius: 4, background: "#FFB34711", border: "1px solid #FFB34733", color: "#FFB347", fontSize: 10, cursor: "pointer" }}>✏️</button>}
+                              {canEditSR && <button onClick={() => handleDeleteReport2(r.id)} style={{ padding: "3px 8px", borderRadius: 4, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 10, cursor: "pointer" }}>🗑️</button>}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredSR.length === 0 && <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>No service reports found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Report Detail View Modal */}
+              {viewReport && viewCust && (
+                <Modal title={`Service Report — ${viewReport.id}`} onClose={() => setReportViewId(null)} width={700}>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{sanitizeHTML(viewReport.title)}</div>
+                    <div style={{ fontSize: 11, color: "#5A6178" }}>{viewReport.reportDate} | Prepared by {sanitizeHTML(viewReport.engineer)}</div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+                    <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Customer</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>{sanitizeHTML(viewCust.name)}</div>
+                      <div style={{ fontSize: 11, color: "#8B8FA3" }}>👤 {sanitizeHTML(viewCust.contactPerson)}</div>
+                      <div style={{ fontSize: 11, color: "#8B8FA3" }}>📧 {sanitizeHTML(viewCust.email)}</div>
+                      <div style={{ fontSize: 11, color: "#8B8FA3" }}>📞 {sanitizeHTML(viewCust.phone)}</div>
+                      <div style={{ fontSize: 11, color: "#8B8FA3" }}>📍 {sanitizeHTML(viewCust.address)}</div>
+                      <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 9, fontWeight: 600, background: viewCust.category === "CSP" ? "#06B6D422" : "#FFB34722", color: viewCust.category === "CSP" ? "#06B6D4" : "#FFB347", marginTop: 6, display: "inline-block" }}>{viewCust.category}</span>
+                    </div>
+                    <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Report Info</div>
+                      <div style={{ fontSize: 11, color: "#C4CAD6", marginBottom: 4 }}>📅 Period: {viewReport.periodFrom} → {viewReport.periodTo}</div>
+                      <div style={{ fontSize: 11, color: "#C4CAD6", marginBottom: 4 }}>🔖 Status: <span style={{ color: viewReport.status === "Sent" ? "#81C784" : "#FFB347", fontWeight: 600 }}>{viewReport.status}</span></div>
+                      <div style={{ fontSize: 11, color: "#06B6D4", marginBottom: 4 }}>⏱️ Support Hours: <span style={{ fontWeight: 700 }}>{(viewReport.supportHours || 0).toFixed(1)} hrs</span></div>
+                      {viewReport.sentAt && <div style={{ fontSize: 11, color: "#81C784" }}>✅ Sent: {viewReport.sentAt}</div>}
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Executive Summary</div>
+                    <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E2130", fontSize: 12, color: "#C4CAD6", lineHeight: 1.6 }}>{sanitizeHTML(viewReport.summary)}</div>
+                  </div>
+                  {(viewReport.sessionLog || []).length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Remote Session Log ({viewReport.sessionLog.length} sessions)</div>
+                      {viewReport.sessionLog.map((ses, idx) => (
+                        <div key={idx} style={{ display: "flex", justifyContent: "space-between", background: "#0A0C14", borderRadius: 6, padding: "8px 12px", border: "1px solid #1E2130", marginBottom: 6 }}>
+                          <span style={{ color: "#06B6D4", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{ses.start} → {ses.end}</span>
+                          <span style={{ color: "#FFB347", fontSize: 11, fontWeight: 600 }}>{ses.duration}h</span>
+                          <span style={{ color: "#8B8FA3", fontSize: 11 }}>{sanitizeHTML(ses.engineer)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {(viewReport.incidents || []).length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Related Incidents</div>
+                      {incidents.filter(i => viewReport.incidents.includes(i.id)).map(inc => (
+                        <div key={inc.id} style={{ display: "flex", justifyContent: "space-between", background: "#0A0C14", borderRadius: 6, padding: "8px 12px", border: "1px solid #1E2130", marginBottom: 6 }}>
+                          <span style={{ color: "#6366F1", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{inc.id}</span>
+                          <span style={{ color: "#E8ECF4", fontSize: 11, flex: 1, marginLeft: 12 }}>{sanitizeHTML(inc.title)}</span>
+                          <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 9, fontWeight: 600, background: inc.status === "Resolved" ? "#81C78422" : "#FFB34722", color: inc.status === "Resolved" ? "#81C784" : "#FFB347" }}>{inc.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                    <button onClick={() => exportPDF2(viewReport)} style={btnStyle("#6366F1")}>📄 Export PDF</button>
+                    {viewReport.status !== "Sent" && <button onClick={() => { sendEmail2(viewReport); setReportViewId(null); }} style={btnStyle("#81C784")}>📧 Send to Customer</button>}
+                  </div>
+                </Modal>
+              )}
+
+              {/* Add/Edit Report Modal */}
+              {showAddReport && (
+                <Modal title={editingReportId ? "Edit Service Report" : "New Service Report"} onClose={() => { setShowAddReport(false); resetReportForm2(); setEditingReportId(null); if (sessionTimerRef.current) { clearInterval(sessionTimerRef.current); sessionTimerRef.current = null; } setSessionTimerActive(false); setSessionElapsed(0); }} width={650}>
+                  <FormField label="Customer *">
+                    <select value={reportForm.customerId} onChange={e => setReportForm(f => ({ ...f, customerId: e.target.value }))} style={inputStyle}>
+                      <option value="">Select Customer...</option>
+                      {customers.filter(c => c.status === "Active").map(c => <option key={c.id} value={c.id}>{c.name} ({c.category})</option>)}
+                    </select>
+                  </FormField>
+                  {/* Auto-populated End User Info */}
+                  {selectedCust && (
+                    <div style={{ background: "#06B6D408", border: "1px solid #06B6D422", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                      <div style={{ fontSize: 10, color: "#06B6D4", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8, fontWeight: 600 }}>📋 End User Information (Auto-populated)</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <div><div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Company</div><div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{sanitizeHTML(selectedCust.name)}</div></div>
+                        <div><div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Person In Charge</div><div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{sanitizeHTML(selectedCust.contactPerson)}</div></div>
+                        <div><div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Contact Number</div><div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{sanitizeHTML(selectedCust.phone)}</div></div>
+                        <div><div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Email</div><div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{sanitizeHTML(selectedCust.email)}</div></div>
+                        <div style={{ gridColumn: "1 / -1" }}><div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Address</div><div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{sanitizeHTML(selectedCust.address)}</div></div>
+                      </div>
+                    </div>
+                  )}
+                  <FormField label="Report Title *">
+                    <input value={reportForm.title} onChange={e => setReportForm(f => ({ ...f, title: e.target.value }))} style={inputStyle} placeholder="Monthly Service Report — March 2026" />
+                  </FormField>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 16px" }}>
+                    <FormField label="Report Date">
+                      <input type="date" value={reportForm.reportDate} onChange={e => setReportForm(f => ({ ...f, reportDate: e.target.value }))} style={inputStyle} />
+                    </FormField>
+                    <FormField label="Period From">
+                      <input type="date" value={reportForm.periodFrom} onChange={e => setReportForm(f => ({ ...f, periodFrom: e.target.value }))} style={inputStyle} />
+                    </FormField>
+                    <FormField label="Period To">
+                      <input type="date" value={reportForm.periodTo} onChange={e => setReportForm(f => ({ ...f, periodTo: e.target.value }))} style={inputStyle} />
+                    </FormField>
+                  </div>
+                  <FormField label="Engineer">
+                    <input value={reportForm.engineer} onChange={e => setReportForm(f => ({ ...f, engineer: e.target.value }))} style={inputStyle} />
+                  </FormField>
+                  {/* Support Hours Timer */}
+                  <div style={{ background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, color: "#06B6D4", textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>⏱️ Remote Session Timer</div>
+                      <div style={{ fontSize: 11, color: "#8B8FA3" }}>Total: <span style={{ color: "#06B6D4", fontWeight: 700 }}>{(reportForm.supportHours || 0).toFixed(2)} hrs</span></div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: sessionTimerActive ? "#FF6B6B" : "#E8ECF4", minWidth: 120 }}>
+                        {fmtTime(sessionElapsed)}
+                        {sessionTimerActive && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#FF6B6B", marginLeft: 8, animation: "pulse 1s infinite" }} />}
+                      </div>
+                      {!sessionTimerActive ? (
+                        <button onClick={startTimer} style={{ ...btnStyle("#06B6D4"), fontSize: 11, padding: "8px 16px" }}>▶ Start Session</button>
+                      ) : (
+                        <button onClick={stopTimer} style={{ ...btnStyle("#FF6B6B"), fontSize: 11, padding: "8px 16px" }}>⏹ Stop & Record</button>
+                      )}
+                    </div>
+                    {(reportForm.sessionLog || []).length > 0 && (
+                      <div style={{ marginTop: 10, borderTop: "1px solid #1E2130", paddingTop: 8 }}>
+                        <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", marginBottom: 6 }}>Session Log</div>
+                        {reportForm.sessionLog.map((ses, idx) => (
+                          <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#8B8FA3", padding: "3px 0" }}>
+                            <span>{ses.start} → {ses.end}</span>
+                            <span style={{ color: "#06B6D4", fontWeight: 600 }}>{ses.duration}h</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <FormField label="Executive Summary">
+                    <textarea value={reportForm.summary} onChange={e => setReportForm(f => ({ ...f, summary: e.target.value }))} rows={5} style={{ ...inputStyle, resize: "vertical" }} placeholder="Summary of services provided, incidents resolved, and overall status..." />
+                  </FormField>
+                  <FormField label="Related Incident IDs">
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                      {(reportForm.incidents || []).map((inc, i) => (
+                        <span key={i} style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, background: "#FF6B6B22", color: "#FF6B6B", border: "1px solid #FF6B6B33", display: "flex", alignItems: "center", gap: 4 }}>
+                          {inc} <button onClick={() => setReportForm(f => ({ ...f, incidents: f.incidents.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 11, padding: 0 }}>✕</button>
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input value={srSvcInput} onChange={e => setSrSvcInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && srSvcInput.trim()) { setReportForm(f => ({ ...f, incidents: [...f.incidents, srSvcInput.trim()] })); setSrSvcInput(""); } }} style={{ ...inputStyle, flex: 1 }} placeholder="Type incident ID (e.g. INC0001) and press Enter" />
+                      <button onClick={() => { if (srSvcInput.trim()) { setReportForm(f => ({ ...f, incidents: [...f.incidents, srSvcInput.trim()] })); setSrSvcInput(""); } }} style={{ ...btnStyle("#333"), fontSize: 11, padding: "8px 12px" }}>Add</button>
+                    </div>
+                  </FormField>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
+                    <button onClick={() => { setShowAddReport(false); resetReportForm2(); setEditingReportId(null); if (sessionTimerRef.current) { clearInterval(sessionTimerRef.current); sessionTimerRef.current = null; } setSessionTimerActive(false); setSessionElapsed(0); }} style={{ ...btnStyle("#333"), color: "#8B8FA3" }}>Cancel</button>
+                    <button onClick={handleSaveReport2} style={btnStyle("#6366F1")}>{editingReportId ? "Save Changes" : "Create Report"}</button>
+                  </div>
+                </Modal>
+              )}
+            </div>
+          );
+        })()}
+
+      </div>
+    );
+  };
+
+  // ─── Cyber News Module ────────────────────────────────────────────────
+  const CyberNewsModule = () => {
+    const allThreats = [
+      { id: "GTHR-001", severity: "Critical", title: "Active exploitation of CVE-2026-21413 — Microsoft Exchange RCE", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "28 min ago", timestamp: Date.now() - 28*60000, isNew: true,
+        aiSummary: "Zero-day RCE in Exchange Server 2019 CU14. Patch available (KB5035432). Immediate patching required within 4 hours. Active exploitation confirmed by multiple threat actors.",
+        affectsUs: true, category: "Vulnerability", cve: "CVE-2026-21413", cvss: 9.8, cvssVector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        affectedSystems: ["Microsoft Exchange Server 2019 CU14", "Exchange Server 2016 CU23"],
+        mitreTactics: ["Initial Access (T1190)", "Execution (T1059)"],
+        iocs: ["185.220.101.x/24", "SHA256: a1b2c3d4e5f6...", "Domain: mail-update-srv.com"],
+        nextSteps: ["Apply emergency patch KB5035432 within 4 hours", "Enable WAF rule for OWA endpoints", "Scan mail server logs for IoC patterns", "Notify affected stakeholders via email", "Verify Exchange Online Protection rules"],
+        references: [
+          { title: "CISA Advisory AA26-085A", url: "https://www.cisa.gov/news-events/cybersecurity-advisories" },
+          { title: "Microsoft Security Update Guide", url: "https://msrc.microsoft.com/update-guide/" },
+          { title: "NVD CVE-2026-21413", url: "https://nvd.nist.gov/" }
+        ],
+        emailSubject: "URGENT: Critical Security Patch Required — CVE-2026-21413 Exchange RCE",
+        emailBody: "Dear Team,\n\nA critical zero-day vulnerability (CVE-2026-21413) affecting Microsoft Exchange Server is being actively exploited in the wild.\n\nIMPACT: Remote Code Execution on Exchange Server 2019 CU14\nRISK LEVEL: Critical (CVSS 9.8)\nPATCH: KB5035432 is available\n\nIMMEDIATE ACTIONS REQUIRED:\n1. Apply patch KB5035432 within 4 hours\n2. Enable WAF rules for OWA endpoints\n3. Review mail server logs for indicators of compromise\n\nPlease confirm completion of patching to the IT Security team.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations\nAutomated via VGC-ITSM AI Engine",
+        status: "open" },
+      { id: "GTHR-002", severity: "High", title: "Ransomware campaign targeting APAC financial services — LockBit 4.0 variant", source: "SingCERT", sourceUrl: "https://www.csa.gov.sg/alerts-advisories", region: "APAC", time: "2 hr ago", timestamp: Date.now() - 2*3600000, isNew: true,
+        aiSummary: "LockBit 4.0 variant using phishing emails with .iso attachments. Targeting APAC financial sector specifically. Block .iso attachments at email gateway immediately. Multiple Singapore organizations already affected.",
+        affectsUs: true, category: "Ransomware", cve: null, cvss: null, cvssVector: null,
+        affectedSystems: ["Email Gateway", "Windows Endpoints", "File Servers"],
+        mitreTactics: ["Initial Access (T1566.001)", "Execution (T1204.002)", "Impact (T1486)"],
+        iocs: ["SHA256: f7e8d9c0b1a2...", "IP: 91.215.85.x", "Domain: invoice-portal-sg.com", "File: Q1-Report-2026.iso"],
+        nextSteps: ["Block .iso attachments at email gateway", "Alert all staff via Teams/Email", "Verify EDR signatures are updated to latest", "Check backup integrity and test restore process", "Enable enhanced monitoring on file servers"],
+        references: [
+          { title: "SingCERT Alert 2026-0142", url: "https://www.csa.gov.sg/alerts-advisories" },
+          { title: "CSA Singapore Advisory", url: "https://www.csa.gov.sg/singcert" },
+          { title: "LockBit 4.0 Analysis — Trend Micro", url: "https://www.trendmicro.com/" }
+        ],
+        emailSubject: "Security Advisory: LockBit 4.0 Ransomware Campaign — APAC Region",
+        emailBody: "Dear Team,\n\nSG-CERT has issued an advisory regarding a LockBit 4.0 ransomware campaign targeting APAC financial services.\n\nTHREAT: LockBit 4.0 variant via phishing (.iso attachments)\nRISK LEVEL: High\nREGION: APAC / Singapore\n\nPREVENTIVE ACTIONS:\n1. .iso attachments have been blocked at the email gateway\n2. Do NOT open suspicious email attachments\n3. Report any suspicious emails to security@vgctech.com\n\nOur EDR signatures have been updated. If you notice any unusual system behavior, disconnect from the network immediately and contact IT.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations\nAutomated via VGC-ITSM AI Engine",
+        status: "open" },
+      { id: "GTHR-003", severity: "High", title: "Critical vulnerability in Fortinet FortiOS SSL VPN — CVE-2026-48788", source: "NVD / CVE", sourceUrl: "https://nvd.nist.gov/", region: "Global", time: "5 hr ago", timestamp: Date.now() - 5*3600000, isNew: false,
+        aiSummary: "Our VPN infrastructure uses Cisco AnyConnect, not FortiOS. Low direct risk. However, monitor for lateral exploitation if partner organizations use FortiOS. Recommend adding FortiOS IoCs to SIEM watchlist.",
+        affectsUs: false, category: "Vulnerability", cve: "CVE-2026-48788", cvss: 9.1, cvssVector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+        affectedSystems: ["FortiOS 7.4.x", "FortiOS 7.2.x", "FortiProxy 7.4.x"],
+        mitreTactics: ["Initial Access (T1190)", "Credential Access (T1003)"],
+        iocs: ["IP: 103.131.189.x", "SHA256: b2c3d4e5f6a7..."],
+        nextSteps: ["Confirm no FortiOS devices in our infrastructure", "Add IoCs to SIEM watchlist", "Notify partner vendors using Fortinet products", "Monitor for related exploitation attempts"],
+        references: [
+          { title: "NVD CVE-2026-48788", url: "https://nvd.nist.gov/" },
+          { title: "Fortinet PSIRT Advisory FG-IR-26-005", url: "https://www.fortiguard.com/psirt" },
+          { title: "Rapid7 Analysis", url: "https://www.rapid7.com/blog/" }
+        ],
+        emailSubject: "FYI: FortiOS SSL VPN Vulnerability — CVE-2026-48788",
+        emailBody: "Dear Team,\n\nA critical vulnerability has been discovered in Fortinet FortiOS SSL VPN (CVE-2026-48788, CVSS 9.1).\n\nWe do NOT use FortiOS in our infrastructure (we use Cisco AnyConnect), so direct risk is LOW.\n\nHowever, please note:\n1. Partner organizations may be affected\n2. IoCs have been added to our SIEM watchlist\n3. Monitor for any related exploitation attempts\n\nNo immediate action required for our team.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "monitoring" },
+      { id: "GTHR-004", severity: "Medium", title: "DNS amplification attacks increase 340% across Southeast Asia ISPs", source: "CSA Singapore", sourceUrl: "https://www.csa.gov.sg/singcert", region: "SEA", time: "8 hr ago", timestamp: Date.now() - 8*3600000, isNew: false,
+        aiSummary: "DNS amplification targeting SEA region ISPs. Our Azure Front Door WAF provides DDoS protection. Verify rate-limiting rules are active. Consider enabling Azure DDoS Protection Standard if not already enabled.",
+        affectsUs: false, category: "DDoS", cve: null, cvss: null, cvssVector: null,
+        affectedSystems: ["DNS Infrastructure", "ISP Networks"],
+        mitreTactics: ["Impact (T1498.002)"],
+        iocs: ["Multiple open resolvers in 103.x.x.x/8 range"],
+        nextSteps: ["Verify Azure DDoS Protection status", "Check WAF rate-limiting rules", "Review DNS configuration for amplification vectors", "Enable enhanced DDoS monitoring"],
+        references: [
+          { title: "CSA Singapore Advisory", url: "https://www.csa.gov.sg/singcert" },
+          { title: "Azure DDoS Protection Best Practices", url: "https://learn.microsoft.com/en-us/azure/ddos-protection/" }
+        ],
+        emailSubject: "Advisory: DNS Amplification Attacks in SEA Region",
+        emailBody: "Dear Team,\n\nCSA Singapore reports a 340% increase in DNS amplification attacks across Southeast Asia.\n\nOur Azure Front Door WAF provides baseline DDoS protection. Please verify:\n1. WAF rate-limiting rules are active\n2. Azure DDoS Protection Standard is enabled\n3. DNS configurations are not susceptible to amplification\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "monitoring" },
+      { id: "GTHR-005", severity: "Low", title: "Updated IoC list for SolarWinds Serv-U FTP vulnerability", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "12 hr ago", timestamp: Date.now() - 12*3600000, isNew: false,
+        aiSummary: "We do not use SolarWinds Serv-U. No action required. IoC list archived for reference in case of future supply chain concerns.",
+        affectsUs: false, category: "Advisory", cve: "CVE-2026-35211", cvss: 7.2, cvssVector: "AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+        affectedSystems: ["SolarWinds Serv-U FTP Server"],
+        mitreTactics: ["Initial Access (T1190)"],
+        iocs: ["SHA256: c3d4e5f6a7b8...", "IP: 198.51.100.x"],
+        nextSteps: ["No action required — we don't use SolarWinds Serv-U", "IoCs archived for reference"],
+        references: [
+          { title: "CISA Known Exploited Vulnerabilities", url: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog" }
+        ],
+        emailSubject: "FYI: SolarWinds Serv-U IoC Update",
+        emailBody: "Dear Team,\n\nCISA has updated the IoC list for SolarWinds Serv-U vulnerability.\n\nWe do NOT use SolarWinds Serv-U in our infrastructure. No action required.\n\nIoC list has been archived for reference.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "closed" },
+      { id: "GTHR-006", severity: "Medium", title: "Phishing kit 'EvilProxy' now targeting Azure AD/Entra ID tenants", source: "BleepingComputer", sourceUrl: "https://www.bleepingcomputer.com/", region: "Global", time: "1 day ago", timestamp: Date.now() - 24*3600000, isNew: false,
+        aiSummary: "EvilProxy is an advanced MFA-bypass phishing kit now targeting Entra ID tenants. Critical for our SSO infrastructure. Ensure Conditional Access policies require compliant devices. Review sign-in logs for suspicious locations. Consider deploying phishing-resistant MFA (FIDO2/Windows Hello).",
+        affectsUs: true, category: "Phishing", cve: null, cvss: null, cvssVector: null,
+        affectedSystems: ["Azure AD / Entra ID", "Microsoft 365", "SSO-integrated apps"],
+        mitreTactics: ["Initial Access (T1566.002)", "Credential Access (T1557)", "Defense Evasion (T1550.001)"],
+        iocs: ["Domain: login-microsoftonline-verify.com", "Domain: entra-auth-portal.com", "IP: 45.153.241.x"],
+        nextSteps: ["Review Conditional Access policies for compliant device requirement", "Audit Entra ID sign-in logs for suspicious locations", "Deploy phishing-resistant MFA (FIDO2/Windows Hello)", "Train staff on MFA bypass phishing techniques", "Block known EvilProxy domains at DNS level"],
+        references: [
+          { title: "BleepingComputer EvilProxy Analysis", url: "https://www.bleepingcomputer.com/" },
+          { title: "Microsoft Entra ID Protection Guide", url: "https://learn.microsoft.com/en-us/entra/id-protection/" },
+          { title: "FIDO2 Security Key Deployment", url: "https://learn.microsoft.com/en-us/entra/identity/authentication/concept-authentication-passwordless" }
+        ],
+        emailSubject: "Security Advisory: EvilProxy MFA-Bypass Phishing Targeting Entra ID",
+        emailBody: "Dear Team,\n\nA phishing kit called 'EvilProxy' is now specifically targeting Azure AD / Entra ID tenants with MFA bypass capabilities.\n\nThis DIRECTLY affects our SSO infrastructure.\n\nIMMEDIATE ACTIONS:\n1. Review Conditional Access policies\n2. Audit sign-in logs for suspicious activity\n3. Consider upgrading to FIDO2 / Windows Hello for Business\n\nDo NOT click on any login links from emails. Always navigate to portal.azure.com directly.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "open" },
+      { id: "GTHR-007", severity: "High", title: "Critical Chrome zero-day CVE-2026-3159 under active exploitation", source: "Google TAG", sourceUrl: "https://blog.google/threat-analysis-group/", region: "Global", time: "1 day ago", timestamp: Date.now() - 24*3600000, isNew: false,
+        aiSummary: "Chrome V8 type confusion vulnerability under active exploitation. Force-update all managed Chrome browsers via Intune policy immediately. Unmanaged BYOD devices should be notified to update manually.",
+        affectsUs: true, category: "Vulnerability", cve: "CVE-2026-3159", cvss: 8.8, cvssVector: "AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+        affectedSystems: ["Google Chrome < 126.0.6478.182", "Chromium-based browsers", "Microsoft Edge (Chromium)"],
+        mitreTactics: ["Execution (T1203)", "Initial Access (T1189)"],
+        iocs: ["Exploit served via compromised ad networks", "SHA256: d4e5f6a7b8c9..."],
+        nextSteps: ["Force Chrome update via Intune to 126.0.6478.182+", "Update Microsoft Edge via WSUS/Intune", "Notify BYOD users to update browsers manually", "Block known exploit domains at web proxy", "Enable Chrome browser cloud management"],
+        references: [
+          { title: "Google TAG Blog Post", url: "https://blog.google/threat-analysis-group/" },
+          { title: "Chrome Release Notes", url: "https://chromereleases.googleblog.com/" },
+          { title: "NVD CVE-2026-3159", url: "https://nvd.nist.gov/" }
+        ],
+        emailSubject: "ACTION REQUIRED: Chrome Zero-Day CVE-2026-3159 — Update Immediately",
+        emailBody: "Dear Team,\n\nA critical Chrome zero-day (CVE-2026-3159) is being actively exploited.\n\nACTION REQUIRED: Update Google Chrome to version 126.0.6478.182 or later IMMEDIATELY.\n\nManaged devices will receive updates via Intune. If you are on a BYOD device:\n1. Open Chrome → Settings → About Chrome\n2. Chrome will auto-update → Restart browser\n\nAlso update Microsoft Edge if used.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "open" },
+      { id: "GTHR-008", severity: "Critical", title: "Nation-state APT campaign 'Typhoon Silk' targeting Singapore critical infrastructure", source: "CSA Singapore", sourceUrl: "https://www.csa.gov.sg/alerts-advisories", region: "Singapore", time: "45 min ago", timestamp: Date.now() - 45*60000, isNew: true,
+        aiSummary: "CSA Singapore has issued an urgent advisory on APT group 'Typhoon Silk' actively targeting Singapore critical infrastructure including financial services. Uses supply chain compromise and living-off-the-land techniques. Immediate review of privileged access and network segmentation required.",
+        affectsUs: true, category: "APT", cve: null, cvss: null, cvssVector: null,
+        affectedSystems: ["Active Directory", "Privileged Access Workstations", "Network Infrastructure", "Supply Chain Software"],
+        mitreTactics: ["Initial Access (T1195.002)", "Persistence (T1078)", "Lateral Movement (T1021.002)", "Defense Evasion (T1218)", "Collection (T1005)"],
+        iocs: ["IP: 103.224.182.x", "IP: 45.77.x.x", "Domain: sg-cloud-updates.com", "Domain: azure-monitor-sg.com", "C2 Protocol: DNS over HTTPS", "SHA256: e5f6a7b8c9d0..."],
+        nextSteps: ["Review all privileged access accounts immediately", "Verify network segmentation controls", "Audit recent supply chain software updates", "Enable enhanced logging on domain controllers", "Conduct emergency threat hunting exercise", "Report any suspicious activity to CSA Singapore"],
+        references: [
+          { title: "CSA Singapore Urgent Advisory", url: "https://www.csa.gov.sg/alerts-advisories" },
+          { title: "Singapore CII Protection Framework", url: "https://www.csa.gov.sg/" },
+          { title: "MITRE ATT&CK — Typhoon Silk", url: "https://attack.mitre.org/" }
+        ],
+        emailSubject: "URGENT: APT Campaign 'Typhoon Silk' Targeting Singapore Infrastructure",
+        emailBody: "Dear Team,\n\nCSA Singapore has issued an URGENT advisory regarding APT group 'Typhoon Silk' actively targeting Singapore critical infrastructure, including financial services.\n\nTHIS IS A NATION-STATE LEVEL THREAT.\n\nIMMEDIATE ACTIONS REQUIRED:\n1. Review ALL privileged access accounts\n2. Verify network segmentation is intact\n3. Audit recent software supply chain updates\n4. Enable enhanced logging on domain controllers\n5. Report ANY suspicious activity to CSA Singapore\n\nAdditional threat hunting exercise will be conducted. Standby for further instructions.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations\nAutomated via VGC-ITSM AI Engine",
+        status: "open" },
+    ];
+
+    const [filterSev, setFilterSev] = useState("All");
+    const [filterCategory, setFilterCategory] = useState("All");
+    const [filterStatus, setFilterStatus] = useState("All");
+    const [showAffectsUsOnly, setShowAffectsUsOnly] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [expandedThreat, setExpandedThreat] = useState(null);
+    const [threatStatuses, setThreatStatuses] = useState({});
+    const [activeTab, setActiveTab] = useState("feed");
+    const [checkedSteps, setCheckedSteps] = useState({});
+
+    const getStatus = (t) => threatStatuses[t.id] || t.status;
+    const statusColors = { open: "#FF4444", acknowledged: "#FFB347", "in-progress": "#64B5F6", mitigated: "#81C784", monitoring: "#CE93D8", closed: "#5A6178" };
+    const statusLabels = { open: "Open", acknowledged: "Acknowledged", "in-progress": "In Progress", mitigated: "Mitigated", monitoring: "Monitoring", closed: "Closed" };
+    const sevColors = { Critical: "#FF4444", High: "#FF6B6B", Medium: "#FFB347", Low: "#4CAF50" };
+    const categories = [...new Set(allThreats.map(t => t.category))];
+
+    const filtered = allThreats.filter(t => {
+      if (filterSev !== "All" && t.severity !== filterSev) return false;
+      if (filterCategory !== "All" && t.category !== filterCategory) return false;
+      if (filterStatus !== "All" && getStatus(t) !== filterStatus) return false;
+      if (showAffectsUsOnly && !t.affectsUs) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        return t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || (t.cve && t.cve.toLowerCase().includes(q)) || t.source.toLowerCase().includes(q) || t.aiSummary.toLowerCase().includes(q);
+      }
+      return true;
+    });
+
+    const emergencyThreats = allThreats.filter(t => (t.severity === "Critical" || t.severity === "High") && t.isNew && t.affectsUs);
+    const toggleStep = (threatId, stepIdx) => setCheckedSteps(prev => ({ ...prev, [threatId]: { ...(prev[threatId] || {}), [stepIdx]: !(prev[threatId] || {})[stepIdx] } }));
+    const getStepProgress = (threat) => {
+      const steps = checkedSteps[threat.id] || {};
+      const done = Object.values(steps).filter(Boolean).length;
+      return { done, total: threat.nextSteps.length, pct: threat.nextSteps.length > 0 ? Math.round(done / threat.nextSteps.length * 100) : 0 };
+    };
+
+    const tabs = [
+      { id: "feed", label: "Threat Feed", icon: "📰", count: allThreats.length },
+      { id: "emergency", label: "Emergency Actions", icon: "🚨", count: emergencyThreats.length },
+      { id: "response", label: "Response Tracker", icon: "🛡️", count: allThreats.filter(t => getStatus(t) !== "closed").length },
+      { id: "ioc", label: "IoC Database", icon: "🔍", count: allThreats.reduce((a, t) => a + (t.iocs?.length || 0), 0) },
+    ];
+
+    const cvssColor = (score) => score >= 9.0 ? "#FF4444" : score >= 7.0 ? "#FF6B6B" : score >= 4.0 ? "#FFB347" : "#4CAF50";
+
+    return (
+      <div>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 22 }}>🛡️</span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 18, fontFamily: "'Space Grotesk', sans-serif" }}>Cyber Threat Intelligence Center</h2>
+              <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Real-time threat intelligence, advisories &amp; incident response tracking</div>
+            </div>
+            <span style={{ padding: "3px 10px", borderRadius: 4, background: "#FF444422", color: "#FF4444", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>● LIVE</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Last sync: {new Date().toLocaleTimeString("en-SG", { hour12: false })}</div>
+            <button onClick={() => {}} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🔄 Refresh</button>
+          </div>
+        </div>
+
+        {/* ═══ EMERGENCY BANNER ═══ */}
+        {emergencyThreats.length > 0 && (
+          <div style={{ marginBottom: 16, padding: "14px 18px", background: "linear-gradient(135deg, #FF444412, #FF6B6B08)", borderRadius: 10, border: "1px solid #FF444444", position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #FF4444, #FF6B6B, #FF4444)", animation: "pulse 2s infinite" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <span style={{ fontSize: 16, animation: "pulse 2s infinite" }}>🚨</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#FF4444", fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>IMMEDIATE ACTION REQUIRED</span>
+              <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FF4444", color: "#fff", fontSize: 10, fontWeight: 700 }}>{emergencyThreats.length} ACTIVE</span>
+            </div>
+            {emergencyThreats.map(t => (
+              <div key={t.id} onClick={() => { setActiveTab("feed"); setExpandedThreat(expandedThreat === t.id ? null : t.id); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C1488", borderRadius: 6, marginBottom: 6, cursor: "pointer", border: "1px solid #FF444422", transition: "all 0.2s" }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: sevColors[t.severity], boxShadow: `0 0 8px ${sevColors[t.severity]}88`, flexShrink: 0, animation: "pulse 2s infinite" }} />
+                <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[t.severity], fontFamily: "'JetBrains Mono', monospace", minWidth: 60 }}>{t.severity.toUpperCase()}</span>
+                <span style={{ fontSize: 11, color: "#E8ECF4", flex: 1, fontWeight: 500 }}>{t.title}</span>
+                {t.cvss && <span style={{ padding: "2px 6px", borderRadius: 3, background: cvssColor(t.cvss) + "22", color: cvssColor(t.cvss), fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>CVSS {t.cvss}</span>}
+                <span style={{ fontSize: 9, color: "#5A6178" }}>{t.time}</span>
+                <span style={{ color: "#6366F1", fontSize: 11 }}>→</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Stat Cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 16 }}>
+          {["Critical", "High", "Medium", "Low"].map(s => {
+            const count = allThreats.filter(t => t.severity === s).length;
+            const affectsCount = allThreats.filter(t => t.severity === s && t.affectsUs).length;
+            return (
+              <div key={s} onClick={() => { setFilterSev(filterSev === s ? "All" : s); setActiveTab("feed"); }} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: `1px solid ${sevColors[s]}22`, borderLeft: `3px solid ${sevColors[s]}`, cursor: "pointer", transition: "all 0.2s" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 22, fontWeight: 700, color: sevColors[s], fontFamily: "'Space Grotesk', sans-serif" }}>{count}</span>
+                  {affectsCount > 0 && <span style={{ fontSize: 9, color: "#FF6B6B", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>({affectsCount} ⚠)</span>}
+                </div>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{s}</div>
+              </div>
+            );
+          })}
+          <div style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #6366F122", borderLeft: "3px solid #6366F1" }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif" }}>{allThreats.filter(t => t.affectsUs).length}</div>
+            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>Affects Us</div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 2, marginBottom: 16, background: "#0A0C14", borderRadius: 8, padding: 3 }}>
+          {tabs.map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+              flex: 1, padding: "8px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600,
+              fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              background: activeTab === tab.id ? "#1E2130" : "transparent",
+              color: activeTab === tab.id ? "#E8ECF4" : "#5A6178",
+              transition: "all 0.2s"
+            }}>
+              <span>{tab.icon}</span> {tab.label}
+              <span style={{ padding: "1px 6px", borderRadius: 10, background: activeTab === tab.id ? "#6366F1" : "#1E2130", color: activeTab === tab.id ? "#fff" : "#5A6178", fontSize: 9, fontWeight: 700 }}>{tab.count}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* ═══ TAB: THREAT FEED ═══ */}
+        {activeTab === "feed" && (
+          <div>
+            {/* Search & Filters */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ position: "relative", flex: "1 1 200px" }}>
+                <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12 }}>🔍</span>
+                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search threats, CVEs, sources..."
+                  style={{ width: "100%", padding: "7px 10px 7px 30px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                {["All", "Critical", "High", "Medium", "Low"].map(s => (
+                  <button key={s} onClick={() => setFilterSev(s)} style={{
+                    padding: "5px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                    fontFamily: "'JetBrains Mono', monospace", cursor: "pointer",
+                    background: filterSev === s ? (sevColors[s] || "#6366F1") + "22" : "#0A0C14",
+                    border: `1px solid ${filterSev === s ? (sevColors[s] || "#6366F1") + "66" : "#1E2130"}`,
+                    color: filterSev === s ? (sevColors[s] || "#E8ECF4") : "#5A6178"
+                  }}>{s}</button>
+                ))}
+              </div>
+              <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
+                style={{ padding: "5px 8px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 5, color: "#C4CAD6", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
+                <option value="All">All Categories</option>
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+                style={{ padding: "5px 8px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 5, color: "#C4CAD6", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
+                <option value="All">All Statuses</option>
+                {Object.entries(statusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <button onClick={() => setShowAffectsUsOnly(!showAffectsUsOnly)} style={{
+                padding: "5px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                fontFamily: "'JetBrains Mono', monospace",
+                background: showAffectsUsOnly ? "#FF444422" : "#0A0C14",
+                border: `1px solid ${showAffectsUsOnly ? "#FF444466" : "#1E2130"}`,
+                color: showAffectsUsOnly ? "#FF6B6B" : "#5A6178"
+              }}>⚠ Affects Us</button>
+            </div>
+
+            {/* Dismissed Alerts Log */}
+            {cyberNewsLog.length > 0 && (
+              <div style={{ marginBottom: 14, padding: "10px 14px", background: "#FF444408", borderRadius: 8, border: "1px solid #FF444422" }}>
+                <div style={{ fontSize: 10, color: "#FF6B6B", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🔔 RECENTLY DISMISSED ALERTS</div>
+                {cyberNewsLog.map(t => (
+                  <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: sevColors[t.severity], flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[t.severity], fontFamily: "'JetBrains Mono', monospace", minWidth: 55 }}>{t.severity?.toUpperCase()}</span>
+                    <span style={{ fontSize: 11, color: "#C4CAD6", flex: 1 }}>{t.title}</span>
+                    <span style={{ fontSize: 9, color: "#5A6178" }}>Dismissed at {t.dismissedAt}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Results count */}
+            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10 }}>
+              Showing {filtered.length} of {allThreats.length} threats {searchQuery && `matching "${searchQuery}"`}
+            </div>
+
+            {/* Threat Cards */}
+            {filtered.map(threat => {
+              const isExpanded = expandedThreat === threat.id;
+              const status = getStatus(threat);
+              const progress = getStepProgress(threat);
+              return (
+                <div key={threat.id} style={{
+                  marginBottom: 10, background: threat.isNew && threat.affectsUs ? "#FF444408" : "#0F1117",
+                  borderRadius: 10, border: `1px solid ${threat.isNew && threat.affectsUs ? sevColors[threat.severity] + '33' : '#1E2130'}`,
+                  borderLeft: `3px solid ${sevColors[threat.severity]}`, position: "relative", overflow: "hidden",
+                  transition: "all 0.2s"
+                }}>
+                  {/* ACTION REQUIRED badge */}
+                  {threat.isNew && threat.severity === "Critical" && (
+                    <div style={{ position: "absolute", top: -1, right: -1, padding: "2px 10px", borderRadius: "0 10px 0 6px", background: "#FF4444", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>⚡ IMMEDIATE ACTION</div>
+                  )}
+                  {threat.isNew && threat.severity === "High" && (
+                    <div style={{ position: "absolute", top: -1, right: -1, padding: "2px 10px", borderRadius: "0 10px 0 6px", background: "#FF6B6B", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>⚡ ACTION REQUIRED</div>
+                  )}
+
+                  {/* Main row — clickable */}
+                  <div onClick={() => setExpandedThreat(isExpanded ? null : threat.id)} style={{ padding: "14px 16px", cursor: "pointer" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: sevColors[threat.severity], boxShadow: threat.isNew ? `0 0 8px ${sevColors[threat.severity]}88` : "none", marginTop: 5, flexShrink: 0 }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace" }}>{threat.severity.toUpperCase()}</span>
+                          <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
+                          <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.id}</span>
+                          {threat.cve && <><span style={{ fontSize: 9, color: "#3A3F55" }}>·</span><span style={{ padding: "1px 6px", borderRadius: 3, background: "#6366F118", fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{threat.cve}</span></>}
+                          {threat.cvss && <span style={{ padding: "2px 6px", borderRadius: 3, background: cvssColor(threat.cvss) + "22", color: cvssColor(threat.cvss), fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>CVSS {threat.cvss}</span>}
+                          <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
+                          <a href={threat.sourceUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6", textDecoration: "none" }}>{threat.source} ↗</a>
+                          <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6" }}>{threat.region}</span>
+                          <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E213066", fontSize: 9, color: "#A0AEC0" }}>{threat.category}</span>
+                          {threat.affectsUs && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#FF444422", fontSize: 9, color: "#FF6B6B", fontWeight: 600 }}>⚠ AFFECTS US</span>}
+                          <span style={{ padding: "2px 6px", borderRadius: 3, background: statusColors[status] + "22", color: statusColors[status], fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{statusLabels[status]?.toUpperCase()}</span>
+                          <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto" }}>{threat.time}</span>
+                          <span style={{ color: "#5A6178", fontSize: 10, transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>▼</span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 500 }}>{threat.title}</div>
+                        {/* AI Summary - always visible */}
+                        <div style={{ marginTop: 8, padding: "8px 10px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                            <span style={{ fontSize: 11 }}>🤖</span>
+                            <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>AI THREAT ANALYSIS</span>
+                            {azureOpenAI.enabled && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />}
+                            {progress.total > 0 && progress.done > 0 && <span style={{ marginLeft: "auto", fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{progress.done}/{progress.total} steps done</span>}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.6 }}>{threat.aiSummary}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Expanded Details */}
+                  {isExpanded && (
+                    <div style={{ padding: "0 16px 16px 36px", borderTop: "1px solid #1E213044" }}>
+
+                      {/* CVSS Details */}
+                      {threat.cvss && (
+                        <div style={{ marginTop: 12, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>CVSS SCORE</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ width: 120, height: 6, background: "#1E2130", borderRadius: 3, overflow: "hidden" }}>
+                                <div style={{ width: `${threat.cvss * 10}%`, height: "100%", background: cvssColor(threat.cvss), borderRadius: 3, transition: "width 0.5s" }} />
+                              </div>
+                              <span style={{ fontSize: 14, fontWeight: 700, color: cvssColor(threat.cvss), fontFamily: "'JetBrains Mono', monospace" }}>{threat.cvss}/10</span>
+                              <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.cvss >= 9 ? "CRITICAL" : threat.cvss >= 7 ? "HIGH" : threat.cvss >= 4 ? "MEDIUM" : "LOW"}</span>
+                            </div>
+                          </div>
+                          {threat.cvssVector && <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Vector: {threat.cvssVector}</div>}
+                        </div>
+                      )}
+
+                      {/* Affected Systems */}
+                      {threat.affectedSystems && (
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>💻 AFFECTED SYSTEMS</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {threat.affectedSystems.map((s, i) => (
+                              <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3E", fontSize: 10, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>{s}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* MITRE ATT&CK Tactics */}
+                      {threat.mitreTactics && (
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🎯 MITRE ATT&CK TACTICS</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {threat.mitreTactics.map((tactic, i) => (
+                              <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#CE93D818", border: "1px solid #CE93D833", fontSize: 10, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace" }}>{tactic}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Indicators of Compromise */}
+                      {threat.iocs && (
+                        <div style={{ marginTop: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🔍 INDICATORS OF COMPROMISE (IoC)</div>
+                          {threat.iocs.map((ioc, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0" }}>
+                              <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#FF6B6B", flexShrink: 0 }} />
+                              <code style={{ fontSize: 10, color: "#A0AEC0", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{ioc}</code>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Recommended Actions with Checkboxes */}
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>✅ RECOMMENDED ACTIONS</div>
+                          {progress.total > 0 && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ width: 80, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                                <div style={{ width: `${progress.pct}%`, height: "100%", background: progress.pct === 100 ? "#4CAF50" : "#6366F1", borderRadius: 2, transition: "width 0.3s" }} />
+                              </div>
+                              <span style={{ fontSize: 9, color: progress.pct === 100 ? "#4CAF50" : "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{progress.pct}%</span>
+                            </div>
+                          )}
+                        </div>
+                        {threat.nextSteps.map((step, i) => {
+                          const checked = (checkedSteps[threat.id] || {})[i];
+                          return (
+                            <div key={i} onClick={() => toggleStep(threat.id, i)} style={{
+                              display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 3,
+                              background: checked ? "#4CAF5008" : "#0A0C14", borderRadius: 6,
+                              border: `1px solid ${checked ? "#4CAF5033" : "#1E2130"}`,
+                              cursor: "pointer", transition: "all 0.2s"
+                            }}>
+                              <span style={{
+                                width: 18, height: 18, borderRadius: 4, border: `2px solid ${checked ? "#4CAF50" : "#2A2E3E"}`,
+                                background: checked ? "#4CAF50" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                                fontSize: 10, color: "#fff", flexShrink: 0, transition: "all 0.2s"
+                              }}>{checked ? "✓" : ""}</span>
+                              <span style={{ fontSize: 11, color: checked ? "#5A6178" : "#C4CAD6", textDecoration: checked ? "line-through" : "none", flex: 1 }}>{step}</span>
+                              <span style={{ width: 18, height: 18, borderRadius: 4, background: "#0A0C14", border: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: checked ? "#4CAF50" : "#5A6178", flexShrink: 0 }}>{i + 1}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* References */}
+                      {threat.references && (
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>📚 REFERENCE SOURCES</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {threat.references.map((ref, i) => (
+                              <a key={i} href={ref.url} target="_blank" rel="noopener noreferrer" style={{
+                                padding: "4px 10px", borderRadius: 5, background: "#1E2130", border: "1px solid #2A2E3E",
+                                fontSize: 10, color: "#64B5F6", textDecoration: "none", display: "flex", alignItems: "center", gap: 4,
+                                transition: "all 0.2s"
+                              }}
+                                onMouseEnter={e => { e.currentTarget.style.background = "#2A2E3E"; e.currentTarget.style.borderColor = "#64B5F6"; }}
+                                onMouseLeave={e => { e.currentTarget.style.background = "#1E2130"; e.currentTarget.style.borderColor = "#2A2E3E"; }}
+                              >
+                                <span style={{ fontSize: 10 }}>🔗</span> {ref.title} ↗
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {/* Status Change */}
+                        <select value={status} onChange={e => setThreatStatuses(prev => ({ ...prev, [threat.id]: e.target.value }))}
+                          style={{ padding: "6px 10px", background: statusColors[status] + "18", border: `1px solid ${statusColors[status]}44`, borderRadius: 6, color: statusColors[status], fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
+                          {Object.entries(statusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                        </select>
+                        <button onClick={(e) => { e.stopPropagation(); setThreatEmailDraft(threat); }} style={{
+                          padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118",
+                          color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                          display: "flex", alignItems: "center", gap: 6
+                        }}>📧 Draft Advisory Email</button>
+                        <button onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(threat.iocs?.join("\n") || ""); }} style={{
+                          padding: "6px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14",
+                          color: "#A0AEC0", cursor: "pointer", fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
+                          display: "flex", alignItems: "center", gap: 6
+                        }}>📋 Copy IoCs</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ═══ TAB: EMERGENCY ACTIONS ═══ */}
+        {activeTab === "emergency" && (
+          <div>
+            {emergencyThreats.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: "#5A6178" }}>
+                <span style={{ fontSize: 32 }}>✅</span>
+                <div style={{ fontSize: 14, marginTop: 10, fontWeight: 600, color: "#81C784" }}>No Emergency Actions Required</div>
+                <div style={{ fontSize: 11, marginTop: 4 }}>All critical and high-severity threats have been addressed.</div>
+              </div>
+            ) : (
+              emergencyThreats.map(threat => {
+                const progress = getStepProgress(threat);
+                return (
+                  <div key={threat.id} style={{
+                    marginBottom: 14, padding: "16px 18px", background: "#FF444408", borderRadius: 10,
+                    border: `2px solid ${sevColors[threat.severity]}44`, position: "relative"
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: 14, animation: "pulse 2s infinite" }}>🚨</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace" }}>{threat.severity.toUpperCase()} — {threat.id}</span>
+                      {threat.cvss && <span style={{ padding: "2px 6px", borderRadius: 3, background: cvssColor(threat.cvss) + "22", color: cvssColor(threat.cvss), fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>CVSS {threat.cvss}</span>}
+                      <a href={threat.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ padding: "2px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6", textDecoration: "none" }}>{threat.source} ↗</a>
+                      <span style={{ marginLeft: "auto", fontSize: 10, color: "#5A6178" }}>{threat.time}</span>
+                    </div>
+                    <div style={{ fontSize: 14, color: "#E8ECF4", fontWeight: 600, marginBottom: 10 }}>{threat.title}</div>
+                    <div style={{ padding: "10px 12px", background: "#6366F108", borderRadius: 8, border: "1px solid #6366F122", marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <span style={{ fontSize: 12 }}>🤖</span>
+                        <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>AI RECOMMENDATION</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.6 }}>{threat.aiSummary}</div>
+                    </div>
+
+                    {/* Affected Systems */}
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>💻 AFFECTED SYSTEMS</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {threat.affectedSystems.map((s, i) => (
+                          <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#FFB34718", border: "1px solid #FFB34733", fontSize: 10, color: "#FFB347" }}>{s}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Action Steps with progress */}
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>🎯 REQUIRED ACTIONS ({progress.done}/{progress.total})</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ width: 120, height: 6, background: "#1E2130", borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ width: `${progress.pct}%`, height: "100%", background: progress.pct === 100 ? "#4CAF50" : progress.pct >= 50 ? "#FFB347" : "#FF4444", borderRadius: 3, transition: "width 0.3s" }} />
+                          </div>
+                          <span style={{ fontSize: 10, color: progress.pct === 100 ? "#4CAF50" : "#FFB347", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{progress.pct}%</span>
+                        </div>
+                      </div>
+                      {threat.nextSteps.map((step, i) => {
+                        const checked = (checkedSteps[threat.id] || {})[i];
+                        return (
+                          <div key={i} onClick={() => toggleStep(threat.id, i)} style={{
+                            display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 4,
+                            background: checked ? "#4CAF5008" : "#0A0C14", borderRadius: 6,
+                            border: `1px solid ${checked ? "#4CAF5044" : "#1E2130"}`, cursor: "pointer"
+                          }}>
+                            <span style={{
+                              width: 22, height: 22, borderRadius: 5, border: `2px solid ${checked ? "#4CAF50" : "#2A2E3E"}`,
+                              background: checked ? "#4CAF50" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                              fontSize: 12, color: "#fff", flexShrink: 0, transition: "all 0.2s"
+                            }}>{checked ? "✓" : ""}</span>
+                            <span style={{ fontSize: 12, color: checked ? "#5A6178" : "#E8ECF4", textDecoration: checked ? "line-through" : "none", flex: 1, fontWeight: checked ? 400 : 500 }}>{step}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* References */}
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>📚 REFERENCES</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {threat.references.map((ref, i) => (
+                          <a key={i} href={ref.url} target="_blank" rel="noopener noreferrer" style={{ padding: "4px 10px", borderRadius: 5, background: "#1E2130", border: "1px solid #2A2E3E", fontSize: 10, color: "#64B5F6", textDecoration: "none" }}>🔗 {ref.title} ↗</a>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <select value={getStatus(threat)} onChange={e => setThreatStatuses(prev => ({ ...prev, [threat.id]: e.target.value }))}
+                        style={{ padding: "6px 10px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
+                        {Object.entries(statusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                      <button onClick={() => setThreatEmailDraft(threat)} style={{ flex: 1, padding: "7px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>📧 Auto-Draft Advisory Email</button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* ═══ TAB: RESPONSE TRACKER ═══ */}
+        {activeTab === "response" && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginBottom: 16 }}>
+              {Object.entries(statusLabels).map(([k, v]) => {
+                const count = allThreats.filter(t => getStatus(t) === k).length;
+                return (
+                  <div key={k} onClick={() => setFilterStatus(filterStatus === k ? "All" : k)} style={{
+                    padding: "10px 12px", background: "#0F1117", borderRadius: 8, border: `1px solid ${statusColors[k]}22`,
+                    borderTop: `3px solid ${statusColors[k]}`, cursor: "pointer", textAlign: "center"
+                  }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: statusColors[k], fontFamily: "'Space Grotesk', sans-serif" }}>{count}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{v}</div>
+                  </div>
+                );
+              })}
+            </div>
+            {allThreats.filter(t => getStatus(t) !== "closed").sort((a, b) => {
+              const order = { "Critical": 0, "High": 1, "Medium": 2, "Low": 3 };
+              return order[a.severity] - order[b.severity];
+            }).map(threat => {
+              const status = getStatus(threat);
+              const progress = getStepProgress(threat);
+              return (
+                <div key={threat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 6, background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", borderLeft: `3px solid ${sevColors[threat.severity]}` }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: sevColors[threat.severity], flexShrink: 0 }} />
+                  <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace", minWidth: 55 }}>{threat.severity.toUpperCase()}</span>
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 70 }}>{threat.id}</span>
+                  <span style={{ fontSize: 11, color: "#E8ECF4", flex: 1 }}>{threat.title}</span>
+                  {progress.total > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 80 }}>
+                      <div style={{ width: 50, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${progress.pct}%`, height: "100%", background: progress.pct === 100 ? "#4CAF50" : "#6366F1", borderRadius: 2 }} />
+                      </div>
+                      <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{progress.pct}%</span>
+                    </div>
+                  )}
+                  <select value={status} onChange={e => setThreatStatuses(prev => ({ ...prev, [threat.id]: e.target.value }))}
+                    style={{ padding: "4px 8px", background: statusColors[status] + "18", border: `1px solid ${statusColors[status]}44`, borderRadius: 4, color: statusColors[status], fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
+                    {Object.entries(statusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                  <span style={{ fontSize: 9, color: "#5A6178" }}>{threat.time}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ═══ TAB: IoC DATABASE ═══ */}
+        {activeTab === "ioc" && (
+          <div>
+            <div style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: "#FF6B6B", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🔍 CONSOLIDATED INDICATORS OF COMPROMISE</div>
+              <div style={{ fontSize: 10, color: "#5A6178" }}>Aggregated IoCs from all active threats. Export for SIEM/EDR ingestion.</div>
+            </div>
+            {allThreats.filter(t => t.iocs && t.iocs.length > 0).map(threat => (
+              <div key={threat.id} style={{ marginBottom: 10, padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", borderLeft: `3px solid ${sevColors[threat.severity]}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace" }}>{threat.severity.toUpperCase()}</span>
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.id}</span>
+                  <span style={{ fontSize: 11, color: "#C4CAD6", flex: 1 }}>{threat.title}</span>
+                  <button onClick={() => navigator.clipboard?.writeText(Array.isArray(threat.iocs) ? threat.iocs.join("\n") : String(threat.iocs || ""))} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #1E2130", background: "#0A0C14", color: "#64B5F6", cursor: "pointer", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>📋 Copy</button>
+                </div>
+                <div style={{ background: "#0A0C14", borderRadius: 6, padding: "8px 10px", border: "1px solid #1E213066" }}>
+                  {threat.iocs.map((ioc, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", borderBottom: i < threat.iocs.length - 1 ? "1px solid #1E213044" : "none" }}>
+                      <span style={{ width: 4, height: 4, borderRadius: "50%", background: sevColors[threat.severity], flexShrink: 0 }} />
+                      <code style={{ fontSize: 10, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all", flex: 1 }}>{ioc}</code>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <button onClick={() => {
+                const allIocs = allThreats.flatMap(t => (t.iocs || []).map(ioc => `[${t.severity}] ${t.id}: ${ioc}`));
+                navigator.clipboard?.writeText(allIocs.join("\n"));
+              }} style={{ flex: 1, padding: "8px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>📋 Copy All IoCs</button>
+              <button onClick={() => {
+                const csv = "Severity,Threat ID,Title,IoC\n" + allThreats.flatMap(t => (t.iocs || []).map(ioc => `${t.severity},${t.id},"${t.title}","${ioc}"`)).join("\n");
+                const blob = new Blob([csv], { type: "text/csv" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url; a.download = "vgc-itsm-ioc-export.csv"; a.click(); URL.revokeObjectURL(url);
+              }} style={{ flex: 1, padding: "8px 14px", borderRadius: 6, border: "1px solid #81C78433", background: "#81C78418", color: "#81C784", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>📥 Export CSV</button>
+            </div>
+          </div>
+        )}
+
+        {/* Sources Footer */}
+        <div style={{ marginTop: 20, padding: "12px 16px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6, textAlign: "center" }}>INTELLIGENCE SOURCES</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+            {[
+              { name: "CISA", url: "https://www.cisa.gov/" },
+              { name: "NVD / CVE", url: "https://nvd.nist.gov/" },
+              { name: "SingCERT", url: "https://www.csa.gov.sg/singcert" },
+              { name: "CSA Singapore", url: "https://www.csa.gov.sg/" },
+              { name: "Google TAG", url: "https://blog.google/threat-analysis-group/" },
+              { name: "MITRE ATT&CK", url: "https://attack.mitre.org/" },
+              { name: "BleepingComputer", url: "https://www.bleepingcomputer.com/" },
+              { name: "The Hacker News", url: "https://thehackernews.com/" },
+              { name: "SecurityWeek", url: "https://www.securityweek.com/" },
+              { name: "Dark Reading", url: "https://www.darkreading.com/" },
+            ].map(s => (
+              <a key={s.name} href={s.url} target="_blank" rel="noopener noreferrer" style={{
+                padding: "3px 8px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3E",
+                fontSize: 9, color: "#64B5F6", textDecoration: "none", fontFamily: "'JetBrains Mono', monospace"
+              }}>{s.name} ↗</a>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── AI-Powered Productivity Dashboard ─────────────────────────────────
+  const ProductivityDashboard = () => {
+    const cardBase = { background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 20, transition: "all 0.3s ease" };
+    const headerGrad = "linear-gradient(135deg, #0078D4, #00BCF2)";
+    const recurrenceColors = { daily: "#FF6B6B", weekly: "#FFB347", monthly: "#6366F1", quarterly: "#06B6D4", "6-monthly": "#CE93D8", yearly: "#81C784" };
+    const recurrenceLabels = { daily: "Daily", weekly: "Weekly", monthly: "Monthly", quarterly: "Quarterly", "6-monthly": "6-Monthly", yearly: "Yearly" };
+    const taskFilterOptions = ["all", "daily", "weekly", "monthly", "quarterly", "6-monthly", "yearly"];
+    const [taskFilter, setTaskFilter] = useState("all");
+    const [showAddTask, setShowAddTask] = useState(false);
+    const [newTask, setNewTask] = useState({ title: "", recurrence: "daily", category: "General", priority: "Medium", assignee: "", notes: "" });
+
+    const safeSmartTasks = Array.isArray(smartTasks) ? smartTasks : [];
+    const pendingTasks = safeSmartTasks.filter(t => t.status === "pending");
+    const completedTasks = safeSmartTasks.filter(t => t.status === "done");
+    const filteredTasks = taskFilter === "all" ? safeSmartTasks : safeSmartTasks.filter(t => t.recurrence === taskFilter);
+    const todayStr = new Date().toISOString().split("T")[0];
+    const todayTasks = pendingTasks.filter(t => {
+      if (!t.nextDue) return false;
+      if (t.nextDue === todayStr) return true;
+      const d = new Date(t.nextDue);
+      return !isNaN(d.getTime()) && d.toDateString() === new Date().toDateString();
+    });
+    const overdueTasks = pendingTasks.filter(t => t.nextDue && t.nextDue < todayStr);
+
+    const completeTask = (id) => {
+      const updated = smartTasks.map(t => t.id === id ? { ...t, status: "done", completedAt: new Date().toISOString() } : t);
+      setSmartTasks(updated);
+      _save("vgc_smart_tasks", updated);
+    };
+    const resetTask = (id) => {
+      const updated = smartTasks.map(t => t.id === id ? { ...t, status: "pending", completedAt: null } : t);
+      setSmartTasks(updated);
+      _save("vgc_smart_tasks", updated);
+    };
+    const addTask = () => {
+      if (!newTask.title.trim()) return;
+      const maxId = Math.max(...safeSmartTasks.map(t => parseInt(t.id?.slice(2)) || 0), 0);
+      const id = "ST" + String(maxId + 1).padStart(3, "0");
+      const task = { ...newTask, id, status: "pending", nextDue: new Date().toISOString().split("T")[0], aiSuggested: false };
+      const updated = [...smartTasks, task];
+      setSmartTasks(updated);
+      _save("vgc_smart_tasks", updated);
+      setNewTask({ title: "", recurrence: "daily", category: "General", priority: "Medium", assignee: "", notes: "" });
+      setShowAddTask(false);
+    };
+    const deleteTask = (id) => {
+      const updated = smartTasks.filter(t => t.id !== id);
+      setSmartTasks(updated);
+      _save("vgc_smart_tasks", updated);
+    };
+
+    // M365 App Quick Access
+    const m365Apps = [
+      { name: "Outlook", icon: "📧", color: "#0078D4", url: "https://outlook.office.com" },
+      { name: "Teams", icon: "💬", color: "#6264A7", url: "https://teams.microsoft.com" },
+      { name: "OneDrive", icon: "☁️", color: "#0078D4", url: "https://onedrive.live.com" },
+      { name: "Word", icon: "📄", color: "#2B579A", url: "https://www.office.com/launch/word" },
+      { name: "Excel", icon: "📊", color: "#217346", url: "https://www.office.com/launch/excel" },
+      { name: "PowerPoint", icon: "📽️", color: "#B7472A", url: "https://www.office.com/launch/powerpoint" },
+      { name: "SharePoint", icon: "🌐", color: "#038387", url: "https://www.office.com/launch/sharepoint" },
+      { name: "Planner", icon: "📋", color: "#31752F", url: "https://tasks.office.com" },
+    ];
+
+    // ─── Overview Tab ────────────────────────────────────────────────
+    if (productivityView === "overview") return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Header */}
+        <div style={{ ...cardBase, background: headerGrad, border: "none", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px" }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>🚀 AI-Powered Productivity Hub</div>
+            <div style={{ fontSize: 12, color: "#ffffffcc", marginTop: 2 }}>Smart scheduling, M365 integration & AI-driven task management</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button onClick={() => {
+              localStorage.removeItem("vgc_smart_tasks");
+              const td = new Date().toISOString().split("T")[0];
+              const yd = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+              const nw = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+              const fresh = [
+                { id: "ST001", title: "Review & close resolved incidents older than 7 days", recurrence: "daily", category: "Incident Mgmt", priority: "High", status: "pending", nextDue: td, assignee: "All Engineers", aiSuggested: true, notes: "" },
+                { id: "ST002", title: "Check SLA compliance for Sev-A tickets", recurrence: "daily", category: "SLA", priority: "Critical", status: "pending", nextDue: td, assignee: "Service Desk Lead", aiSuggested: true, notes: "" },
+                { id: "ST003", title: "Review unassigned ticket queue", recurrence: "daily", category: "Queue Mgmt", priority: "High", status: "pending", nextDue: td, assignee: "L1 Support Engineer", aiSuggested: false, notes: "" },
+                { id: "ST004", title: "Weekly team standup — review open incidents & changes", recurrence: "weekly", category: "Team Mgmt", priority: "Medium", status: "pending", nextDue: nw, assignee: "Service Desk Lead", aiSuggested: false, notes: "" },
+                { id: "ST005", title: "Update Knowledge Portal articles from resolved tickets", recurrence: "weekly", category: "Knowledge Mgmt", priority: "Medium", status: "pending", nextDue: nw, assignee: "L2 Support Engineer", aiSuggested: true, notes: "" },
+                { id: "ST006", title: "Patch Tuesday — review & schedule OS patching", recurrence: "monthly", category: "Change Mgmt", priority: "High", status: "pending", nextDue: "2026-04-08", assignee: "Network Engineer", aiSuggested: true, notes: "" },
+                { id: "ST007", title: "Monthly SLA & KPI performance report for management", recurrence: "monthly", category: "Reports", priority: "Medium", status: "pending", nextDue: "2026-04-01", assignee: "Service Desk Lead", aiSuggested: false, notes: "" },
+                { id: "ST008", title: "Quarterly PDPA compliance audit", recurrence: "quarterly", category: "Compliance", priority: "High", status: "pending", nextDue: "2026-06-01", assignee: "Tenant Admin", aiSuggested: true, notes: "" },
+                { id: "ST009", title: "Bi-annual disaster recovery drill & documentation", recurrence: "6-monthly", category: "DR/BCP", priority: "Critical", status: "pending", nextDue: "2026-06-15", assignee: "VGC Dev Admin", aiSuggested: true, notes: "" },
+                { id: "ST010", title: "Annual license & subscription renewal review", recurrence: "yearly", category: "Asset Mgmt", priority: "Medium", status: "pending", nextDue: "2026-12-01", assignee: "Tenant Admin", aiSuggested: false, notes: "" },
+                { id: "ST011", title: "Escalate overdue Sev-B incidents to L2 support", recurrence: "daily", category: "Incident Mgmt", priority: "High", status: "pending", nextDue: yd, assignee: "Service Desk Lead", aiSuggested: true, notes: "" },
+                { id: "ST012", title: "Verify backup completion for production servers", recurrence: "daily", category: "Infrastructure", priority: "Critical", status: "pending", nextDue: yd, assignee: "Network Engineer", aiSuggested: true, notes: "" },
+              ];
+              setSmartTasks(fresh); _save("vgc_smart_tasks", fresh);
+            }} style={{ padding: "5px 10px", borderRadius: 5, background: "#ffffff11", border: "1px solid #ffffff22", color: "#ffffffcc", fontSize: 10, cursor: "pointer" }} title="Reset to default tasks">🔄 Reset</button>
+            {["overview", "outlook", "teams", "tasks"].map(v => (
+              <button key={v} onClick={() => setProductivityView(v)} style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                background: productivityView === v ? "#ffffff33" : "#ffffff11", color: "#fff",
+                border: productivityView === v ? "1px solid #ffffff55" : "1px solid #ffffff22",
+                transition: "all 0.2s", textTransform: "capitalize"
+              }}>{v === "overview" ? "🏠 Overview" : v === "outlook" ? "📧 Outlook" : v === "teams" ? "💬 Teams" : "📋 Tasks"}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* M365 Quick Access Row */}
+        <div style={{ ...cardBase, padding: "14px 20px" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#8B8FA3", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Microsoft 365 Quick Access</div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {m365Apps.map(app => (
+              <a key={app.name} href={app.url} target="_blank" rel="noopener noreferrer" style={{
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "10px 14px",
+                borderRadius: 10, background: app.color + "11", border: "1px solid " + app.color + "33",
+                cursor: "pointer", textDecoration: "none", transition: "all 0.2s", minWidth: 64
+              }} onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = app.color + "66"; }}
+                 onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = app.color + "33"; }}>
+                <span style={{ fontSize: 22 }}>{app.icon}</span>
+                <span style={{ fontSize: 10, color: "#E8ECF4", fontWeight: 500 }}>{app.name}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* Three-column layout: Business Impact (small) | Outlook (large) | Teams (large) */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr 1.5fr", gap: 16 }}>
+          {/* Business Impact & Cost Card (smaller) */}
+          <div style={{ ...cardBase, background: "linear-gradient(135deg, #0F1117, #131620)" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>💰</span> Business Impact
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {[
+                { label: "Hours Saved / Week", value: "12.5h", icon: "⏱️", color: "#06B6D4", sub: "via automated scheduling" },
+                { label: "Tasks Auto-Completed", value: `${completedTasks.length}`, icon: "✅", color: "#81C784", sub: "this period" },
+                { label: "Escalations Prevented", value: "8", icon: "🛡️", color: "#FFB347", sub: "AI early warnings" },
+                { label: "Productivity Score", value: pendingTasks.length > 0 ? Math.round((completedTasks.length / (completedTasks.length + pendingTasks.length)) * 100) + "%" : "—", icon: "📈", color: "#6366F1", sub: "completion rate" },
+              ].map((m, i) => (
+                <div key={i} style={{ padding: "10px 12px", borderRadius: 8, background: m.color + "08", border: "1px solid " + m.color + "22" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 10, color: "#8B8FA3" }}>{m.icon} {m.label}</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: m.color }}>{m.value}</div>
+                  </div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{m.sub}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Outlook Dashboard Card (large) */}
+          <div style={{ ...cardBase, cursor: "pointer", position: "relative" }} onClick={() => setProductivityView("outlook")}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#0078D466"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.transform = "translateY(0)"; }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 8, background: "#0078D422", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📧</div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4" }}>Microsoft Outlook</div>
+                <div style={{ fontSize: 10, color: "#5A6178" }}>Email, Calendar & Tasks</div>
+              </div>
+              <div style={{ marginLeft: "auto", padding: "3px 8px", borderRadius: 4, background: "#0078D422", color: "#0078D4", fontSize: 9, fontWeight: 600 }}>GRAPH API</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {[
+                { icon: "📥", label: "Inbox", desc: "View & manage emails with AI-prioritized inbox", color: "#0078D4" },
+                { icon: "📅", label: "Calendar", desc: "Meetings, events & schedule management", color: "#00BCF2" },
+                { icon: "✉️", label: "Compose", desc: "AI-assisted email drafting & templates", color: "#6366F1" },
+              ].map((f, i) => (
+                <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: f.color + "08", border: "1px solid " + f.color + "15", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>{f.icon}</span>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{f.label}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{f.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6, background: "#0078D411", border: "1px solid #0078D422", textAlign: "center" }}>
+              <span style={{ fontSize: 10, color: "#0078D4", fontWeight: 600 }}>Click to open Outlook Dashboard →</span>
+            </div>
+          </div>
+
+          {/* Teams Dashboard Card (large) */}
+          <div style={{ ...cardBase, cursor: "pointer", position: "relative" }} onClick={() => setProductivityView("teams")}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#6264A766"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.transform = "translateY(0)"; }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 8, background: "#6264A722", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>💬</div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4" }}>Microsoft Teams</div>
+                <div style={{ fontSize: 10, color: "#5A6178" }}>Chat, Channels & Meetings</div>
+              </div>
+              <div style={{ marginLeft: "auto", padding: "3px 8px", borderRadius: 4, background: "#6264A722", color: "#6264A7", fontSize: 9, fontWeight: 600 }}>GRAPH API</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {[
+                { icon: "💬", label: "Chats", desc: "Recent conversations & group chats", color: "#6264A7" },
+                { icon: "📢", label: "Channels", desc: "Team channels & announcements", color: "#00BCF2" },
+                { icon: "📞", label: "Teams Phone", desc: "Call history, voicemail & contacts", color: "#81C784" },
+              ].map((f, i) => (
+                <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: f.color + "08", border: "1px solid " + f.color + "15", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>{f.icon}</span>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{f.label}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{f.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6, background: "#6264A711", border: "1px solid #6264A722", textAlign: "center" }}>
+              <span style={{ fontSize: 10, color: "#6264A7", fontWeight: 600 }}>Click to open Teams Dashboard →</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Smart Task Overview — Today + Overdue */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Today's Tasks */}
+          <div style={{ ...cardBase }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4" }}>📌 Today's Tasks</div>
+              <span style={{ padding: "2px 8px", borderRadius: 10, background: todayTasks.length > 0 ? "#FF6B6B22" : "#81C78422", color: todayTasks.length > 0 ? "#FF6B6B" : "#81C784", fontSize: 10, fontWeight: 600 }}>{todayTasks.length} pending</span>
+            </div>
+            {todayTasks.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 20, color: "#5A6178", fontSize: 12 }}>✅ All caught up! No tasks due today.</div>
+            ) : todayTasks.slice(0, 5).map(t => (
+              <div key={t.id} style={{ padding: "8px 10px", borderRadius: 6, background: "#ffffff04", marginBottom: 6, display: "flex", alignItems: "center", gap: 8, border: "1px solid #1E2130" }}>
+                <button onClick={() => completeTask(t.id)} style={{ width: 18, height: 18, borderRadius: 4, border: "1.5px solid #5A6178", background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#5A6178" }} title="Mark done">○</button>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: "#E8ECF4" }}>{t.title}</div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
+                    <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: recurrenceColors[t.recurrence] + "22", color: recurrenceColors[t.recurrence] }}>{recurrenceLabels[t.recurrence]}</span>
+                    <span style={{ fontSize: 8, color: "#5A6178" }}>{t.category}</span>
+                    {t.aiSuggested && <span style={{ fontSize: 8, color: "#6366F1" }}>🤖 AI</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div style={{ marginTop: 8, textAlign: "center" }}>
+              <button onClick={() => setProductivityView("tasks")} style={{ background: "none", border: "1px solid #1E2130", color: "#0078D4", fontSize: 10, padding: "5px 12px", borderRadius: 5, cursor: "pointer" }}>View All Tasks →</button>
+            </div>
+          </div>
+
+          {/* Overdue / Upcoming */}
+          <div style={{ ...cardBase }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4" }}>⚠️ Overdue & Upcoming</div>
+              <span style={{ padding: "2px 8px", borderRadius: 10, background: overdueTasks.length > 0 ? "#FF6B6B22" : "#81C78422", color: overdueTasks.length > 0 ? "#FF6B6B" : "#81C784", fontSize: 10, fontWeight: 600 }}>{overdueTasks.length} overdue</span>
+            </div>
+            {overdueTasks.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 20, color: "#5A6178", fontSize: 12 }}>🎉 No overdue tasks!</div>
+            ) : overdueTasks.slice(0, 5).map(t => (
+              <div key={t.id} style={{ padding: "8px 10px", borderRadius: 6, background: "#FF6B6B06", marginBottom: 6, display: "flex", alignItems: "center", gap: 8, border: "1px solid #FF6B6B22" }}>
+                <span style={{ fontSize: 12 }}>🔴</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: "#E8ECF4" }}>{t.title}</div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
+                    <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#FF6B6B22", color: "#FF6B6B" }}>Due: {t.nextDue}</span>
+                    <span style={{ fontSize: 8, color: "#5A6178" }}>{t.category}</span>
+                  </div>
+                </div>
+                <button onClick={() => completeTask(t.id)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #81C78444", background: "#81C78411", color: "#81C784", fontSize: 9, cursor: "pointer" }}>Done</button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* AI Daily Guidance */}
+        <div style={{ ...cardBase, background: "linear-gradient(135deg, #6366F108, #06B6D408)", border: "1px solid #6366F122" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>🤖 AI Daily Guidance</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            {[
+              { icon: "🎯", title: "Priority Focus", text: overdueTasks.length > 0 ? `You have ${overdueTasks.length} overdue task(s). Address these first to stay on track.` : todayTasks.length > 0 ? `${todayTasks.length} task(s) due today. Start with the highest priority ones.` : "All tasks up to date! Consider reviewing upcoming weekly tasks.", color: "#FF6B6B" },
+              { icon: "📊", title: "Productivity Insight", text: `${completedTasks.length} tasks completed so far. ${pendingTasks.length} pending across ${Object.keys(recurrenceColors).length} schedules. Keep the momentum going!`, color: "#06B6D4" },
+              { icon: "💡", title: "AI Recommendation", text: "Review Knowledge Portal for common resolutions. Auto-schedule monthly patching tasks via the Smart Task Scheduler.", color: "#6366F1" },
+            ].map((g, i) => (
+              <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: "#0F1117", border: "1px solid " + g.color + "22" }}>
+                <div style={{ fontSize: 16, marginBottom: 4 }}>{g.icon}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: g.color, marginBottom: 4 }}>{g.title}</div>
+                <div style={{ fontSize: 10, color: "#8B8FA3", lineHeight: 1.5 }}>{g.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+
+    // ─── Outlook Tab ──────────────────────────────────────────────────
+    if (productivityView === "outlook") return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Header with back */}
+        <div style={{ ...cardBase, background: "linear-gradient(135deg, #0078D4, #00BCF2)", border: "none", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button onClick={() => setProductivityView("overview")} style={{ background: "#ffffff22", border: "1px solid #ffffff33", color: "#fff", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>← Back</button>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>📧 Microsoft Outlook</div>
+              <div style={{ fontSize: 11, color: "#ffffffbb" }}>Email, Calendar & Scheduling — Powered by Microsoft Graph</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {["overview", "outlook", "teams", "tasks"].map(v => (
+              <button key={v} onClick={() => setProductivityView(v)} style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                background: productivityView === v ? "#ffffff33" : "#ffffff11", color: "#fff",
+                border: productivityView === v ? "1px solid #ffffff55" : "1px solid #ffffff22",
+                textTransform: "capitalize"
+              }}>{v === "overview" ? "🏠" : v === "outlook" ? "📧" : v === "teams" ? "💬" : "📋"}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Graph Connection Status */}
+        {isMsalAuthenticated && (
+          <div style={{ ...cardBase, padding: "8px 16px", display: "flex", alignItems: "center", gap: 8, background: graphLoading ? "#FFB34708" : graphError ? "#FF6B6B08" : "#4CAF5008", border: "1px solid " + (graphLoading ? "#FFB34722" : graphError ? "#FF6B6B22" : "#4CAF5022") }}>
+            <span style={{ fontSize: 12 }}>{graphLoading ? "⏳" : graphError ? "⚠️" : "✅"}</span>
+            <span style={{ fontSize: 10, color: graphLoading ? "#FFB347" : graphError ? "#FF6B6B" : "#4CAF50", fontWeight: 600 }}>
+              {graphLoading ? "Loading Microsoft 365 data..." : graphError ? `Graph API: ${graphError}` : "Connected to Microsoft 365 Graph API — Live Data"}
+            </span>
+            {!graphLoading && (
+              <button onClick={() => { graphFetchedRef.current = false; fetchGraphData(); }} style={{ marginLeft: "auto", padding: "3px 10px", borderRadius: 4, background: "#0078D411", border: "1px solid #0078D433", color: "#0078D4", fontSize: 9, cursor: "pointer", fontWeight: 600 }}>🔄 Refresh</button>
+            )}
+          </div>
+        )}
+
+        {/* Outlook Feature Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Inbox Preview */}
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+              📥 Inbox
+              {isMsalAuthenticated && graphUnread > 0 && <span style={{ padding: "1px 7px", borderRadius: 10, background: "#0078D4", color: "#fff", fontSize: 9, fontWeight: 700 }}>{graphUnread}</span>}
+              {isMsalAuthenticated && <span style={{ marginLeft: "auto", fontSize: 8, padding: "2px 6px", borderRadius: 3, background: "#4CAF5011", color: "#4CAF50", border: "1px solid #4CAF5022" }}>LIVE</span>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(graphEmails || [
+                { from: { emailAddress: { name: "IT Security Team" } }, subject: "🔒 Monthly Security Patch Schedule — April 2026", receivedDateTime: "2026-03-26T09:15:00Z", isRead: false, importance: "high" },
+                { from: { emailAddress: { name: "Service Desk" } }, subject: "INC0005 Escalation — VPN connectivity issue", receivedDateTime: "2026-03-26T08:47:00Z", isRead: false, importance: "high" },
+                { from: { emailAddress: { name: "Azure DevOps" } }, subject: "Build Pipeline #247 completed successfully", receivedDateTime: "2026-03-26T08:30:00Z", isRead: true, importance: "normal" },
+                { from: { emailAddress: { name: "HR Department" } }, subject: "Q2 Training Calendar — IT Team", receivedDateTime: "2026-03-25T14:00:00Z", isRead: true, importance: "low" },
+                { from: { emailAddress: { name: "Microsoft 365" } }, subject: "Your weekly productivity summary", receivedDateTime: "2026-03-25T10:00:00Z", isRead: true, importance: "low" },
+              ]).slice(0, 8).map((e, i) => {
+                const isUnread = !e.isRead;
+                const fromName = e.from?.emailAddress?.name || e.from?.emailAddress?.address || "Unknown";
+                const time = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+                const dateStr = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleDateString() : "";
+                const isToday = dateStr === new Date().toLocaleDateString();
+                return (
+                  <div key={e.id || i} style={{ padding: "10px 12px", borderRadius: 6, background: isUnread ? "#0078D406" : "#ffffff03", border: "1px solid " + (isUnread ? "#0078D422" : "#1E2130"), display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <div style={{ width: 6, height: 6, borderRadius: 3, background: isUnread ? "#0078D4" : "transparent", marginTop: 5, flexShrink: 0 }}/>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <div style={{ fontSize: 11, fontWeight: isUnread ? 700 : 500, color: "#E8ECF4", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fromName}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178", flexShrink: 0 }}>{isToday ? time : dateStr}</div>
+                      </div>
+                      <div style={{ fontSize: 10, color: isUnread ? "#8B8FA3" : "#5A6178", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.subject}</div>
+                      {e.bodyPreview && <div style={{ fontSize: 9, color: "#5A617866", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.bodyPreview.substring(0, 80)}</div>}
+                    </div>
+                    {e.hasAttachments && <span style={{ fontSize: 10, color: "#5A6178", flexShrink: 0 }}>📎</span>}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 10, borderTop: "1px solid #1E2130", paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 9, color: "#5A6178" }}>{graphEmails ? `Showing ${Math.min(graphEmails.length, 8)} of ${graphEmails.length} emails` : "Showing 5 mock emails"}</span>
+              <a href="https://outlook.office.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#0078D4", textDecoration: "none", fontWeight: 600 }}>Open in Outlook ↗</a>
+            </div>
+          </div>
+
+          {/* Calendar Preview */}
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+              📅 Today's Calendar
+              {isMsalAuthenticated && <span style={{ marginLeft: "auto", fontSize: 8, padding: "2px 6px", borderRadius: 3, background: "#4CAF5011", color: "#4CAF50", border: "1px solid #4CAF5022" }}>LIVE</span>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(graphCalendar || [
+                { start: { dateTime: "2026-03-26T09:00:00" }, end: { dateTime: "2026-03-26T09:30:00" }, subject: "Daily Standup — IT Team", isOnlineMeeting: true, _color: "#6264A7" },
+                { start: { dateTime: "2026-03-26T10:30:00" }, end: { dateTime: "2026-03-26T11:15:00" }, subject: "Incident Review — INC0005 VPN Issue", isOnlineMeeting: true, _color: "#FF6B6B" },
+                { start: { dateTime: "2026-03-26T13:00:00" }, end: { dateTime: "2026-03-26T14:00:00" }, subject: "Change Advisory Board Meeting", isOnlineMeeting: false, _color: "#FFB347" },
+                { start: { dateTime: "2026-03-26T14:30:00" }, end: { dateTime: "2026-03-26T15:30:00" }, subject: "Azure Infrastructure Review", isOnlineMeeting: true, _color: "#0078D4" },
+                { start: { dateTime: "2026-03-26T16:00:00" }, end: { dateTime: "2026-03-26T16:30:00" }, subject: "Knowledge Portal Update Session", isOnlineMeeting: true, _color: "#06B6D4" },
+              ]).slice(0, 8).map((e, i) => {
+                const startTime = e.start?.dateTime ? new Date(e.start.dateTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+                const endTime = e.end?.dateTime ? new Date(e.end.dateTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+                const colors = ["#6264A7", "#0078D4", "#FF6B6B", "#FFB347", "#06B6D4", "#81C784", "#EC4899"];
+                const color = e._color || colors[i % colors.length];
+                return (
+                  <div key={e.id || i} style={{ padding: "8px 12px", borderRadius: 6, background: "#ffffff04", border: "1px solid #1E2130", display: "flex", gap: 10, alignItems: "center" }}>
+                    <div style={{ width: 3, height: 28, borderRadius: 2, background: color, flexShrink: 0 }}/>
+                    <div style={{ width: 42, fontSize: 11, fontWeight: 600, color: "#E8ECF4", flexShrink: 0 }}>{startTime}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: "#E8ECF4" }}>{e.subject}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{startTime} – {endTime} · {e.isOnlineMeeting ? "🟢 Online" : "🏢 In-Person"}</div>
+                  </div>
+                  {e.onlineMeetingUrl && <a href={e.onlineMeetingUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 9, color: "#6264A7", textDecoration: "none", fontWeight: 600 }}>Join</a>}
+                </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 10, borderTop: "1px solid #1E2130", paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 9, color: "#5A6178" }}>{graphCalendar ? `${graphCalendar.length} events today (Live)` : "5 events today (Demo)"}</span>
+              <a href="https://outlook.office.com/calendar" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#0078D4", textDecoration: "none", fontWeight: 600 }}>Open Calendar ↗</a>
+            </div>
+          </div>
+        </div>
+
+        {/* AI Email Assist + Compose */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ ...cardBase, background: "linear-gradient(135deg, #6366F108, #0078D408)", border: "1px solid #6366F122" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>🤖 AI Email Assistant</div>
+            <div style={{ fontSize: 11, color: "#8B8FA3", lineHeight: 1.6, marginBottom: 12 }}>
+              Your AI assistant can help you draft replies, summarize long email threads, prioritize your inbox, and flag emails requiring urgent action.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[
+                { icon: "📝", label: "Draft Reply", desc: "AI composes contextual replies" },
+                { icon: "📋", label: "Summarize Thread", desc: "Get a TL;DR of long chains" },
+                { icon: "🔔", label: "Priority Alerts", desc: "Flag urgent emails automatically" },
+              ].map((f, i) => (
+                <div key={i} style={{ padding: "6px 10px", borderRadius: 5, background: "#ffffff04", border: "1px solid #1E2130", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>{f.icon}</span>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{f.label}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{f.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>⚡ Quick Actions</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[
+                { icon: "✉️", label: "New Email", action: "https://outlook.office.com/mail/deeplink/compose" },
+                { icon: "📅", label: "New Event", action: "https://outlook.office.com/calendar/deeplink/compose" },
+                { icon: "👥", label: "Contacts", action: "https://outlook.office.com/people" },
+                { icon: "📎", label: "Attachments", action: "https://outlook.office.com" },
+              ].map((a, i) => (
+                <a key={i} href={a.action} target="_blank" rel="noopener noreferrer" style={{
+                  padding: "12px", borderRadius: 8, background: "#ffffff04", border: "1px solid #1E2130",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 4, textDecoration: "none",
+                  cursor: "pointer", transition: "all 0.2s"
+                }} onMouseEnter={e => { e.currentTarget.style.borderColor = "#0078D444"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; }}>
+                  <span style={{ fontSize: 18 }}>{a.icon}</span>
+                  <span style={{ fontSize: 10, color: "#E8ECF4", fontWeight: 500 }}>{a.label}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+
+    // ─── Teams Tab ──────────────────────────────────────────────────
+    if (productivityView === "teams") return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Header with back */}
+        <div style={{ ...cardBase, background: "linear-gradient(135deg, #6264A7, #8B8CC7)", border: "none", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button onClick={() => setProductivityView("overview")} style={{ background: "#ffffff22", border: "1px solid #ffffff33", color: "#fff", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>← Back</button>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>💬 Microsoft Teams</div>
+              <div style={{ fontSize: 11, color: "#ffffffbb" }}>Chat, Channels, Meetings & Phone — Powered by Microsoft Graph</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {["overview", "outlook", "teams", "tasks"].map(v => (
+              <button key={v} onClick={() => setProductivityView(v)} style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                background: productivityView === v ? "#ffffff33" : "#ffffff11", color: "#fff",
+                border: productivityView === v ? "1px solid #ffffff55" : "1px solid #ffffff22",
+                textTransform: "capitalize"
+              }}>{v === "overview" ? "🏠" : v === "outlook" ? "📧" : v === "teams" ? "💬" : "📋"}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Graph Connection Status */}
+        {isMsalAuthenticated && (
+          <div style={{ ...cardBase, padding: "8px 16px", display: "flex", alignItems: "center", gap: 8, background: graphLoading ? "#FFB34708" : "#4CAF5008", border: "1px solid " + (graphLoading ? "#FFB34722" : "#4CAF5022") }}>
+            <span style={{ fontSize: 12 }}>{graphLoading ? "⏳" : "✅"}</span>
+            <span style={{ fontSize: 10, color: graphLoading ? "#FFB347" : "#4CAF50", fontWeight: 600 }}>{graphLoading ? "Loading Teams data..." : "Connected to Microsoft Graph — Live Data"}</span>
+            {graphPresence && <span style={{ marginLeft: 8, fontSize: 9, padding: "2px 8px", borderRadius: 10, background: graphPresence.availability === "Available" ? "#4CAF5022" : graphPresence.availability === "Busy" ? "#FF6B6B22" : "#FFB34722", color: graphPresence.availability === "Available" ? "#4CAF50" : graphPresence.availability === "Busy" ? "#FF6B6B" : "#FFB347" }}>● {graphPresence.availability}</span>}
+            <button onClick={() => { graphFetchedRef.current = false; fetchGraphData(); }} style={{ marginLeft: "auto", padding: "3px 10px", borderRadius: 4, background: "#6264A711", border: "1px solid #6264A733", color: "#6264A7", fontSize: 9, cursor: "pointer", fontWeight: 600 }}>🔄 Refresh</button>
+          </div>
+        )}
+
+        {/* Teams Content Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Recent Chats */}
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+              💬 Recent Chats
+              {isMsalAuthenticated && <span style={{ marginLeft: "auto", fontSize: 8, padding: "2px 6px", borderRadius: 3, background: "#4CAF5011", color: "#4CAF50", border: "1px solid #4CAF5022" }}>LIVE</span>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(graphChats ? graphChats.map((c, i) => {
+                const avatarEmojis = ["🟢", "🔵", "🟡", "🟠", "🔴", "🟣", "⚪"];
+                const name = c.topic || (c.chatType === "oneOnOne" ? "Direct Message" : c.chatType === "group" ? "Group Chat" : "Meeting Chat");
+                const lastMsg = c.lastMessagePreview?.body?.content?.replace(/<[^>]*>/g, "").substring(0, 60) || "No recent messages";
+                const time = c.lastUpdatedDateTime ? new Date(c.lastUpdatedDateTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+                return (
+                  <div key={c.id} style={{ padding: "8px 12px", borderRadius: 6, background: "#6264A706", border: "1px solid #6264A722", display: "flex", gap: 10, alignItems: "center" }}>
+                    <span style={{ fontSize: 16 }}>{avatarEmojis[i % avatarEmojis.length]}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178" }}>{time}</div>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lastMsg}</div>
+                    </div>
+                  </div>
+                );
+              }) : [
+                { name: "IT Support Team", message: "INC0005 has been escalated to L2", time: "10 min ago", unread: 3, avatar: "🟢" },
+                { name: "John Doe", message: "Can you check the VPN config?", time: "25 min ago", unread: 1, avatar: "🔵" },
+                { name: "Change Advisory Board", message: "CAB meeting rescheduled to 1 PM", time: "1 hr ago", unread: 0, avatar: "🟡" },
+                { name: "Security Team", message: "New vulnerability advisory posted", time: "2 hr ago", unread: 0, avatar: "🔴" },
+                { name: "Azure DevOps Bot", message: "Pipeline #247 — all checks passed", time: "3 hr ago", unread: 0, avatar: "🤖" },
+              ].map((c, i) => (
+                <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: c.unread > 0 ? "#6264A706" : "#ffffff03", border: "1px solid " + (c.unread > 0 ? "#6264A722" : "#1E2130"), display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ fontSize: 16 }}>{c.avatar}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <div style={{ fontSize: 11, fontWeight: c.unread > 0 ? 700 : 500, color: "#E8ECF4" }}>{c.name}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178" }}>{c.time}</div>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#5A6178", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.message}</div>
+                  </div>
+                  {c.unread > 0 && <span style={{ width: 18, height: 18, borderRadius: 9, background: "#6264A7", color: "#fff", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{c.unread}</span>}
+                </div>
+              )))}
+            </div>
+            <div style={{ marginTop: 10, borderTop: "1px solid #1E2130", paddingTop: 10, textAlign: "right" }}>
+              <a href="https://teams.microsoft.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#6264A7", textDecoration: "none", fontWeight: 600 }}>Open in Teams ↗</a>
+            </div>
+          </div>
+
+          {/* Channels */}
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+              📢 {graphTeams ? "Joined Teams" : "Active Channels"}
+              {isMsalAuthenticated && <span style={{ marginLeft: "auto", fontSize: 8, padding: "2px 6px", borderRadius: 3, background: "#4CAF5011", color: "#4CAF50", border: "1px solid #4CAF5022" }}>LIVE</span>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(graphTeams ? graphTeams.map((t, i) => {
+                const colors = ["#0078D4", "#FF6B6B", "#FFB347", "#81C784", "#06B6D4", "#6264A7", "#EC4899"];
+                return (
+                  <div key={t.id} style={{ padding: "8px 12px", borderRadius: 6, background: "#ffffff04", border: "1px solid #1E2130", display: "flex", gap: 10, alignItems: "center" }}>
+                    <div style={{ width: 3, height: 24, borderRadius: 2, background: colors[i % colors.length], flexShrink: 0 }}/>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{t.displayName}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178" }}>{t.description?.substring(0, 50) || "Team"}</div>
+                    </div>
+                  </div>
+                );
+              }) : [
+                { name: "IT-Service-Desk", team: "IT Operations", activity: "5 new messages", color: "#0078D4" },
+                { name: "Security-Alerts", team: "Cybersecurity", activity: "2 new alerts", color: "#FF6B6B" },
+                { name: "Change-Management", team: "IT Governance", activity: "CAB notes posted", color: "#FFB347" },
+                { name: "General", team: "IT Operations", activity: "Team outing poll", color: "#81C784" },
+                { name: "Azure-Infrastructure", team: "Cloud Ops", activity: "Deployment update", color: "#06B6D4" },
+              ].map((ch, i) => (
+                <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: "#ffffff04", border: "1px solid #1E2130", display: "flex", gap: 10, alignItems: "center" }}>
+                  <div style={{ width: 3, height: 24, borderRadius: 2, background: ch.color, flexShrink: 0 }}/>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>#{ch.name}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{ch.team} · {ch.activity}</div>
+                  </div>
+                </div>
+              )))}
+            </div>
+          </div>
+        </div>
+
+        {/* Teams Phone + Meetings */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Teams Phone */}
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>📞 Teams Phone</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[
+                { type: "📞 Incoming", from: "VGC Networks Pte Ltd", time: "09:45 AM", duration: "5 min", missed: false },
+                { type: "📱 Outgoing", from: "ABC Enterprise — Ms Carol", time: "09:15 AM", duration: "12 min", missed: false },
+                { type: "❌ Missed", from: "Unknown +65 8XXX XXXX", time: "08:30 AM", duration: "—", missed: true },
+              ].map((c, i) => (
+                <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: c.missed ? "#FF6B6B06" : "#ffffff04", border: "1px solid " + (c.missed ? "#FF6B6B22" : "#1E2130"), display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 12 }}>{c.type.split(" ")[0]}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: c.missed ? "#FF6B6B" : "#E8ECF4" }}>{c.from}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{c.time} · {c.duration}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 5, background: "#6264A711", border: "1px solid #6264A722", textAlign: "center" }}>
+              <a href="https://teams.microsoft.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#6264A7", textDecoration: "none", fontWeight: 600 }}>Open Teams Phone ↗</a>
+            </div>
+          </div>
+
+          {/* Upcoming Meetings */}
+          <div style={{ ...cardBase }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>🗓️ Upcoming Meetings</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[
+                { title: "Sprint Retrospective", time: "Tomorrow, 10:00 AM", organizer: "Team Lead", type: "🟢 Online" },
+                { title: "Quarterly IT Review", time: "Fri, 2:00 PM", organizer: "CTO", type: "🏢 Hybrid" },
+                { title: "Security Awareness Training", time: "Mon, 11:00 AM", organizer: "CISO", type: "🟢 Online" },
+              ].map((m, i) => (
+                <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: "#ffffff04", border: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{m.title}</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{m.time} · {m.organizer} · {m.type}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* AI Teams Assistant */}
+        <div style={{ ...cardBase, background: "linear-gradient(135deg, #6264A708, #6366F108)", border: "1px solid #6264A722" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 8 }}>🤖 AI Teams Assistant</div>
+          <div style={{ fontSize: 11, color: "#8B8FA3", lineHeight: 1.6 }}>
+            Your AI assistant monitors Teams channels for critical mentions, summarizes long chat threads, and can draft messages for your review before sending. It highlights messages that need your attention and suggests optimal meeting times.
+          </div>
+        </div>
+      </div>
+    );
+
+    // ─── Tasks Tab (Smart Scheduler) ─────────────────────────────────
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Header */}
+        <div style={{ ...cardBase, background: "linear-gradient(135deg, #0078D4, #6366F1)", border: "none", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button onClick={() => setProductivityView("overview")} style={{ background: "#ffffff22", border: "1px solid #ffffff33", color: "#fff", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>← Back</button>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>📋 Smart Task & Routine Scheduler</div>
+              <div style={{ fontSize: 11, color: "#ffffffbb" }}>AI-driven scheduling with daily, weekly, monthly, quarterly & yearly recurrence</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {["overview", "outlook", "teams", "tasks"].map(v => (
+              <button key={v} onClick={() => setProductivityView(v)} style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                background: productivityView === v ? "#ffffff33" : "#ffffff11", color: "#fff",
+                border: productivityView === v ? "1px solid #ffffff55" : "1px solid #ffffff22",
+                textTransform: "capitalize"
+              }}>{v === "overview" ? "🏠" : v === "outlook" ? "📧" : v === "teams" ? "💬" : "📋"}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Filter Tabs + Add Button */}
+        <div style={{ ...cardBase, padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {taskFilterOptions.map(f => (
+              <button key={f} onClick={() => setTaskFilter(f)} style={{
+                padding: "5px 12px", borderRadius: 5, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                background: taskFilter === f ? (recurrenceColors[f] || "#0078D4") + "22" : "#ffffff06",
+                color: taskFilter === f ? (recurrenceColors[f] || "#0078D4") : "#5A6178",
+                border: "1px solid " + (taskFilter === f ? (recurrenceColors[f] || "#0078D4") + "44" : "#1E2130"),
+                textTransform: "capitalize"
+              }}>{f === "all" ? "All Tasks" : recurrenceLabels[f] || f}</button>
+            ))}
+          </div>
+          <button onClick={() => setShowAddTask(!showAddTask)} style={{
+            padding: "6px 14px", borderRadius: 6, background: "#0078D4", color: "#fff", fontSize: 11, fontWeight: 600,
+            border: "none", cursor: "pointer"
+          }}>{showAddTask ? "✕ Cancel" : "＋ Add Task"}</button>
+        </div>
+
+        {/* Add Task Form */}
+        {showAddTask && (
+          <div style={{ ...cardBase, border: "1px solid #0078D433" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 12 }}>➕ New Scheduled Task</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Task Title *</div>
+                <input value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} placeholder="Enter task description..." style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none", boxSizing: "border-box" }}/>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Recurrence</div>
+                <select value={newTask.recurrence} onChange={e => setNewTask({ ...newTask, recurrence: e.target.value })} style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none" }}>
+                  {Object.entries(recurrenceLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Priority</div>
+                <select value={newTask.priority} onChange={e => setNewTask({ ...newTask, priority: e.target.value })} style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none" }}>
+                  {["Critical", "High", "Medium", "Low"].map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Category</div>
+                <input value={newTask.category} onChange={e => setNewTask({ ...newTask, category: e.target.value })} placeholder="e.g., Incident Mgmt" style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none", boxSizing: "border-box" }}/>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Assignee</div>
+                <input value={newTask.assignee} onChange={e => setNewTask({ ...newTask, assignee: e.target.value })} placeholder="e.g., L1 Support Engineer" style={{ width: "100%", padding: "6px 10px", borderRadius: 5, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none", boxSizing: "border-box" }}/>
+              </div>
+            </div>
+            <button onClick={addTask} style={{ padding: "8px 20px", borderRadius: 6, background: "#0078D4", color: "#fff", fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>Create Task</button>
+          </div>
+        )}
+
+        {/* Task Summary Stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10 }}>
+          {Object.entries(recurrenceLabels).map(([key, label]) => {
+            const count = safeSmartTasks.filter(t => t.recurrence === key).length;
+            const pending = safeSmartTasks.filter(t => t.recurrence === key && t.status === "pending").length;
+            return (
+              <div key={key} style={{ ...cardBase, padding: "12px 14px", textAlign: "center", cursor: "pointer", border: taskFilter === key ? "1px solid " + recurrenceColors[key] + "66" : "1px solid #1E2130" }}
+                onClick={() => setTaskFilter(key)}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: recurrenceColors[key] }}>{count}</div>
+                <div style={{ fontSize: 10, color: "#8B8FA3", marginTop: 2 }}>{label}</div>
+                <div style={{ fontSize: 9, color: "#5A6178", marginTop: 1 }}>{pending} pending</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Task List */}
+        <div style={{ ...cardBase }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 14 }}>
+            {taskFilter === "all" ? "All Scheduled Tasks" : recurrenceLabels[taskFilter] + " Tasks"} ({filteredTasks.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {filteredTasks.map(t => {
+              const isOverdue = t.status === "pending" && new Date(t.nextDue) < new Date() && new Date(t.nextDue).toDateString() !== new Date().toDateString();
+              return (
+                <div key={t.id} style={{
+                  padding: "10px 14px", borderRadius: 8,
+                  background: t.status === "done" ? "#81C78406" : isOverdue ? "#FF6B6B06" : "#ffffff04",
+                  border: "1px solid " + (t.status === "done" ? "#81C78422" : isOverdue ? "#FF6B6B22" : "#1E2130"),
+                  display: "flex", alignItems: "center", gap: 10, opacity: t.status === "done" ? 0.6 : 1
+                }}>
+                  {t.status === "pending" ? (
+                    <button onClick={() => completeTask(t.id)} style={{ width: 20, height: 20, borderRadius: 5, border: "1.5px solid " + recurrenceColors[t.recurrence], background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: recurrenceColors[t.recurrence], flexShrink: 0 }} title="Mark done">○</button>
+                  ) : (
+                    <button onClick={() => resetTask(t.id)} style={{ width: 20, height: 20, borderRadius: 5, border: "1.5px solid #81C784", background: "#81C78422", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#81C784", flexShrink: 0 }} title="Reset">✓</button>
+                  )}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: "#E8ECF4", textDecoration: t.status === "done" ? "line-through" : "none" }}>{t.title}</div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: recurrenceColors[t.recurrence] + "22", color: recurrenceColors[t.recurrence], fontWeight: 600 }}>{recurrenceLabels[t.recurrence]}</span>
+                      <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#ffffff08", color: "#8B8FA3" }}>{t.category}</span>
+                      <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: t.priority === "Critical" ? "#FF6B6B22" : t.priority === "High" ? "#FFB34722" : "#ffffff08", color: t.priority === "Critical" ? "#FF6B6B" : t.priority === "High" ? "#FFB347" : "#8B8FA3" }}>{t.priority}</span>
+                      {t.aiSuggested && <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#6366F122", color: "#6366F1" }}>🤖 AI Suggested</span>}
+                      {isOverdue && <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#FF6B6B22", color: "#FF6B6B", fontWeight: 600 }}>OVERDUE</span>}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ fontSize: 9, color: isOverdue ? "#FF6B6B" : "#5A6178" }}>Due: {t.nextDue}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{t.assignee}</div>
+                  </div>
+                  <button onClick={() => deleteTask(t.id)} style={{ width: 18, height: 18, borderRadius: 4, border: "1px solid #FF6B6B33", background: "none", cursor: "pointer", color: "#FF6B6B", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: 0.5 }} title="Delete task">✕</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* AI Scheduling Guidance */}
+        <div style={{ ...cardBase, background: "linear-gradient(135deg, #6366F108, #06B6D408)", border: "1px solid #6366F122" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 8 }}>🤖 AI Scheduling Intelligence</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            {[
+              { icon: "📊", title: "Pattern Analysis", desc: "AI analyzes your task completion history and suggests optimal scheduling times based on your productivity patterns." },
+              { icon: "🔮", title: "Proactive Reminders", desc: "Get AI-driven reminders before tasks are due. Monthly patching, quarterly audits, and yearly reviews — never miss a deadline." },
+              { icon: "🧠", title: "Smart Suggestions", desc: "Based on incident trends and case history, AI automatically suggests new routine tasks to prevent recurring issues." },
+            ].map((g, i) => (
+              <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: "#0F1117", border: "1px solid #1E2130" }}>
+                <div style={{ fontSize: 16, marginBottom: 4 }}>{g.icon}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#06B6D4", marginBottom: 4 }}>{g.title}</div>
+                <div style={{ fontSize: 10, color: "#8B8FA3", lineHeight: 1.5 }}>{g.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+
+    return null;
+  };
+
+  // ─── Render Module Content ────────────────────────────────────────────
+  const renderModule = () => {
+    switch (activeModule) {
+      case "dashboard": return <Dashboard />;
+      case "productivity": return <ProductivityDashboard />;
+      case "incidents": return <IncidentsModule />;
+      case "problems": return <ProblemsModule />;
+      case "changes": return <ChangesModule />;
+      case "requests": return <RequestsModule />;
+      case "catalog": return <CatalogModule />;
+      case "knowledge": return <KnowledgeModule />;
+      case "assets": return <AssetsModule />;
+      case "approvals": return <ApprovalsModule />;
+      case "sla": return <SLAModule />;
+      case "reports": return <ReportingModule />;
+      case "customers": return <CustomersModule />;
+      case "ai": return <AIAssistModule />;
+      case "cybernews": return <CyberNewsModule />;
+      case "admin": return <AdminSettingsModule />;
+      default: return <Dashboard />;
+    }
+  };
+
+  const moduleTitle = NAV.find(n => n.id === activeModule)?.label || "Dashboard";
+
+  // ─── Login Page ────────────────────────────────────────────────────────
+  if (!isLoggedIn || !currentUser) {
+    const loginCards = [
+      {
+        id: "dev-admin",
+        user: USERS[0],
+        icon: "🛡️",
+        title: "VGC Dev Admin",
+        subtitle: "Developer / Vendor",
+        gradient: "linear-gradient(135deg, #FF6B6B22 0%, #6366F122 50%, #06B6D422 100%)",
+        borderColor: "#FF6B6B",
+        glowColor: "#FF6B6B",
+        features: [
+          { icon: "☁️", label: "Azure Services", desc: "Full cloud infrastructure, App Services, SQL, Functions, Storage, CDN, VMs" },
+          { icon: "🤖", label: "AI Suggestions", desc: "Copilot-powered code & architecture recommendations, anomaly detection" },
+          { icon: "📊", label: "Predictions", desc: "ML-driven capacity forecasting, incident trend analysis, SLA risk scoring" },
+          { icon: "🔧", label: "Remediation", desc: "Automated runbook execution, self-healing infrastructure, rollback orchestration" },
+          { icon: "💰", label: "Cost Optimization", desc: "Azure Advisor integration, right-sizing VMs, reserved instance savings" },
+          { icon: "🔑", label: "API & Secrets", desc: "Key Vault, API management, Entra ID config, webhook & integration settings" },
+        ],
+        badge: "SUPER ADMIN",
+        badgeColor: "#FF6B6B",
+      },
+      {
+        id: "vgc-admin",
+        user: USERS[1],
+        icon: "🏢",
+        title: "VGC Admin",
+        subtitle: "End Customer Admin",
+        gradient: "linear-gradient(135deg, #EC489922 0%, #8B5CF622 50%, #6366F122 100%)",
+        borderColor: "#EC4899",
+        glowColor: "#EC4899",
+        features: [
+          { icon: "👥", label: "User Management", desc: "RBAC roles, Entra ID sync, group policies, SCIM provisioning" },
+          { icon: "📋", label: "Compliance", desc: "PDPA, audit logs, data retention, regulatory reporting" },
+          { icon: "⚙️", label: "Customisation", desc: "Tenant branding, workflow builder, SLA policy configuration" },
+          { icon: "📈", label: "Analytics", desc: "KPI dashboards, trend reports, team performance metrics" },
+        ],
+        badge: "TENANT ADMIN",
+        badgeColor: "#EC4899",
+      },
+      {
+        id: "engineer",
+        user: USERS[2],
+        icon: "🔧",
+        title: "Service Support Engineers",
+        subtitle: "End Customer Engineer",
+        gradient: "linear-gradient(135deg, #06B6D422 0%, #81C78422 50%, #6366F122 100%)",
+        borderColor: "#06B6D4",
+        glowColor: "#06B6D4",
+        features: [
+          { icon: "🎫", label: "Ticket Management", desc: "Create, triage, escalate incidents & service requests" },
+          { icon: "📚", label: "Knowledge Base", desc: "AI-powered article lookup, contribute & publish solutions" },
+          { icon: "🔍", label: "Diagnostics", desc: "Root cause analysis, AI troubleshooting assistant" },
+          { icon: "📡", label: "Monitoring", desc: "Real-time alerts, SLA tracking, asset health checks" },
+        ],
+        badge: "ENGINEER",
+        badgeColor: "#06B6D4",
+      },
+    ];
+
+    const handleLogin = (user) => {
+      setCurrentUser(user);
+      setIsLoggedIn(true);
+    };
+
+    // ─── Local Auth (Dev Admin only) ────────────────────────────────────
+    const handleLocalLogin = async () => {
+      if (!localUsername.trim() || !localPassword) { setLocalLoginError("Enter username and password"); return; }
+      setLocalLoginLoading(true); setLocalLoginError("");
+      try {
+        const resp = await fetch("/api/auth/local", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: localUsername.trim(), password: localPassword }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { setLocalLoginError(data.error || "Authentication failed"); return; }
+        setCurrentUser(data.user);
+        setIsLoggedIn(true);
+      } catch (err) {
+        setLocalLoginError("Connection error — check server");
+      } finally { setLocalLoginLoading(false); }
+    };
+
+    // ─── Entra ID SSO Login (VGC Admin & Engineers) ─────────────────────
+    const handleSSOLogin = async (fallbackUser) => {
+      try {
+        // Store fallback user context so the post-redirect useEffect can recover it
+        sessionStorage.setItem("itsm_sso_fallback", JSON.stringify(fallbackUser));
+        // Use redirect (not popup) — avoids popup-blocker and white-page race conditions
+        await msalInstance.loginRedirect({
+          scopes: ["openid", "profile", "email", "User.Read"],
+          prompt: "select_account",
+        });
+        // Page navigates away — code below never executes
+      } catch (err) {
+        console.error("SSO Login failed:", err);
+        if (err.errorCode === "user_cancelled") return;
+        setErrorAdvisory({
+          type: "SSO Login",
+          code: err.errorCode || "MSAL_ERROR",
+          message: err.message || "Single Sign-On authentication failed",
+          timestamp: new Date().toISOString(),
+          details: err.errorMessage || err.message || "The Microsoft Entra ID login encountered an error. This could be due to network issues or Azure AD configuration.",
+          stack: err.stack?.substring(0, 500) || ""
+        });
+      }
+    };
+
+    return (
+      <div style={{
+        minHeight: "100vh", background: "#080A12", color: "#E8ECF4",
+        fontFamily: "'DM Sans', -apple-system, sans-serif",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        position: "relative", overflow: "hidden",
+      }}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+          @keyframes loginGridMove { 0% { transform: translateY(0); } 100% { transform: translateY(-50px); } }
+          @keyframes loginGlow { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.7; } }
+          @keyframes loginCardFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+          @keyframes loginOrb1 { 0% { transform: translate(0,0) scale(1); } 33% { transform: translate(60px,-40px) scale(1.1); } 66% { transform: translate(-30px,50px) scale(0.9); } 100% { transform: translate(0,0) scale(1); } }
+          @keyframes loginOrb2 { 0% { transform: translate(0,0) scale(1); } 33% { transform: translate(-50px,30px) scale(0.95); } 66% { transform: translate(40px,-60px) scale(1.08); } 100% { transform: translate(0,0) scale(1); } }
+          @keyframes loginOrb3 { 0% { transform: translate(0,0) scale(1); } 33% { transform: translate(30px,50px) scale(1.05); } 66% { transform: translate(-60px,-20px) scale(0.92); } 100% { transform: translate(0,0) scale(1); } }
+          @keyframes loginShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+          @keyframes loginPulseRing { 0% { transform: scale(1); opacity: 0.4; } 100% { transform: scale(2.5); opacity: 0; } }
+          @keyframes loginFeatureFade { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } }
+          @keyframes loginBtnGlow { 0%, 100% { box-shadow: 0 0 8px var(--glow) ; } 50% { box-shadow: 0 0 20px var(--glow), 0 0 40px color-mix(in srgb, var(--glow) 40%, transparent); } }
+          .login-card { transition: all 0.4s cubic-bezier(0.34,1.56,0.64,1); }
+          .login-card:hover { transform: translateY(-8px) scale(1.02); }
+          .login-btn { transition: all 0.3s ease; }
+          .login-btn:hover { filter: brightness(1.15); transform: scale(1.03); }
+          .login-feature-row { transition: all 0.25s ease; }
+          .login-feature-row:hover { background: #ffffff08 !important; transform: translateX(3px); }
+        `}</style>
+
+        {/* Background animated orbs */}
+        <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+          <div style={{ position: "absolute", top: "10%", left: "15%", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, #6366F115 0%, transparent 70%)", animation: "loginOrb1 12s ease-in-out infinite" }} />
+          <div style={{ position: "absolute", top: "60%", right: "10%", width: 250, height: 250, borderRadius: "50%", background: "radial-gradient(circle, #EC489915 0%, transparent 70%)", animation: "loginOrb2 15s ease-in-out infinite" }} />
+          <div style={{ position: "absolute", bottom: "20%", left: "50%", width: 200, height: 200, borderRadius: "50%", background: "radial-gradient(circle, #06B6D415 0%, transparent 70%)", animation: "loginOrb3 10s ease-in-out infinite" }} />
+          {/* Grid pattern */}
+          <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(#6366F108 1px, transparent 1px), linear-gradient(90deg, #6366F108 1px, transparent 1px)", backgroundSize: "40px 40px", animation: "loginGridMove 20s linear infinite" }} />
+        </div>
+
+        {/* Logo & Title */}
+        <div style={{ textAlign: "center", marginBottom: 40, position: "relative", zIndex: 2 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+            <div style={{
+              width: 62, height: 62, borderRadius: 16,
+              background: "linear-gradient(135deg, #D4AF37, #FFD700, #B8860B, #F59E0B, #D4AF37)",
+              backgroundSize: "300% 300%",
+              animation: "logoGradient 4s ease infinite",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 0 20px #FFD70044, 0 0 40px #D4AF3722",
+              position: "relative",
+            }}>
+              <div style={{
+                width: 52, height: 52, borderRadius: 12,
+                background: "radial-gradient(ellipse at 30% 30%, #141620, #0A0C14)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <span style={{
+                  fontSize: 26, fontWeight: 900, fontFamily: "'Space Grotesk', sans-serif",
+                  background: "linear-gradient(135deg, #FFD700, #D4AF37, #FFF8DC, #FFD700, #B8860B)",
+                  backgroundSize: "300% 300%",
+                  animation: "goldShimmer 3s linear infinite",
+                  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                  backgroundClip: "text",
+                }}>V</span>
+              </div>
+              <div style={{ position: "absolute", inset: -4, borderRadius: 20, border: "1.5px solid #FFD70033", animation: "loginPulseRing 3s ease-out infinite" }} />
+            </div>
+            <div>
+              <div style={{
+                fontSize: 28, fontWeight: 800, fontFamily: "'Space Grotesk', sans-serif",
+                background: "linear-gradient(90deg, #6366F1, #06B6D4, #EC4899, #F59E0B, #6366F1)",
+                backgroundSize: "300% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                backgroundClip: "text", animation: "loginShimmer 4s linear infinite",
+              }}>
+                VGC-ITSM
+              </div>
+              <div style={{ fontSize: 11, color: "#5A6178", letterSpacing: 2.5, textTransform: "uppercase", fontWeight: 500 }}>
+                AI-Powered IT Service Management
+              </div>
+            </div>
+          </div>
+          <div style={{ fontSize: 13, color: "#5A617899", maxWidth: 500, margin: "0 auto", lineHeight: 1.6 }}>
+            Intelligent operations platform with Azure AI integration, predictive analytics, and automated remediation
+          </div>
+        </div>
+
+        {/* Login Cards */}
+        <div style={{
+          display: "flex", gap: 24, flexWrap: "wrap", justifyContent: "center",
+          maxWidth: 1200, padding: "0 20px", position: "relative", zIndex: 2,
+        }}>
+          {loginCards.map((card, ci) => (
+            <div key={card.id} className="login-card" style={{
+              width: 340, background: card.gradient, backdropFilter: "blur(20px)",
+              border: `1.5px solid ${card.borderColor}33`, borderRadius: 20,
+              padding: 0, overflow: "hidden", cursor: "default",
+              boxShadow: `0 8px 32px ${card.glowColor}15, 0 0 0 1px #ffffff06`,
+              animation: `loginCardFloat ${5 + ci}s ease-in-out infinite`,
+              animationDelay: `${ci * 0.3}s`,
+            }}>
+              {/* Card Header */}
+              <div style={{
+                padding: "24px 24px 16px", display: "flex", alignItems: "center", gap: 14,
+                borderBottom: `1px solid ${card.borderColor}15`,
+              }}>
+                <div style={{
+                  width: 50, height: 50, borderRadius: 14,
+                  background: `linear-gradient(135deg, ${card.borderColor}33, ${card.borderColor}11)`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 24, position: "relative",
+                }}>
+                  {card.icon}
+                  <div style={{ position: "absolute", inset: -3, borderRadius: 17, border: `1.5px solid ${card.borderColor}22`, animation: "loginGlow 3s ease-in-out infinite" }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{card.title}</div>
+                  <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{card.subtitle}</div>
+                </div>
+                <div style={{
+                  padding: "3px 10px", borderRadius: 20, fontSize: 8, fontWeight: 700,
+                  background: `${card.badgeColor}22`, color: card.badgeColor,
+                  border: `1px solid ${card.badgeColor}44`, letterSpacing: 1.2, textTransform: "uppercase",
+                }}>
+                  {card.badge}
+                </div>
+              </div>
+
+              {/* Features */}
+              <div style={{ padding: "12px 16px 8px" }}>
+                {card.features.map((f, fi) => (
+                  <div key={fi} className="login-feature-row" style={{
+                    display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 10px",
+                    borderRadius: 10, marginBottom: 2, cursor: "default",
+                    animation: `loginFeatureFade 0.5s ease-out ${fi * 0.08}s both`,
+                  }}>
+                    <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{f.icon}</span>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#C8CDD8" }}>{f.label}</div>
+                      <div style={{ fontSize: 10, color: "#5A617899", lineHeight: 1.4, marginTop: 1 }}>{f.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Sign-in Button */}
+              <div style={{ padding: "12px 20px 22px" }}>
+                {card.id === "dev-admin" ? (
+                  <>
+                    {/* ─── Local Auth Form (Dev Admin Only) ────────────────── */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
+                      <input type="text" placeholder="Username" value={localUsername}
+                        onChange={e => { setLocalUsername(e.target.value); setLocalLoginError(""); }}
+                        onKeyDown={e => e.key === "Enter" && handleLocalLogin()}
+                        autoComplete="username"
+                        style={{
+                          width: "100%", padding: "10px 14px", borderRadius: 10,
+                          background: "#0D0F1A", border: `1.5px solid ${localLoginError ? "#FF6B6B55" : "#FF6B6B33"}`,
+                          color: "#E8ECF4", fontSize: 13, outline: "none",
+                          fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box",
+                        }} />
+                      <input type="password" placeholder="Password" value={localPassword}
+                        onChange={e => { setLocalPassword(e.target.value); setLocalLoginError(""); }}
+                        onKeyDown={e => e.key === "Enter" && handleLocalLogin()}
+                        autoComplete="current-password"
+                        style={{
+                          width: "100%", padding: "10px 14px", borderRadius: 10,
+                          background: "#0D0F1A", border: `1.5px solid ${localLoginError ? "#FF6B6B55" : "#FF6B6B33"}`,
+                          color: "#E8ECF4", fontSize: 13, outline: "none",
+                          fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box",
+                        }} />
+                    </div>
+                    {localLoginError && (
+                      <div style={{ fontSize: 11, color: "#FF6B6B", textAlign: "center", marginBottom: 6 }}>
+                        ⚠️ {localLoginError}
+                      </div>
+                    )}
+                    <button className="login-btn" onClick={handleLocalLogin} disabled={localLoginLoading} style={{
+                      width: "100%", padding: "13px 0", borderRadius: 12,
+                      background: localLoginLoading ? "#FF6B6B88" : `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
+                      border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: localLoginLoading ? "wait" : "pointer",
+                      fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                      "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
+                    }}>
+                      🔐 {localLoginLoading ? "Authenticating..." : "Sign In (Local)"}
+                    </button>
+                    <div style={{ textAlign: "center", marginTop: 8, fontSize: 10, color: "#5A617866" }}>
+                      🛡️ Local Authentication • Developer Access Only
+                    </div>
+                  </>
+                ) : card.id === "vgc-admin" || card.id === "engineer" ? (
+                  <>
+                    <button className="login-btn" onClick={() => handleSSOLogin(card.user)} style={{
+                      width: "100%", padding: "13px 0", borderRadius: 12,
+                      background: `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
+                      border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                      fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                      "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
+                    }}>
+                      <svg width="16" height="16" viewBox="0 0 23 23" fill="none"><path d="M1 1h10v10H1z" fill="#f25022"/><path d="M12 1h10v10H12z" fill="#7fba00"/><path d="M1 12h10v10H1z" fill="#00a4ef"/><path d="M12 12h10v10H12z" fill="#ffb900"/></svg>
+                      Sign in with Microsoft Entra ID
+                    </button>
+                    <div style={{ textAlign: "center", marginTop: 8, fontSize: 10, color: "#5A617866" }}>
+                      {card.id === "vgc-admin"
+                        ? "🔐 Live SSO • MFA Enforced • vgcsg.com Tenant"
+                        : "🔐 Live SSO • Entra ID Sync • Role assigned by Admin"}
+                    </div>
+                    <button className="login-btn" onClick={() => handleLogin(card.user)} style={{
+                      width: "100%", padding: "8px 0", borderRadius: 8, marginTop: 6,
+                      background: "transparent", border: `1px solid ${card.borderColor}44`,
+                      color: card.borderColor, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                      fontFamily: "'DM Sans', sans-serif",
+                    }}>
+                      Demo Experience (Skip SSO)
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="login-btn" onClick={() => handleLogin(card.user)} style={{
+                      width: "100%", padding: "13px 0", borderRadius: 12,
+                      background: `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
+                      border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                      fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                      "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
+                    }}>
+                      Sign in — Demo Mode
+                    </button>
+                    <div style={{ textAlign: "center", marginTop: 10, fontSize: 10, color: "#5A617866" }}>
+                      Demo • {card.user.rbacRole}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={{ marginTop: 48, textAlign: "center", position: "relative", zIndex: 2 }}>
+          <div style={{ fontSize: 10, color: "#5A617855", letterSpacing: 1 }}>
+            VGC Technology Pte Ltd • Singapore • PDPA Compliant
+          </div>
+          <div style={{ fontSize: 9, color: "#5A617833", marginTop: 4 }}>
+            v3.33 • Powered by Azure AI & Microsoft Entra ID
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      display: "flex", height: "100vh", background: "#080A12",
+      color: "#E8ECF4", fontFamily: "'DM Sans', -apple-system, sans-serif",
+      overflow: "hidden"
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; margin: 0; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #1E2130; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #2A2F45; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 8px #6366F155, 0 0 20px #8B5CF622; } 50% { box-shadow: 0 0 14px #06B6D488, 0 0 30px #8B5CF644, 0 0 40px #EC489922; } }
+        @keyframes logoPulseRing { 0% { transform: scale(1); opacity: 0.6; } 50% { transform: scale(1.15); opacity: 0; } 100% { transform: scale(1); opacity: 0; } }
+        @keyframes logoTextShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+        @keyframes orbitDot { 0% { transform: rotate(0deg) translateX(24px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(24px) rotate(-360deg); } }
+        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 8px #FFD70044, 0 0 16px #D4AF3722; filter: brightness(1); } 25% { transform: scale(1.08) translateY(-2px); text-shadow: 0 0 18px #FFD70088, 0 0 36px #D4AF3744, 0 0 52px #FFD70022; filter: brightness(1.3); } 50% { transform: scale(1.15) translateY(-3px); text-shadow: 0 0 24px #FFD700AA, 0 0 48px #D4AF3766, 0 0 72px #FFD70033; filter: brightness(1.5); } 75% { transform: scale(1.08) translateY(-2px); text-shadow: 0 0 18px #FFD70088, 0 0 36px #D4AF3744; filter: brightness(1.3); } }
+        @keyframes goldShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+        @keyframes nudgeSlideIn { 0% { transform: translateY(8px) scale(0.95); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+        @keyframes nudgePulse { 0%, 100% { box-shadow: 0 2px 12px #6366F122; } 50% { box-shadow: 0 4px 20px #6366F144, 0 0 30px #06B6D422; } }
+        @keyframes aiFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+        @keyframes aiBreathe { 0%, 100% { transform: scale(1); box-shadow: 0 8px 24px #6366F144; } 50% { transform: scale(1.04); box-shadow: 0 12px 32px #6366F166, 0 0 50px #06B6D422; } }
+        @keyframes aiBounce { 0%, 100% { transform: translateY(0) scale(1); } 25% { transform: translateY(-6px) scale(1.02); } 50% { transform: translateY(-2px) scale(1); } 75% { transform: translateY(-4px) scale(1.01); } }
+        @keyframes aiSmartPulse { 0% { box-shadow: 0 0 10px #6366F133, 0 0 20px transparent; } 33% { box-shadow: 0 0 14px #06B6D444, 0 0 28px #6366F122; } 66% { box-shadow: 0 0 10px #EC489933, 0 0 24px #06B6D422; } 100% { box-shadow: 0 0 10px #6366F133, 0 0 20px transparent; } }
+        @keyframes aiNeonBorder { 0%, 100% { border-color: #6366F188; box-shadow: 0 0 8px #6366F144, inset 0 0 8px #6366F111; } 25% { border-color: #06B6D488; box-shadow: 0 0 8px #06B6D444, inset 0 0 8px #06B6D411; } 50% { border-color: #EC489988; box-shadow: 0 0 8px #EC489944, inset 0 0 8px #EC489911; } 75% { border-color: #81C78488; box-shadow: 0 0 8px #81C78444, inset 0 0 8px #81C78411; } }
+        @keyframes aiSparkle { 0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); } 50% { opacity: 1; transform: scale(1) rotate(180deg); } }
+        @keyframes aiThinkingRing { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes aiStatusOrbit { 0% { transform: rotate(0deg) translateX(32px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(32px) rotate(-360deg); } }
+        @keyframes proactiveSlideIn { 0% { transform: translateX(120%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes proactiveUrgent { 0%, 100% { border-color: #FF6B6B44; box-shadow: 0 0 8px #FF6B6B22; } 50% { border-color: #FF6B6B88; box-shadow: 0 0 20px #FF6B6B44, 0 0 40px #FF6B6B22; } }
+        @keyframes aiBorderPulse { 0%, 100% { border-color: #6366F133; } 50% { border-color: #6366F166; } }
+        @keyframes iconBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+        @keyframes iconSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes avatarBlink { 0%, 90%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+        @keyframes slideInRight { 0% { transform: translateX(100%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes threatAutoClose { from { width: 100%; } to { width: 0%; } }
+        @keyframes aiShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes aiPulseGlow { 0%, 100% { box-shadow: 0 0 8px #6366F122, 0 0 20px #06B6D411; } 50% { box-shadow: 0 0 16px #6366F144, 0 0 40px #06B6D422, 0 0 60px #EC489911; } }
+        @keyframes tourFadeIn { 0% { opacity: 0; transform: scale(0.92) translateY(8px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+        @keyframes tourBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+        @keyframes tourSpotlight { 0%, 100% { box-shadow: 0 0 0 4px #6366F133, 0 0 0 8px #6366F111; } 50% { box-shadow: 0 0 0 6px #6366F155, 0 0 0 14px #6366F122; } }
+        @keyframes tourWave { 0% { transform: rotate(0deg); } 15% { transform: rotate(14deg); } 30% { transform: rotate(-8deg); } 40% { transform: rotate(10deg); } 50% { transform: rotate(-4deg); } 60% { transform: rotate(6deg); } 100% { transform: rotate(0deg); } }
+        @keyframes tourConfetti { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(-30px) rotate(720deg); opacity: 0; } }
+        @keyframes tourProgressFill { from { width: 0; } }
+        @keyframes headerTitleGlow { 0% { text-shadow: 0 0 8px rgba(99,102,241,0.3); } 50% { text-shadow: 0 0 16px rgba(6,182,212,0.4), 0 0 30px rgba(99,102,241,0.2); } 100% { text-shadow: 0 0 8px rgba(99,102,241,0.3); } }
+        @keyframes bellShake { 0% { transform: rotate(0); } 15% { transform: rotate(12deg); } 30% { transform: rotate(-10deg); } 45% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 75% { transform: rotate(3deg); } 100% { transform: rotate(0); } }
+        @keyframes alertSlideDown { 0% { opacity: 0; transform: translateY(-10px) scale(0.96); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes criticalGlow { 0%, 100% { box-shadow: 0 0 4px #FF444422; border-color: #FF444433; } 50% { box-shadow: 0 0 14px #FF444455, 0 0 28px #FF444422; border-color: #FF444466; } }
+        @keyframes criticalBadgePulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 4px #FF444444; } 50% { transform: scale(1.15); box-shadow: 0 0 12px #FF444488; } }
+        @keyframes emojiBounce { 0%, 100% { transform: translateY(0) scale(1); } 25% { transform: translateY(-2px) scale(1.12); } 50% { transform: translateY(0) scale(1); } }
+        @keyframes highlightPulse { 0%, 100% { background: #FF6B6B11; } 50% { background: #FF6B6B22; } }
+        @keyframes sidebarCollapseHover { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+        @keyframes warningGlow { 0%, 100% { box-shadow: 0 0 4px #FFB34722; border-color: #FFB34733; } 50% { box-shadow: 0 0 10px #FFB34744, 0 0 20px #FFB34722; border-color: #FFB34755; } }
+        @keyframes criticalRowFlash { 0%, 100% { background: #1A080866; } 50% { background: #2D0A0A88; } }
+        @keyframes slaBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        @keyframes slaBlinkFast { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+        @keyframes slaBreachPulse { 0%, 100% { color: #FF4444; text-shadow: 0 0 4px #FF444444; } 50% { color: #FF6666; text-shadow: 0 0 12px #FF444488, 0 0 24px #FF444444; } }
+        @keyframes weatherSunPulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.08); filter: brightness(1.15); } }
+        @keyframes weatherRayPulse { 0%, 100% { opacity: 0.6; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.3); } }
+        @keyframes weatherMoonGlow { 0%, 100% { filter: brightness(1) drop-shadow(0 0 4px rgba(200,210,255,0.3)); } 50% { filter: brightness(1.15) drop-shadow(0 0 10px rgba(200,210,255,0.6)); } }
+        @keyframes weatherStarTwinkle { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.4); } }
+        @keyframes weatherCloudDrift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
+        @keyframes disasterSlideIn { 0% { transform: translateX(120%); opacity: 0; } 60% { transform: translateX(-8px); opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes disasterSlideOut { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(120%); opacity: 0; } }
+        @keyframes disasterIconPulse { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.3) rotate(-5deg); } 60% { transform: scale(1.1) rotate(5deg); } }
+        @keyframes disasterGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.15), inset 0 1px 0 rgba(255,255,255,0.05); } 50% { box-shadow: 0 4px 30px rgba(255,68,68,0.35), 0 0 40px rgba(255,68,68,0.1), inset 0 1px 0 rgba(255,255,255,0.05); } }
+        @keyframes disasterProgress { 0% { width: 100%; } 100% { width: 0%; } }
+        @keyframes disasterFadeOut { 0% { opacity: 1; transform: translateX(0); } 100% { opacity: 0; transform: translateX(120%); } }
+        @keyframes escalationBannerGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.1); } 50% { box-shadow: 0 4px 40px rgba(255,68,68,0.3), 0 0 60px rgba(255,68,68,0.08); } }
+        @keyframes escalationIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.85; } }
+        @keyframes escalationTextBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .vgc-logo-box { animation: logoGlow 3s ease-in-out infinite; }
+        .vgc-logo-box:hover { transform: scale(1.08) rotate(-2deg); transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); }
+        .vgc-logo-text { background: linear-gradient(90deg, #6366F1, #06B6D4, #EC4899, #F59E0B, #6366F1); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 4s linear infinite; }
+        .vgc-logo-collapsed { animation: logoGlow 3s ease-in-out infinite; }
+        .vgc-logo-collapsed:hover { transform: scale(1.12); transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); }
+        select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235A6178' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
+        option { background: #0A0C14; color: #E8ECF4; }
+
+        /* ─── Sidebar Glassy Nav Items ─── */
+        .vgc-nav-btn { position: relative; overflow: hidden; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)) !important; border: 1px solid rgba(255,255,255,0.04) !important; border-left: 2px solid var(--nav-accent, transparent) !important; margin-bottom: 2px !important; }
+        .vgc-nav-btn::before { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, var(--nav-accent, #6366F1)08, transparent); opacity: 0.5; transition: opacity 0.3s; }
+        .vgc-nav-btn:hover { background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)) !important; border-color: rgba(255,255,255,0.08) !important; }
+        .vgc-nav-btn:hover::before { opacity: 1; }
+        .vgc-nav-btn::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent); }
+        .vgc-nav-active { background: linear-gradient(135deg, color-mix(in srgb, var(--nav-accent, #6366F1) 12%, transparent), color-mix(in srgb, var(--nav-accent, #6366F1) 6%, transparent)) !important; border-left: 2px solid var(--nav-accent, #6366F1) !important; border-color: color-mix(in srgb, var(--nav-accent, #6366F1) 20%, transparent) !important; box-shadow: inset 0 0 20px color-mix(in srgb, var(--nav-accent, #6366F1) 8%, transparent), 0 0 16px color-mix(in srgb, var(--nav-accent, #6366F1) 10%, transparent); }
+        .vgc-nav-active::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent) !important; }
+
+        /* ─── Responsive Breakpoints ─── */
+        @media (max-width: 1024px) {
+          .vgc-kpi-grid-6 { grid-template-columns: repeat(3, 1fr) !important; }
+          .vgc-kpi-grid-5 { grid-template-columns: repeat(3, 1fr) !important; }
+          .vgc-kpi-grid-3 { grid-template-columns: 1fr 1fr !important; }
+          .vgc-grid-2-1 { grid-template-columns: 1fr !important; }
+        }
+        @media (max-width: 768px) {
+          .vgc-kpi-grid-6 { grid-template-columns: repeat(2, 1fr) !important; }
+          .vgc-kpi-grid-5 { grid-template-columns: repeat(2, 1fr) !important; }
+          .vgc-kpi-grid-3 { grid-template-columns: 1fr !important; }
+          .vgc-donut-grid { grid-template-columns: repeat(3, 1fr) !important; }
+          .vgc-sidebar { position: fixed !important; z-index: 900; height: 100vh !important; box-shadow: 4px 0 24px rgba(0,0,0,0.5) !important; }
+          .vgc-sidebar.collapsed { width: 0 !important; padding: 0 !important; border: none !important; }
+          .vgc-mobile-toggle { display: flex !important; }
+        }
+        @media (max-width: 480px) {
+          .vgc-kpi-grid-6 { grid-template-columns: 1fr !important; }
+          .vgc-kpi-grid-5 { grid-template-columns: 1fr !important; }
+          .vgc-donut-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+      `}</style>
+
+      {/* Sidebar */}
+      <div className={`vgc-sidebar${sideCollapsed ? ' collapsed' : ''}`} style={{
+        width: sideCollapsed ? 56 : 240, background: "linear-gradient(180deg, #0A0C14 0%, #0D0F18 50%, #0A0C14 100%)",
+        borderRight: "1px solid #1E213066", display: "flex", flexDirection: "column",
+        transition: "width 0.25s cubic-bezier(0.4, 0, 0.2, 1)", flexShrink: 0, overflow: "hidden",
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+        boxShadow: "1px 0 16px rgba(0,0,0,0.3), inset -1px 0 0 rgba(255,255,255,0.02)"
+      }}>
+        <div style={{
+          padding: sideCollapsed ? "16px 12px" : "16px 18px",
+          borderBottom: "1px solid #1E2130",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          minHeight: 68
+        }}>
+          {!sideCollapsed ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div className="vgc-logo-box" style={{
+                width: 62, height: 62, borderRadius: 16, position: "relative",
+                background: "linear-gradient(135deg, #D4AF37, #FFD700, #B8860B, #F59E0B, #D4AF37)",
+                backgroundSize: "300% 300%",
+                animation: "logoGradient 4s ease infinite, logoGlow 3s ease-in-out infinite",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", flexShrink: 0
+              }}>
+                {/* Inner dark shield */}
+                <div style={{
+                  width: 52, height: 52, borderRadius: 12,
+                  background: "radial-gradient(ellipse at 30% 30%, #141620, #0A0C14)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  position: "relative", overflow: "hidden"
+                }}>
+                  {/* Circuit pattern accent */}
+                  <div style={{ position: "absolute", top: 4, left: 6, width: 14, height: 1, background: "#FFD70033", borderRadius: 1 }} />
+                  <div style={{ position: "absolute", bottom: 5, right: 6, width: 12, height: 1, background: "#D4AF3733", borderRadius: 1 }} />
+                  <div style={{ position: "absolute", top: 8, right: 5, width: 1, height: 12, background: "#FFD70022", borderRadius: 1 }} />
+                  <div style={{ position: "absolute", bottom: 8, left: 5, width: 1, height: 10, background: "#D4AF3722", borderRadius: 1 }} />
+                  <span style={{
+                    fontSize: 26, fontWeight: 900, fontFamily: "'Space Grotesk', sans-serif",
+                    background: "linear-gradient(135deg, #FFD700, #D4AF37, #FFF8DC, #FFD700, #B8860B)",
+                    backgroundSize: "300% 300%",
+                    animation: "goldVBounce 4s ease-in-out infinite, goldShimmer 3s linear infinite",
+                    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                    backgroundClip: "text", letterSpacing: "-0.5px",
+                    display: "inline-block"
+                  }}>V</span>
+                </div>
+                {/* Orbiting dot */}
+                <div style={{
+                  position: "absolute", width: 5, height: 5, borderRadius: "50%",
+                  background: "#FFD700", boxShadow: "0 0 8px #FFD700, 0 0 16px #D4AF3744",
+                  animation: "orbitDot 6s linear infinite",
+                  top: "calc(50% - 2.5px)", left: "calc(50% - 2.5px)"
+                }} />
+                {/* Pulse ring */}
+                <div style={{
+                  position: "absolute", inset: -4, borderRadius: 20,
+                  border: "1.5px solid #FFD70033",
+                  animation: "logoPulseRing 3s ease-in-out infinite"
+                }} />
+              </div>
+              <div>
+                <span className="vgc-logo-text" style={{
+                  fontSize: 20, fontWeight: 800, fontFamily: "'Space Grotesk', sans-serif",
+                  letterSpacing: "-0.5px", display: "block", lineHeight: 1.1
+                }}>VGC-ITSM</span>
+                <span style={{ fontSize: 9, color: "#5A617899", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1.5px", textTransform: "uppercase" }}>Service Management</span>
+                <span style={{ fontSize: 7, color: "#5A617855", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.3px", display: "block", marginTop: 2 }}>Developed by VGC Technology Pte Ltd</span>
+              </div>
+            </div>
+          ) : (
+            <div className="vgc-logo-collapsed" style={{
+              width: 42, height: 42, borderRadius: 12, margin: "0 auto",
+              background: "linear-gradient(135deg, #D4AF37, #FFD700, #B8860B, #F59E0B, #D4AF37)",
+              backgroundSize: "300% 300%",
+              animation: "logoGradient 4s ease infinite, logoGlow 3s ease-in-out infinite",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", position: "relative"
+            }}>
+              <div style={{
+                width: 34, height: 34, borderRadius: 8, background: "radial-gradient(ellipse at 30% 30%, #141620, #0A0C14)",
+                display: "flex", alignItems: "center", justifyContent: "center"
+              }}>
+                <span style={{
+                  fontSize: 18, fontWeight: 900, fontFamily: "'Space Grotesk', sans-serif",
+                  background: "linear-gradient(135deg, #FFD700, #D4AF37, #FFF8DC, #FFD700, #B8860B)",
+                  backgroundSize: "300% 300%",
+                  animation: "goldVBounce 4s ease-in-out infinite, goldShimmer 3s linear infinite",
+                  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                  backgroundClip: "text", display: "inline-block"
+                }}>V</span>
+              </div>
+              <div style={{
+                position: "absolute", width: 4, height: 4, borderRadius: "50%",
+                background: "#FFD700", boxShadow: "0 0 6px #FFD700, 0 0 12px #D4AF3744",
+                animation: "orbitDot 6s linear infinite",
+                top: "calc(50% - 2px)", left: "calc(50% - 2px)"
+              }} />
+            </div>
+          )}
+          <button onClick={() => setSideCollapsed(!sideCollapsed)} className="sidebar-collapse-btn" style={{
+            width: 30, height: 30, borderRadius: 8,
+            background: "linear-gradient(135deg, #6366F122, #06B6D411)",
+            border: "1px solid #6366F133", color: "#6366F1",
+            cursor: "pointer", fontSize: 14, fontWeight: 700,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "all 0.3s cubic-bezier(0.34,1.56,0.64,1)",
+            boxShadow: "0 2px 8px #6366F111"
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "linear-gradient(135deg, #6366F144, #06B6D422)"; e.currentTarget.style.transform = "scale(1.15)"; e.currentTarget.style.boxShadow = "0 4px 16px #6366F133"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "linear-gradient(135deg, #6366F122, #06B6D411)"; e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 2px 8px #6366F111"; }}
+          >{sideCollapsed ? "▸" : "◂"}</button>
+        </div>
+
+        <nav style={{ flex: 1, padding: "8px 0", overflowY: "auto" }}>
+          {NAV.map(item => {
+            const isActive = activeModule === item.id;
+            return (
+            <button key={item.id} className={`vgc-nav-btn${isActive ? ' vgc-nav-active' : ''}`}
+              onClick={() => { setActiveModule(item.id); setSearch(""); }}
+              style={{
+                "--nav-accent": item.accent,
+                display: "flex", alignItems: "center", gap: 10,
+                width: "100%", padding: sideCollapsed ? "11px 0" : "11px 16px",
+                margin: sideCollapsed ? "2px 0" : "2px 8px 2px 0",
+                borderRadius: sideCollapsed ? 0 : "0 8px 8px 0",
+                justifyContent: sideCollapsed ? "center" : "flex-start",
+                background: isActive ? item.gradient : "transparent",
+                border: "none", borderLeft: isActive ? `2px solid ${item.accent}` : "2px solid transparent",
+                color: "#E8ECF4",
+                cursor: "pointer", fontSize: 13, fontFamily: "inherit",
+                transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)", whiteSpace: "nowrap",
+                position: "relative"
+              }}
+              onMouseEnter={e => { if (!isActive) { e.currentTarget.style.borderLeftColor = item.accent + "88"; } }}
+              onMouseLeave={e => { if (!isActive) { e.currentTarget.style.borderLeftColor = item.accent + "33"; } }}
+            >
+              <NavIcon type={item.id} isActive={isActive} />
+              {!sideCollapsed && <span style={{ flex: 1, textAlign: "left", fontSize: 13, fontWeight: isActive ? 600 : 400 }}>{item.label}</span>}
+              {!sideCollapsed && item.count > 0 && (
+                <span style={{
+                  background: item.critical ? "#FF4444" : `${item.accent}cc`,
+                  color: "#fff", fontSize: 10, fontWeight: 700, padding: "2px 7px",
+                  borderRadius: 10, fontFamily: "'JetBrains Mono', monospace", minWidth: 20, textAlign: "center",
+                  animation: item.critical ? "criticalBadgePulse 1.5s ease-in-out infinite" : "none",
+                  boxShadow: item.critical ? "0 0 8px #FF444466" : `0 0 6px ${item.accent}33`
+                }}>{item.count}</span>
+              )}
+            </button>
+          );
+          })}
+        </nav>
+
+        {!sideCollapsed && (
+          <div style={{ padding: "14px 16px", borderTop: "1px solid #1E213066", background: "linear-gradient(180deg, transparent, rgba(99,102,241,0.03))" }}>
+            <div onClick={() => setShowProfileModal(true)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.08)", backdropFilter: "blur(8px)", cursor: "pointer", transition: "all 0.2s" }}
+              onMouseEnter={e => { e.currentTarget.style.background = "rgba(99,102,241,0.12)"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.2)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "rgba(99,102,241,0.06)"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.08)"; }}>
+              <div style={{
+                width: 34, height: 34, borderRadius: 10, position: "relative",
+                background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4, #EC4899)",
+                backgroundSize: profilePhoto ? "cover" : "200% 200%",
+                animation: profilePhoto ? "none" : "logoGradient 5s ease infinite",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 12, fontWeight: 700, color: "#fff",
+                boxShadow: "0 2px 8px rgba(99,102,241,0.3)"
+              }}>{!profilePhoto && currentUser.avatar}
+                <span style={{ position: "absolute", bottom: -2, right: -2, width: 10, height: 10, borderRadius: "50%", background: "#4CAF50", border: "2px solid #0A0C14", boxShadow: "0 0 4px #4CAF5066" }} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{msalUser?.displayName || currentUser.name}</div>
+                <div style={{ fontSize: 10, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace" }}>{msalUser?.jobTitle || currentUser.rbacRole}</div>
+                <div style={{ fontSize: 8, color: isMsalAuthenticated ? "#4CAF50" : "#FFB347", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 3 }}>
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: isMsalAuthenticated ? "#4CAF50" : "#FFB347", animation: "pulse 2s infinite" }} /> {isMsalAuthenticated ? "Entra ID Connected" : "Demo Mode"}
+                </div>
+                {msalUser?.mail && <div style={{ fontSize: 7, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{msalUser.mail}</div>}
+              </div>
+            </div>
+            {/* Sign Out */}
+            <button onClick={() => {
+              setIsLoggedIn(false); setCurrentUser(null); _save("vgc_current_user", null);
+              setMsalUser(null); setMsalPhoto(null); setGraphEmails(null); setGraphCalendar(null);
+              setGraphChats(null); setGraphTeams(null); setGraphPresence(null); setGraphUnread(0);
+              graphFetchedRef.current = false;
+              if (accounts && accounts.length > 0) {
+                msalInstance.logoutPopup({ account: accounts[0] }).catch(() => {});
+              }
+            }} style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              width: "100%", marginTop: 8, padding: "7px 0", borderRadius: 8,
+              background: "rgba(255,107,107,0.06)", border: "1px solid rgba(255,107,107,0.15)",
+              color: "#FF6B6B", cursor: "pointer", fontSize: 11, fontWeight: 500,
+              fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3,
+              transition: "all 0.2s ease"
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,107,107,0.12)"; e.currentTarget.style.borderColor = "rgba(255,107,107,0.3)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,107,107,0.06)"; e.currentTarget.style.borderColor = "rgba(255,107,107,0.15)"; }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              Sign Out
+            </button>
+            <div style={{ textAlign: "center", marginTop: 8, fontSize: 8, color: "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>
+              © {new Date().getFullYear()} VGC Technology Pte Ltd
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Main Content */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Header */}
+        <div style={{
+          padding: "12px 28px", borderBottom: "1px solid #1E2130",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: "#0A0C14", position: "relative"
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <h1 style={{
+              fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: "-0.5px",
+              fontFamily: "'Space Grotesk', sans-serif",
+              background: activeModule === "dashboard" ? "linear-gradient(135deg, #6366F1, #06B6D4, #EC4899, #6366F1)" : "none",
+              backgroundSize: activeModule === "dashboard" ? "300% auto" : "auto",
+              WebkitBackgroundClip: activeModule === "dashboard" ? "text" : "unset",
+              WebkitTextFillColor: activeModule === "dashboard" ? "transparent" : "#E8ECF4",
+              backgroundClip: activeModule === "dashboard" ? "text" : "unset",
+              animation: activeModule === "dashboard" ? "logoTextShimmer 4s linear infinite" : "none",
+              filter: activeModule === "dashboard" ? "drop-shadow(0 0 12px rgba(99,102,241,0.3))" : "none"
+            }}>{moduleTitle}</h1>
+            {activeModule === "dashboard" && (
+              <span style={{
+                padding: "3px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+                fontFamily: "'JetBrains Mono', monospace",
+                background: "linear-gradient(135deg, #6366F118, #06B6D418)",
+                border: "1px solid #6366F133",
+                color: "#06B6D4", letterSpacing: 0.5
+              }}>AI-POWERED</span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {/* Glassy Singapore Weather + Date/Time */}
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "7px 14px",
+              background: "linear-gradient(135deg, rgba(100, 181, 246, 0.08), rgba(6, 182, 212, 0.06), rgba(129, 199, 132, 0.04))",
+              backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+              border: "1px solid rgba(100, 181, 246, 0.15)", borderRadius: 10,
+              cursor: "default", position: "relative", overflow: "hidden",
+              boxShadow: "0 4px 16px rgba(100, 181, 246, 0.06), inset 0 1px 0 rgba(255,255,255,0.06)"
+            }}>
+              <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, rgba(255,255,255,0.04), transparent 60%)", pointerEvents: "none" }} />
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, rgba(100,181,246,0.3), rgba(6,182,212,0.3), rgba(129,199,132,0.2), transparent)" }} />
+              {/* Date & Time */}
+              <div style={{ lineHeight: 1.2, position: "relative", textAlign: "right", minWidth: 80 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>
+                  {new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Singapore", hour: "2-digit", minute: "2-digit" })}
+                  <span style={{ fontSize: 9, color: "rgba(255,255,255,0.5)", marginLeft: 3 }}>SGT</span>
+                </div>
+                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.5)", fontFamily: "'JetBrains Mono', monospace" }}>
+                  {(() => { const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" })); const d = String(now.getDate()).padStart(2, "0"); const m = now.toLocaleString("en-US", { month: "short" }); const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]; return `${days[now.getDay()]}, ${d} ${m} ${now.getFullYear()}`; })()}
+                </div>
+              </div>
+              <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.08)" }} />
+              {/* Weather — dynamic time-aware */}
+              {(() => {
+                const sgNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" }));
+                const hr = sgNow.getHours();
+                const isNight = hr >= 19 || hr < 6;
+                const isDusk = hr >= 18 && hr < 19;
+                const isDawn = hr >= 6 && hr < 7;
+                const isMorning = hr >= 7 && hr < 11;
+                const isMidday = hr >= 11 && hr < 14;
+                const isAfternoon = hr >= 14 && hr < 18;
+                const temp = isNight ? (25 + Math.floor(Math.random() * 2)) : isDawn || isMorning ? (26 + Math.floor(Math.random() * 2)) : isMidday ? (31 + Math.floor(Math.random() * 2)) : isAfternoon ? (30 + Math.floor(Math.random() * 2)) : (28 + Math.floor(Math.random() * 2));
+                const desc = isNight ? "Clear Night" : isDawn ? "Early Dawn" : isMorning ? "Partly Cloudy" : isMidday ? "Warm & Humid" : isAfternoon ? "Partly Cloudy" : isDusk ? "Sunset Glow" : "Fair";
+                const humidity = isNight ? 85 : isMidday ? 72 : 78;
+                const wind = isNight ? 8 : isAfternoon ? 14 : 11;
+                const weatherIcon = isNight ? (
+                  <svg width="26" height="26" viewBox="0 0 26 26" style={{ filter: "drop-shadow(0 0 6px rgba(200,210,255,0.5))" }}>
+                    <defs>
+                      <radialGradient id="moonGrd" cx="40%" cy="40%"><stop offset="0%" stopColor="#F0F4FF"/><stop offset="70%" stopColor="#C8D6FF"/><stop offset="100%" stopColor="#A0B4F0"/></radialGradient>
+                    </defs>
+                    <circle cx="13" cy="13" r="8" fill="url(#moonGrd)" style={{ animation: "weatherMoonGlow 4s ease-in-out infinite" }}/>
+                    <circle cx="17" cy="10" r="6" fill="#0A0C14"/>
+                    <circle cx="10" cy="11" r="1" fill="#A0B4F088" opacity="0.5"/>
+                    <circle cx="12" cy="15" r="0.7" fill="#A0B4F066" opacity="0.4"/>
+                    {[{x:4,y:4,r:0.6,d:"0.3s"},{x:22,y:6,r:0.5,d:"0.8s"},{x:6,y:21,r:0.4,d:"1.4s"},{x:23,y:19,r:0.5,d:"0.6s"},{x:2,y:13,r:0.3,d:"1.1s"},{x:20,y:24,r:0.4,d:"1.8s"}].map((s,i)=>(
+                      <circle key={i} cx={s.x} cy={s.y} r={s.r} fill="#E8ECF4" style={{ animation: `weatherStarTwinkle 2.5s ease-in-out ${s.d} infinite` }}/>
+                    ))}
+                  </svg>
+                ) : (isDusk || isDawn) ? (
+                  <svg width="26" height="26" viewBox="0 0 26 26" style={{ filter: "drop-shadow(0 0 6px rgba(255,150,50,0.5))" }}>
+                    <defs>
+                      <radialGradient id="sunsetGrd" cx="50%" cy="50%"><stop offset="0%" stopColor="#FFD93D"/><stop offset="50%" stopColor="#FF8C42"/><stop offset="100%" stopColor="#FF6B6B"/></radialGradient>
+                    </defs>
+                    <circle cx="13" cy="15" r="6" fill="url(#sunsetGrd)" style={{ animation: "weatherSunPulse 3s ease-in-out infinite" }}/>
+                    {[0,45,90,135,180,225,270,315].map((a,i)=>{const rad=a*Math.PI/180;return(
+                      <line key={i} x1={13+Math.cos(rad)*8} y1={15+Math.sin(rad)*8} x2={13+Math.cos(rad)*10} y2={15+Math.sin(rad)*10} stroke="#FF8C42" strokeWidth="1.2" strokeLinecap="round" opacity="0.6" style={{ animation: `weatherRayPulse 2s ease-in-out ${i*0.2}s infinite`, transformOrigin: "13px 15px" }}/>
+                    )})}
+                    <rect x="0" y="18" width="26" height="10" fill="#0A0C14" opacity="0.6"/>
+                    <line x1="2" y1="18" x2="24" y2="18" stroke="#FF8C4266" strokeWidth="0.5"/>
+                  </svg>
+                ) : (
+                  <svg width="26" height="26" viewBox="0 0 26 26" style={{ filter: "drop-shadow(0 0 8px rgba(255,200,50,0.4))" }}>
+                    <defs>
+                      <radialGradient id="sunGrd" cx="50%" cy="50%"><stop offset="0%" stopColor="#FFF7AE"/><stop offset="40%" stopColor="#FFD93D"/><stop offset="100%" stopColor="#F59E0B"/></radialGradient>
+                    </defs>
+                    <circle cx="13" cy="13" r="5.5" fill="url(#sunGrd)" style={{ animation: "weatherSunPulse 3s ease-in-out infinite" }}/>
+                    {[0,45,90,135,180,225,270,315].map((a,i)=>{const rad=a*Math.PI/180;return(
+                      <line key={i} x1={13+Math.cos(rad)*8} y1={13+Math.sin(rad)*8} x2={13+Math.cos(rad)*11} y2={13+Math.sin(rad)*11} stroke="#FFD93D" strokeWidth="1.5" strokeLinecap="round" style={{ animation: `weatherRayPulse 2s ease-in-out ${i*0.25}s infinite`, transformOrigin: "13px 13px" }}/>
+                    )})}
+                    {isMorning || isAfternoon ? <>
+                      <ellipse cx="19" cy="18" rx="5" ry="3" fill="#E8ECF4" opacity="0.2" style={{ animation: "weatherCloudDrift 8s ease-in-out infinite" }}/>
+                      <ellipse cx="17" cy="17" rx="3" ry="2" fill="#E8ECF4" opacity="0.15" style={{ animation: "weatherCloudDrift 8s ease-in-out 1s infinite" }}/>
+                    </> : null}
+                  </svg>
+                );
+                return <>
+                  <div style={{ width: 26, height: 26, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{weatherIcon}</div>
+                  <div style={{ lineHeight: 1.2, position: "relative" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#ffffff", fontFamily: "'Space Grotesk', sans-serif", textShadow: "0 1px 3px rgba(0,0,0,0.3)" }}>{temp}°C</div>
+                    <div style={{ fontSize: 9, color: "rgba(255,255,255,0.65)", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}>Singapore · {desc}</div>
+                  </div>
+                  <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.08)" }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1, position: "relative" }}>
+                    <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: "'JetBrains Mono', monospace" }}>💧 {humidity}%</span>
+                    <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: "'JetBrains Mono', monospace" }}>🌬️ {wind}km/h</span>
+                  </div>
+                </>;
+              })()}
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: disasterAlert ? disasterAlert.color : "#4CAF50", boxShadow: disasterAlert ? `0 0 8px ${disasterAlert.color}88, 0 0 16px ${disasterAlert.color}44` : "0 0 8px #4CAF5088, 0 0 16px #4CAF5044", animation: disasterAlert ? "criticalBadgePulse 1.5s infinite" : "pulse 2s infinite", marginLeft: 2, flexShrink: 0 }} title={disasterAlert ? `⚠️ ${disasterAlert.type} Alert Active` : "Weather Normal"} />
+            </div>
+
+            {/* ═══ Bell Icon — AI Alert Panel ═══ */}
+            {(() => {
+              const critIncidents = incidents.filter(i => (i.priority === "Sev-A" || i.priority === "Sev-B") && i.status !== "Resolved" && i.status !== "Closed");
+              const alertCount = critIncidents.length;
+              const aiActions = critIncidents.map(inc => {
+                const sevA = inc.priority === "Sev-A";
+                let action = "", detail = "";
+                if (inc.category === "Network" || inc.title?.toLowerCase().includes("network")) { action = "Restart affected network services & check firewall rules"; detail = "Run diagnostics on core switches, verify VLAN configs, escalate to Network team if persists > 15min"; }
+                else if (inc.category === "Security" || inc.title?.toLowerCase().includes("security") || inc.title?.toLowerCase().includes("breach")) { action = "Isolate affected systems & initiate incident response"; detail = "Block suspicious IPs, enable enhanced logging, notify CISO, preserve forensic evidence"; }
+                else if (inc.category === "Email" || inc.title?.toLowerCase().includes("email") || inc.title?.toLowerCase().includes("exchange")) { action = "Check Exchange health & restart mail transport services"; detail = "Verify mail queue, check certificate validity, restart MSExchangeTransport, monitor delivery"; }
+                else if (inc.category === "SAP" || inc.title?.toLowerCase().includes("sap") || inc.title?.toLowerCase().includes("erp")) { action = "Verify SAP application servers & restart work processes"; detail = "Check SM21 system log, ST22 dumps, restart SAP services, verify DB connectivity"; }
+                else if (inc.title?.toLowerCase().includes("vpn") || inc.title?.toLowerCase().includes("remote")) { action = "Check VPN concentrator health & user authentication"; detail = "Verify AnyConnect profiles, check Entra ID sync, restart VPN services, test connectivity"; }
+                else if (inc.title?.toLowerCase().includes("server") || inc.title?.toLowerCase().includes("down")) { action = "Run server health checks & attempt service restart"; detail = "Check CPU/RAM/Disk, review event logs, restart primary services, fail-over if needed"; }
+                else { action = sevA ? "Escalate immediately & begin root cause analysis" : "Investigate and apply standard troubleshooting"; detail = sevA ? "Engage L2/L3 support, notify service owner, start P1 bridge call" : "Follow KB runbook, check recent changes, gather diagnostics"; }
+                return { ...inc, aiAction: action, aiDetail: detail, isSevA: sevA };
+              });
+              return (
+                <div style={{ position: "relative" }}>
+                  <div onClick={() => setShowAlertPanel(!showAlertPanel)} style={{
+                    position: "relative", width: 38, height: 38, borderRadius: 8,
+                    background: alertCount > 0 ? "linear-gradient(135deg, #FF444412, #FF6B6B08)" : "#0F1117",
+                    border: `1px solid ${alertCount > 0 ? "#FF444433" : "#1E2130"}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", fontSize: 16,
+                    animation: alertCount > 0 ? "bellShake 2s ease-in-out infinite" : "none",
+                    transition: "all 0.2s"
+                  }}>
+                    🔔
+                    {alertCount > 0 && (
+                      <span style={{
+                        position: "absolute", top: -4, right: -4, minWidth: 18, height: 18,
+                        borderRadius: 9, background: "#FF4444", color: "#fff",
+                        fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        border: "2px solid #0A0C14", padding: "0 3px",
+                        animation: "criticalBadgePulse 2s infinite"
+                      }}>{alertCount}</span>
+                    )}
+                  </div>
+
+                  {/* AI Alert Panel Dropdown */}
+                  {showAlertPanel && (
+                    <div style={{
+                      position: "absolute", top: 46, right: 0, width: 440, maxHeight: "75vh",
+                      background: "#0F1117", borderRadius: 12,
+                      border: "1px solid #1E2130", boxShadow: "0 16px 48px #000000AA, 0 4px 12px #00000066",
+                      overflow: "hidden", zIndex: 999,
+                      animation: "alertSlideDown 0.25s ease-out"
+                    }}>
+                      {/* Panel Header */}
+                      <div style={{ padding: "12px 16px", background: "linear-gradient(135deg, #FF444410, #6366F108)", borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 14 }}>🤖</span>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Action Center</div>
+                            <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{alertCount} active alert{alertCount !== 1 ? "s" : ""} · AI recommendations ready</div>
+                          </div>
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); setShowAlertPanel(false); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 15, padding: "2px 4px" }}>✕</button>
+                      </div>
+
+                      {/* Alert Items */}
+                      <div style={{ overflow: "auto", maxHeight: "calc(75vh - 100px)", padding: "8px" }}>
+                        {aiActions.length === 0 ? (
+                          <div style={{ textAlign: "center", padding: "30px 20px" }}>
+                            <span style={{ fontSize: 28 }}>✅</span>
+                            <div style={{ fontSize: 13, color: "#81C784", fontWeight: 600, marginTop: 8 }}>All Clear</div>
+                            <div style={{ fontSize: 11, color: "#5A6178", marginTop: 4 }}>No high-priority incidents requiring immediate action</div>
+                          </div>
+                        ) : (
+                          aiActions.map(item => (
+                            <div key={item.id} onClick={() => { setShowAlertPanel(false); setDetailItem(item); setModal("incidentDetail"); }} style={{
+                              padding: "10px 12px", marginBottom: 6, borderRadius: 8,
+                              background: item.isSevA ? "#FF444408" : "#0A0C14",
+                              border: `1px solid ${item.isSevA ? "#FF444433" : "#1E2130"}`,
+                              borderLeft: `3px solid ${item.isSevA ? "#FF4444" : "#FF6B6B"}`,
+                              cursor: "pointer", transition: "all 0.2s"
+                            }}
+                              onMouseEnter={e => { e.currentTarget.style.background = item.isSevA ? "#FF444412" : "#1E213044"; e.currentTarget.style.transform = "translateX(2px)"; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = item.isSevA ? "#FF444408" : "#0A0C14"; e.currentTarget.style.transform = "translateX(0)"; }}
+                            >
+                              {/* Ticket Header */}
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: item.isSevA ? "#FF4444" : "#FF6B6B", boxShadow: item.isSevA ? "0 0 6px #FF444488" : "none", flexShrink: 0, animation: item.isSevA ? "pulse 2s infinite" : "none" }} />
+                                <span style={{ fontSize: 10, fontWeight: 700, color: item.isSevA ? "#FF4444" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{item.priority}</span>
+                                <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{item.id}</span>
+                                {item.isSevA && <span style={{ padding: "1px 5px", borderRadius: 3, background: "#FF4444", color: "#fff", fontSize: 8, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>URGENT</span>}
+                                <span style={{ padding: "1px 5px", borderRadius: 3, background: "#1E2130", fontSize: 8, color: "#A0AEC0" }}>{item.status}</span>
+                                <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto" }}>{item.assignee || "Unassigned"}</span>
+                              </div>
+                              {/* Title */}
+                              <div style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 500, marginBottom: 6, lineHeight: 1.4 }}>{item.title}</div>
+                              {/* AI Action — highlighted */}
+                              <div style={{ padding: "7px 10px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 6, border: "1px solid #6366F122", marginBottom: 4 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                                  <span style={{ fontSize: 10 }}>⚡</span>
+                                  <span style={{ fontSize: 9, fontWeight: 700, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>AI RECOMMENDED ACTION</span>
+                                </div>
+                                <div style={{ fontSize: 11, color: "#81C784", fontWeight: 600, marginBottom: 2 }}>{item.aiAction}</div>
+                                <div style={{ fontSize: 10, color: "#A0AEC0", lineHeight: 1.4 }}>{item.aiDetail}</div>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, marginTop: 4 }}>
+                                <span style={{ fontSize: 9, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>Open ticket →</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+
+                        {/* Quick Actions Footer */}
+                        {aiActions.length > 0 && (
+                          <div style={{ padding: "8px 4px 4px", borderTop: "1px solid #1E213044", marginTop: 4 }}>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button onClick={(e) => { e.stopPropagation(); setShowAlertPanel(false); setActiveModule("incidents"); }} style={{
+                                flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid #FF444433", background: "#FF444412",
+                                color: "#FF6B6B", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace"
+                              }}>🎫 All Incidents</button>
+                              <button onClick={(e) => { e.stopPropagation(); setShowAlertPanel(false); setActiveModule("cybernews"); }} style={{
+                                flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F112",
+                                color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace"
+                              }}>🛡️ Cyber News</button>
+                              <button onClick={(e) => { e.stopPropagation(); setShowAlertPanel(false); setActiveModule("sla"); }} style={{
+                                flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid #FFB34733", background: "#FFB34712",
+                                color: "#FFB347", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace"
+                              }}>⏱️ SLA Tracker</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflow: "auto", padding: 28 }}>
+          {renderModule()}
+        </div>
+        {/* Footer */}
+        <div style={{ padding: "6px 28px", borderTop: "1px solid #1E213033", background: "#0A0C14", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 9, color: "#5A617855", fontFamily: "'JetBrains Mono', monospace" }}>© {new Date().getFullYear()} VGC Technology Pte Ltd — All rights reserved</span>
+          <span style={{ fontSize: 9, color: "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>VGC-ITSM v2.0 · Enterprise Service Management</span>
+        </div>
+      </div>
+
+      {/* Modals */}
+      {modal === "newIncident" && <NewIncidentModal />}
+      {modal === "incidentDetail" && <IncidentDetailModal />}
+      {modal === "changeDetail" && <ChangeDetailModal />}
+      {modal === "problemDetail" && <ProblemDetailModal />}
+      {modal === "kbDetail" && <KBDetailModal />}
+      {modal === "newProblem" && <NewProblemModal />}
+      {modal === "newChange" && <NewChangeModal />}
+      {modal === "newAsset" && <NewAssetModal />}
+      {modal === "newKBArticle" && <NewKBArticleModal />}
+      {modal === "assetDetail" && <AssetDetailModal />}
+      {modal === "requestDetail" && <RequestDetailModal />}
+      {modal === "catalogRequest" && <CatalogRequestModal />}
+      {modal === "catalogManage" && <CatalogManageModal />}
+
+      {/* ═══ PROFILE MODAL ═══ */}
+      {showProfileModal && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000AA", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => { if (e.target === e.currentTarget) setShowProfileModal(false); }}>
+          <div style={{ width: 520, maxHeight: "85vh", background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", overflow: "auto", boxShadow: "0 20px 60px #00000066" }}>
+            <div style={{ padding: "16px 20px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>👤</span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>My Profile</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Manage your account & Entra ID sync</div>
+                </div>
+              </div>
+              <button onClick={() => setShowProfileModal(false)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 16 }}>✕</button>
+            </div>
+            <div style={{ padding: 20 }}>
+              {/* Photo Section */}
+              <div style={{ textAlign: "center", marginBottom: 20 }}>
+                <div style={{ position: "relative", width: 80, height: 80, margin: "0 auto 12px" }}>
+                  <div style={{
+                    width: 80, height: 80, borderRadius: 20,
+                    background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4, #EC4899, #F59E0B)",
+                    backgroundSize: profilePhoto ? "cover" : "300% 300%",
+                    animation: profilePhoto ? "none" : "logoGradient 4s ease infinite",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 24, fontWeight: 700, color: "#fff",
+                    boxShadow: "0 4px 16px rgba(99,102,241,0.3)",
+                    border: "3px solid #6366F133"
+                  }}>{!profilePhoto && currentUser.avatar}</div>
+                  <button onClick={() => profilePhotoRef.current?.click()} style={{
+                    position: "absolute", bottom: -4, right: -4, width: 28, height: 28, borderRadius: 8,
+                    background: "#6366F1", border: "2px solid #0F1117", cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 12, color: "#fff", boxShadow: "0 2px 8px rgba(99,102,241,0.4)"
+                  }}>📷</button>
+                  <input ref={profilePhotoRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file && file.size <= 5 * 1024 * 1024 && /^image\/(png|jpe?g|gif|webp)$/i.test(file.type)) {
+                      const reader = new FileReader();
+                      reader.onload = ev => setProfilePhoto(ev.target.result);
+                      reader.readAsDataURL(file);
+                    }
+                  }} />
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{currentUser.name}</div>
+                <div style={{ fontSize: 11, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace" }}>{currentUser.rbacRole}</div>
+              </div>
+
+              {/* Entra ID Sync Status */}
+              <div style={{ padding: "10px 14px", borderRadius: 8, background: "#4CAF5008", border: "1px solid #4CAF5022", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L14 4V8.5C14 11.5 11.5 14 8 15C4.5 14 2 11.5 2 8.5V4L8 1Z" stroke="#4CAF50" strokeWidth="1.3"/><path d="M5.5 8L7 9.5L10.5 6" stroke="#4CAF50" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#4CAF50" }}>Microsoft Entra ID — Synced</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Last sync: {new Date().toLocaleString("en-GB", { timeZone: "Asia/Singapore" })} SGT</div>
+                </div>
+                <button style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #4CAF5033", background: "#4CAF5012", color: "#4CAF50", cursor: "pointer", fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🔄 Sync Now</button>
+              </div>
+
+              {/* Profile Fields */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {[
+                  { label: "Full Name", value: currentUser.name, icon: "👤" },
+                  { label: "Employee ID", value: currentUser.employeeId, icon: "🆔" },
+                  { label: "Email Address", value: currentUser.email, icon: "📧" },
+                  { label: "Office Phone", value: currentUser.phone, icon: "📞" },
+                  { label: "Mobile Number", value: "+65 9123 4567", icon: "📱" },
+                  { label: "Department", value: currentUser.department, icon: "🏢" },
+                  { label: "Role / Title", value: currentUser.role, icon: "💼" },
+                  { label: "Team", value: currentUser.team, icon: "👥" },
+                  { label: "Location", value: currentUser.location, icon: "📍" },
+                  { label: "PC Name", value: currentUser.pcName, icon: "💻" },
+                  { label: "RBAC Role", value: currentUser.rbacRole, icon: "🔐" },
+                  { label: "Entra ID UPN", value: currentUser.email, icon: "☁️" },
+                ].map((f, i) => (
+                  <div key={i} style={{ padding: "8px 10px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 10 }}>{f.icon}</span> {f.label}</div>
+                    <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{f.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Actions */}
+              <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+                {profilePhoto && <button onClick={() => setProfilePhoto(null)} style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #FF444433", background: "#FF444412", color: "#FF6B6B", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Remove Photo</button>}
+                <button onClick={() => setShowProfileModal(false)} style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14", color: "#5A6178", cursor: "pointer", fontSize: 11 }}>Close</button>
+                <button onClick={() => { _save("vgc_profile_photo", profilePhoto); _save("vgc_avatar", avatarConfig); setShowProfileModal(false); }} style={{ padding: "8px 14px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>💾 Save Changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ AI AUTO-DRAFT EMAIL MODAL ═══ */}
+      {threatEmailDraft && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000AA", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => { if (e.target === e.currentTarget) setThreatEmailDraft(null); }}>
+          <div style={{ width: 620, maxHeight: "85vh", background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", overflow: "hidden", boxShadow: "0 20px 60px #00000066" }}>
+            <div style={{ padding: "16px 20px", background: "#0A0C14", borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>📧</span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Auto-Draft Email</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+                    {azureOpenAI.enabled ? "Powered by Azure Open AI" : "Generated by VGC-AI Engine"} · {threatEmailDraft.id}
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => setThreatEmailDraft(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ padding: 20, overflow: "auto", maxHeight: "65vh" }}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>TO:</div>
+                <input style={{ width: "100%", padding: "8px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 12, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }} defaultValue="it-team@vgctech.com; security@vgctech.com" />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>CC:</div>
+                <input style={{ width: "100%", padding: "8px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 12, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }} defaultValue="management@vgctech.com" />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>SUBJECT:</div>
+                <input style={{ width: "100%", padding: "8px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#E8ECF4", fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }} defaultValue={threatEmailDraft.emailSubject} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>BODY:</div>
+                <textarea style={{ width: "100%", minHeight: 220, padding: "12px 14px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 12, lineHeight: 1.6, fontFamily: "'DM Sans', sans-serif", resize: "vertical", boxSizing: "border-box" }} defaultValue={threatEmailDraft.emailBody} />
+              </div>
+              <div style={{ padding: "10px 12px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122", marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 12 }}>⚠️</span>
+                  <span style={{ fontSize: 10, color: "#FFB347", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                    This email draft by AI, you need to verify before sent
+                  </span>
+                  {azureOpenAI.enabled && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444", animation: "pulse 2s infinite", marginLeft: 4 }} />}
+                </div>
+                <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 4 }}>AI-generated content may contain inaccuracies. Please review all details carefully before sending.</div>
+              </div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setThreatEmailDraft(null)} style={{ padding: "8px 20px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14", color: "#5A6178", cursor: "pointer", fontSize: 12 }}>Cancel</button>
+                {azureOpenAI.enabled && (
+                  <button onClick={async () => {
+                    const aiBody = await callAzureOpenAI(
+                      "You are VGC-ITSM security email drafter for VGC Technology Pte Ltd, Singapore. Write professional security advisory emails. Include threat details, risk level, actions required, and sign off as VGC Technology Pte Ltd IT Security Operations.",
+                      `Draft a professional security advisory email about: ${threatEmailDraft.title}. Severity: ${threatEmailDraft.severity}. Summary: ${threatEmailDraft.aiSummary}. Include specific action items.`
+                    );
+                    if (aiBody) setThreatEmailDraft(prev => ({ ...prev, emailBody: aiBody }));
+                  }} style={{ padding: "8px 20px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                    🔄 Regenerate with AI
+                  </button>
+                )}
+                <button onClick={() => { setThreatEmailDraft(null); }} style={{ padding: "8px 20px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>✉️ Send via M365</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Assisted by AI Button — 3D Avatar */}
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 999,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+      }}>
+        {showAiPanel && (
+          <div style={{
+            width: 380, background: "#12141E", borderRadius: 12, border: "1px solid #6366F133",
+            boxShadow: "0 24px 48px #00000066, 0 0 30px #6366F111",
+            overflow: "hidden", animation: "aiBorderPulse 3s ease-in-out infinite"
+          }}>
+            <div style={{
+              padding: "14px 18px", background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+              display: "flex", justifyContent: "space-between", alignItems: "center"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {/* Mini avatar in header — Profile Photo */}
+                <div style={{ width: 28, height: 28, borderRadius: 8, overflow: "hidden", background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #1E2130, #0F1117)", display: "flex", alignItems: "center", justifyContent: "center", border: "1.5px solid #ffffff33" }}>
+                  {!profilePhoto && <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4" }}>{currentUser.avatar}</span>}
+                </div>
+                <span style={{ fontWeight: 700, fontSize: 14, color: "#fff", fontFamily: "'Space Grotesk', sans-serif" }}>Assisted by {currentUser.name} AI</span>
+              </div>
+              <button onClick={() => setShowAiPanel(false)} style={{ background: "none", border: "none", color: "#ffffff88", cursor: "pointer", fontSize: 16 }}>✕</button>
+            </div>
+            <div style={{ padding: 14, maxHeight: 350, overflowY: "auto", scrollBehavior: "smooth" }}>
+              {aiMessages.map((msg, i) => (
+                <div key={i} style={{ marginBottom: 10, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 6, animation: i === aiMessages.length - 1 ? "nudgeSlideIn 0.3s ease" : "none" }}>
+                  <div style={{
+                    width: 24, height: 24, borderRadius: 6, flexShrink: 0,
+                    background: msg.role === "ai" ? (profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4)") : "#1E2130",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: msg.role === "ai" ? 12 : 9, color: "#fff", fontWeight: 600,
+                    border: msg.role === "ai" ? `1px solid ${avatarConfig.glowColor}44` : "none",
+                    overflow: "hidden"
+                  }}>{msg.role === "ai" ? (!profilePhoto ? currentUser.avatar : "") : currentUser.avatar}</div>
+                  <div style={{ maxWidth: "80%", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{
+                      padding: "8px 12px", borderRadius: 8, fontSize: 12,
+                      background: msg.role === "ai" ? "#0A0C14" : "#6366F122",
+                      border: `1px solid ${msg.role === "ai" ? "#1E213055" : "#6366F133"}`,
+                      color: "#C4CAD6", lineHeight: 1.5, whiteSpace: "pre-line"
+                    }}>
+                      {msg.role === "ai" ? renderAiRichText(msg.text, handleTicketLinkClick) : msg.text}
+                      {msg.role === "ai" && (
+                        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, borderTop: "1px solid #1E213044", paddingTop: 4 }}>
+                          <span style={{
+                            fontSize: 8, color: msg.source === "azure" ? "#06B6D4" : "#FFB347",
+                            background: msg.source === "azure" ? "#06B6D411" : "#FFB34711",
+                            border: `1px solid ${msg.source === "azure" ? "#06B6D422" : "#FFB34722"}`,
+                            padding: "1px 6px", borderRadius: 3, fontFamily: "'JetBrains Mono', monospace",
+                            display: "inline-flex", alignItems: "center", gap: 3
+                          }}>
+                            {msg.source === "azure" ? "⚡ Azure OpenAI" : "🧠 Local AI"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {/* Suggested Reply Cards */}
+                    {msg.role === "ai" && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {msg.suggestions.slice(0, 3).map((s, si) => (
+                          <button key={si} onClick={() => handleAiChat(s.action)} style={{
+                            padding: "4px 8px", fontSize: 9, background: "#6366F108",
+                            border: "1px solid #6366F133", borderRadius: 6, color: "#6366F1", cursor: "pointer",
+                            fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s"
+                          }}
+                          onMouseOver={e => { e.target.style.background = "#6366F122"; }}
+                          onMouseOut={e => { e.target.style.background = "#6366F108"; }}>
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {aiLoading && (
+                <div style={{ marginBottom: 8, display: "flex", gap: 6 }}>
+                  <div style={{
+                    width: 24, height: 24, borderRadius: 6, flexShrink: 0,
+                    background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4)",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12,
+                    border: `1px solid ${avatarConfig.glowColor}44`, overflow: "hidden"
+                  }}>{!profilePhoto ? currentUser.avatar : ""}</div>
+                  <div style={{
+                    padding: "10px 14px", borderRadius: 8, background: "#0A0C14",
+                    border: "1px solid #1E213044", display: "flex", gap: 4, alignItems: "center"
+                  }}>
+                    {[0,1,2].map(d => (
+                      <div key={d} style={{
+                        width: 6, height: 6, borderRadius: "50%", background: "#6366F1",
+                        animation: `pulse 1.2s ease-in-out ${d * 0.2}s infinite`
+                      }} />
+                    ))}
+                    <span style={{ color: "#5A6178", fontSize: 10, marginLeft: 6 }}>
+                      {azureOpenAI.enabled ? "Thinking via Azure Open AI..." : "Thinking..."}
+                    </span>
+                  </div>
+                </div>
+              )}
+              <div ref={floatingChatEndRef} />
+            </div>
+            <div style={{ padding: "10px 14px", borderTop: "1px solid #1E2130", display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1, fontSize: 12 }} value={aiInput}
+                onChange={e => setAiInput(e.target.value)} placeholder={azureOpenAI.enabled ? "Ask Azure Open AI..." : "Ask me anything..."}
+                disabled={aiLoading}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && aiInput.trim() && !aiLoading) {
+                    handleAiChat();
+                  }
+                }} />
+              <button style={{
+                ...btnStyle("#6366F1"), fontSize: 11, padding: "6px 12px",
+                opacity: aiLoading ? 0.5 : 1, cursor: aiLoading ? "wait" : "pointer"
+              }} disabled={aiLoading} onClick={() => handleAiChat()}>{azureOpenAI.enabled ? "⚡" : "↑"}</button>
+            </div>
+            {azureOpenAI.enabled && (
+              <div style={{
+                padding: "4px 14px 6px", borderTop: "1px solid #1E213022",
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 2
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444", animation: "pulse 2s infinite" }} />
+                  <span style={{ color: "#5A617866", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>Powered by Azure Open AI · Enterprise‑grade data security with a Responsible AI model.</span>
+                </div>
+                <span style={{ color: "#6366F144", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>I assist, I don't replace — your expertise leads. 🤝</span>
+              </div>
+            )}
+          </div>
+        )}
+        {/* AI Idle Nudge Tooltip */}
+        {!showAiPanel && aiIdleNudge && (
+          <div
+            onClick={() => { handleAiChat(aiIdleNudge.action); setShowAiPanel(true); setAiIdleNudge(null); }}
+            style={{
+              background: "#12141E", borderRadius: 10,
+              border: `1px solid ${aiIdleNudge.urgency === "critical" ? "#FF6B6B44" : aiIdleNudge.urgency === "high" ? "#FFB34744" : "#6366F133"}`,
+              padding: "10px 14px", cursor: "pointer",
+              animation: "nudgeSlideIn 0.4s ease, nudgePulse 3s ease-in-out infinite",
+              boxShadow: "0 8px 24px #00000044",
+              display: "flex", alignItems: "center", gap: 8, maxWidth: 280,
+              transition: "all 0.2s"
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#6366F166"; e.currentTarget.style.transform = "scale(1.02)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = aiIdleNudge.urgency === "critical" ? "#FF6B6B44" : "#6366F133"; e.currentTarget.style.transform = "scale(1)"; }}
+          >
+            <span style={{ fontSize: 16, flexShrink: 0 }}>{aiIdleNudge.icon}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: aiIdleNudge.urgency === "critical" ? "#FF6B6B" : aiIdleNudge.urgency === "high" ? "#FFB347" : "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.3 }}>{aiIdleNudge.text}</div>
+              <div style={{ fontSize: 8, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>Click to take action</div>
+            </div>
+            <button onClick={e => { e.stopPropagation(); setAiIdleNudge(null); }} style={{ background: "none", border: "none", color: "#5A617844", cursor: "pointer", fontSize: 10, padding: 2, flexShrink: 0 }}>✕</button>
+          </div>
+        )}
+        {/* 3D Avatar Button — Profile Photo Based with Smart Animations */}
+        <button onClick={() => setShowAiPanel(!showAiPanel)} style={{
+          width: 64, height: 64,
+          borderRadius: avatarConfig.shape === "circle" ? "50%" : avatarConfig.shape === "hexagon" ? 16 : 18,
+          border: avatarConfig.borderStyle === "neon" ? `2.5px solid ${avatarConfig.glowColor}88` : "3px solid transparent",
+          cursor: "pointer",
+          background: avatarConfig.borderStyle === "gradient" ? "linear-gradient(135deg, #6366F1, #06B6D4, #EC4899)" : avatarConfig.borderStyle === "merlion" ? "linear-gradient(135deg, #D4AF37, #B8860B, #FFD700)" : `linear-gradient(135deg, ${avatarConfig.glowColor}, ${avatarConfig.glowColor}88)`,
+          backgroundSize: "200% 200%",
+          animation: `logoGradient 3s ease infinite, ${avatarConfig.animation === "float" ? "aiFloat 3s ease-in-out infinite" : avatarConfig.animation === "pulse" ? "aiSmartPulse 4s ease-in-out infinite" : avatarConfig.animation === "breathe" ? "aiBreathe 4s ease-in-out infinite" : "aiBounce 2s ease-in-out infinite"}`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: `0 8px 24px ${avatarConfig.glowColor}44, 0 0 40px ${avatarConfig.glowColor}22`,
+          position: "relative", padding: 3, overflow: "visible"
+        }}>
+          {/* Profile photo or avatar initials */}
+          <div style={{
+            width: "100%", height: "100%",
+            borderRadius: avatarConfig.shape === "circle" ? "50%" : avatarConfig.shape === "hexagon" ? 12 : 14,
+            background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #1E2130, #0F1117)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            overflow: "hidden", position: "relative"
+          }}>
+            {!profilePhoto && (
+              <span style={{ fontSize: 18, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", textShadow: `0 0 12px ${avatarConfig.glowColor}66` }}>{currentUser.avatar}</span>
+            )}
+            {/* Smart mood overlay */}
+            <div style={{
+              position: "absolute", inset: 0,
+              background: avatarConfig.mood === "smart" ? "linear-gradient(180deg, transparent 60%, #6366F122)" : avatarConfig.mood === "energetic" ? "linear-gradient(180deg, transparent 60%, #EC489922)" : avatarConfig.mood === "calm" ? "linear-gradient(180deg, transparent 60%, #81C78422)" : "linear-gradient(180deg, transparent 60%, #06B6D422)",
+              borderRadius: "inherit"
+            }} />
+          </div>
+          {/* Headset overlay (optional) */}
+          {avatarConfig.showHeadset && (
+            <>
+              <div style={{ position: "absolute", top: 2, left: 2, right: 2, height: 20, borderRadius: "50% 50% 0 0", border: `2px solid ${avatarConfig.glowColor}88`, borderBottom: "none", zIndex: 4, pointerEvents: "none" }} />
+              <div style={{ position: "absolute", top: 14, left: -1, width: 8, height: 10, borderRadius: "30%", background: `linear-gradient(135deg, ${avatarConfig.glowColor}, ${avatarConfig.glowColor}88)`, zIndex: 4, pointerEvents: "none" }} />
+              <div style={{ position: "absolute", top: 14, right: -1, width: 8, height: 10, borderRadius: "30%", background: `linear-gradient(135deg, ${avatarConfig.glowColor}, ${avatarConfig.glowColor}88)`, zIndex: 4, pointerEvents: "none" }} />
+              <div style={{ position: "absolute", bottom: 8, left: 0, width: 12, height: 2, background: avatarConfig.glowColor, borderRadius: 2, transform: "rotate(20deg)", zIndex: 4, pointerEvents: "none" }}>
+                <div style={{ position: "absolute", right: -3, top: -3, width: 7, height: 7, borderRadius: "50%", background: `linear-gradient(135deg, #06B6D4, ${avatarConfig.glowColor})`, boxShadow: `0 0 5px ${avatarConfig.glowColor}44` }} />
+              </div>
+            </>
+          )}
+          {/* Status ring (orbiting) */}
+          {avatarConfig.showStatusRing && (
+            <div style={{ position: "absolute", inset: -6, borderRadius: "50%", border: `1.5px dashed ${avatarConfig.glowColor}33`, animation: "aiThinkingRing 8s linear infinite", pointerEvents: "none" }}>
+              <div style={{ position: "absolute", top: -2, left: "50%", width: 5, height: 5, borderRadius: "50%", background: avatarConfig.glowColor, boxShadow: `0 0 6px ${avatarConfig.glowColor}88` }} />
+            </div>
+          )}
+          {/* Sparkle effects */}
+          {avatarConfig.showSparkles && (
+            <>
+              <div style={{ position: "absolute", top: -4, right: 6, fontSize: 8, animation: "aiSparkle 2s ease-in-out infinite", pointerEvents: "none" }}>✨</div>
+              <div style={{ position: "absolute", bottom: 2, left: -2, fontSize: 7, animation: "aiSparkle 2.5s ease-in-out 0.5s infinite", pointerEvents: "none" }}>⚡</div>
+              <div style={{ position: "absolute", top: 8, right: -4, fontSize: 6, animation: "aiSparkle 3s ease-in-out 1s infinite", pointerEvents: "none" }}>💡</div>
+            </>
+          )}
+          {/* Online indicator + proactive alert count */}
+          <span style={{
+            position: "absolute", top: -2, right: -2, width: 14, height: 14,
+            borderRadius: "50%",
+            background: proactiveAlerts.filter(a => !dismissedProactiveAlerts.includes(a.id)).length > 0 ? "#FF6B6B" : "#4CAF50",
+            border: "2.5px solid #12141E",
+            animation: proactiveAlerts.filter(a => !dismissedProactiveAlerts.includes(a.id)).length > 0 ? "criticalBadgePulse 1.5s infinite" : "pulse 2s infinite",
+            zIndex: 5, display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 7, fontWeight: 700, color: "#fff"
+          }}>{proactiveAlerts.filter(a => !dismissedProactiveAlerts.includes(a.id)).length > 0 ? proactiveAlerts.filter(a => !dismissedProactiveAlerts.includes(a.id)).length : ""}</span>
+          {/* Customize button */}
+          <span onClick={e => { e.stopPropagation(); setShowAvatarCustomizer(!showAvatarCustomizer); }} style={{
+            position: "absolute", bottom: -4, left: -4, width: 18, height: 18,
+            borderRadius: "50%", background: "#1E2130", border: "1.5px solid #6366F144",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 9, cursor: "pointer", zIndex: 5
+          }}>⚙️</span>
+        </button>
+
+        {/* ═══ Avatar Customizer Panel ═══ */}
+        {showAvatarCustomizer && (
+          <div style={{
+            position: "absolute", bottom: 80, right: 0, width: 300, background: "#12141E",
+            borderRadius: 12, border: "1px solid #6366F133", boxShadow: "0 16px 40px #00000066",
+            padding: 16, zIndex: 10000, animation: "alertSlideDown 0.3s ease"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🎨 Customise My AI Avatar</h4>
+              <button onClick={() => setShowAvatarCustomizer(false)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 14 }}>✕</button>
+            </div>
+            {/* Shape */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Shape</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[{ val: "rounded", label: "Rounded" }, { val: "circle", label: "Circle" }, { val: "hexagon", label: "Hex" }].map(s => (
+                  <button key={s.val} onClick={() => setAvatarConfig(p => ({ ...p, shape: s.val }))} style={{ flex: 1, padding: "5px 0", fontSize: 10, background: avatarConfig.shape === s.val ? "#6366F122" : "#0A0C14", border: `1px solid ${avatarConfig.shape === s.val ? "#6366F1" : "#1E2130"}`, borderRadius: 4, color: avatarConfig.shape === s.val ? "#6366F1" : "#5A6178", cursor: "pointer" }}>{s.label}</button>
+                ))}
+              </div>
+            </div>
+            {/* Animation */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Animation</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[{ val: "float", label: "🌊 Float" }, { val: "pulse", label: "💫 Pulse" }, { val: "breathe", label: "🧘 Breathe" }, { val: "bounce", label: "⚡ Bounce" }].map(a => (
+                  <button key={a.val} onClick={() => setAvatarConfig(p => ({ ...p, animation: a.val }))} style={{ flex: 1, padding: "5px 0", fontSize: 9, background: avatarConfig.animation === a.val ? "#6366F122" : "#0A0C14", border: `1px solid ${avatarConfig.animation === a.val ? "#6366F1" : "#1E2130"}`, borderRadius: 4, color: avatarConfig.animation === a.val ? "#6366F1" : "#5A6178", cursor: "pointer" }}>{a.label}</button>
+                ))}
+              </div>
+            </div>
+            {/* Mood */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>AI Mood</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[{ val: "smart", label: "🧠 Smart", color: "#6366F1" }, { val: "energetic", label: "🔥 Energetic", color: "#EC4899" }, { val: "calm", label: "🌿 Calm", color: "#81C784" }, { val: "focused", label: "🎯 Focused", color: "#06B6D4" }].map(m => (
+                  <button key={m.val} onClick={() => setAvatarConfig(p => ({ ...p, mood: m.val, glowColor: m.color }))} style={{ flex: 1, padding: "5px 0", fontSize: 9, background: avatarConfig.mood === m.val ? `${m.color}22` : "#0A0C14", border: `1px solid ${avatarConfig.mood === m.val ? m.color : "#1E2130"}`, borderRadius: 4, color: avatarConfig.mood === m.val ? m.color : "#5A6178", cursor: "pointer" }}>{m.label}</button>
+                ))}
+              </div>
+            </div>
+            {/* Border Style */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Border Style</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[{ val: "gradient", label: "🌈 Gradient" }, { val: "neon", label: "💡 Neon" }, { val: "merlion", label: "🇸🇬 Merlion" }, { val: "solid", label: "⬜ Solid" }].map(b => (
+                  <button key={b.val} onClick={() => setAvatarConfig(p => ({ ...p, borderStyle: b.val }))} style={{ flex: 1, padding: "5px 0", fontSize: 9, background: avatarConfig.borderStyle === b.val ? "#6366F122" : "#0A0C14", border: `1px solid ${avatarConfig.borderStyle === b.val ? "#6366F1" : "#1E2130"}`, borderRadius: 4, color: avatarConfig.borderStyle === b.val ? "#6366F1" : "#5A6178", cursor: "pointer" }}>{b.label}</button>
+                ))}
+              </div>
+            </div>
+            {/* Theme */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Theme</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[{ val: "singapore", label: "🇸🇬 SG" }, { val: "tech", label: "💻 Tech" }, { val: "nature", label: "🌿 Nature" }, { val: "minimal", label: "⬛ Minimal" }].map(t => (
+                  <button key={t.val} onClick={() => setAvatarConfig(p => ({ ...p, theme: t.val }))} style={{ flex: 1, padding: "5px 0", fontSize: 9, background: avatarConfig.theme === t.val ? "#6366F122" : "#0A0C14", border: `1px solid ${avatarConfig.theme === t.val ? "#6366F1" : "#1E2130"}`, borderRadius: 4, color: avatarConfig.theme === t.val ? "#6366F1" : "#5A6178", cursor: "pointer" }}>{t.label}</button>
+                ))}
+              </div>
+            </div>
+            {/* Toggles */}
+            <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+              {[{ key: "showHeadset", label: "🎧 Headset" }, { key: "showStatusRing", label: "💫 Ring" }, { key: "showSparkles", label: "✨ Sparkles" }].map(t => (
+                <label key={t.key} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#C4CAD6", cursor: "pointer" }}>
+                  <input type="checkbox" checked={avatarConfig[t.key]} onChange={e => setAvatarConfig(p => ({ ...p, [t.key]: e.target.checked }))} style={{ accentColor: "#6366F1" }} />
+                  {t.label}
+                </label>
+              ))}
+            </div>
+            {/* Auto-save indicator */}
+            <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 6, background: "#4CAF5010", border: "1px solid #4CAF5022", display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, animation: "pulse 2s infinite" }}>✅</span>
+              <span style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>Changes auto-saved — persists until you change again</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ PROACTIVE AI ALERT NOTIFICATIONS ═══ */}
+      {proactiveAlerts.filter(a => !dismissedProactiveAlerts.includes(a.id)).length > 0 && (
+        <div style={{
+          position: "fixed", bottom: 100, right: 90, zIndex: 9998,
+          display: "flex", flexDirection: "column", gap: 8, maxWidth: 360
+        }}>
+          {proactiveAlerts.filter(a => !dismissedProactiveAlerts.includes(a.id)).slice(0, 3).map((alert, i) => (
+            <div key={alert.id} style={{
+              background: "#12141E", borderRadius: 10,
+              border: `1px solid ${alert.severity === "critical" ? "#FF6B6B44" : alert.severity === "high" ? "#FFB34744" : "#6366F133"}`,
+              boxShadow: `0 8px 24px #00000066, 0 0 20px ${alert.severity === "critical" ? "#FF6B6B22" : "#6366F111"}`,
+              padding: "14px 16px", animation: `proactiveSlideIn 0.4s ease ${i * 0.1}s both${alert.severity === "critical" ? ", proactiveUrgent 2s ease-in-out infinite" : ""}`,
+              overflow: "hidden", position: "relative"
+            }}>
+              {/* Severity accent bar */}
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: alert.severity === "critical" ? "#FF6B6B" : alert.severity === "high" ? "#FFB347" : "#6366F1" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {/* Mini profile photo */}
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 8, flexShrink: 0, overflow: "hidden",
+                    background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : `linear-gradient(135deg, ${avatarConfig.glowColor}, ${avatarConfig.glowColor}88)`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    border: `1.5px solid ${alert.severity === "critical" ? "#FF6B6B44" : avatarConfig.glowColor + "44"}`,
+                    animation: alert.severity === "critical" ? "criticalBadgePulse 1.5s infinite" : "none"
+                  }}>
+                    {!profilePhoto && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff" }}>{currentUser.avatar}</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: alert.severity === "critical" ? "#FF6B6B" : alert.severity === "high" ? "#FFB347" : "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{alert.title}</div>
+                    <div style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Assisted by {currentUser.name} AI · Just now</div>
+                  </div>
+                </div>
+                <button onClick={() => setDismissedProactiveAlerts(prev => [...prev, alert.id])} style={{ background: "none", border: "none", color: "#5A617866", cursor: "pointer", fontSize: 12, flexShrink: 0, padding: 0 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 10, color: "#C4CAD6", marginBottom: 6, lineHeight: 1.4 }}>{alert.detail}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 9, color: "#81C784", fontStyle: "italic" }}>💡 {alert.action}</span>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {alert.ticketId && <button onClick={() => { const t = incidents.find(i => i.id === alert.ticketId); if (t) { setDetailItem(t); setModal("incidentDetail"); } setDismissedProactiveAlerts(prev => [...prev, alert.id]); }} style={{ padding: "3px 8px", fontSize: 9, background: "#6366F122", border: "1px solid #6366F133", borderRadius: 4, color: "#6366F1", cursor: "pointer" }}>📋 View</button>}
+                  <button onClick={() => setDismissedProactiveAlerts(prev => [...prev, alert.id])} style={{ padding: "3px 8px", fontSize: 9, background: "#81C78411", border: "1px solid #81C78433", borderRadius: 4, color: "#81C784", cursor: "pointer" }}>✅ Got it</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ═══ GLOBAL HIGH-SEVERITY ALERT OVERLAY ═══ */}
+      {globalHighAlert && (() => {
+        const ga = globalHighAlert;
+        const inc = ga.incident;
+        const isSevA = inc.priority === "Sev-A";
+        const canDismiss = !isSevA || escalationConfig.dashboardAlertDismissible;
+        const phaseLabels = { pickup_window: "AWAITING PICKUP", auto_escalating: "AUTO ESCALATION IN PROGRESS", escalated: "ESCALATED" };
+        return (
+          <div style={{
+            position: "fixed", top: 0, left: 0, right: 0, zIndex: 999999,
+            background: "linear-gradient(135deg, #1A0A0A 0%, #2D0A0AEE 100%)",
+            backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+            borderBottom: `3px solid ${isSevA ? "#FF4444" : "#FFB347"}`,
+            animation: "escalationBannerGlow 2s ease-in-out infinite",
+            padding: "0 24px",
+          }}>
+            <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", alignItems: "center", gap: 16, padding: "14px 0" }}>
+              {/* Pulsing icon */}
+              <div style={{
+                width: 44, height: 44, borderRadius: 12,
+                background: isSevA ? "#FF444422" : "#FFB34722",
+                border: `2px solid ${isSevA ? "#FF4444" : "#FFB347"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                animation: "escalationIconPulse 1s ease-in-out infinite", flexShrink: 0
+              }}>
+                <span style={{ fontSize: 22 }}>🚨</span>
+              </div>
+
+              {/* Alert content */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{
+                    fontSize: 9, fontWeight: 800, color: "#fff", padding: "2px 10px", borderRadius: 4,
+                    background: isSevA ? "#FF4444" : "#FFB347",
+                    fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1,
+                    animation: isSevA ? "escalationTextBlink 0.8s ease-in-out infinite" : "none"
+                  }}>{inc.priority}</span>
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+                    background: ga.escalationPhase === "auto_escalating" ? "#FF444444" : "#FFB34733",
+                    color: ga.escalationPhase === "auto_escalating" ? "#FF6B6B" : "#FFB347",
+                    fontFamily: "'JetBrains Mono', monospace", letterSpacing: 0.5,
+                    animation: ga.escalationPhase === "auto_escalating" ? "escalationTextBlink 1s ease-in-out infinite" : "none"
+                  }}>{phaseLabels[ga.escalationPhase] || "ALERT ACTIVE"}</span>
+                  <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'JetBrains Mono', monospace" }}>
+                    {ga.correlationId}
+                  </span>
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif" }}>
+                  {ga.escalationPhase === "auto_escalating"
+                    ? `🚨 NO ENGINEER PICKED UP — AUTO ESCALATION IN PROGRESS`
+                    : `🚨 High-Severity incident detected. Immediate pickup required.`}
+                </div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>
+                  {inc.id} — {inc.title} {ga.allCritical.length > 1 ? `(+${ga.allCritical.length - 1} more)` : ""}
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <button onClick={() => {
+                  // Pick up / acknowledge — assign to current user
+                  setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, status: "In Progress", assignee: currentUser?.name || "Assigned" } : i));
+                  logEscalation({ type: "ENGINEER_PICKUP", incidentId: inc.id, engineer: currentUser?.name, correlationId: ga.correlationId });
+                  setGlobalHighAlert(null);
+                  setActiveModule("incidents");
+                  setDetailItem(incidents.find(i => i.id === inc.id));
+                }} style={{
+                  padding: "8px 20px", borderRadius: 8, border: "none", cursor: "pointer",
+                  background: "#81C784", color: "#0A0C14", fontSize: 12, fontWeight: 700,
+                  fontFamily: "'Space Grotesk', sans-serif", animation: "pulse 2s infinite"
+                }}>✋ Pick Up Now</button>
+
+                {canDismiss && (
+                  <button onClick={() => setGlobalHighAlert(null)} style={{
+                    padding: "8px 14px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.15)",
+                    background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.5)",
+                    fontSize: 11, cursor: "pointer"
+                  }}>Dismiss</button>
+                )}
+              </div>
+            </div>
+
+            {/* AI Advisory Row */}
+            <div style={{
+              maxWidth: 1200, margin: "0 auto", padding: "8px 0 12px",
+              borderTop: "1px solid rgba(255,255,255,0.06)",
+              display: "flex", alignItems: "center", gap: 12
+            }}>
+              <span style={{ fontSize: 11 }}>🤖</span>
+              <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", fontStyle: "italic" }}>
+                AI Assist: "{inc.priority === "Sev-A" ? "Critical incident requires immediate L2/L3 engagement. P1 bridge call recommended. All engineers notified." : "High-priority incident approaching SLA threshold. Assign an available engineer promptly."}"
+              </span>
+              {ga.callsInitiated && (
+                <span style={{ fontSize: 9, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", padding: "2px 8px", background: "#FF444418", borderRadius: 4, animation: "escalationTextBlink 1.5s ease-in-out infinite" }}>
+                  📞 AUTO-CALLS ACTIVE
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ═══ WEATHER DISASTER ALERT TOAST ═══ */}
+      {disasterAlert && (
+        <div style={{
+          position: "fixed", top: 80, right: 24, zIndex: 99999, width: 420, maxWidth: "calc(100vw - 48px)",
+          background: "linear-gradient(135deg, #1A1D2E 0%, #12141F 100%)",
+          border: `1px solid ${disasterAlert.color}44`,
+          borderRadius: 16, overflow: "hidden",
+          animation: "disasterSlideIn 0.6s cubic-bezier(0.34,1.56,0.64,1) forwards, disasterGlow 3s ease-in-out 0.6s infinite",
+          backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        }}>
+          {/* Top accent bar */}
+          <div style={{ height: 3, background: `linear-gradient(90deg, ${disasterAlert.color}, ${disasterAlert.color}88, transparent)` }} />
+          {/* Progress bar (auto-dismiss countdown) */}
+          <div style={{ height: 2, background: "rgba(255,255,255,0.05)", position: "relative" }}>
+            <div style={{ height: "100%", background: `${disasterAlert.color}88`, animation: "disasterProgress 10s linear forwards" }} />
+          </div>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px 8px" }}>
+            <span style={{ fontSize: 28, animation: "disasterIconPulse 1.5s ease-in-out infinite", flexShrink: 0 }}>{disasterAlert.icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: disasterAlert.color, padding: "2px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  {disasterAlert.severity} Alert
+                </span>
+                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.4)", fontFamily: "'JetBrains Mono', monospace" }}>
+                  {new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Singapore", hour: "2-digit", minute: "2-digit" })} SGT
+                </span>
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>
+                🚨 {disasterAlert.type} Warning — {disasterAlert.region}
+              </div>
+            </div>
+            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch {} }} style={{
+              background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: 14, flexShrink: 0,
+              transition: "all 0.2s"
+            }} onMouseEnter={e => { e.target.style.background = "rgba(255,68,68,0.15)"; e.target.style.color = "#FF6B6B"; }}
+               onMouseLeave={e => { e.target.style.background = "rgba(255,255,255,0.06)"; e.target.style.color = "rgba(255,255,255,0.5)"; }}>✕</button>
+          </div>
+          {/* Summary */}
+          <div style={{ padding: "0 16px 10px", fontSize: 11, color: "rgba(255,255,255,0.7)", lineHeight: 1.5, fontFamily: "'Inter', sans-serif" }}>
+            {disasterAlert.summary}
+          </div>
+          {/* AI Advisory */}
+          <div style={{
+            margin: "0 12px 12px", padding: "10px 12px", borderRadius: 10,
+            background: "linear-gradient(135deg, rgba(99,102,241,0.08), rgba(6,182,212,0.05))",
+            border: "1px solid rgba(99,102,241,0.15)"
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <span style={{ fontSize: 12 }}>🤖</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#818CF8", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: 0.5 }}>AI SAFETY ADVISORY</span>
+            </div>
+            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.8)", lineHeight: 1.6, fontFamily: "'Inter', sans-serif" }}>
+              {disasterAlert.aiAdvice}
+            </div>
+          </div>
+          {/* Trusted Sources */}
+          <div style={{ padding: "0 16px 8px" }}>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.25)", fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
+              📡 Verified sources: {disasterAlert.sources}
+            </div>
+          </div>
+          {/* Footer */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px 12px" }}>
+            <span style={{ fontSize: 8, color: "rgba(255,255,255,0.2)", fontFamily: "'JetBrains Mono', monospace" }}>
+              Auto-dismiss in 10s · One-time alert
+            </span>
+            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch {} }} style={{
+              background: `${disasterAlert.color}22`, border: `1px solid ${disasterAlert.color}44`,
+              borderRadius: 8, padding: "5px 14px", fontSize: 10, fontWeight: 600,
+              color: disasterAlert.color, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif",
+              transition: "all 0.2s"
+            }} onMouseEnter={e => { e.target.style.background = `${disasterAlert.color}44`; e.target.style.color = "#fff"; }}
+               onMouseLeave={e => { e.target.style.background = `${disasterAlert.color}22`; e.target.style.color = disasterAlert.color; }}>
+              Dismiss Permanently
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ AI ERROR ADVISORY OVERLAY ═══ */}
+      {errorAdvisory && (() => {
+        const ea = errorAdvisory;
+        const sgTime = new Date(ea.timestamp).toLocaleString("en-SG", { timeZone: "Asia/Singapore", dateStyle: "medium", timeStyle: "medium" });
+        const aiSteps = ea.type === "SSO Login" ? [
+          { icon: "🔍", text: "Check if popup blocker is disabled for this site" },
+          { icon: "🌐", text: "Verify your network connection is stable" },
+          { icon: "🔑", text: "Ensure your Microsoft account has access to this tenant" },
+          { icon: "🔄", text: "Clear browser cache & cookies, then try again" },
+          { icon: "⚙️", text: "Ask IT Admin to verify Azure AD App Registration redirect URIs" },
+          { icon: "📧", text: "If issue persists, contact developer via the button below" },
+        ] : [
+          { icon: "🔐", text: "Verify API permissions are granted in Azure AD (Mail.Read, Calendars.Read, etc.)" },
+          { icon: "✅", text: "Ensure Admin Consent is granted for all Microsoft Graph permissions" },
+          { icon: "🔄", text: "Try signing out and signing back in to refresh your token" },
+          { icon: "🌐", text: "Check network connectivity to Microsoft Graph API endpoints" },
+          { icon: "⏱️", text: "Wait a moment and click Retry — the issue may be temporary" },
+          { icon: "📧", text: "If issue persists, contact developer via the button below" },
+        ];
+        const screenshotInfo = `Error Type: ${ea.type}\nError Code: ${ea.code}\nMessage: ${ea.message}\nTimestamp: ${sgTime}\nBrowser: ${navigator.userAgent}\nURL: ${window.location.href}\n\nDetails:\n${ea.details}\n\nStack Trace:\n${ea.stack || "N/A"}`;
+        const emailSubject = encodeURIComponent(`[VGC-ITSM] Error Report — ${ea.type} (${ea.code})`);
+        const emailBody = encodeURIComponent(
+          `Dear VGC Technology Support Team,\n\nI encountered an error while using VGC-ITSM. Please find the details below:\n\n` +
+          `━━━━━━━━━━ ERROR REPORT ━━━━━━━━━━\n` +
+          `Error Type: ${ea.type}\n` +
+          `Error Code: ${ea.code}\n` +
+          `Error Message: ${ea.message}\n` +
+          `Timestamp: ${sgTime}\n` +
+          `Browser: ${navigator.userAgent}\n` +
+          `URL: ${window.location.href}\n` +
+          `User: ${currentUser?.name || "Unknown"} (${currentUser?.email || "N/A"})\n` +
+          `SSO Status: ${isMsalAuthenticated ? "Entra ID Connected" : "Demo Mode"}\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `Technical Details:\n${ea.details}\n\n` +
+          `Stack Trace:\n${ea.stack || "N/A"}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `Steps I tried:\n[Please describe what you were doing when the error occurred]\n\n` +
+          `[!] Please attach a screenshot of your browser showing the error if possible.\n\n` +
+          `Thank you.\n` +
+          `${currentUser?.name || "User"}\n` +
+          `${currentUser?.department || ""} · ${currentUser?.team || ""}`
+        );
+        const mailtoLink = `mailto:help@vgctechnology.com?subject=${emailSubject}&body=${emailBody}`;
+
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", animation: "alertSlideDown 0.3s ease-out" }}
+            onClick={e => { if (e.target === e.currentTarget) setErrorAdvisory(null); }}>
+            <div style={{ width: 560, maxHeight: "88vh", background: "#0F1117", borderRadius: 16, border: "1px solid #FF6B6B33", overflow: "hidden", boxShadow: "0 24px 64px rgba(255,107,107,0.15), 0 8px 24px #00000088", animation: "alertSlideDown 0.35s ease-out" }}>
+              {/* Header */}
+              <div style={{ padding: "16px 20px", background: "linear-gradient(135deg, #FF6B6B10, #FF444408)", borderBottom: "1px solid #FF6B6B22", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #FF6B6B22, #FF444411)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, animation: "aiBreathe 3s ease-in-out infinite" }}>🤖</div>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Error Advisory</div>
+                    <div style={{ fontSize: 10, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#FF6B6B", animation: "pulse 1.5s infinite" }} />
+                      {ea.type} Error Detected
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => setErrorAdvisory(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18, padding: "4px 6px", borderRadius: 6, transition: "all 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "#FF6B6B"}
+                  onMouseLeave={e => e.currentTarget.style.color = "#5A6178"}>✕</button>
+              </div>
+
+              {/* Content */}
+              <div style={{ padding: 20, maxHeight: "60vh", overflow: "auto" }}>
+                {/* Error Info Card */}
+                <div style={{ padding: 14, borderRadius: 10, background: "#FF6B6B08", border: "1px solid #FF6B6B1A", marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                    <span style={{ fontSize: 12 }}>⚠️</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#FF6B6B", fontFamily: "'Space Grotesk', sans-serif" }}>Error Details</span>
+                    <span style={{ marginLeft: "auto", fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FF6B6B15", color: "#FF8888", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{ea.code}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#E8ECF4", marginBottom: 6, lineHeight: 1.5, fontFamily: "'DM Sans', sans-serif" }}>{ea.message}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.5, fontFamily: "'JetBrains Mono', monospace" }}>{ea.details}</div>
+                  <div style={{ marginTop: 8, fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>🕐 {sgTime}</div>
+                </div>
+
+                {/* AI Recommended Steps */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#06B6D4", marginBottom: 10, display: "flex", alignItems: "center", gap: 6, fontFamily: "'Space Grotesk', sans-serif" }}>
+                    <span style={{ fontSize: 13 }}>💡</span> AI Recommended Actions
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {aiSteps.map((step, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, background: "#ffffff03", border: "1px solid #1E2130", animation: `loginFeatureFade 0.4s ease-out ${i * 0.08}s both` }}>
+                        <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{step.icon}</span>
+                        <div style={{ fontSize: 11, color: "#C8CDD8", lineHeight: 1.5, fontFamily: "'DM Sans', sans-serif" }}>
+                          <span style={{ fontWeight: 600, color: "#E8ECF4" }}>Step {i + 1}:</span> {step.text}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Screenshot Tip */}
+                <div style={{ padding: 10, borderRadius: 8, background: "#FFB34708", border: "1px solid #FFB34718", marginBottom: 16, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <span style={{ fontSize: 13, flexShrink: 0 }}>📸</span>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#FFB347", marginBottom: 3 }}>Take a Screenshot</div>
+                    <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.5 }}>
+                      Press <kbd style={{ padding: "1px 5px", borderRadius: 3, background: "#1E2130", border: "1px solid #2A2F45", fontSize: 9, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>Win + Shift + S</kbd> to capture a screenshot, then paste it into the email below.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Copy Error Info */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <button onClick={() => { navigator.clipboard.writeText(screenshotInfo).then(() => { const btn = document.getElementById("vgc-copy-err-btn"); if(btn) { btn.textContent = "✅ Copied!"; setTimeout(() => { if(btn) btn.textContent = "📋 Copy Error Info"; }, 2000); } }); }}
+                    id="vgc-copy-err-btn"
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 8, background: "#1E2130", border: "1px solid #2A2F45", color: "#E8ECF4", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#2A2F45"; e.currentTarget.style.borderColor = "#6366F155"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "#1E2130"; e.currentTarget.style.borderColor = "#2A2F45"; }}
+                  >📋 Copy Error Info</button>
+                </div>
+              </div>
+
+              {/* Footer Actions */}
+              <div style={{ padding: "14px 20px", borderTop: "1px solid #1E2130", background: "#0A0C14", display: "flex", gap: 8, alignItems: "center" }}>
+                <a href={mailtoLink} target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: "11px 0", borderRadius: 10, background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", textDecoration: "none", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 4px 16px #6366F144", transition: "all 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
+                  onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                  Email Developer — help@vgctechnology.com
+                </a>
+                <button onClick={() => { setErrorAdvisory(null); if (ea.type !== "SSO Login") { graphFetchedRef.current = false; fetchGraphData(); } }}
+                  style={{ padding: "11px 20px", borderRadius: 10, background: "#FF6B6B15", border: "1px solid #FF6B6B33", color: "#FF6B6B", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s", whiteSpace: "nowrap" }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "#FF6B6B25"; e.currentTarget.style.borderColor = "#FF6B6B55"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "#FF6B6B15"; e.currentTarget.style.borderColor = "#FF6B6B33"; }}
+                >🔄 Retry</button>
+                <button onClick={() => setErrorAdvisory(null)}
+                  style={{ padding: "11px 16px", borderRadius: 10, background: "transparent", border: "1px solid #1E2130", color: "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = "#2A2F45"; e.currentTarget.style.color = "#E8ECF4"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.color = "#5A6178"; }}
+                >Dismiss</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ═══════════ ONBOARDING GUIDED TOUR ═══════════ */}
+      {tourStep >= 0 && (() => {
+        const step = TOUR_STEPS[tourStep];
+        if (!step) return null;
+        const totalSteps = TOUR_STEPS.length;
+        const isWelcome = tourStep === 0;
+        const isDone = tourStep === totalSteps - 1;
+        const isCenter = step.position === "center";
+        const progress = ((tourStep) / (totalSteps - 1)) * 100;
+
+        // Position calculations for anchored tooltips
+        const getTooltipStyle = () => {
+          if (isCenter) return {
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+            width: isWelcome ? 480 : isDone ? 460 : 420, zIndex: 10001
+          };
+          const positions = {
+            sidebar: { top: step.id === "admin" ? "60%" : "30%", left: 240, transform: "translateY(-50%)" },
+            header: { top: 70, left: step.id === "weather" ? "70%" : "50%", transform: "translateX(-50%)" },
+            content: { top: "40%", left: "50%", transform: "translate(-50%, -50%)" },
+            roleBar: { top: 160, left: "50%", transform: "translateX(-50%)" },
+            threats: { top: 120, right: 460, left: "auto", transform: "none" },
+            aiButton: { bottom: 100, right: 90, top: "auto", left: "auto", transform: "none" },
+          };
+          return { position: "fixed", width: 380, zIndex: 10001, ...positions[step.anchor] };
+        };
+
+        // Arrow direction for anchored tooltips
+        const getArrowStyle = () => {
+          if (isCenter) return null;
+          const base = { position: "absolute", width: 0, height: 0 };
+          if (step.position === "right") return { ...base, left: -8, top: 24, borderTop: "8px solid transparent", borderBottom: "8px solid transparent", borderRight: "8px solid #1A1D2E" };
+          if (step.position === "left") return { ...base, right: -8, top: 24, borderTop: "8px solid transparent", borderBottom: "8px solid transparent", borderLeft: "8px solid #1A1D2E" };
+          if (step.position === "bottom") return { ...base, top: -8, left: step.id === "weather" ? "70%" : "50%", transform: "translateX(-50%)", borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderBottom: "8px solid #1A1D2E" };
+          if (step.position === "top") return { ...base, bottom: -8, left: "50%", transform: "translateX(-50%)", borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid #1A1D2E" };
+          return null;
+        };
+
+        return (
+          <>
+            {/* Backdrop overlay */}
+            <div onClick={dismissTour} style={{
+              position: "fixed", inset: 0, zIndex: 10000,
+              background: isCenter ? "#000000CC" : "#000000AA",
+              transition: "background 0.3s"
+            }} />
+
+            {/* Tooltip card */}
+            <div style={{
+              ...getTooltipStyle(),
+              background: "linear-gradient(135deg, #12141E 0%, #1A1D2E 100%)",
+              borderRadius: 16, border: "1px solid #6366F133",
+              boxShadow: "0 20px 60px #00000088, 0 0 40px #6366F118",
+              overflow: "hidden",
+              animation: "tourFadeIn 0.4s cubic-bezier(0.34,1.56,0.64,1)"
+            }}>
+              {/* Arrow pointer */}
+              {getArrowStyle() && <div style={getArrowStyle()} />}
+
+              {/* Animated gradient top bar */}
+              <div style={{
+                height: 3, background: "linear-gradient(90deg, #6366F1, #06B6D4, #EC4899, #FFB347, #6366F1)",
+                backgroundSize: "200% 100%", animation: "aiShimmer 2s linear infinite"
+              }} />
+
+              {/* Header with icon + step counter */}
+              <div style={{ padding: "16px 20px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 12,
+                    background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 20, animation: isWelcome ? "tourWave 1.5s ease-in-out 0.5s" : isDone ? "tourBounce 1s ease-in-out infinite" : "tourSpotlight 2s ease-in-out infinite",
+                    boxShadow: "0 4px 16px #6366F144"
+                  }}>{step.icon}</div>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{step.title}</div>
+                    {!isWelcome && !isDone && (
+                      <div style={{ fontSize: 10, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", marginTop: 1 }}>
+                        Step {tourStep} of {totalSteps - 2}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={dismissTour} title="Close tour" style={{
+                  background: "#ffffff08", border: "1px solid #ffffff11", borderRadius: 8,
+                  width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", color: "#5A6178", fontSize: 14, transition: "all 0.15s"
+                }} onMouseEnter={e => { e.currentTarget.style.background = "#ffffff15"; e.currentTarget.style.color = "#E8ECF4"; }}
+                   onMouseLeave={e => { e.currentTarget.style.background = "#ffffff08"; e.currentTarget.style.color = "#5A6178"; }}>✕</button>
+              </div>
+
+              {/* Progress bar */}
+              {!isWelcome && (
+                <div style={{ margin: "12px 20px 0", height: 3, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%", borderRadius: 2, transition: "width 0.4s cubic-bezier(0.34,1.56,0.64,1)",
+                    background: "linear-gradient(90deg, #6366F1, #06B6D4)",
+                    width: `${progress}%`
+                  }} />
+                </div>
+              )}
+
+              {/* Body content */}
+              <div style={{
+                padding: "14px 20px 16px", fontSize: 13, color: "#C4CAD6", lineHeight: 1.7,
+                whiteSpace: "pre-line", fontFamily: "'DM Sans', sans-serif"
+              }}>{step.body}</div>
+
+              {/* Confetti particles on final step */}
+              {isDone && (
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, pointerEvents: "none", overflow: "hidden", height: 50 }}>
+                  {["#6366F1","#06B6D4","#EC4899","#FFB347","#81C784","#FF6B6B","#FFD700","#9B59B6"].map((c, i) => (
+                    <div key={i} style={{
+                      position: "absolute", width: 6, height: 6, borderRadius: i % 2 === 0 ? "50%" : 1,
+                      background: c, top: 10, left: `${8 + i * 12}%`,
+                      animation: `tourConfetti 1.5s ease-out ${i * 0.15}s forwards`
+                    }} />
+                  ))}
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div style={{
+                padding: "0 20px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10
+              }}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {!isWelcome && !isDone && TOUR_STEPS.slice(1, -1).map((_, i) => (
+                    <div key={i} style={{
+                      width: tourStep - 1 === i ? 16 : 6, height: 6, borderRadius: 3,
+                      background: tourStep - 1 >= i ? "#6366F1" : "#1E2130",
+                      transition: "all 0.3s", cursor: "pointer"
+                    }} onClick={() => setTourStep(i + 1)} />
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {!isWelcome && !isDone && (
+                    <button onClick={() => setTourStep(prev => prev - 1)} style={{
+                      padding: "8px 16px", borderRadius: 8, border: "1px solid #1E2130",
+                      background: "#0A0C14", color: "#5A6178", cursor: "pointer",
+                      fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif"
+                    }}>← Back</button>
+                  )}
+                  {isWelcome && (
+                    <button onClick={dismissTour} style={{
+                      padding: "8px 16px", borderRadius: 8, border: "1px solid #1E2130",
+                      background: "transparent", color: "#5A6178", cursor: "pointer",
+                      fontSize: 12, fontFamily: "'DM Sans', sans-serif"
+                    }}>Skip Tour</button>
+                  )}
+                  {isDone ? (
+                    <button onClick={dismissTour} style={{
+                      padding: "8px 22px", borderRadius: 8, border: "none",
+                      background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+                      color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700,
+                      fontFamily: "'Space Grotesk', sans-serif",
+                      boxShadow: "0 4px 16px #6366F144"
+                    }}>🚀 Let's Go!</button>
+                  ) : (
+                    <button onClick={() => setTourStep(prev => prev + 1)} style={{
+                      padding: "8px 22px", borderRadius: 8, border: "none",
+                      background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+                      color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700,
+                      fontFamily: "'Space Grotesk', sans-serif",
+                      boxShadow: "0 4px 16px #6366F144",
+                      display: "flex", alignItems: "center", gap: 6
+                    }}>
+                      {isWelcome ? "Start Tour ✨" : "Next →"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Don't show again checkbox on welcome */}
+              {isWelcome && (
+                <div style={{
+                  padding: "0 20px 14px", display: "flex", alignItems: "center", gap: 6,
+                  fontSize: 10, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace"
+                }}>
+                  💡 You can restart this tour anytime from Admin → General
+                </div>
+              )}
+            </div>
+          </>
+        );
+      })()}
+    </div>
+  );
+}

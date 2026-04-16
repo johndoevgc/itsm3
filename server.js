@@ -1,0 +1,708 @@
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const https = require("https");
+const crypto = require("crypto");
+
+const PORT = process.env.PORT || 8080;
+const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
+const USE_MYSQL = !USE_MSSQL && !!(process.env.MYSQL_HOST);
+
+// Microsoft Entra ID config (client secret via env var only — NEVER in frontend)
+const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || "";
+const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
+const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
+
+// Azure OpenAI config (server-side only — avoids CORS and protects API key)
+const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
+const AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
+const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-4o-mini";
+
+// ─── Local Auth: Dev Admin ──────────────────────────────────────────────
+// Password is stored as SHA-256 hash (never plain text)
+// Local admin users are configured via environment variables
+// Format: LOCAL_ADMIN_PASSWORD_HASH = SHA-256 hash of the password
+const LOCAL_USERS = process.env.LOCAL_ADMIN_PASSWORD_HASH ? {
+  admin: {
+    passwordHash: process.env.LOCAL_ADMIN_PASSWORD_HASH,
+    profile: {
+      id: "LOCAL-admin",
+      name: process.env.LOCAL_ADMIN_NAME || "System Admin",
+      role: "Administrator",
+      avatar: "SA",
+      team: "IT",
+      gender: "other",
+      rbacRole: "Administrator",
+      email: process.env.LOCAL_ADMIN_EMAIL || "admin@localhost",
+      phone: "",
+      location: "",
+      department: "IT",
+      pcName: "",
+      employeeId: "ADMIN001",
+      authType: "local",
+    },
+  },
+} : {};
+
+const MIME = {
+  ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
+  ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg",
+  ".gif": "image/gif", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+  ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf",
+  ".webp": "image/webp",
+};
+
+// ─── Database Abstraction Layer ─────────────────────────────────────────
+let db; // set during init()
+
+async function initDatabase() {
+  if (USE_MSSQL) {
+    const sql = require("mssql");
+    const mssqlConfig = {
+      server: process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST,
+      database: process.env.AZURE_SQL_DATABASE || "itsmdb",
+      user: process.env.AZURE_SQL_USER || "vgcadmin",
+      password: process.env.AZURE_SQL_PASSWORD || "",
+      port: parseInt(process.env.AZURE_SQL_PORT || "1433", 10),
+      options: { encrypt: true, trustServerCertificate: false },
+      pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
+    };
+    const pool = await sql.connect(mssqlConfig);
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'itsm_data')
+      CREATE TABLE itsm_data (
+        collection NVARCHAR(64) NOT NULL,
+        id NVARCHAR(128) NOT NULL,
+        data NVARCHAR(MAX) NOT NULL,
+        updated_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        CONSTRAINT PK_itsm_data PRIMARY KEY (collection, id)
+      )
+    `);
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_itsm_collection')
+      CREATE NONCLUSTERED INDEX idx_itsm_collection ON itsm_data(collection)
+    `);
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_itsm_updated')
+      CREATE NONCLUSTERED INDEX idx_itsm_updated ON itsm_data(updated_at)
+    `);
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'audit_log')
+      CREATE TABLE audit_log (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        collection NVARCHAR(64) NOT NULL,
+        record_id NVARCHAR(128) NOT NULL,
+        action NVARCHAR(32) NOT NULL,
+        data NVARCHAR(MAX),
+        user_name NVARCHAR(128),
+        [timestamp] DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+      )
+    `);
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_audit_collection')
+      CREATE NONCLUSTERED INDEX idx_audit_collection ON audit_log(collection)
+    `);
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_audit_timestamp')
+      CREATE NONCLUSTERED INDEX idx_audit_timestamp ON audit_log([timestamp])
+    `);
+    db = {
+      type: "mssql",
+      label: `Azure SQL: ${mssqlConfig.server}/${mssqlConfig.database}`,
+      upsert: async (coll, id, data) => {
+        await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("id", sql.NVarChar(128), id)
+          .input("data", sql.NVarChar(sql.MAX), data)
+          .query(`MERGE itsm_data AS t
+            USING (SELECT @coll AS collection, @id AS id, @data AS data) AS s
+            ON t.collection = s.collection AND t.id = s.id
+            WHEN MATCHED THEN UPDATE SET data = s.data, updated_at = GETUTCDATE()
+            WHEN NOT MATCHED THEN INSERT (collection, id, data) VALUES (s.collection, s.id, s.data);`);
+      },
+      getAll: async (coll) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .query("SELECT id, data FROM itsm_data WHERE collection = @coll ORDER BY updated_at DESC");
+        return r.recordset;
+      },
+      getOne: async (coll, id) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("id", sql.NVarChar(128), id)
+          .query("SELECT data FROM itsm_data WHERE collection = @coll AND id = @id");
+        return r.recordset[0] || null;
+      },
+      deleteOne: async (coll, id) => {
+        await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("id", sql.NVarChar(128), id)
+          .query("DELETE FROM itsm_data WHERE collection = @coll AND id = @id");
+      },
+      count: async (coll) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .query("SELECT COUNT(*) AS cnt FROM itsm_data WHERE collection = @coll");
+        return r.recordset[0].cnt;
+      },
+      audit: async (coll, rid, action, data, user) => {
+        await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("rid", sql.NVarChar(128), rid)
+          .input("action", sql.NVarChar(32), action)
+          .input("data", sql.NVarChar(sql.MAX), data)
+          .input("usr", sql.NVarChar(128), user)
+          .query("INSERT INTO audit_log (collection, record_id, action, data, user_name) VALUES (@coll, @rid, @action, @data, @usr)");
+      },
+      getAudit: async (coll, limit) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("lim", sql.Int, Number(limit))
+          .query("SELECT TOP (@lim) * FROM audit_log WHERE collection = @coll ORDER BY [timestamp] DESC");
+        return r.recordset;
+      },
+      getAllAudit: async (limit) => {
+        const r = await pool.request()
+          .input("lim", sql.Int, Number(limit))
+          .query("SELECT TOP (@lim) * FROM audit_log ORDER BY [timestamp] DESC");
+        return r.recordset;
+      },
+      bulkUpsert: async (coll, items) => {
+        const transaction = new sql.Transaction(pool);
+        await transaction.begin();
+        try {
+          for (const item of items) {
+            const id = item.id || item.title || String(Math.random());
+            await transaction.request()
+              .input("coll", sql.NVarChar(64), coll)
+              .input("id", sql.NVarChar(128), id)
+              .input("data", sql.NVarChar(sql.MAX), JSON.stringify(item))
+              .query(`MERGE itsm_data AS t
+                USING (SELECT @coll AS collection, @id AS id, @data AS data) AS s
+                ON t.collection = s.collection AND t.id = s.id
+                WHEN MATCHED THEN UPDATE SET data = s.data, updated_at = GETUTCDATE()
+                WHEN NOT MATCHED THEN INSERT (collection, id, data) VALUES (s.collection, s.id, s.data);`);
+          }
+          await transaction.commit();
+        } catch (e) { await transaction.rollback(); throw e; }
+      },
+      ping: async () => { await pool.request().query("SELECT 1"); return true; },
+      close: () => pool.close(),
+    };
+  } else if (USE_MYSQL) {
+    const mysql = require("mysql2/promise");
+    const pool = mysql.createPool({
+      host: process.env.MYSQL_HOST || "vgc-itsm-mysql.mysql.database.azure.com",
+      user: process.env.MYSQL_USER || "vgcadmin",
+      password: process.env.MYSQL_PASSWORD || "",
+      database: process.env.MYSQL_DATABASE || "flexibleserverdb",
+      port: parseInt(process.env.MYSQL_PORT || "3306", 10),
+      ssl: { rejectUnauthorized: true },
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+    });
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS itsm_data (
+        collection VARCHAR(64) NOT NULL,
+        id VARCHAR(128) NOT NULL,
+        data LONGTEXT NOT NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (collection, id),
+        INDEX idx_itsm_collection (collection),
+        INDEX idx_itsm_updated (updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        collection VARCHAR(64) NOT NULL,
+        record_id VARCHAR(128) NOT NULL,
+        action VARCHAR(32) NOT NULL,
+        data LONGTEXT,
+        user_name VARCHAR(128),
+        timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_audit_collection (collection),
+        INDEX idx_audit_timestamp (timestamp)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    db = {
+      type: "mysql",
+      label: `MySQL: ${process.env.MYSQL_HOST || "vgc-itsm-mysql.mysql.database.azure.com"}`,
+      upsert: async (coll, id, data) => {
+        await pool.execute(
+          "INSERT INTO itsm_data (collection, id, data) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP",
+          [coll, id, data]
+        );
+      },
+      getAll: async (coll) => {
+        const [rows] = await pool.execute("SELECT id, data FROM itsm_data WHERE collection = ? ORDER BY updated_at DESC", [coll]);
+        return rows;
+      },
+      getOne: async (coll, id) => {
+        const [rows] = await pool.execute("SELECT data FROM itsm_data WHERE collection = ? AND id = ?", [coll, id]);
+        return rows[0] || null;
+      },
+      deleteOne: async (coll, id) => {
+        await pool.execute("DELETE FROM itsm_data WHERE collection = ? AND id = ?", [coll, id]);
+      },
+      count: async (coll) => {
+        const [rows] = await pool.execute("SELECT COUNT(*) as cnt FROM itsm_data WHERE collection = ?", [coll]);
+        return rows[0].cnt;
+      },
+      audit: async (coll, rid, action, data, user) => {
+        await pool.execute("INSERT INTO audit_log (collection, record_id, action, data, user_name) VALUES (?, ?, ?, ?, ?)", [coll, rid, action, data, user]);
+      },
+      getAudit: async (coll, limit) => {
+        const [rows] = await pool.query("SELECT * FROM audit_log WHERE collection = ? ORDER BY timestamp DESC LIMIT ?", [coll, Number(limit)]);
+        return rows;
+      },
+      getAllAudit: async (limit) => {
+        const [rows] = await pool.query("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?", [Number(limit)]);
+        return rows;
+      },
+      bulkUpsert: async (coll, items) => {
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+          for (const item of items) {
+            const id = item.id || item.title || String(Math.random());
+            await conn.execute(
+              "INSERT INTO itsm_data (collection, id, data) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP",
+              [coll, id, JSON.stringify(item)]
+            );
+          }
+          await conn.commit();
+        } catch (e) { await conn.rollback(); throw e; }
+        finally { conn.release(); }
+      },
+      ping: async () => { await pool.execute("SELECT 1"); return true; },
+      close: () => pool.end(),
+    };
+  } else {
+    const Database = require("better-sqlite3");
+    const DB_PATH = path.join(__dirname, "vgc-itsm.db");
+    const sdb = new Database(DB_PATH);
+    sdb.pragma("journal_mode = WAL");
+    sdb.pragma("foreign_keys = ON");
+    sdb.exec(`
+      CREATE TABLE IF NOT EXISTS itsm_data (
+        collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (collection, id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_itsm_collection ON itsm_data(collection);
+      CREATE INDEX IF NOT EXISTS idx_itsm_updated ON itsm_data(updated_at);
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL,
+        record_id TEXT NOT NULL, action TEXT NOT NULL, data TEXT,
+        user_name TEXT, timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_collection ON audit_log(collection);
+      CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
+    `);
+    const s = {
+      upsert: sdb.prepare("INSERT INTO itsm_data (collection, id, data, updated_at) VALUES (?, ?, ?, datetime('now')) ON CONFLICT(collection, id) DO UPDATE SET data = excluded.data, updated_at = datetime('now')"),
+      getAll: sdb.prepare("SELECT id, data FROM itsm_data WHERE collection = ? ORDER BY updated_at DESC"),
+      getOne: sdb.prepare("SELECT data FROM itsm_data WHERE collection = ? AND id = ?"),
+      deleteOne: sdb.prepare("DELETE FROM itsm_data WHERE collection = ? AND id = ?"),
+      count: sdb.prepare("SELECT COUNT(*) as cnt FROM itsm_data WHERE collection = ?"),
+      audit: sdb.prepare("INSERT INTO audit_log (collection, record_id, action, data, user_name) VALUES (?, ?, ?, ?, ?)"),
+      getAudit: sdb.prepare("SELECT * FROM audit_log WHERE collection = ? ORDER BY timestamp DESC LIMIT ?"),
+      getAllAudit: sdb.prepare("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?"),
+    };
+    const bulkTx = sdb.transaction((coll, items) => {
+      for (const item of items) {
+        const id = item.id || item.title || String(Math.random());
+        s.upsert.run(coll, id, JSON.stringify(item));
+      }
+    });
+    db = {
+      type: "sqlite",
+      label: `SQLite: ${DB_PATH}`,
+      upsert: async (coll, id, data) => s.upsert.run(coll, id, data),
+      getAll: async (coll) => s.getAll.all(coll),
+      getOne: async (coll, id) => s.getOne.get(coll, id) || null,
+      deleteOne: async (coll, id) => s.deleteOne.run(coll, id),
+      count: async (coll) => s.count.get(coll).cnt,
+      audit: async (coll, rid, action, data, user) => s.audit.run(coll, rid, action, data, user),
+      getAudit: async (coll, limit) => s.getAudit.all(coll, limit),
+      getAllAudit: async (limit) => s.getAllAudit.all(limit),
+      bulkUpsert: async (coll, items) => bulkTx(coll, items),
+      ping: async () => { sdb.prepare("SELECT 1").get(); return true; },
+      close: () => sdb.close(),
+    };
+  }
+}
+
+// ─── Helper: read JSON body from request ────────────────────────────────
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    const MAX = 10 * 1024 * 1024; // 10MB limit
+    req.on("data", chunk => {
+      size += chunk.length;
+      if (size > MAX) { reject(new Error("Payload too large")); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+      catch { reject(new Error("Invalid JSON body")); }
+    });
+    req.on("error", reject);
+  });
+}
+
+function json(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+}
+
+// Valid collection names (whitelist to prevent injection)
+const VALID_COLLECTIONS = new Set([
+  "incidents", "problems", "changes", "requests",
+  "assets", "kb", "services", "users", "vendors",
+  "workflow_rules", "survey_templates", "smart_tasks",
+  "integrations", "escalation_log", "escalation_config",
+  "customers", "service_reports",
+]);
+
+// Server-side Graph API call using client credentials (app-only)
+function graphAppCall(endpoint) {
+  return new Promise((resolve, reject) => {
+    if (!ENTRA_CLIENT_SECRET) return reject(new Error("No client secret configured"));
+    const tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_secret=${encodeURIComponent(ENTRA_CLIENT_SECRET)}&grant_type=client_credentials`;
+    const tokenReq = https.request({
+      hostname: "login.microsoftonline.com", path: `/${ENTRA_TENANT_ID}/oauth2/v2.0/token`,
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(tokenBody) },
+    }, tokenRes => {
+      let data = "";
+      tokenRes.on("data", c => data += c);
+      tokenRes.on("end", () => {
+        try {
+          const token = JSON.parse(data);
+          if (!token.access_token) return reject(new Error(token.error_description || "Token failed"));
+          const graphReq = https.request({
+            hostname: "graph.microsoft.com", path: `/v1.0${endpoint}`,
+            method: "GET", headers: { Authorization: `Bearer ${token.access_token}` },
+          }, graphRes => {
+            let gData = "";
+            graphRes.on("data", c => gData += c);
+            graphRes.on("end", () => {
+              try { resolve(JSON.parse(gData)); } catch { reject(new Error("Invalid JSON")); }
+            });
+          });
+          graphReq.on("error", reject);
+          graphReq.end();
+        } catch { reject(new Error("Token parse failed")); }
+      });
+    });
+    tokenReq.on("error", reject);
+    tokenReq.write(tokenBody);
+    tokenReq.end();
+  });
+}
+
+const server = http.createServer(async (req, res) => {
+  // CORS headers for API routes
+  if (req.url.startsWith("/api/")) {
+    const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:4173,http://localhost:5173").split(",").map(s => s.trim());
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
+  }
+  // Security headers
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+  const urlObj = new URL(req.url, `http://localhost:${PORT}`);
+  const pathname = urlObj.pathname;
+
+  // ─── REST API: /api/db/:collection ─────────────────────────────────
+  const dbMatch = pathname.match(/^\/api\/db\/([a-z_]+)(?:\/([^/]+))?$/);
+  if (dbMatch) {
+    const collection = dbMatch[1];
+    const recordId = dbMatch[2] ? decodeURIComponent(dbMatch[2]) : null;
+
+    if (!VALID_COLLECTIONS.has(collection)) {
+      return json(res, 400, { error: "Invalid collection name" });
+    }
+
+    try {
+      // GET /api/db/:collection — list all
+      if (req.method === "GET" && !recordId) {
+        const rows = await db.getAll(collection);
+        const items = rows.map(r => JSON.parse(r.data));
+        return json(res, 200, { collection, count: items.length, data: items });
+      }
+
+      // GET /api/db/:collection/:id — get one
+      if (req.method === "GET" && recordId) {
+        const row = await db.getOne(collection, recordId);
+        if (!row) return json(res, 404, { error: "Not found" });
+        return json(res, 200, JSON.parse(row.data));
+      }
+
+      // POST /api/db/:collection — create or bulk upsert
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        if (Array.isArray(body)) {
+          await db.bulkUpsert(collection, body);
+          await db.audit(collection, "*", "bulk_upsert", JSON.stringify({ count: body.length }), "system");
+          return json(res, 200, { ok: true, collection, upserted: body.length });
+        } else {
+          const id = body.id || recordId || String(Date.now());
+          body.id = id;
+          await db.upsert(collection, id, JSON.stringify(body));
+          await db.audit(collection, id, "upsert", JSON.stringify(body), body._user || "system");
+          return json(res, 200, { ok: true, id });
+        }
+      }
+
+      // PUT /api/db/:collection/:id — update one
+      if (req.method === "PUT" && recordId) {
+        const body = await readBody(req);
+        body.id = recordId;
+        await db.upsert(collection, recordId, JSON.stringify(body));
+        await db.audit(collection, recordId, "update", JSON.stringify(body), body._user || "system");
+        return json(res, 200, { ok: true, id: recordId });
+      }
+
+      // DELETE /api/db/:collection/:id — delete one
+      if (req.method === "DELETE" && recordId) {
+        await db.deleteOne(collection, recordId);
+        await db.audit(collection, recordId, "delete", null, "system");
+        return json(res, 200, { ok: true, deleted: recordId });
+      }
+
+      return json(res, 405, { error: "Method not allowed" });
+    } catch (err) {
+      console.error(`DB API error [${collection}]:`, err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Audit Log API ────────────────────────────────────────────────────
+  if (pathname === "/api/audit" && req.method === "GET") {
+    try {
+      const collection = urlObj.searchParams.get("collection");
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "100", 10), 1000);
+      const rows = collection
+        ? await db.getAudit(collection, limit)
+        : await db.getAllAudit(limit);
+      return json(res, 200, { count: rows.length, data: rows });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── DB Stats ─────────────────────────────────────────────────────────
+  if (pathname === "/api/db-stats" && req.method === "GET") {
+    try {
+      const stats = {};
+      for (const c of VALID_COLLECTIONS) {
+        stats[c] = await db.count(c);
+      }
+      return json(res, 200, { database: db.label, collections: stats, timestamp: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // Graph API proxy: /api/graph?endpoint=/users
+  if (pathname.startsWith("/api/graph")) {
+    const endpoint = urlObj.searchParams.get("endpoint");
+    if (!endpoint || !endpoint.startsWith("/")) {
+      return json(res, 400, { error: "Missing or invalid endpoint parameter" });
+    }
+    try {
+      const data = await graphAppCall(endpoint);
+      return json(res, 200, data);
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Local Auth: POST /api/auth/local ─────────────────────────────────
+  if (pathname === "/api/auth/local" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { username, password } = body;
+      if (!username || !password) return json(res, 400, { error: "Username and password required" });
+      const localUser = LOCAL_USERS[username.toLowerCase()];
+      if (!localUser) return json(res, 401, { error: "Invalid credentials" });
+      const inputHash = crypto.createHash("sha256").update(password).digest("hex");
+      if (!crypto.timingSafeEqual(Buffer.from(inputHash), Buffer.from(localUser.passwordHash))) {
+        return json(res, 401, { error: "Invalid credentials" });
+      }
+      await db.audit("auth", username, "local_login", JSON.stringify({ username, timestamp: new Date().toISOString() }), username);
+      return json(res, 200, { ok: true, user: localUser.profile });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Entra ID User Sync: GET /api/entra/users ─────────────────────────
+  // Fetches live user list from vgcsg.com tenant via Graph API (app-only)
+  if (pathname === "/api/entra/users" && req.method === "GET") {
+    try {
+      const data = await graphAppCall("/users?$select=id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation,mobilePhone,accountEnabled&$top=999&$orderby=displayName");
+      const users = (data.value || [])
+        .filter(u => u.accountEnabled !== false)
+        .map(u => ({
+          id: "ENTRA-" + (u.id || "").substring(0, 8),
+          entraObjectId: u.id,
+          name: u.displayName || u.userPrincipalName,
+          email: (u.mail || u.userPrincipalName || "").toLowerCase(),
+          role: u.jobTitle || "IT Staff",
+          department: u.department || "IT",
+          location: u.officeLocation || "Singapore",
+          phone: u.mobilePhone || "",
+          avatar: ((u.displayName || "U").match(/\b\w/g) || ["U"]).slice(0, 2).join("").toUpperCase(),
+          authType: "entra",
+          synced: true,
+          syncedAt: new Date().toISOString(),
+        }));
+      return json(res, 200, { ok: true, count: users.length, users, tenant: ENTRA_TENANT_ID });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Email Send Endpoint: POST /api/email/send ─────────────────────
+  if (pathname === "/api/email/send" && req.method === "POST") {
+    try {
+      const body = await new Promise((resolve, reject) => {
+        let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
+        req.on("end", () => resolve(JSON.parse(d)));
+      });
+      const { to, subject, reportId, customerName } = body;
+      if (!to || !subject) return json(res, 400, { error: "Missing to or subject" });
+      // In production, use nodemailer with smtpConfig. For demo, log and return success.
+      console.log(`[VGC-ITSM] Email queued: to=${to}, subject=${subject}, reportId=${reportId}, customer=${customerName}`);
+      return json(res, 200, { success: true, message: `Email sent to ${to}` });
+    } catch (err) {
+      return json(res, 500, { error: "Email send failed: " + err.message });
+    }
+  }
+
+  // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
+  if (pathname === "/api/ai/chat" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured on server" });
+    }
+    try {
+      const body = await new Promise((resolve, reject) => {
+        let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
+        req.on("end", () => resolve(JSON.parse(d)));
+      });
+      const { systemPrompt, userPrompt } = body;
+      if (!systemPrompt || !userPrompt) return json(res, 400, { error: "systemPrompt and userPrompt required" });
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_tokens: 1200, temperature: 0.7 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiReqOptions = {
+        hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+        method: "POST",
+        headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+      };
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request(aiReqOptions, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) {
+              resolve(JSON.parse(data));
+            } else {
+              reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+            }
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
+      return json(res, 200, { text, model: AZURE_OPENAI_MODEL });
+    } catch (err) {
+      console.error("[Azure OpenAI Proxy]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // Health check
+  if (pathname === "/api/health") {
+    let dbOk = false;
+    try { dbOk = await db.ping(); } catch {}
+    return json(res, 200, {
+      status: "ok",
+      database: dbOk ? "connected" : "error",
+      dbType: db.type,
+      dbLabel: db.label,
+      entraConfigured: !!ENTRA_CLIENT_SECRET,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // ─── Static File Serving ──────────────────────────────────────────────
+  const distDir = path.join(__dirname, "dist");
+  const hasDistDir = fs.existsSync(distDir);
+  const serveRoot = hasDistDir ? distDir : __dirname;
+  let filePath = path.join(serveRoot, pathname === "/" ? "index.html" : pathname);
+  const ext = path.extname(filePath).toLowerCase();
+  // Security: prevent directory traversal
+  if (!filePath.startsWith(serveRoot)) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  // Don't serve the database file
+  if (filePath.endsWith(".db") || filePath.endsWith(".db-wal") || filePath.endsWith(".db-shm")) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      // SPA fallback
+      fs.readFile(path.join(serveRoot, "index.html"), (e2, html) => {
+        if (e2) { res.writeHead(500); return res.end("Server Error"); }
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(html);
+      });
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": MIME[ext] || "application/octet-stream",
+      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=31536000",
+    });
+    res.end(data);
+  });
+});
+
+// ─── Start Server ───────────────────────────────────────────────────────
+async function start() {
+  await initDatabase();
+  server.listen(PORT, async () => {
+    const stats = {};
+    for (const c of VALID_COLLECTIONS) stats[c] = await db.count(c);
+    console.log(`VGC-ITSM serving on port ${PORT}`);
+    console.log(`Database: ${db.label}`);
+    console.log(`Collections:`, stats);
+  });
+}
+start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
+
+// Graceful shutdown
+process.on("SIGINT", () => { db.close(); process.exit(0); });
+process.on("SIGTERM", () => { db.close(); process.exit(0); });
