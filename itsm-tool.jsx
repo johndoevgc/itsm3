@@ -29,7 +29,11 @@ const ADMIN_EMAILS = [
   "adrian@vgctechnology.com",
 ];
 
-const USERS = [];
+const USERS = [
+  { id: "DEMO-001", name: "Dev Admin", role: "Platform Super Admin", avatar: "DA", team: "VGC Engineering", gender: "unspecified", rbacRole: "VGC Dev Admin", email: "devadmin@vgctechnology.com", phone: "+65 9000 0001", location: "Singapore", department: "Engineering", pcName: "VGC-DEV-01", employeeId: "VGC001" },
+  { id: "DEMO-002", name: "VGC Admin", role: "Tenant Administrator", avatar: "VA", team: "IT Operations", gender: "unspecified", rbacRole: "Administrator", email: "admin@vgctechnology.com", phone: "+65 9000 0002", location: "Singapore", department: "IT", pcName: "VGC-ADM-01", employeeId: "VGC002" },
+  { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@vgctechnology.com", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
+];
 
 // ─── Initial Customer Data (empty — ready for production data entry) ───
 const INITIAL_CUSTOMERS = [];
