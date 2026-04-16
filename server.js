@@ -23,11 +23,11 @@ const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-4o-mini";
 // Local admin users are configured via environment variables
 // Format: LOCAL_ADMIN_PASSWORD_HASH = SHA-256 hash of the password
 const LOCAL_USERS = process.env.LOCAL_ADMIN_PASSWORD_HASH ? {
-  admin: {
+  vgcdevadmin: {
     passwordHash: process.env.LOCAL_ADMIN_PASSWORD_HASH,
     profile: {
-      id: "LOCAL-admin",
-      name: process.env.LOCAL_ADMIN_NAME || "System Admin",
+      id: "LOCAL-vgcdevadmin",
+      name: process.env.LOCAL_ADMIN_NAME || "VGC Dev Admin",
       role: "Administrator",
       avatar: "SA",
       team: "IT",
