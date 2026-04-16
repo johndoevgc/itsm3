@@ -35,8 +35,10 @@ const USERS = [
   { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@vgctechnology.com", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
 ];
 
-// ─── Initial Customer Data (empty — ready for production data entry) ───
-const INITIAL_CUSTOMERS = [];
+// ─── Initial Customer Data ────────────────────────────────────────────
+const INITIAL_CUSTOMERS = [
+  { id: "CUS001", name: "Kellington Group Pte Ltd", category: "CSP", contactPerson: "Daniel Lim", email: "daniel.lim@kellington.com", phone: "+65 6321 8800", address: "1 Harbourfront Place, #08-01 HarbourFront Tower One, Singapore 098633", status: "Active", contractStart: "2026-01-15", contractEnd: "2027-01-14", services: ["Managed Endpoint", "VPN Access", "Email Security", "Cloud Backup"], notes: "CSP Tier-1 contract — 24×7 priority support, quarterly service review. Primary escalation: Daniel Lim (CTO).", createdBy: "VGC Admin", createdAt: "2026-01-15" },
+];
 
 // ─── RBAC Enterprise Roles & Permissions ─────────────────────────────────
 const RBAC_ROLES = [
@@ -874,7 +876,14 @@ const INTEGRATION_CATALOG = [
   { id: "INT12", name: "GitHub", category: "DevOps", icon: "🐙", status: "available", description: "Link incidents to code changes and deployments" },
 ];
 
-const INITIAL_INCIDENTS = [];
+const INITIAL_INCIDENTS = [
+  { id: "INC0001", title: "Production VPN gateway down — all remote users disconnected", description: "All 120+ remote staff unable to establish VPN tunnel. Gateway reports high memory and connection pool exhaustion. FortiGate HA failover did not trigger. Business-critical ERP and CRM systems unreachable for remote workforce.", category: "Network", subcategory: "VPN / Remote Access", priority: "Sev-A", urgency: "Critical", status: "In Progress", assignee: "Support Engineer", assignmentGroup: "Network Engineering", reporter: "VGC Admin", reporterName: "Daniel Lim", reporterEmail: "daniel.lim@kellington.com", reporterRole: "CTO — Kellington Group", customer: "Kellington Group Pte Ltd", customerContact: "Daniel Lim", customerPhone: "+65 6321 8800", customerAddress: "1 Harbourfront Place, Singapore", contactMethod: "Phone Call", impact: "Enterprise", affectedService: "VPN Access", affectedAsset: "FW-VPN-GW-01", location: "Singapore DC-1", created: 1.5, slaTarget: 4, firstResponseTime: 0.1, aiTriaged: true, aiConfidence: 94, workaround: "Staff can use backup SSL VPN portal at vpn-backup.kellington.com (capacity limited to 30 concurrent users)", linkedProblem: "", linkedChange: "", affectedAssets: ["FW-VPN-GW-01", "SW-CORE-01"], activityLog: [
+    { id: "AL0001", type: "status", user: "VGC Admin", time: "16/04/2026, 08:14:00", detail: "Incident created — Sev-A escalation triggered automatically" },
+    { id: "AL0002", type: "email", user: "Support Engineer", time: "16/04/2026, 08:20:00", detail: "Acknowledgement email sent to daniel.lim@kellington.com", to: "daniel.lim@kellington.com", from: "engineer@vgctechnology.com", subject: "INC0001 — VPN Gateway Down — Acknowledged", body: "Hi Daniel,<br/><br/>We have received your critical report regarding the VPN gateway outage. Our Network Engineering team is actively investigating. SLA target: 4 hours.<br/><br/>Backup SSL VPN portal: vpn-backup.kellington.com<br/><br/>We will update you every 30 minutes.<br/><br/>— VGC Technology Service Desk" },
+    { id: "AL0003", type: "note", user: "Support Engineer", time: "16/04/2026, 08:35:00", detail: "Internal note added", isInternal: true, body: "FortiGate dashboard shows memory at 97%. Connection table has 4,200 stale sessions. Initiating controlled flush and failover to secondary node." },
+    { id: "AL0004", type: "status", user: "Support Engineer", time: "16/04/2026, 08:36:00", detail: "Status changed: New → In Progress" },
+  ]},
+];
 const INITIAL_PROBLEMS = [];
 const INITIAL_CHANGES = [];
 const INITIAL_REQUESTS = [];
@@ -2019,6 +2028,7 @@ export default function ITSMApp() {
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "cybernews", label: "Cyber News", count: (() => { const sev = ["Critical","High"]; return [{ severity: "Critical", status: "Active" },{ severity: "High", status: "Investigating" },{ severity: "Medium", status: "Acknowledged" },{ severity: "Low", status: "Scheduled" },{ severity: "High", status: "Active" }].filter(a => sev.includes(a.severity)).length; })(), critical: true, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
+    { id: "architecture", label: "Architecture", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #6366F118)" },
   ];
 
   // ─── Dashboard ────────────────────────────────────────────────────────
@@ -4146,7 +4156,7 @@ export default function ITSMApp() {
           </div>
           {/* Tabs */}
           <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
-            {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }].map(t => (
+            {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "workflow", label: "Workflow", icon: "⚡" }].map(t => (
               <button key={t.id} onClick={() => setDetailTab(t.id)}
                 style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
                 <span>{t.icon}</span> {t.label}
@@ -4388,6 +4398,139 @@ export default function ITSMApp() {
                   {activities.length === 0 && (
                     <div style={{ padding: 30, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No activity yet. Use the buttons above to reply or add notes.</div>
                   )}
+                </div>
+              </>
+            )}
+
+            {/* ─── Workflow Process Tab ─── */}
+            {detailTab === "workflow" && (
+              <>
+                <style>{`
+                  @keyframes wfSlideIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+                  @keyframes wfPulseNode { 0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.4); } 50% { box-shadow: 0 0 0 10px rgba(99,102,241,0); } }
+                  @keyframes wfFlowLine { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
+                  @keyframes wfGlow { 0%, 100% { filter: drop-shadow(0 0 4px rgba(99,102,241,0.3)); } 50% { filter: drop-shadow(0 0 12px rgba(99,102,241,0.6)); } }
+                  @keyframes wfCheckPop { 0% { transform: scale(0); } 60% { transform: scale(1.3); } 100% { transform: scale(1); } }
+                `}</style>
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 6 }}>⚡ INCIDENT LIFECYCLE WORKFLOW</div>
+                  <div style={{ fontSize: 12, color: "#5A617899", marginBottom: 16 }}>Visual process flow showing each stage of incident resolution. Active step is highlighted.</div>
+                </div>
+                {/* Workflow Flow Cards */}
+                {(() => {
+                  const steps = [
+                    { id: "new", label: "New", icon: "📩", desc: "Ticket created via portal, email, phone, or API. Auto-assigned default severity (Sev-C).", color: "#CE93D8" },
+                    { id: "triage", label: "AI Triage", icon: "🤖", desc: "AI engine classifies category, suggests priority, identifies affected service, and routes to assignment group.", color: "#EC4899" },
+                    { id: "open", label: "Open", icon: "📂", desc: "Engineer acknowledges ticket. SLA countdown begins based on severity level. First-response timer active.", color: "#A0AEC0" },
+                    { id: "inprogress", label: "In Progress", icon: "🔧", desc: "Active investigation and remediation. Engineer updates ticket with findings, communicates with reporter.", color: "#64B5F6" },
+                    { id: "pending", label: "Pending", icon: "⏳", desc: "Awaiting external input — customer response, vendor patch, or third-party action. SLA clock paused.", color: "#FFB347" },
+                    { id: "resolved", label: "Resolved", icon: "✅", desc: "Root cause addressed, service restored. Resolution notes documented. Customer satisfaction survey triggered.", color: "#81C784" },
+                    { id: "closed", label: "Closed", icon: "🔒", desc: "Confirmed by reporter or auto-closed after 5 business days. Linked to Problem record if recurring.", color: "#666" },
+                  ];
+                  const statusMap = { "New": "new", "Open": "open", "In Progress": "inprogress", "Pending": "pending", "On Hold": "pending", "Resolved": "resolved", "Closed": "closed", "Reopened": "open" };
+                  const currentStep = statusMap[inc.status] || "new";
+                  const currentIdx = steps.findIndex(s => s.id === currentStep);
+                  return (
+                    <div style={{ position: "relative" }}>
+                      {/* Horizontal connector line */}
+                      <div style={{ position: "absolute", top: 32, left: 40, right: 40, height: 3, background: "#1E2130", borderRadius: 2, zIndex: 0 }}>
+                        <div style={{ height: "100%", background: "linear-gradient(90deg, #6366F1, #06B6D4)", borderRadius: 2, width: `${Math.max(0, (currentIdx / (steps.length - 1)) * 100)}%`, transition: "width 1s ease", boxShadow: "0 0 8px #6366F144" }} />
+                      </div>
+                      {/* Step nodes */}
+                      <div style={{ display: "grid", gridTemplateColumns: `repeat(${steps.length}, 1fr)`, gap: 6, position: "relative", zIndex: 1 }}>
+                        {steps.map((step, i) => {
+                          const isPast = i < currentIdx;
+                          const isActive = i === currentIdx;
+                          const isFuture = i > currentIdx;
+                          return (
+                            <div key={step.id} style={{ textAlign: "center", animation: `wfSlideIn 0.5s ease ${i * 0.08}s both` }}>
+                              {/* Node circle */}
+                              <div style={{
+                                width: 48, height: 48, borderRadius: "50%", margin: "0 auto 10px",
+                                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20,
+                                background: isActive ? `linear-gradient(135deg, ${step.color}33, ${step.color}11)` : isPast ? "#0D2D1A" : "#0A0C14",
+                                border: `2px solid ${isActive ? step.color : isPast ? "#4CAF50" : "#1E2130"}`,
+                                animation: isActive ? "wfPulseNode 2s infinite" : "none",
+                                transition: "all 0.4s ease", position: "relative",
+                                boxShadow: isActive ? `0 0 20px ${step.color}33` : "none",
+                              }}>
+                                {isPast ? <span style={{ animation: "wfCheckPop 0.4s ease", color: "#4CAF50", fontSize: 18, fontWeight: 700 }}>✓</span> : <span style={{ opacity: isFuture ? 0.35 : 1 }}>{step.icon}</span>}
+                              </div>
+                              {/* Label */}
+                              <div style={{ fontSize: 10, fontWeight: 700, color: isActive ? step.color : isPast ? "#81C784" : "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, transition: "color 0.3s" }}>{step.label}</div>
+                              {/* Description card */}
+                              <div style={{
+                                background: isActive ? `linear-gradient(135deg, ${step.color}08, #12141E)` : "#0A0C14",
+                                border: `1px solid ${isActive ? step.color + "44" : "#1E213044"}`, borderRadius: 8, padding: "8px 6px",
+                                fontSize: 10, color: isActive ? "#C4CAD6" : "#5A617888", lineHeight: 1.4,
+                                transition: "all 0.4s ease", minHeight: 50,
+                                boxShadow: isActive ? `0 4px 16px ${step.color}11` : "none",
+                              }}>
+                                {step.desc}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* SLA Workflow */}
+                <div style={{ marginTop: 28, background: "#0A0C14", borderRadius: 10, border: "1px solid #1E213044", padding: 18, animation: "wfSlideIn 0.6s ease 0.6s both" }}>
+                  <div style={{ fontSize: 11, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>⏱ SLA ESCALATION PATH</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                    {[
+                      { sev: "Sev-A", label: "CRITICAL", first: "30 min", worst: "4 hrs", esc: "Immediate → IT Manager", color: "#FF6B6B", active: inc.priority === "Sev-A" },
+                      { sev: "Sev-B", label: "HIGH", first: "1 hr", worst: "4 hrs", esc: "2 hrs → Team Lead", color: "#FFB347", active: inc.priority === "Sev-B" },
+                      { sev: "Sev-C", label: "MEDIUM", first: "4 hrs", worst: "9 hrs", esc: "6 hrs → Team Lead", color: "#64B5F6", active: inc.priority === "Sev-C" },
+                      { sev: "Sev-D", label: "LOW", first: "9 hrs", worst: "27 hrs", esc: "Next business day", color: "#81C784", active: inc.priority === "Sev-D" },
+                    ].map((s, i) => (
+                      <div key={s.sev} style={{
+                        padding: 12, borderRadius: 8, textAlign: "center",
+                        background: s.active ? `linear-gradient(135deg, ${s.color}15, ${s.color}08)` : "#12141E",
+                        border: `1px solid ${s.active ? s.color + "66" : "#1E213022"}`,
+                        animation: s.active ? "wfGlow 2.5s ease-in-out infinite" : `wfSlideIn 0.4s ease ${0.7 + i * 0.1}s both`,
+                        transform: s.active ? "scale(1.04)" : "scale(1)", transition: "transform 0.3s",
+                      }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: s.color, fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>{s.sev}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178", marginBottom: 4 }}>{s.label}</div>
+                        <div style={{ fontSize: 10, color: "#C4CAD6" }}>First: <strong style={{ color: s.color }}>{s.first}</strong></div>
+                        <div style={{ fontSize: 10, color: "#C4CAD6" }}>Max: <strong style={{ color: s.color }}>{s.worst}</strong></div>
+                        <div style={{ fontSize: 9, color: "#5A617899", marginTop: 4 }}>{s.esc}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Feature Process Cards */}
+                <div style={{ marginTop: 24, animation: "wfSlideIn 0.6s ease 0.8s both" }}>
+                  <div style={{ fontSize: 11, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>🔗 CONNECTED PROCESSES</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    {[
+                      { icon: "🔍", title: "Problem Management", desc: "Recurring incidents trigger root cause analysis. Known Errors link back to prevent future occurrences.", color: "#CE93D8", flow: "Incident → Problem → Known Error → Fix" },
+                      { icon: "🔄", title: "Change Management", desc: "Fixes requiring infrastructure changes create RFC with risk assessment, approvals, and rollback plan.", color: "#FFB347", flow: "Problem → RFC → Approve → Implement → Review" },
+                      { icon: "📊", title: "SLA & Reporting", desc: "Real-time SLA tracking with auto-escalation. Monthly service reports generated for customer review.", color: "#64B5F6", flow: "Track → Alert → Escalate → Report" },
+                      { icon: "🤖", title: "AI Auto-Triage", desc: "NLP classification assigns category, priority, and routing. Confidence score determines manual review threshold.", color: "#EC4899", flow: "Ingest → Classify → Score → Route" },
+                      { icon: "📧", title: "Communications", desc: "Bi-directional email with templates. Internal notes for agent collaboration. Full audit trail.", color: "#3B82F6", flow: "Receive → Template → Send → Log" },
+                      { icon: "📋", title: "Customer Survey", desc: "Auto-generated satisfaction survey on resolution. Templates adapt based on severity and interaction count.", color: "#81C784", flow: "Resolve → Generate → Send → Analyse" },
+                    ].map((card, i) => (
+                      <div key={i} style={{
+                        background: `linear-gradient(135deg, ${card.color}06, #0A0C14)`, borderRadius: 8,
+                        border: `1px solid ${card.color}22`, padding: "12px 14px",
+                        animation: `wfSlideIn 0.4s ease ${0.9 + i * 0.08}s both`,
+                        transition: "border-color 0.3s, transform 0.2s", cursor: "default",
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = card.color + "66"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = card.color + "22"; e.currentTarget.style.transform = "translateY(0)"; }}
+                      >
+                        <div style={{ fontSize: 16, marginBottom: 6 }}>{card.icon}</div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: card.color, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>{card.title}</div>
+                        <div style={{ fontSize: 10, color: "#A0AEC0", lineHeight: 1.4, marginBottom: 8 }}>{card.desc}</div>
+                        <div style={{ fontSize: 9, color: card.color + "99", fontFamily: "'JetBrains Mono', monospace", background: card.color + "08", padding: "3px 6px", borderRadius: 4, display: "inline-block" }}>{card.flow}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </>
             )}
@@ -10139,6 +10282,225 @@ export default function ITSMApp() {
     return null;
   };
 
+  // ─── Architecture Diagram ──────────────────────────────────────────────
+  const ArchitectureDiagram = () => {
+    const [hoveredNode, setHoveredNode] = useState(null);
+    const [selectedLayer, setSelectedLayer] = useState(null);
+
+    const layers = [
+      {
+        id: "client", label: "CLIENT LAYER", icon: "🖥️", color: "#6366F1", y: 0,
+        nodes: [
+          { id: "browser", label: "Browser SPA", tech: "React 19 + Vite", desc: "Single-page application with real-time dashboard, RBAC-controlled views, and responsive dark-theme UI", icon: "🌐" },
+          { id: "msal", label: "MSAL Auth", tech: "PKCE Flow", desc: "Microsoft Authentication Library handles Entra ID SSO with secure PKCE authorization code flow", icon: "🔐" },
+          { id: "pwa", label: "Progressive Web", tech: "Service Worker", desc: "Offline-capable PWA with cached assets, push notifications, and installable desktop experience", icon: "📱" },
+        ]
+      },
+      {
+        id: "api", label: "API GATEWAY", icon: "🔀", color: "#3B82F6", y: 1,
+        nodes: [
+          { id: "rest", label: "REST API", tech: "Node.js HTTP", desc: "Lightweight HTTP server with JSON endpoints. Collection-based CRUD with bulk upsert support", icon: "⚡" },
+          { id: "auth", label: "Auth Middleware", tech: "JWT + Local", desc: "Dual authentication: Entra ID JWT validation for SSO users, SHA-256 hash for local admin fallback", icon: "🛡️" },
+          { id: "graphproxy", label: "Graph Proxy", tech: "Microsoft Graph", desc: "Server-side proxy to Microsoft Graph API for user profiles, mail, calendar, and Teams integration", icon: "📊" },
+        ]
+      },
+      {
+        id: "services", label: "SERVICE LAYER", icon: "⚙️", color: "#EC4899", y: 2,
+        nodes: [
+          { id: "incident", label: "Incident Engine", tech: "ITIL v4", desc: "Full lifecycle management: create → triage → assign → work → resolve → close with SLA enforcement", icon: "🎫" },
+          { id: "ai", label: "AI Engine", tech: "Azure OpenAI", desc: "NLP-powered ticket classification, priority suggestion, resolution recommendations, and anomaly detection", icon: "🤖" },
+          { id: "workflow", label: "Workflow Engine", tech: "Rule-based", desc: "Configurable automation rules for routing, escalation, notifications, and SLA breach alerts", icon: "🔄" },
+          { id: "email", label: "Email Engine", tech: "SMTP/Graph", desc: "Bi-directional email processing with templates, signatures, attachments, and delivery tracking", icon: "📧" },
+        ]
+      },
+      {
+        id: "data", label: "DATA LAYER", icon: "💾", color: "#FFB347", y: 3,
+        nodes: [
+          { id: "mysql", label: "Azure MySQL", tech: "Flexible Server", desc: "Primary production database with automatic backups, geo-redundancy, and point-in-time restore", icon: "🐬" },
+          { id: "audit", label: "Audit Log", tech: "Immutable Store", desc: "Tamper-proof audit trail logging every data mutation with user, timestamp, and before/after state", icon: "📝" },
+          { id: "cache", label: "In-Memory Cache", tech: "Node.js Map", desc: "Server-side caching for frequently accessed data: services, vendors, SLA configs, and workflow rules", icon: "⚡" },
+        ]
+      },
+      {
+        id: "infra", label: "INFRASTRUCTURE", icon: "☁️", color: "#81C784", y: 4,
+        nodes: [
+          { id: "appservice", label: "Azure App Service", tech: "Linux B1", desc: "Managed PaaS hosting with auto-scaling, deployment slots, custom domains, and SSL certificates", icon: "🏗️" },
+          { id: "entra", label: "Microsoft Entra ID", tech: "OAuth 2.0", desc: "Enterprise identity provider with MFA, conditional access, and SCIM user provisioning", icon: "🔑" },
+          { id: "monitor", label: "Azure Monitor", tech: "App Insights", desc: "Application performance monitoring, log analytics, custom alerts, and availability testing", icon: "📈" },
+        ]
+      }
+    ];
+
+    const connections = [
+      { from: "browser", to: "rest", label: "HTTPS/JSON", color: "#6366F188" },
+      { from: "msal", to: "auth", label: "OAuth Token", color: "#3B82F688" },
+      { from: "rest", to: "incident", label: "CRUD Ops", color: "#EC489988" },
+      { from: "rest", to: "ai", label: "AI Proxy", color: "#EC489988" },
+      { from: "auth", to: "entra", label: "Token Verify", color: "#81C78488" },
+      { from: "incident", to: "mysql", label: "SQL/JSON", color: "#FFB34788" },
+      { from: "workflow", to: "email", label: "Triggers", color: "#EC489988" },
+      { from: "incident", to: "audit", label: "Log Events", color: "#FFB34788" },
+      { from: "appservice", to: "rest", label: "Hosts", color: "#81C78488" },
+      { from: "graphproxy", to: "entra", label: "Graph API", color: "#81C78488" },
+    ];
+
+    return (
+      <div style={{ padding: 0 }}>
+        <style>{`
+          @keyframes archFadeIn { from { opacity: 0; transform: translateY(24px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+          @keyframes archPulse { 0%, 100% { box-shadow: 0 0 0 0 var(--pulse-color, rgba(99,102,241,0.3)); } 50% { box-shadow: 0 0 0 8px transparent; } }
+          @keyframes archFlowDash { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
+          @keyframes archGlow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+          @keyframes archNodeFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+          @keyframes archLabelSlide { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+          @keyframes archConnectorPulse { 0% { stroke-opacity: 0.3; } 50% { stroke-opacity: 0.8; } 100% { stroke-opacity: 0.3; } }
+        `}</style>
+
+        {/* Header */}
+        <div style={{ marginBottom: 24, animation: "archFadeIn 0.6s ease" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <span style={{ fontSize: 28, animation: "archNodeFloat 3s ease-in-out infinite" }}>🏛️</span>
+            <div>
+              <h2 style={{ margin: 0, color: "#E8ECF4", fontSize: 18, fontFamily: "'Space Grotesk', sans-serif" }}>VGC-ITSM Platform Architecture</h2>
+              <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>End-to-end system architecture with live component status</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={() => setSelectedLayer(null)} style={{ padding: "5px 12px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer", background: !selectedLayer ? "#6366F122" : "#ffffff06", color: !selectedLayer ? "#6366F1" : "#5A6178", border: `1px solid ${!selectedLayer ? "#6366F144" : "#1E2130"}`, fontFamily: "'JetBrains Mono', monospace" }}>ALL LAYERS</button>
+            {layers.map(l => (
+              <button key={l.id} onClick={() => setSelectedLayer(selectedLayer === l.id ? null : l.id)} style={{ padding: "5px 12px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer", background: selectedLayer === l.id ? l.color + "22" : "#ffffff06", color: selectedLayer === l.id ? l.color : "#5A6178", border: `1px solid ${selectedLayer === l.id ? l.color + "44" : "#1E2130"}`, fontFamily: "'JetBrains Mono', monospace" }}>{l.label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Architecture Layers */}
+        <div style={{ position: "relative" }}>
+          {/* Animated connection lines (SVG overlay) */}
+          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 0 }}>
+            {connections.map((c, i) => (
+              <line key={i} x1="50%" y1={`${layers.findIndex(l => l.nodes.some(n => n.id === c.from)) * 140 + 60}px`}
+                x2="50%" y2={`${layers.findIndex(l => l.nodes.some(n => n.id === c.to)) * 140 + 60}px`}
+                stroke={c.color} strokeWidth="1" strokeDasharray="6 4"
+                style={{ animation: `archFlowDash 1.5s linear infinite, archConnectorPulse 3s ease-in-out ${i * 0.3}s infinite` }} />
+            ))}
+          </svg>
+
+          {/* Layer cards */}
+          {layers.filter(l => !selectedLayer || l.id === selectedLayer).map((layer, li) => (
+            <div key={layer.id} style={{
+              marginBottom: 16, position: "relative", zIndex: 1,
+              animation: `archFadeIn 0.5s ease ${li * 0.12}s both`,
+            }}>
+              {/* Layer header */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, animation: `archLabelSlide 0.4s ease ${li * 0.12}s both` }}>
+                <span style={{ fontSize: 16, animation: "archNodeFloat 4s ease-in-out infinite" }}>{layer.icon}</span>
+                <div style={{ fontSize: 10, fontWeight: 700, color: layer.color, fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>{layer.label}</div>
+                <div style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${layer.color}44, transparent)` }} />
+              </div>
+
+              {/* Node cards */}
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${layer.nodes.length}, 1fr)`, gap: 12 }}>
+                {layer.nodes.map((node, ni) => {
+                  const isHovered = hoveredNode === node.id;
+                  return (
+                    <div key={node.id}
+                      onMouseEnter={() => setHoveredNode(node.id)}
+                      onMouseLeave={() => setHoveredNode(null)}
+                      style={{
+                        background: isHovered ? `linear-gradient(135deg, ${layer.color}12, #12141E)` : "#0F1117",
+                        borderRadius: 10, padding: 16,
+                        border: `1px solid ${isHovered ? layer.color + "55" : "#1E213044"}`,
+                        cursor: "default", position: "relative", overflow: "hidden",
+                        transition: "all 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+                        transform: isHovered ? "translateY(-4px) scale(1.02)" : "translateY(0) scale(1)",
+                        boxShadow: isHovered ? `0 12px 32px ${layer.color}15` : "none",
+                        animation: `archFadeIn 0.4s ease ${li * 0.12 + ni * 0.08}s both`,
+                        "--pulse-color": layer.color + "40",
+                      }}>
+                      {/* Animated corner accent */}
+                      {isHovered && <div style={{ position: "absolute", top: 0, right: 0, width: 40, height: 40, background: `linear-gradient(135deg, transparent 50%, ${layer.color}15 50%)`, animation: "archGlow 2s ease-in-out infinite" }} />}
+                      {/* Status indicator */}
+                      <div style={{ position: "absolute", top: 12, right: 12, width: 7, height: 7, borderRadius: "50%", background: "#4CAF50", animation: "archPulse 2s infinite", "--pulse-color": "#4CAF5040" }} />
+                      {/* Content */}
+                      <div style={{ fontSize: 22, marginBottom: 8, transition: "transform 0.3s", transform: isHovered ? "scale(1.15)" : "scale(1)" }}>{node.icon}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 3, fontFamily: "'Space Grotesk', sans-serif" }}>{node.label}</div>
+                      <div style={{ fontSize: 9, color: layer.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, marginBottom: 8, padding: "2px 6px", background: layer.color + "12", borderRadius: 4, display: "inline-block" }}>{node.tech}</div>
+                      <div style={{ fontSize: 10, color: "#A0AEC0", lineHeight: 1.5, transition: "color 0.3s", ...(isHovered ? { color: "#C4CAD6" } : {}) }}>{node.desc}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Down arrow connector between layers */}
+              {li < layers.filter(l => !selectedLayer || l.id === selectedLayer).length - 1 && (
+                <div style={{ textAlign: "center", padding: "6px 0", position: "relative", zIndex: 2 }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" style={{ animation: `archNodeFloat 2s ease-in-out ${li * 0.3}s infinite` }}>
+                    <path d="M12 4 L12 18 M6 14 L12 20 L18 14" fill="none" stroke={layer.color + "66"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ animation: "archFlowDash 1.5s linear infinite" }} strokeDasharray="4 3" />
+                  </svg>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Data Flow Summary */}
+        <div style={{ marginTop: 20, background: "#0A0C14", borderRadius: 10, border: "1px solid #1E213044", padding: 18, animation: "archFadeIn 0.6s ease 1s both" }}>
+          <div style={{ fontSize: 11, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 14 }}>🔗 DATA FLOW — REQUEST LIFECYCLE</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap" }}>
+            {[
+              { label: "User", icon: "👤", color: "#6366F1" },
+              { label: "Browser SPA", icon: "🌐", color: "#6366F1" },
+              { label: "HTTPS", icon: "→", color: "#3B82F6", isArrow: true },
+              { label: "REST API", icon: "⚡", color: "#3B82F6" },
+              { label: "Auth Check", icon: "→", color: "#EC4899", isArrow: true },
+              { label: "Service Layer", icon: "⚙️", color: "#EC4899" },
+              { label: "Query", icon: "→", color: "#FFB347", isArrow: true },
+              { label: "MySQL", icon: "🐬", color: "#FFB347" },
+              { label: "Response", icon: "←", color: "#81C784", isArrow: true },
+              { label: "Render UI", icon: "✨", color: "#81C784" },
+            ].map((step, i) => (
+              <div key={i} style={{
+                display: "flex", alignItems: "center", gap: 4,
+                animation: `archFadeIn 0.3s ease ${1.1 + i * 0.08}s both`,
+              }}>
+                {step.isArrow ? (
+                  <div style={{ padding: "0 6px", color: step.color, fontSize: 14, fontWeight: 700, animation: `archGlow 2s ease-in-out ${i * 0.2}s infinite` }}>{step.icon}</div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", background: step.color + "12", borderRadius: 6, border: `1px solid ${step.color}22` }}>
+                    <span style={{ fontSize: 12 }}>{step.icon}</span>
+                    <span style={{ fontSize: 9, color: step.color, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{step.label}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Tech Stack Summary */}
+        <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, animation: "archFadeIn 0.6s ease 1.2s both" }}>
+          {[
+            { label: "Frontend", items: ["React 19", "Vite 8", "MSAL.js"], color: "#6366F1", icon: "⚛️" },
+            { label: "Backend", items: ["Node.js 20", "HTTP Server", "Graph API"], color: "#3B82F6", icon: "🔧" },
+            { label: "Database", items: ["Azure MySQL", "JSON Store", "Audit Log"], color: "#FFB347", icon: "💾" },
+            { label: "Cloud", items: ["Azure App Service", "Entra ID", "Monitor"], color: "#81C784", icon: "☁️" },
+          ].map((stack, i) => (
+            <div key={i} style={{ background: "#0F1117", borderRadius: 8, padding: 14, border: `1px solid ${stack.color}22`, animation: `archFadeIn 0.4s ease ${1.3 + i * 0.1}s both` }}>
+              <div style={{ fontSize: 14, marginBottom: 6 }}>{stack.icon}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: stack.color, fontFamily: "'JetBrains Mono', monospace", marginBottom: 8 }}>{stack.label}</div>
+              {stack.items.map((item, j) => (
+                <div key={j} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0", display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: stack.color, flexShrink: 0, animation: `archPulse 2s ease ${j * 0.5}s infinite`, "--pulse-color": stack.color + "40" }} />
+                  {item}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   // ─── Render Module Content ────────────────────────────────────────────
   const renderModule = () => {
     switch (activeModule) {
@@ -10158,6 +10520,7 @@ export default function ITSMApp() {
       case "ai": return <AIAssistModule />;
       case "cybernews": return <CyberNewsModule />;
       case "admin": return <AdminSettingsModule />;
+      case "architecture": return <ArchitectureDiagram />;
       default: return <Dashboard />;
     }
   };
