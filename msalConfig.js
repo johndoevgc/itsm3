@@ -7,6 +7,8 @@ import { PublicClientApplication, LogLevel } from "@azure/msal-browser";
 const REGISTERED_REDIRECT_URIS = [
   "http://localhost:8080",
   "http://localhost:4173",
+  "http://localhost:5173",
+  "https://vgc-itsm1-app.azurewebsites.net",
 ];
 // Add production URI dynamically — will be set after Entra ID app registration
 if (window.__ITSM_CONFIG__?.redirectUris) {
@@ -17,7 +19,7 @@ const redirectUri = REGISTERED_REDIRECT_URIS.includes(window.location.origin)
   : window.location.origin; // fallback to current origin
 
 // Entra ID configuration — set via build-time or runtime injection
-const ENTRA_CLIENT_ID = window.__ITSM_CONFIG__?.clientId || "ENTRA_CLIENT_ID_PLACEHOLDER";
+const ENTRA_CLIENT_ID = window.__ITSM_CONFIG__?.clientId || "7c2be528-9424-4530-9c50-cc97fc6bc793";
 const ENTRA_TENANT_ID = window.__ITSM_CONFIG__?.tenantId || "3994f368-b34e-4722-a56b-92ac87150f00";
 
 const msalConfig = {
