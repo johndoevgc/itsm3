@@ -18,6 +18,11 @@ const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
 const AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
 const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-4o-mini";
 
+// Zendesk API config (server-side only — protects API token)
+const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
+const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL || "";
+const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN || "";
+
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
 // Local admin users are configured via environment variables
@@ -592,6 +597,125 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ─── Zendesk API Proxy ──────────────────────────────────────────────
+  if (pathname.startsWith("/api/zendesk")) {
+    if (!ZENDESK_SUBDOMAIN || !ZENDESK_EMAIL || !ZENDESK_API_TOKEN) {
+      return json(res, 503, { error: "Zendesk not configured. Set ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN." });
+    }
+    const zdBase = `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`;
+    const zdAuth = "Basic " + Buffer.from(`${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}`).toString("base64");
+
+    const zdRequest = (method, zdPath, body) => new Promise((resolve, reject) => {
+      const url = new URL(zdBase + zdPath);
+      const opts = {
+        hostname: url.hostname, port: 443, path: url.pathname + url.search,
+        method, headers: { "Authorization": zdAuth, "Content-Type": "application/json" },
+      };
+      const r = https.request(opts, (resp) => {
+        let data = ""; resp.on("data", c => data += c);
+        resp.on("end", () => {
+          if (resp.statusCode >= 200 && resp.statusCode < 300) {
+            resolve(data ? JSON.parse(data) : {});
+          } else {
+            reject(new Error(`Zendesk ${resp.statusCode}: ${data.substring(0, 500)}`));
+          }
+        });
+      });
+      r.on("error", reject);
+      r.setTimeout(20000, () => { r.destroy(); reject(new Error("Zendesk API timeout")); });
+      if (body) r.write(JSON.stringify(body));
+      r.end();
+    });
+
+    try {
+      // GET /api/zendesk/me — verify connection
+      if (pathname === "/api/zendesk/me" && req.method === "GET") {
+        const result = await zdRequest("GET", "/users/me.json");
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/tickets?page=1&per_page=25&status=open&sort_by=created_at&sort_order=desc
+      if (pathname === "/api/zendesk/tickets" && req.method === "GET") {
+        const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+        const page = qs.get("page") || "1";
+        const perPage = Math.min(parseInt(qs.get("per_page") || "25"), 100);
+        const status = qs.get("status") || "";
+        const sortBy = qs.get("sort_by") || "created_at";
+        const sortOrder = qs.get("sort_order") || "desc";
+        let zdPath = `/tickets.json?page=${page}&per_page=${perPage}&sort_by=${sortBy}&sort_order=${sortOrder}`;
+        if (status) zdPath = `/search.json?query=type:ticket status:${encodeURIComponent(status)}&page=${page}&per_page=${perPage}&sort_by=${sortBy}&sort_order=${sortOrder}`;
+        const result = await zdRequest("GET", zdPath);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/tickets/:id
+      if (pathname.match(/^\/api\/zendesk\/tickets\/\d+$/) && req.method === "GET") {
+        const ticketId = pathname.split("/").pop();
+        const result = await zdRequest("GET", `/tickets/${ticketId}.json`);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/tickets/:id/comments
+      if (pathname.match(/^\/api\/zendesk\/tickets\/\d+\/comments$/) && req.method === "GET") {
+        const ticketId = pathname.split("/")[4];
+        const result = await zdRequest("GET", `/tickets/${ticketId}/comments.json`);
+        return json(res, 200, result);
+      }
+
+      // PUT /api/zendesk/tickets/:id — update ticket (status, priority, comment)
+      if (pathname.match(/^\/api\/zendesk\/tickets\/\d+$/) && req.method === "PUT") {
+        const ticketId = pathname.split("/").pop();
+        const body = await new Promise((resolve, reject) => {
+          let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
+          req.on("end", () => resolve(JSON.parse(d)));
+        });
+        const result = await zdRequest("PUT", `/tickets/${ticketId}.json`, body);
+        return json(res, 200, result);
+      }
+
+      // POST /api/zendesk/tickets — create new ticket
+      if (pathname === "/api/zendesk/tickets" && req.method === "POST") {
+        const body = await new Promise((resolve, reject) => {
+          let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
+          req.on("end", () => resolve(JSON.parse(d)));
+        });
+        const result = await zdRequest("POST", "/tickets.json", body);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/groups
+      if (pathname === "/api/zendesk/groups" && req.method === "GET") {
+        const result = await zdRequest("GET", "/groups.json");
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/users?role=agent
+      if (pathname === "/api/zendesk/users" && req.method === "GET") {
+        const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+        const role = qs.get("role") || "";
+        const zdPath = role ? `/users.json?role=${encodeURIComponent(role)}` : "/users.json";
+        const result = await zdRequest("GET", zdPath);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/stats — ticket counts by status
+      if (pathname === "/api/zendesk/stats" && req.method === "GET") {
+        const [open, pending, hold, solved] = await Promise.all([
+          zdRequest("GET", "/search.json?query=type:ticket status:open").catch(() => ({ count: 0 })),
+          zdRequest("GET", "/search.json?query=type:ticket status:pending").catch(() => ({ count: 0 })),
+          zdRequest("GET", "/search.json?query=type:ticket status:hold").catch(() => ({ count: 0 })),
+          zdRequest("GET", "/search.json?query=type:ticket status:solved").catch(() => ({ count: 0 })),
+        ]);
+        return json(res, 200, { open: open.count || 0, pending: pending.count || 0, hold: hold.count || 0, solved: solved.count || 0 });
+      }
+
+      return json(res, 404, { error: "Zendesk endpoint not found" });
+    } catch (err) {
+      console.error("[Zendesk Proxy]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
   // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
@@ -652,6 +776,7 @@ const server = http.createServer(async (req, res) => {
       dbType: db.type,
       dbLabel: db.label,
       entraConfigured: !!ENTRA_CLIENT_SECRET,
+      zendeskConfigured: !!(ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN),
       timestamp: new Date().toISOString(),
     });
   }
