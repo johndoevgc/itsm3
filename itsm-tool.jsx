@@ -1176,7 +1176,7 @@ export default function ITSMApp() {
     try { const saved = localStorage.getItem("vgc_dismissed_alerts"); return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
   const [aiMessages, setAiMessages] = useState([
-    { role: "ai", text: `Hello! 👋 I'm your AI Co-Pilot — Assisted by ${USERS[0].name} AI.\n\nI'm your enterprise-grade assistant for VGC Technology Pte Ltd:\n• 📊 Daily priority plan & risk assessment\n• 🎫 Incident triage & severity-based routing\n• 📚 SharePoint Knowledge Portal — instant article search\n• ⚠️ SLA breach prevention & proactive alerting\n• 📧 Draft communications — you always approve first\n• 🛡️ Security monitoring & compliance (ISO 27001)\n\nTry "Good morning" for your daily briefing, or describe an issue for KB recommendations.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPowered by Azure Open AI\nEnterprise-grade data security with a Responsible AI model.`, suggestions: [
+    { role: "ai", text: `Hello! 👋 I'm your AI Co-Pilot — Assisted by ${USERS[0]?.name || "VGC ITSM"} AI.\n\nI'm your enterprise-grade assistant for VGC Technology Pte Ltd:\n• 📊 Daily priority plan & risk assessment\n• 🎫 Incident triage & severity-based routing\n• 📚 SharePoint Knowledge Portal — instant article search\n• ⚠️ SLA breach prevention & proactive alerting\n• 📧 Draft communications — you always approve first\n• 🛡️ Security monitoring & compliance (ISO 27001)\n\nTry "Good morning" for your daily briefing, or describe an issue for KB recommendations.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPowered by Azure Open AI\nEnterprise-grade data security with a Responsible AI model.`, suggestions: [
       { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
       { label: "📚 Knowledge Portal", action: "Search knowledge base" },
       { label: "🎫 Open Tickets", action: "Show open incidents" },
@@ -10165,7 +10165,7 @@ export default function ITSMApp() {
     const loginCards = [
       {
         id: "dev-admin",
-        user: USERS[0],
+        user: USERS[0] || null,
         icon: "🛡️",
         title: "VGC Dev Admin",
         subtitle: "Developer / Vendor",
@@ -10185,7 +10185,7 @@ export default function ITSMApp() {
       },
       {
         id: "vgc-admin",
-        user: USERS[1],
+        user: USERS[1] || null,
         icon: "🏢",
         title: "VGC Admin",
         subtitle: "End Customer Admin",
@@ -10203,7 +10203,7 @@ export default function ITSMApp() {
       },
       {
         id: "engineer",
-        user: USERS[2],
+        user: USERS[2] || null,
         icon: "🔧",
         title: "Service Support Engineers",
         subtitle: "End Customer Engineer",
