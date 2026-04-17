@@ -34,6 +34,9 @@ const SOLARWINDS_API_HOST = process.env.SOLARWINDS_API_HOST || "www.systemmonito
 const SOPHOS_CLIENT_ID = process.env.SOPHOS_CLIENT_ID || "";
 const SOPHOS_CLIENT_SECRET = process.env.SOPHOS_CLIENT_SECRET || "";
 
+// M365 Mail sending via Managed Identity
+const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
+
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
 // Local admin users are configured via environment variables
@@ -391,7 +394,35 @@ const VALID_COLLECTIONS = new Set([
   "customers", "service_reports",
 ]);
 
-// Server-side Graph API call using client credentials (app-only)
+// Get access token via Managed Identity (no secrets needed on Azure App Service)
+function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
+  return new Promise((resolve, reject) => {
+    const identityEndpoint = process.env.IDENTITY_ENDPOINT;
+    const identityHeader = process.env.IDENTITY_HEADER;
+    if (!identityEndpoint || !identityHeader) {
+      return reject(new Error("Managed Identity not available — IDENTITY_ENDPOINT or IDENTITY_HEADER missing"));
+    }
+    const url = new URL(identityEndpoint);
+    url.searchParams.set("resource", resource);
+    url.searchParams.set("api-version", "2019-08-01");
+    const mod = url.protocol === "https:" ? https : http;
+    const req = mod.get(url.href, { headers: { "X-IDENTITY-HEADER": identityHeader } }, (resp) => {
+      let data = "";
+      resp.on("data", c => data += c);
+      resp.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.access_token) resolve(parsed.access_token);
+          else reject(new Error(parsed.error_description || "MI token failed"));
+        } catch { reject(new Error("MI token parse failed")); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error("MI token timeout")); });
+  });
+}
+
+// Server-side Graph API call using client credentials (app-only) — fallback
 function graphAppCall(endpoint) {
   return new Promise((resolve, reject) => {
     if (!ENTRA_CLIENT_SECRET) return reject(new Error("No client secret configured"));
@@ -424,6 +455,51 @@ function graphAppCall(endpoint) {
     tokenReq.on("error", reject);
     tokenReq.write(tokenBody);
     tokenReq.end();
+  });
+}
+
+// Send email via Microsoft Graph API using Managed Identity
+function graphSendMail({ to, subject, body, from }) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const token = await getManagedIdentityToken();
+      const sender = from || MAIL_FROM;
+      const mailPayload = JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: "HTML", content: body },
+          toRecipients: (Array.isArray(to) ? to : [to]).map(addr => ({ emailAddress: { address: addr } })),
+          from: { emailAddress: { address: sender } },
+        },
+        saveToSentItems: true,
+      });
+      const graphReq = https.request({
+        hostname: "graph.microsoft.com",
+        path: `/v1.0/users/${encodeURIComponent(sender)}/sendMail`,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(mailPayload),
+        },
+      }, (resp) => {
+        let data = "";
+        resp.on("data", c => data += c);
+        resp.on("end", () => {
+          if (resp.statusCode === 202 || resp.statusCode === 200) {
+            console.log(`[M365 Mail] Sent to ${to} subject="${subject}"`);
+            resolve({ success: true, statusCode: resp.statusCode });
+          } else {
+            console.error(`[M365 Mail] Failed ${resp.statusCode}: ${data.substring(0, 500)}`);
+            reject(new Error(`Graph sendMail ${resp.statusCode}: ${data.substring(0, 300)}`));
+          }
+        });
+      });
+      graphReq.on("error", reject);
+      graphReq.setTimeout(20000, () => { graphReq.destroy(); reject(new Error("Graph sendMail timeout")); });
+      graphReq.write(mailPayload);
+      graphReq.end();
+    } catch (err) { reject(err); }
   });
 }
 
@@ -602,12 +678,14 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/api/email/send" && req.method === "POST") {
     try {
       const body = await parseBody(req);
-      const { to, subject, reportId, customerName } = body;
+      const { to, subject, htmlBody, reportId, customerName } = body;
       if (!to || !subject) return json(res, 400, { error: "Missing to or subject" });
-      // In production, use nodemailer with smtpConfig. For demo, log and return success.
-      console.log(`[VGC-ITSM] Email queued: to=${to}, subject=${subject}, reportId=${reportId}, customer=${customerName}`);
-      return json(res, 200, { success: true, message: `Email sent to ${to}` });
+      const emailBody = htmlBody || `<p>Dear ${customerName || "Customer"},</p><p>${subject}</p><p>Best regards,<br/>VGC IT Support</p>`;
+      await graphSendMail({ to, subject, body: emailBody });
+      console.log(`[VGC-ITSM] Email sent via M365: to=${to}, subject=${subject}`);
+      return json(res, 200, { success: true, message: `Email sent to ${to} via M365` });
     } catch (err) {
+      console.error(`[VGC-ITSM] Email send failed: ${err.message}`);
       return json(res, 500, { error: "Email send failed: " + err.message });
     }
   }
@@ -814,8 +892,38 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           ticket: { comment: { body: auditNote, public: false } }
         }).catch(() => {});
 
+        // Also send email via M365 Graph to the ticket requester
+        let emailResult = null;
+        try {
+          const ticket = await zdRequest("GET", `/tickets/${ticketId}.json`);
+          const requesterId = ticket?.ticket?.requester_id;
+          if (requesterId) {
+            const requester = await zdRequest("GET", `/users/${requesterId}.json`);
+            const requesterEmail = requester?.user?.email;
+            const ticketSubject = ticket?.ticket?.subject || `Ticket #${ticketId} Response`;
+            if (requesterEmail) {
+              const htmlBody = `<div style="font-family:Arial,sans-serif;max-width:600px;">
+                <h3 style="color:#1a1a2e;">Re: ${ticketSubject}</h3>
+                <div style="background:#f8f9fa;padding:16px;border-radius:8px;border-left:4px solid #4CAF50;margin:12px 0;">
+                  ${response.replace(/\n/g, "<br/>")}
+                </div>
+                <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
+                <p style="color:#666;font-size:12px;">This response was reviewed and approved by ${approvedBy}.<br/>
+                Ticket Reference: #${ticketId}<br/>
+                VGC IT Support — <a href="mailto:${MAIL_FROM}">${MAIL_FROM}</a></p>
+              </div>`;
+              await graphSendMail({ to: requesterEmail, subject: `Re: ${ticketSubject} [#${ticketId}]`, body: htmlBody });
+              emailResult = { sent: true, to: requesterEmail };
+              console.log(`[M365 Mail] Ticket #${ticketId} response emailed to ${requesterEmail}`);
+            }
+          }
+        } catch (emailErr) {
+          emailResult = { sent: false, error: emailErr.message };
+          console.error(`[M365 Mail] Ticket #${ticketId} email failed: ${emailErr.message}`);
+        }
+
         console.log(`[AUDIT] Ticket #${ticketId} response sent — approved by: ${approvedBy}`);
-        return json(res, 200, { success: true, approvedBy, result });
+        return json(res, 200, { success: true, approvedBy, result, email: emailResult });
       }
 
       // GET /api/zendesk/new-tickets — fetch only new/open tickets for automation polling
@@ -1365,6 +1473,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       merakiConfigured: MERAKI_API_KEYS.length > 0,
       solarwindsConfigured: !!SOLARWINDS_API_KEY,
       sophosConfigured: !!(SOPHOS_CLIENT_ID && SOPHOS_CLIENT_SECRET),
+      mailConfigured: !!(process.env.IDENTITY_ENDPOINT),
+      mailFrom: MAIL_FROM,
       timestamp: new Date().toISOString(),
     });
   }

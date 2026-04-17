@@ -11336,9 +11336,11 @@ export default function ITSMApp() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ticketId: queueItem.ticketId, response: queueItem.draftResponse, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote, approvedBy: currentUser?.name || "Admin" }),
         });
-        if (!r.ok) throw new Error("Failed to send");
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || "Failed to send"); }
+        const result = await r.json();
         setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", reviewedBy: currentUser?.name || "Admin" } : q));
-        addAutoLog({ type: "human_approved", ticketId: queueItem.ticketId, subject: queueItem.ticketSubject, message: `#${queueItem.ticketId} approved & sent by ${currentUser?.name || "Admin"}` });
+        const emailNote = result.email?.sent ? ` ✉️ Email sent to ${result.email.to}` : result.email?.error ? ` ⚠️ Email failed: ${result.email.error}` : "";
+        addAutoLog({ type: "human_approved", ticketId: queueItem.ticketId, subject: queueItem.ticketSubject, message: `#${queueItem.ticketId} approved & sent by ${currentUser?.name || "Admin"}${emailNote}` });
         zdFetchTickets(); zdFetchStats();
       } catch (e) { setZdError("Send failed: " + e.message); }
       finally { setZdLoading(false); }
@@ -11355,10 +11357,12 @@ export default function ITSMApp() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ticketId: queueItem.ticketId, response: editedText, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote, approvedBy: `${currentUser?.name || "Admin"} (edited)` }),
         });
-        if (!r.ok) throw new Error("Failed to send");
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || "Failed to send"); }
+        const result = await r.json();
         setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", draftResponse: editedText, reviewedBy: `${currentUser?.name || "Admin"} (edited)` } : q));
         setEditingDraft(null); setEditedText("");
-        addAutoLog({ type: "human_edited", ticketId: queueItem.ticketId, message: `#${queueItem.ticketId} edited & sent by ${currentUser?.name || "Admin"}` });
+        const emailNote = result.email?.sent ? ` ✉️ Email sent to ${result.email.to}` : result.email?.error ? ` ⚠️ Email failed: ${result.email.error}` : "";
+        addAutoLog({ type: "human_edited", ticketId: queueItem.ticketId, message: `#${queueItem.ticketId} edited & sent by ${currentUser?.name || "Admin"}${emailNote}` });
         zdFetchTickets(); zdFetchStats();
       } catch (e) { setZdError("Send failed: " + e.message); }
       finally { setZdLoading(false); }
