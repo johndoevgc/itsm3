@@ -1290,7 +1290,7 @@ export default function ITSMApp() {
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
-  const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", true));
+  const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", false));
   const [zdAutoLog, setZdAutoLog] = useState([]);
   const [zdTriagedIds, setZdTriagedIds] = useState(new Set());
   const [zdAutoStats, setZdAutoStats] = useState({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
@@ -10593,22 +10593,9 @@ export default function ITSMApp() {
         setZdTriagedIds(prev => new Set(prev).add(ticketId));
         setZdAutoStats(prev => ({ ...prev, totalTriaged: prev.totalTriaged + 1, avgConfidence: Math.round(((prev.avgConfidence * prev.totalTriaged) + (triage.confidence || 75)) / (prev.totalTriaged + 1)) }));
 
-        // AUTO-SEND if high confidence & safe
-        if (zdAutoMode && queueItem.autoSendable) {
-          const sendR = await fetch("/api/zendesk/auto-respond", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ticketId, response: triage.draft_response, priority: triage.priority, tags: triage.tags, internalNote: triage.internal_note }),
-          });
-          if (sendR.ok) {
-            queueItem.status = "auto_sent";
-            queueItem.reviewedBy = "AI Engine (Auto)";
-            setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
-            addAutoLog({ type: "auto_send", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `Auto-responded to #${ticketId} (${triage.confidence}% confidence)` });
-          }
-        } else if (!queueItem.autoSendable) {
-          setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
-          addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for human review (${triage.confidence}% confidence, reason: ${triage.confidence < 85 ? "low confidence" : "complex/sensitive"})` });
-        }
+        // HUMAN-IN-THE-LOOP: All responses require engineer review — never auto-send
+        setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+        addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for engineer review (${triage.confidence}% confidence) — ${queueItem.autoSendable ? "AI recommends approval" : "requires careful review"}` });
 
         // AUTO-CREATE ITSM INCIDENT for high/urgent tickets
         if ((triage.priority === "urgent" || triage.priority === "high") && triage.sla_priority) {
@@ -10673,7 +10660,7 @@ export default function ITSMApp() {
         setZdLoading(true);
         const r = await fetch("/api/zendesk/auto-respond", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticketId: queueItem.ticketId, response: queueItem.draftResponse, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote }),
+          body: JSON.stringify({ ticketId: queueItem.ticketId, response: queueItem.draftResponse, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote, approvedBy: currentUser?.name || "Admin" }),
         });
         if (!r.ok) throw new Error("Failed to send");
         setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", reviewedBy: currentUser?.name || "Admin" } : q));
@@ -10692,7 +10679,7 @@ export default function ITSMApp() {
         setZdLoading(true);
         const r = await fetch("/api/zendesk/auto-respond", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticketId: queueItem.ticketId, response: editedText, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote }),
+          body: JSON.stringify({ ticketId: queueItem.ticketId, response: editedText, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote, approvedBy: `${currentUser?.name || "Admin"} (edited)` }),
         });
         if (!r.ok) throw new Error("Failed to send");
         setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", draftResponse: editedText, reviewedBy: `${currentUser?.name || "Admin"} (edited)` } : q));
@@ -10724,8 +10711,7 @@ export default function ITSMApp() {
     const slaPriorityColor = (p) => ({ "Sev-A": "#FF6B6B", "Sev-B": "#FFB347", "Sev-C": "#64B5F6", "Sev-D": "#81C784" }[p] || "#5A6178");
     const statusIcon = (s) => ({ new: "🆕", open: "📂", pending: "⏳", hold: "⏸️", solved: "✅", closed: "🔒" }[s] || "📋");
     const pendingQueue = zdAiQueue.filter(q => q.status === "pending_approval");
-    const autoSentQueue = zdAiQueue.filter(q => q.status === "auto_sent");
-    const humanSentQueue = zdAiQueue.filter(q => q.status === "sent");
+    const approvedSentQueue = zdAiQueue.filter(q => q.status === "sent");
     const rejectedQueue = zdAiQueue.filter(q => q.status === "rejected");
 
     const cardStyle = { background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "hidden" };
@@ -10743,39 +10729,39 @@ export default function ITSMApp() {
           @keyframes zdPulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
           @keyframes zdSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
           @keyframes zdSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-          @keyframes zdGlow { 0%, 100% { box-shadow: 0 0 8px #EC489933; } 50% { box-shadow: 0 0 20px #EC489955; } }
+          @keyframes zdGlow { 0%, 100% { box-shadow: 0 0 8px #4CAF5033; } 50% { box-shadow: 0 0 20px #4CAF5055; } }
           @keyframes zdFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
         `}</style>
 
         {/* ── Top Banner: Connection + Automation Status ── */}
         <div style={{
-          background: zdConnected ? "linear-gradient(135deg, #0F1117, #EC489908, #0F1117)" : "#0F1117",
+          background: zdConnected ? "linear-gradient(135deg, #0F1117, #4CAF5008, #0F1117)" : "#0F1117",
           backgroundSize: "200% 100%", animation: zdConnected && zdAutoMode ? "zdFlow 8s linear infinite" : "none",
-          borderRadius: 12, border: `1px solid ${zdConnected ? (zdAutoMode ? "#EC489944" : "#FFB34733") : "#FF6B6B33"}`,
+          borderRadius: 12, border: `1px solid ${zdConnected ? (zdAutoMode ? "#4CAF5044" : "#FFB34733") : "#FF6B6B33"}`,
           padding: "16px 22px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: zdAutoMode && zdConnected ? "#EC489922" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: zdAutoMode && zdConnected ? "zdGlow 3s ease infinite" : "none" }}>🤖</div>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: zdAutoMode && zdConnected ? "#4CAF5022" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: zdAutoMode && zdConnected ? "zdGlow 3s ease infinite" : "none" }}>🤖</div>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 10 }}>
                 Zendesk AI Command Center
-                <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdConnected ? (zdAutoMode ? "#EC489922" : "#81C78422") : "#FF444422", color: zdConnected ? (zdAutoMode ? "#EC4899" : "#81C784") : "#FF4444", animation: zdConnected ? "zdPulse 2s infinite" : "none" }}>
-                  {zdConnected ? (zdAutoMode ? "🔴 AI AUTOPILOT ACTIVE" : "LIVE — MANUAL") : "OFFLINE"}
+                <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdConnected ? (zdAutoMode ? "#4CAF5022" : "#81C78422") : "#FF444422", color: zdConnected ? (zdAutoMode ? "#4CAF50" : "#81C784") : "#FF4444", animation: zdConnected ? "zdPulse 2s infinite" : "none" }}>
+                  {zdConnected ? (zdAutoMode ? "� AI TRIAGE ACTIVE" : "LIVE — MANUAL") : "OFFLINE"}
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
-                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? "Auto-triage every 60s" : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0}` : zdError || "Not connected"}
+                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? "AI triage every 60s · Human approval required" : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0}` : zdError || "Not connected"}
               </div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {zdConnected && (
-              <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "AI Autopilot ENABLED — auto-triage + auto-respond for high-confidence tickets" : "AI Autopilot DISABLED — all responses require human approval" }); }}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdAutoMode ? "#EC489922" : "#1E2130", border: `1px solid ${zdAutoMode ? "#EC489944" : "#1E2130"}` }}>
-                <div style={{ width: 32, height: 16, borderRadius: 8, background: zdAutoMode ? "#EC4899" : "#333", position: "relative", transition: "all 0.3s" }}>
+              <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "AI Auto-Triage ENABLED — tickets triaged automatically, all responses require engineer approval" : "AI Auto-Triage DISABLED — manual triage mode" }); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdAutoMode ? "#4CAF5022" : "#1E2130", border: `1px solid ${zdAutoMode ? "#4CAF5044" : "#1E2130"}` }}>
+                <div style={{ width: 32, height: 16, borderRadius: 8, background: zdAutoMode ? "#4CAF50" : "#333", position: "relative", transition: "all 0.3s" }}>
                   <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdAutoMode ? 18 : 2, transition: "left 0.3s" }} />
                 </div>
-                <span style={{ fontSize: 9, fontWeight: 600, color: zdAutoMode ? "#EC4899" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>AUTOPILOT</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: zdAutoMode ? "#4CAF50" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>AI TRIAGE</span>
               </div>
             )}
             {zdConnected && azureOpenAI.enabled && (
@@ -10803,8 +10789,8 @@ export default function ITSMApp() {
             { label: "On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️" },
             { label: "Solved", value: zdStats.solved, accent: "#81C784", icon: "✅" },
             { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖" },
-            { label: "Auto-Sent", value: zdAutoStats.autoSent, accent: "#06B6D4", icon: "⚡" },
-            { label: "Human Review", value: pendingQueue.length, accent: "#FFB347", icon: "👤" },
+            { label: "Approved & Sent", value: zdAutoStats.autoSent, accent: "#06B6D4", icon: "✅" },
+            { label: "Pending Review", value: pendingQueue.length, accent: "#FFB347", icon: "👤" },
             { label: "ITSM Created", value: zdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫" },
             { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊" },
           ].map((s, i) => (
@@ -10821,7 +10807,7 @@ export default function ITSMApp() {
             { id: "automation", label: "🤖 Automation", count: null },
             { id: "queue", label: "👤 Human Review", count: pendingQueue.length },
             { id: "tickets", label: "📋 All Tickets", count: zdStats.open + zdStats.pending },
-            { id: "history", label: "📊 AI History", count: autoSentQueue.length + humanSentQueue.length },
+            { id: "history", label: "📊 AI History", count: approvedSentQueue.length },
             { id: "settings", label: "⚙️ Settings", count: null },
           ].map(tab => (
             <button key={tab.id} onClick={() => setZdTab(tab.id)}
@@ -10842,7 +10828,7 @@ export default function ITSMApp() {
                 {[
                   { label: "Ingest", desc: "Zendesk tickets pulled every 60s", icon: "📥", color: "#64B5F6", active: zdConnected },
                   { label: "AI Triage", desc: "Category, priority, draft response", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled },
-                  { label: "Auto-Route", desc: "High confidence → auto-send", icon: "🚀", color: "#81C784", active: zdAutoMode },
+                  { label: "Engineer Queue", desc: "All responses → human approval", icon: "👤", color: "#81C784", active: zdAutoMode },
                 ].map((step, i) => (
                   <div key={i} style={{ padding: "12px 10px", borderRadius: 8, background: step.active ? `${step.color}08` : "#12141E", border: `1px solid ${step.active ? step.color + "33" : "#1E213033"}`, textAlign: "center" }}>
                     <div style={{ fontSize: 20, marginBottom: 4 }}>{step.icon}</div>
@@ -10856,8 +10842,8 @@ export default function ITSMApp() {
               {/* Routing Rules */}
               <div style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>📋 Auto-Routing Rules</div>
               {[
-                { condition: "Confidence ≥ 85% + Safe Category", action: "→ Auto-respond to customer", color: "#81C784" },
-                { condition: "Confidence < 85% or Complex/Sensitive", action: "→ Queue for human review", color: "#FFB347" },
+                { condition: "All AI-drafted responses", action: "→ Queue for engineer approval", color: "#81C784" },
+                { condition: "Confidence < 85% or Complex/Sensitive", action: "→ Flagged for careful review", color: "#FFB347" },
                 { condition: "Priority = Urgent/High", action: "→ Auto-create ITSM Incident", color: "#FF6B6B" },
                 { condition: "Category = Network/Security", action: "→ Route to Network Engineering", color: "#6366F1" },
                 { condition: "Category = Hardware", action: "→ Route to L2 Support", color: "#06B6D4" },
@@ -10878,7 +10864,7 @@ export default function ITSMApp() {
                 {zdAutoLog.length === 0 ? (
                   <div style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>
                     <div style={{ fontSize: 28, marginBottom: 8 }}>🤖</div>
-                    <div style={{ fontSize: 11 }}>{zdAutoMode ? "AI Autopilot active — waiting for new tickets..." : "Enable Autopilot or click 'Triage Now' to start"}</div>
+                    <div style={{ fontSize: 11 }}>{zdAutoMode ? "AI Triage active — waiting for new tickets. All responses require your approval." : "Enable AI Triage or click 'Triage Now' to start"}</div>
                   </div>
                 ) : (
                   zdAutoLog.slice(0, 50).map((log, i) => {
@@ -10917,13 +10903,13 @@ export default function ITSMApp() {
               <div style={{ ...cardStyle, padding: 40, textAlign: "center" }}>
                 <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "#81C784", marginBottom: 4 }}>All Clear — No Items Pending Review</div>
-                <div style={{ fontSize: 11, color: "#5A6178" }}>AI is handling {zdAutoStats.autoSent} ticket(s) automatically. You'll see items here only when human judgment is needed.</div>
+                <div style={{ fontSize: 11, color: "#5A6178" }}>All AI-drafted responses have been reviewed. New tickets will appear here for your approval.</div>
               </div>
             ) : (
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  {sectionLabel("👤", "Requires Your Decision", pendingQueue.length)}
-                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>These tickets need human review — low confidence, complex, or sensitive content</span>
+                  {sectionLabel("👤", "Requires Your Approval", pendingQueue.length)}
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>⚠️ Human approval required — review, edit & approve before sending to customer</span>
                 </div>
                 {pendingQueue.map((q, i) => (
                   <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.05}s both`, border: `1px solid ${q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
@@ -11027,7 +11013,7 @@ export default function ITSMApp() {
                             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                               <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>#{ticket.id}</span>
                               {ticket.priority && <span style={{ width: 6, height: 6, borderRadius: "50%", background: priorityColor(ticket.priority), flexShrink: 0 }} />}
-                              {aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: aiItem.status === "auto_sent" ? "#06B6D422" : aiItem.status === "pending_approval" ? "#EC489922" : aiItem.status === "sent" ? "#81C78422" : "#FF6B6B22", color: aiItem.status === "auto_sent" ? "#06B6D4" : aiItem.status === "pending_approval" ? "#EC4899" : aiItem.status === "sent" ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{aiItem.status === "auto_sent" ? "⚡ AUTO" : aiItem.status === "pending_approval" ? "👤 REVIEW" : aiItem.status === "sent" ? "✅ SENT" : "❌"}</span>}
+                              {aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: aiItem.status === "pending_approval" ? "#FFB34722" : aiItem.status === "sent" ? "#81C78422" : "#FF6B6B22", color: aiItem.status === "pending_approval" ? "#FFB347" : aiItem.status === "sent" ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{aiItem.status === "pending_approval" ? "⚠️ AWAITING APPROVAL" : aiItem.status === "sent" ? "✅ APPROVED & SENT" : "❌"}</span>}
                               {triaged && !aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>✅ TRIAGED</span>}
                             </div>
                             <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ticket.subject || "No subject"}</div>
@@ -11099,7 +11085,7 @@ export default function ITSMApp() {
                             <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(ai.suggestedPriority) + "22", color: priorityColor(ai.suggestedPriority), fontWeight: 600 }}>{ai.suggestedPriority}</span>
                             <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>🎯 {ai.confidence}%</span>
                             <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {ai.suggestedAssignee}</span>
-                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: ai.status === "auto_sent" ? "#06B6D422" : ai.status === "sent" ? "#81C78422" : "#FFB34722", color: ai.status === "auto_sent" ? "#06B6D4" : ai.status === "sent" ? "#81C784" : "#FFB347", fontWeight: 600 }}>{ai.status === "auto_sent" ? "⚡ Auto-sent" : ai.status === "sent" ? "✅ Approved" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Pending"}</span>
+                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: ai.status === "sent" ? "#81C78422" : ai.status === "rejected" ? "#FF6B6B22" : "#FFB34722", color: ai.status === "sent" ? "#81C784" : ai.status === "rejected" ? "#FF6B6B" : "#FFB347", fontWeight: 600 }}>{ai.status === "sent" ? "✅ Approved & Sent" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Awaiting Approval"}</span>
                           </div>
                           <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 6, lineHeight: 1.4 }}>{ai.internalNote}</div>
                         </div>
@@ -11131,19 +11117,20 @@ export default function ITSMApp() {
         {zdTab === "history" && (
           <div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              {/* Auto-Sent */}
+              {/* Approved & Sent */}
               <div style={{ ...cardStyle, padding: 16 }}>
-                {sectionLabel("⚡", "Auto-Sent by AI", autoSentQueue.length)}
-                {autoSentQueue.length === 0 ? (
-                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No auto-sent responses yet</div>
-                ) : autoSentQueue.slice(0, 20).map(q => (
+                {sectionLabel("✅", "Approved & Sent", approvedSentQueue.length)}
+                {approvedSentQueue.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No approved responses yet</div>
+                ) : approvedSentQueue.slice(0, 20).map(q => (
                   <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022" }}>
-                    <span style={{ fontSize: 12 }}>⚡</span>
+                    <span style={{ fontSize: 12 }}>✅</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 11, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{q.ticketId} — {q.ticketSubject}</div>
                       <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
-                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>{q.confidence}%</span>
+                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>{q.confidence}%</span>
                         <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{q.category}</span>
+                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#4CAF5022", color: "#4CAF50", fontWeight: 600 }}>By: {q.reviewedBy}</span>
                         {q.itsmIncidentId && <span onClick={(e) => { e.stopPropagation(); const inc = incidents.find(i => i.id === q.itsmIncidentId); if (inc) { setDetailItem(inc); setModal("incidentDetail"); } else { setActiveModule("incidents"); } }} style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#EC489922", color: "#EC4899", fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => { e.currentTarget.style.background = "#EC489944"; }} onMouseLeave={e => { e.currentTarget.style.background = "#EC489922"; }} title={`Open ${q.itsmIncidentId}`}>🎫 {q.itsmIncidentId} →</span>}
                       </div>
                     </div>
@@ -11152,12 +11139,12 @@ export default function ITSMApp() {
                 ))}
               </div>
 
-              {/* Human-Approved + Rejected */}
+              {/* Rejected */}
               <div style={{ ...cardStyle, padding: 16 }}>
-                {sectionLabel("👤", "Human Decisions", humanSentQueue.length + rejectedQueue.length)}
-                {humanSentQueue.length + rejectedQueue.length === 0 ? (
-                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No human decisions yet</div>
-                ) : [...humanSentQueue, ...rejectedQueue].slice(0, 20).map(q => (
+                {sectionLabel("❌", "Rejected", rejectedQueue.length)}
+                {rejectedQueue.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No rejected responses yet</div>
+                ) : rejectedQueue.slice(0, 20).map(q => (
                   <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022" }}>
                     <span style={{ fontSize: 12 }}>{q.status === "sent" ? "✅" : "❌"}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -11178,7 +11165,7 @@ export default function ITSMApp() {
             <div style={{ ...cardStyle, padding: 18 }}>
               {sectionLabel("⚙️", "Automation Configuration")}
               {[
-                { label: "AI Autopilot Mode", desc: "Auto-respond to high-confidence tickets (≥85%)", value: zdAutoMode, key: "autopilot" },
+                { label: "AI Auto-Triage Mode", desc: "AI classifies & drafts responses — engineer must review, edit & approve before sending to customer", value: zdAutoMode, key: "autopilot" },
               ].map(setting => (
                 <div key={setting.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1E213022" }}>
                   <div>
@@ -11196,8 +11183,8 @@ export default function ITSMApp() {
               {[
                 { step: "1", title: "Ingest", desc: "Every 60s, polls Zendesk for new/open tickets" },
                 { step: "2", title: "AI Triage", desc: "Azure OpenAI analyzes each ticket — classifies category, priority, drafts response" },
-                { step: "3", title: "Confidence Check", desc: "If confidence ≥ 85% AND safe category → auto-send response" },
-                { step: "4", title: "Human Queue", desc: "Complex, sensitive, or low-confidence tickets → queued for human review" },
+                { step: "3", title: "Engineer Queue", desc: "ALL responses queued for assigned engineer to review, edit & approve" },
+                { step: "4", title: "Human Approval", desc: "Engineer reviews AI draft → edits if needed → approves & sends to customer" },
                 { step: "5", title: "ITSM Sync", desc: "High/urgent tickets → auto-create ITSM incident with SLA tracking" },
                 { step: "6", title: "Routing", desc: "AI suggests assignee based on category (Network → Network Eng, etc.)" },
               ].map((s, i) => (

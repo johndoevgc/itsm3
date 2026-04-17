@@ -786,14 +786,15 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, { triage: parsed, ticket: ticket.ticket });
       }
 
-      // POST /api/zendesk/auto-respond — send AI response to ticket (auto or approved)
+      // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)
       if (pathname === "/api/zendesk/auto-respond" && req.method === "POST") {
         const body = await new Promise((resolve, reject) => {
           let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
           req.on("end", () => resolve(JSON.parse(d)));
         });
-        const { ticketId, response, priority, tags, internalNote } = body;
+        const { ticketId, response, priority, tags, internalNote, approvedBy } = body;
         if (!ticketId || !response) return json(res, 400, { error: "ticketId and response required" });
+        if (!approvedBy) return json(res, 403, { error: "Human approval required — approvedBy field is mandatory. No auto-sending allowed." });
 
         const updatePayload = {
           ticket: {
@@ -802,20 +803,16 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
             ...(tags && tags.length > 0 ? { tags } : {}),
           }
         };
-        // Add internal note as a separate update if provided
-        if (internalNote) {
-          updatePayload.ticket.comment = { body: response, public: true };
-        }
         const result = await zdRequest("PUT", `/tickets/${ticketId}.json`, updatePayload);
         
-        // Also add internal note
-        if (internalNote) {
-          await zdRequest("PUT", `/tickets/${ticketId}.json`, {
-            ticket: { comment: { body: `[AI Internal Analysis]\n${internalNote}`, public: false } }
-          }).catch(() => {});
-        }
+        // Add internal note with approval audit trail
+        const auditNote = `[AI Response — Approved by ${approvedBy}]\n${internalNote || "No additional analysis notes."}`;
+        await zdRequest("PUT", `/tickets/${ticketId}.json`, {
+          ticket: { comment: { body: auditNote, public: false } }
+        }).catch(() => {});
 
-        return json(res, 200, { success: true, result });
+        console.log(`[AUDIT] Ticket #${ticketId} response sent — approved by: ${approvedBy}`);
+        return json(res, 200, { success: true, approvedBy, result });
       }
 
       // GET /api/zendesk/new-tickets — fetch only new/open tickets for automation polling
