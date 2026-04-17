@@ -755,7 +755,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
         const payload = isResponsesAPI
           ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-          : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_tokens: 1500, temperature: 0.4 };
+          : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 1500, temperature: 0.4 };
 
         const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
         const aiResult = await new Promise((resolve, reject) => {
@@ -856,7 +856,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
       const payload = isResponsesAPI
         ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_tokens: 1200, temperature: 0.7 };
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 1200, temperature: 0.7 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiReqOptions = {
@@ -899,7 +899,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
       const payload = isResponsesAPI
         ? { model: AZURE_OPENAI_MODEL, input: [{ role: "user", content: "Reply with exactly: OK" }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 10, temperature: 0 };
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_completion_tokens: 10, temperature: 0 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({
