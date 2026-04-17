@@ -910,6 +910,107 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── Cyber News: Live RSS Feeds ─────────────────────────────────────
+  if (pathname === "/api/cybernews" && method === "GET") {
+    // Cache for 10 minutes to avoid hammering feeds
+    const CACHE_TTL = 10 * 60 * 1000;
+    if (!global._cyberNewsCache) global._cyberNewsCache = { data: null, ts: 0 };
+    const cache = global._cyberNewsCache;
+    const forceRefresh = url.searchParams?.get("refresh") === "true" || new URL(`http://localhost${req.url}`).searchParams.get("refresh") === "true";
+
+    if (cache.data && (Date.now() - cache.ts < CACHE_TTL) && !forceRefresh) {
+      return json(res, 200, { threats: cache.data, cached: true, lastSync: new Date(cache.ts).toISOString() });
+    }
+
+    const fetchUrl = (feedUrl, timeoutMs = 12000) => new Promise((resolve, reject) => {
+      const proto = feedUrl.startsWith("https") ? https : http;
+      const req = proto.get(feedUrl, { headers: { "User-Agent": "VGC-ITSM-CyberNews/1.0" } }, resp => {
+        if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+          return fetchUrl(resp.headers.location, timeoutMs).then(resolve, reject);
+        }
+        let d = ""; resp.on("data", c => d += c); resp.on("end", () => resolve(d));
+      });
+      req.on("error", reject);
+      req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("Timeout")); });
+    });
+
+    const parseRssItems = (xml, source, sourceUrl, maxItems = 8) => {
+      const items = [];
+      const itemRegex = /<item[\s>]([\s\S]*?)<\/item>/gi;
+      let match;
+      while ((match = itemRegex.exec(xml)) && items.length < maxItems) {
+        const block = match[1];
+        const tag = (name) => { const m = block.match(new RegExp(`<${name}[^>]*>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*<\\/${name}>`, "i")); return m ? m[1].trim() : ""; };
+        const title = tag("title").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        const link = tag("link") || tag("guid");
+        const pubDate = tag("pubDate");
+        const desc = tag("description").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").substring(0, 300);
+        if (!title) continue;
+        const published = pubDate ? new Date(pubDate) : new Date();
+        const ageMs = Date.now() - published.getTime();
+        const ageStr = ageMs < 3600000 ? `${Math.round(ageMs/60000)} min ago` : ageMs < 86400000 ? `${Math.round(ageMs/3600000)} hr ago` : `${Math.round(ageMs/86400000)} day ago`;
+        const cveMatch = title.match(/CVE-\d{4}-\d+/i) || desc.match(/CVE-\d{4}-\d+/i);
+        const sevGuess = /critical|emergency|urgent|zero.?day|actively.exploit/i.test(title + desc) ? "Critical"
+          : /high|severe|important|rce|remote.code/i.test(title + desc) ? "High"
+          : /medium|moderate/i.test(title + desc) ? "Medium" : "Low";
+        const catGuess = /ransomware|lockbit|blackcat|alphv/i.test(title + desc) ? "Ransomware"
+          : /phish/i.test(title + desc) ? "Phishing"
+          : /apt|nation.state|espionage/i.test(title + desc) ? "APT"
+          : /ddos|amplification|flood/i.test(title + desc) ? "DDoS"
+          : /cve|vulnerabilit|patch|exploit|rce|xss|sqli/i.test(title + desc) ? "Vulnerability"
+          : /malware|trojan|botnet|stealer/i.test(title + desc) ? "Malware"
+          : "Advisory";
+        items.push({
+          id: `LIVE-${source.replace(/[^A-Z0-9]/gi,"").substring(0,4).toUpperCase()}-${items.length+1}`,
+          severity: sevGuess,
+          title,
+          source,
+          sourceUrl: link || sourceUrl,
+          region: "Global",
+          time: ageStr,
+          timestamp: published.getTime(),
+          isNew: ageMs < 6 * 3600000,
+          aiSummary: desc || "No description available. Click the source link for full details.",
+          affectsUs: false,
+          category: catGuess,
+          cve: cveMatch ? cveMatch[0].toUpperCase() : null,
+          cvss: null, cvssVector: null,
+          affectedSystems: [],
+          mitreTactics: [],
+          iocs: [],
+          nextSteps: ["Review the advisory details via the source link", "Assess applicability to your environment", "Update security monitoring rules if relevant"],
+          references: [{ title: `${source} — Full Article`, url: link || sourceUrl }],
+          status: "open",
+        });
+      }
+      return items;
+    };
+
+    try {
+      const feeds = [
+        { url: "https://feeds.feedburner.com/TheHackersNews", source: "The Hacker News", home: "https://thehackernews.com/" },
+        { url: "https://www.bleepingcomputer.com/feed/", source: "BleepingComputer", home: "https://www.bleepingcomputer.com/" },
+        { url: "https://www.cisa.gov/cybersecurity-advisories/all.xml", source: "CISA", home: "https://www.cisa.gov/cybersecurity-advisories" },
+        { url: "https://cvefeed.io/rssfeed/latest.xml", source: "CVE Feed", home: "https://cvefeed.io/" },
+      ];
+      const results = await Promise.allSettled(feeds.map(f => fetchUrl(f.url).then(xml => parseRssItems(xml, f.source, f.home))));
+      let allItems = [];
+      results.forEach(r => { if (r.status === "fulfilled") allItems = allItems.concat(r.value); });
+      // Sort by timestamp descending (newest first), then renumber IDs
+      allItems.sort((a, b) => b.timestamp - a.timestamp);
+      allItems = allItems.slice(0, 30);
+      allItems.forEach((item, i) => { item.id = `LIVE-${String(i+1).padStart(3,"0")}`; });
+
+      cache.data = allItems;
+      cache.ts = Date.now();
+      console.log(`[CYBER NEWS] Fetched ${allItems.length} items from ${results.filter(r=>r.status==="fulfilled").length}/${feeds.length} feeds`);
+      return json(res, 200, { threats: allItems, cached: false, lastSync: new Date(cache.ts).toISOString(), feedsOk: results.filter(r=>r.status==="fulfilled").length, feedsTotal: feeds.length });
+    } catch (err) {
+      console.error("[CYBER NEWS] Fetch error:", err.message);
+      return json(res, 502, { error: "Failed to fetch cyber news feeds", detail: err.message });
+    }
+  }
+
   // Health check
   if (pathname === "/api/health") {
     let dbOk = false;

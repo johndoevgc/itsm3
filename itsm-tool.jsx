@@ -1220,6 +1220,7 @@ export default function ITSMApp() {
   const [dismissedThreats, setDismissedThreats] = useState([]);
   const [cyberNewsLog, setCyberNewsLog] = useState([]);
   const [threatEmailDraft, setThreatEmailDraft] = useState(null);
+  const [dashboardThreats, setDashboardThreats] = useState([]);
   const [showCardSettings, setShowCardSettings] = useState(false);
   const [cardVisibility, setCardVisibility] = useState({
     execKpis:        { on: true, important: false, label: "Executive KPIs",        roles: ["management"] },
@@ -1393,6 +1394,13 @@ export default function ITSMApp() {
   useEffect(() => {
     try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch {}
   }, [dismissedProactiveAlerts]);
+
+  // Fetch live cyber news for dashboard threat feed
+  useEffect(() => {
+    fetch("/api/cybernews").then(r => r.json()).then(data => {
+      if (data.threats && data.threats.length > 0) setDashboardThreats(data.threats.slice(0, 5));
+    }).catch(() => {});
+  }, []);
 
   // ─── Microsoft Entra ID SSO — Token & Graph Logic ────────────────────
   const getAccessToken = useCallback(async (scopes) => {
@@ -3121,7 +3129,7 @@ export default function ITSMApp() {
             </span>
             <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Source: CISA · NVD · CVE · SingCERT · The Hacker News · SecurityWeek · Dark Reading</span>
           </h3>
-          {[
+          {(dashboardThreats.length > 0 ? dashboardThreats : [
             { id: "GTHR-001", severity: "Critical", title: "Active exploitation of CVE-2026-21413 — Microsoft Exchange RCE", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "28 min ago", isNew: true,
               aiSummary: "Zero-day RCE in Exchange Server 2019 CU14. Patch available (KB5035432). Our Exchange cluster CHG0001 upgrade should be prioritized. Recommend: 1) Apply emergency patch within 4 hours, 2) Enable WAF rule for OWA endpoints, 3) Scan mail server logs for indicators of compromise.",
               affectsUs: true },
@@ -3137,7 +3145,7 @@ export default function ITSMApp() {
             { id: "GTHR-005", severity: "Low", title: "Updated IoC list for SolarWinds Serv-U FTP vulnerability", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "12 hr ago", isNew: false,
               aiSummary: "We do not use SolarWinds Serv-U. No action required. IoC list archived for reference.",
               affectsUs: false },
-          ].map((threat, i) => (
+          ]).map((threat, i) => (
             <div key={threat.id} style={{
               padding: "12px 14px", marginBottom: 8, background: threat.isNew ? "#FF444408" : "#0A0C14",
               borderRadius: 8, border: `1px solid ${threat.isNew ? sevColors[threat.severity] + '33' : '#1E213044'}`,
@@ -9014,7 +9022,31 @@ export default function ITSMApp() {
 
   // ─── Cyber News Module ────────────────────────────────────────────────
   const CyberNewsModule = () => {
-    const allThreats = [
+    const [liveThreats, setLiveThreats] = useState([]);
+    const [newsLoading, setNewsLoading] = useState(true);
+    const [lastSyncTime, setLastSyncTime] = useState(null);
+    const [feedStatus, setFeedStatus] = useState("");
+
+    const fetchCyberNews = async (forceRefresh = false) => {
+      setNewsLoading(true);
+      try {
+        const resp = await fetch(`/api/cybernews${forceRefresh ? "?refresh=true" : ""}`);
+        const data = await resp.json();
+        if (data.threats && data.threats.length > 0) {
+          setLiveThreats(data.threats);
+          setLastSyncTime(data.lastSync ? new Date(data.lastSync) : new Date());
+          setFeedStatus(`${data.feedsOk || "?"}/${data.feedsTotal || "?"} feeds${data.cached ? " (cached)" : ""}`);
+        }
+      } catch (err) {
+        console.error("Cyber news fetch error:", err);
+        setFeedStatus("Feed error");
+      }
+      setNewsLoading(false);
+    };
+
+    useEffect(() => { fetchCyberNews(); }, []);
+
+    const fallbackThreats = [
       { id: "GTHR-001", severity: "Critical", title: "Active exploitation of CVE-2026-21413 — Microsoft Exchange RCE", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "28 min ago", timestamp: Date.now() - 28*60000, isNew: true,
         aiSummary: "Zero-day RCE in Exchange Server 2019 CU14. Patch available (KB5035432). Immediate patching required within 4 hours. Active exploitation confirmed by multiple threat actors.",
         affectsUs: true, category: "Vulnerability", cve: "CVE-2026-21413", cvss: 9.8, cvssVector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
@@ -9134,6 +9166,8 @@ export default function ITSMApp() {
         status: "open" },
     ];
 
+    const allThreats = liveThreats.length > 0 ? liveThreats : fallbackThreats;
+
     const [filterSev, setFilterSev] = useState("All");
     const [filterCategory, setFilterCategory] = useState("All");
     const [filterStatus, setFilterStatus] = useState("All");
@@ -9192,8 +9226,11 @@ export default function ITSMApp() {
             <span style={{ padding: "3px 10px", borderRadius: 4, background: "#FF444422", color: "#FF4444", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>● LIVE</span>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Last sync: {new Date().toLocaleTimeString("en-SG", { hour12: false })}</div>
-            <button onClick={() => {}} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🔄 Refresh</button>
+            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+              {feedStatus && <span style={{ marginRight: 6, color: "#64B5F6" }}>[{feedStatus}]</span>}
+              Last sync: {lastSyncTime ? lastSyncTime.toLocaleTimeString("en-SG", { hour12: false }) : "—"}
+            </div>
+            <button onClick={() => fetchCyberNews(true)} disabled={newsLoading} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #6366F133", background: newsLoading ? "#1E2130" : "#6366F118", color: newsLoading ? "#5A6178" : "#6366F1", cursor: newsLoading ? "wait" : "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{newsLoading ? "⏳ Loading…" : "🔄 Refresh"}</button>
           </div>
         </div>
 
