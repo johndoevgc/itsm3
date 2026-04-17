@@ -1910,9 +1910,24 @@ export default function ITSMApp() {
     ]
   });
   const [infraConfig] = useState({
-    database: { type: "Azure SQL Serverless", region: "Southeast Asia (Singapore)", server: "vgc-itsm-sql.database.windows.net", database: "vgc-itsm-prod", tier: "General Purpose", maxVCores: 4, minVCores: 0.5, autoPause: 60, status: "Online", storage: "32 GB", usedStorage: "8.4 GB", backupRetention: "7 days (LTR: 30 days)" },
-    webApp: { name: "vgc-itsm-app", region: "Southeast Asia (Singapore)", plan: "P1v3 (Premium v3)", runtime: "Node.js 20 LTS", status: "Running", customDomain: "itsm.vgctech.com", ssl: "Managed Certificate", scaling: "Auto-scale (1-5 instances)", deployment: "GitHub Actions CI/CD" },
-    network: { vnet: "vgc-sea-vnet", subnet: "app-subnet", nsg: "vgc-itsm-nsg", privateEndpoint: "Enabled (SQL)", waf: "Azure Front Door WAF" }
+    database: { type: "Azure MySQL Flexible Server", region: "Southeast Asia (Singapore)", server: "vgc-itsm1-mysql.mysql.database.azure.com", database: "itsmdb", tier: "Burstable", sku: "Standard_B1ms", version: "8.0.21", storage: "20 GB", ha: "Disabled", backupRetention: "7 days", status: "Ready" },
+    webApp: { name: "vgc-itsm1-app", region: "Southeast Asia (Singapore)", plan: "B1 (Basic)", runtime: "Node.js 20 LTS", status: "Running", url: "vgc-itsm1-app.azurewebsites.net", ssl: "Azure Managed", scaling: "Manual (1 instance)", deployment: "ZIP Deploy (az webapp deploy)" },
+    openAI: { name: "vgc-ai-model-1", region: "Southeast Asia", sku: "S0", endpoint: "https://vgc-ai-model-1.openai.azure.com/", rg: "AI-Models-RG1", status: "Active" },
+    identity: { name: "oidc-msi-b517", type: "User Assigned Managed Identity" },
+    zendesk: { domain: "vgctech.zendesk.com", status: "Connected" },
+    cost: {
+      appService: { name: "App Service B1 Linux", monthly: 13.14, note: "1 core, 1.75 GB RAM" },
+      mysql: { name: "MySQL Flexible B1ms", monthly: 12.41, storage: 2.30, note: "1 vCore, 2 GB RAM, 20 GB storage" },
+      openAI: { name: "Azure OpenAI (S0)", monthly: 3.00, note: "Pay-per-token, est. light usage" },
+      total: 30.85,
+      currency: "USD",
+      alerts: [
+        { level: "tip", text: "B1 plan is cost-efficient but limited to 1 instance. Consider B2 ($26.28/mo) if response times degrade." },
+        { level: "warning", text: "MySQL HA is disabled — single point of failure. Enable HA (+$12.41/mo) for production reliability." },
+        { level: "tip", text: "Azure OpenAI cost is usage-based. Monitor token consumption to avoid surprise charges." },
+        { level: "info", text: "Total hosting cost is well under $35/mo — excellent for a full ITSM + AI platform." },
+      ]
+    }
   });
 
   // ─── Persist to localStorage + SQLite Database ─────────────────────────
@@ -7002,67 +7017,186 @@ export default function ITSMApp() {
           </div>
         )}
 
-        {/* Infrastructure (Azure SQL + Web App) */}
+        {/* Infrastructure — Azure Topology & Cost */}
         {activeTab === "infrastructure" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
                 ☁️ Azure Infrastructure — Southeast Asia
               </h3>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>All Systems Healthy</Badge>
+                <div style={{ padding: "4px 10px", borderRadius: 6, background: "#0078D411", border: "1px solid #0078D433", color: "#50E6FF", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+                  Est. ${infraConfig.cost.total.toFixed(2)}/mo
+                </div>
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
-              {/* Azure SQL Serverless */}
-              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #0078D4, #00BCF2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🗄️</div>
-                  <div>
-                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure SQL Serverless</h4>
-                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Online</Badge>
+            {/* ── Animated Alerts ─────────────────── */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+              {infraConfig.cost.alerts.map((alert, i) => {
+                const alertStyles = {
+                  warning: { bg: "#332B00", border: "#FFB347", text: "#FFD93D", icon: "⚠️", anim: "warningGlow 2s ease-in-out infinite" },
+                  tip: { bg: "#0D2D1A", border: "#81C784", text: "#A5D6A7", icon: "💡", anim: "none" },
+                  info: { bg: "#0A1628", border: "#42A5F5", text: "#90CAF9", icon: "ℹ️", anim: "none" },
+                };
+                const s = alertStyles[alert.level] || alertStyles.info;
+                return (
+                  <div key={i} style={{
+                    padding: "10px 14px", borderRadius: 8, background: s.bg, border: `1px solid ${s.border}44`,
+                    display: "flex", alignItems: "center", gap: 10, animation: s.anim,
+                    animationDelay: `${i * 0.3}s`
+                  }}>
+                    <span style={{ fontSize: 16, animation: alert.level === "warning" ? "iconBounce 1.5s ease-in-out infinite" : "none" }}>{s.icon}</span>
+                    <span style={{ color: s.text, fontSize: 11, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.4 }}>{alert.text}</span>
                   </div>
-                </div>
-                {Object.entries({
-                  "Server": infraConfig.database.server,
-                  "Database": infraConfig.database.database,
-                  "Region": infraConfig.database.region,
-                  "Tier": infraConfig.database.tier,
-                  "vCores": `${infraConfig.database.minVCores} – ${infraConfig.database.maxVCores} (auto-scale)`,
-                  "Auto-Pause": `${infraConfig.database.autoPause} min idle`,
-                  "Storage": `${infraConfig.database.usedStorage} / ${infraConfig.database.storage}`,
-                  "Backup": infraConfig.database.backupRetention,
-                }).map(([k, v]) => (
-                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
-                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
-                    <span style={{ color: "#C4CAD6", fontSize: 11, textAlign: "right", maxWidth: "60%" }}>{v}</span>
+                );
+              })}
+            </div>
+
+            {/* ── Monthly Cost Breakdown ─────────────────── */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                💰 Monthly Cost Breakdown (USD)
+              </h4>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                {[
+                  { ...infraConfig.cost.appService, color: "#50E6FF", icon: "🌐", pct: (infraConfig.cost.appService.monthly / infraConfig.cost.total * 100) },
+                  { name: infraConfig.cost.mysql.name, monthly: infraConfig.cost.mysql.monthly + infraConfig.cost.mysql.storage, note: infraConfig.cost.mysql.note, color: "#FF9800", icon: "🗄️", pct: ((infraConfig.cost.mysql.monthly + infraConfig.cost.mysql.storage) / infraConfig.cost.total * 100) },
+                  { ...infraConfig.cost.openAI, color: "#AB47BC", icon: "🤖", pct: (infraConfig.cost.openAI.monthly / infraConfig.cost.total * 100) },
+                ].map((item, i) => (
+                  <div key={i} style={{
+                    padding: 16, background: "#0A0C14", borderRadius: 8,
+                    border: `1px solid ${item.color}22`, position: "relative", overflow: "hidden"
+                  }}>
+                    <div style={{ position: "absolute", bottom: 0, left: 0, height: 3, width: `${item.pct}%`, background: item.color, borderRadius: "0 3px 0 0", opacity: 0.6 }} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: 20 }}>{item.icon}</span>
+                      <span style={{ color: "#5A6178", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{item.name}</span>
+                    </div>
+                    <div style={{ color: item.color, fontSize: 22, fontWeight: 800, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 4 }}>
+                      ${item.monthly.toFixed(2)}
+                      <span style={{ fontSize: 11, color: "#5A6178", fontWeight: 500 }}>/mo</span>
+                    </div>
+                    <div style={{ color: "#5A6178", fontSize: 10 }}>{item.note}</div>
+                    <div style={{ color: "#5A617888", fontSize: 9, marginTop: 4, fontFamily: "'JetBrains Mono', monospace" }}>{item.pct.toFixed(0)}% of total</div>
                   </div>
                 ))}
-                <div style={{ marginTop: 12, padding: "8px 10px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
-                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>CONNECTION STRING</div>
-                  <div style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>Server=tcp:{infraConfig.database.server},1433;Database={infraConfig.database.database};Authentication=Active Directory Default;Encrypt=True;</div>
+              </div>
+              {/* Total bar */}
+              <div style={{
+                padding: "12px 16px", background: "linear-gradient(135deg, #0078D411, #6366F111)", borderRadius: 8,
+                border: "1px solid #0078D433", display: "flex", justifyContent: "space-between", alignItems: "center",
+                animation: "aiBorderPulse 3s ease-in-out infinite"
+              }}>
+                <div>
+                  <span style={{ color: "#C4CAD6", fontSize: 12, fontWeight: 600 }}>Total Monthly Cost</span>
+                  <span style={{ color: "#5A6178", fontSize: 10, marginLeft: 8 }}>Southeast Asia region</span>
+                </div>
+                <div style={{ color: "#50E6FF", fontSize: 24, fontWeight: 800, fontFamily: "'Space Grotesk', sans-serif", animation: "headerTitleGlow 3s ease-in-out infinite" }}>
+                  ${infraConfig.cost.total.toFixed(2)}
+                  <span style={{ fontSize: 12, color: "#5A6178", fontWeight: 500 }}> USD/mo</span>
                 </div>
               </div>
+            </div>
 
-              {/* Azure Web App */}
+            {/* ── Resource Cards ─────────────────── */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+              {/* App Service */}
               <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #0078D4, #50E6FF)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🌐</div>
                   <div>
-                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure Web App</h4>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure App Service</h4>
                     <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Running</Badge>
                   </div>
                 </div>
                 {Object.entries({
                   "App Name": infraConfig.webApp.name,
+                  "URL": infraConfig.webApp.url,
                   "Region": infraConfig.webApp.region,
                   "Plan": infraConfig.webApp.plan,
                   "Runtime": infraConfig.webApp.runtime,
-                  "Custom Domain": infraConfig.webApp.customDomain,
                   "SSL": infraConfig.webApp.ssl,
                   "Scaling": infraConfig.webApp.scaling,
-                  "CI/CD": infraConfig.webApp.deployment,
+                  "Deploy": infraConfig.webApp.deployment,
+                }).map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
+                    <span style={{ color: "#C4CAD6", fontSize: 11, textAlign: "right", maxWidth: "60%" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* MySQL */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #FF9800, #FFB74D)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🗄️</div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure MySQL Flexible Server</h4>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Ready</Badge>
+                  </div>
+                </div>
+                {Object.entries({
+                  "Server": infraConfig.database.server,
+                  "Database": infraConfig.database.database,
+                  "Version": `MySQL ${infraConfig.database.version}`,
+                  "SKU": infraConfig.database.sku,
+                  "Tier": infraConfig.database.tier,
+                  "Storage": infraConfig.database.storage,
+                  "HA": infraConfig.database.ha,
+                  "Backup": infraConfig.database.backupRetention,
+                }).map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
+                    <span style={{ color: k === "HA" && v === "Disabled" ? "#FFB347" : "#C4CAD6", fontSize: 11, textAlign: "right", maxWidth: "60%",
+                      animation: k === "HA" && v === "Disabled" ? "highlightPulse 3s ease-in-out infinite" : "none",
+                      padding: k === "HA" && v === "Disabled" ? "0 6px" : 0, borderRadius: 3
+                    }}>{v}{k === "HA" && v === "Disabled" ? " ⚠️" : ""}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Azure OpenAI */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #AB47BC, #CE93D8)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🤖</div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure OpenAI Service</h4>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Active</Badge>
+                  </div>
+                </div>
+                {Object.entries({
+                  "Resource": infraConfig.openAI.name,
+                  "Region": infraConfig.openAI.region,
+                  "SKU": infraConfig.openAI.sku,
+                  "Endpoint": infraConfig.openAI.endpoint.replace("https://", "").replace("/", ""),
+                  "Resource Group": infraConfig.openAI.rg,
+                  "Billing": "Pay-per-token",
+                }).map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
+                    <span style={{ color: "#C4CAD6", fontSize: 11, textAlign: "right", maxWidth: "60%", wordBreak: "break-all" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Zendesk + Identity */}
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #03363D, #17494D)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🎫</div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>External Integrations</h4>
+                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Connected</Badge>
+                  </div>
+                </div>
+                {Object.entries({
+                  "Zendesk": infraConfig.zendesk.domain,
+                  "Zendesk Status": infraConfig.zendesk.status,
+                  "Managed Identity": infraConfig.identity.name,
+                  "Identity Type": infraConfig.identity.type,
+                  "Subscription": "2bec625d-...955f0",
+                  "Resource Group": "vgc-itsm-1-RG",
                 }).map(([k, v]) => (
                   <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #1E213022" }}>
                     <span style={{ color: "#5A6178", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{k}</span>
@@ -7072,51 +7206,38 @@ export default function ITSMApp() {
               </div>
             </div>
 
-            {/* Network Config */}
-            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
-              <h4 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Network & Security</h4>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                {[
-                  { label: "Virtual Network", value: infraConfig.network.vnet, icon: "🔗" },
-                  { label: "Subnet", value: infraConfig.network.subnet, icon: "📡" },
-                  { label: "NSG", value: infraConfig.network.nsg, icon: "🛡️" },
-                  { label: "Private Endpoint", value: infraConfig.network.privateEndpoint, icon: "🔒" },
-                  { label: "WAF", value: infraConfig.network.waf, icon: "🧱" },
-                  { label: "Region", value: "Southeast Asia (Singapore)", icon: "🌏" },
-                ].map((item, i) => (
-                  <div key={i} style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontSize: 14 }}>{item.icon}</span>
-                      <span style={{ color: "#5A6178", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{item.label}</span>
-                    </div>
-                    <div style={{ color: "#C4CAD6", fontSize: 12, fontWeight: 600 }}>{item.value}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Architecture Diagram (text) */}
+            {/* ── Architecture Topology Diagram ─────────────────── */}
             <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-              <h4 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Architecture Overview</h4>
-              <div style={{ padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "#64B5F6", lineHeight: 1.8, whiteSpace: "pre" }}>{`  ┌─────────────────────────────────────────────────────────────┐
-  │                   Azure Front Door (WAF)                    │
-  │                    itsm.vgc-corp.com                         │
-  └────────────────────────┬────────────────────────────────────┘
-                           │
-  ┌────────────────────────▼────────────────────────────────────┐
-  │              Azure App Service (P1v3)                       │
-  │              vgc-itsm-app · Node.js 20                      │
-  │              Southeast Asia (Singapore)                     │
-  │              Auto-scale: 1-5 instances                      │
-  └──────────┬───────────────────────┬──────────────────────────┘
-             │                       │
-  ┌──────────▼──────────┐ ┌─────────▼──────────────────────────┐
-  │  Azure SQL Serverless│ │  Microsoft Entra ID                │
-  │  General Purpose     │ │  SSO + SCIM + Conditional Access   │
-  │  0.5-4 vCores        │ │  MFA Enforced                      │
-  │  Southeast Asia      │ │                                    │
-  │  Private Endpoint    │ │                                    │
-  └──────────────────────┘ └────────────────────────────────────┘`}</div>
+              <h4 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                🗺️ Azure Topology — Actual Resources
+              </h4>
+              <div style={{ padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "#64B5F6", lineHeight: 1.8, whiteSpace: "pre" }}>{`  ┌───────────────────────────────────────────────────────────────────┐
+  │                    🌐 Internet / Users                           │
+  └────────────────────────────┬──────────────────────────────────────┘
+                               │ HTTPS
+  ┌────────────────────────────▼──────────────────────────────────────┐
+  │  Azure App Service (B1 Linux)              $13.14/mo             │
+  │  vgc-itsm1-app · Node.js 20 LTS                                 │
+  │  vgc-itsm1-app.azurewebsites.net                                │
+  │  RG: vgc-itsm-1-RG · Southeast Asia                             │
+  └──────┬──────────────┬──────────────┬─────────────────────────────┘
+         │              │              │
+  ┌──────▼──────┐ ┌─────▼──────┐ ┌────▼─────────────────────────────┐
+  │ MySQL       │ │ OpenAI     │ │ Zendesk                          │
+  │ Flexible    │ │ Service    │ │ vgctech.zendesk.com              │
+  │ Server      │ │ vgc-ai-    │ │ Tickets · Auto-Triage            │
+  │ B1ms        │ │ model-1    │ │ Auto-Respond · AI Routing        │
+  │ $14.71/mo   │ │ S0         │ │ (External — no Azure cost)       │
+  │ 8.0.21      │ │ ~$3.00/mo  │ │                                  │
+  │ 20 GB       │ │ SEA        │ │                                  │
+  └─────────────┘ └────────────┘ └──────────────────────────────────┘
+         │
+  ┌──────▼──────────────────────────────────────────────────────────┐
+  │  Managed Identity: oidc-msi-b517 (User Assigned)               │
+  │  Microsoft Entra ID · MSAL SSO                                  │
+  └─────────────────────────────────────────────────────────────────┘
+
+  TOTAL ESTIMATED COST: ~$30.85 USD/month`}</div>
             </div>
           </div>
         )}
