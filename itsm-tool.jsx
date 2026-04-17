@@ -2051,7 +2051,7 @@ export default function ITSMApp() {
 
   const NAV = [
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
-    { id: "productivity", label: "Productivity", count: smartTasks.filter(t => t.status === "pending").length, accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #00BCF218)" },
+    { id: "zendesk", label: "Zendesk AI", count: zdStats.open + zdStats.pending + zdAiQueue.filter(q => q.status === "pending_approval").length, critical: zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "incidents", label: "Incidents", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed"), accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "problems", label: "Problems", count: problems.length, accent: "#CE93D8", gradient: "linear-gradient(135deg, #CE93D808, #CE93D818)" },
     { id: "changes", label: "Changes", count: changes.filter(c => c.status === "Awaiting Approval").length, accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
@@ -2066,7 +2066,7 @@ export default function ITSMApp() {
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "cybernews", label: "Cyber News", count: (() => { const sev = ["Critical","High"]; return [{ severity: "Critical", status: "Active" },{ severity: "High", status: "Investigating" },{ severity: "Medium", status: "Acknowledged" },{ severity: "Low", status: "Scheduled" },{ severity: "High", status: "Active" }].filter(a => sev.includes(a.severity)).length; })(), critical: true, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
-    { id: "zendesk", label: "Zendesk AI", count: zdStats.open + zdStats.pending + zdAiQueue.filter(q => q.status === "pending_approval").length, critical: zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
+    { id: "productivity", label: "Productivity", count: smartTasks.filter(t => t.status === "pending").length, accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #00BCF218)" },
     { id: "architecture", label: "Architecture", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #6366F118)" },
   ];
 
