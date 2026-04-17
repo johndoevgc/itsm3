@@ -1024,10 +1024,17 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       return json(res, 200, { ...swc.data, cached: true, lastSync: new Date(swc.ts).toISOString() });
     }
     const swFetch = (service) => new Promise((resolve, reject) => {
-      const u = `https://${SOLARWINDS_API_HOST}/api/?apikey=${encodeURIComponent(SOLARWINDS_API_KEY)}&service=${service}`;
-      https.get(u, { headers: { "User-Agent": "VGC-ITSM/1.0" } }, resp => {
-        let d = ""; resp.on("data", c => d += c); resp.on("end", () => resolve(d));
-      }).on("error", reject).setTimeout(15000, function() { this.destroy(); reject(new Error("Timeout")); });
+      const host = SOLARWINDS_API_HOST.startsWith("www.") ? SOLARWINDS_API_HOST : `www.${SOLARWINDS_API_HOST}`;
+      const u = `https://${host}/api/?apikey=${encodeURIComponent(SOLARWINDS_API_KEY)}&service=${service}`;
+      const doGet = (url) => {
+        https.get(url, { headers: { "User-Agent": "VGC-ITSM/1.0" } }, resp => {
+          if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+            return doGet(resp.headers.location);
+          }
+          let d = ""; resp.on("data", c => d += c); resp.on("end", () => resolve(d));
+        }).on("error", reject).setTimeout(15000, function() { this.destroy(); reject(new Error("Timeout")); });
+      };
+      doGet(u);
     });
     try {
       // N-able RMM XML API — parse clients and devices
