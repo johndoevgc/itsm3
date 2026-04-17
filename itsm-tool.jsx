@@ -1221,6 +1221,12 @@ export default function ITSMApp() {
   const [cyberNewsLog, setCyberNewsLog] = useState([]);
   const [threatEmailDraft, setThreatEmailDraft] = useState(null);
   const [dashboardThreats, setDashboardThreats] = useState([]);
+  const [merakiData, setMerakiData] = useState(null);
+  const [merakiLoading, setMerakiLoading] = useState(false);
+  const [solarwindsData, setSolarwindsData] = useState(null);
+  const [solarwindsLoading, setSolarwindsLoading] = useState(false);
+  const [sophosData, setSophosData] = useState(null);
+  const [sophosLoading, setSophosLoading] = useState(false);
   const [showCardSettings, setShowCardSettings] = useState(false);
   const [dashboardEditMode, setDashboardEditMode] = useState(false);
   const [cardLayout, setCardLayout] = useState(() => {
@@ -1238,6 +1244,8 @@ export default function ITSMApp() {
     pendingApprovals:{ on: true, important: false, label: "Pending Approvals",      roles: ["management"] },
     opsHub:          { on: true, important: false, label: "Operations Hub",         roles: ["all"] },
     merakiFirewall:  { on: true, important: false, label: "Cisco Meraki Firewall",  roles: ["all"] },
+    solarwindsRmm:   { on: true, important: false, label: "SolarWinds RMM",        roles: ["all"] },
+    sophosFirewall:  { on: true, important: false, label: "Sophos Firewall",        roles: ["all"] },
     personalKpis:    { on: true, important: false, label: "Personal KPIs",          roles: ["engineer"] },
     ticketQueue:     { on: true, important: false, label: "My Ticket Queue",        roles: ["engineer"] },
     quickActions:    { on: true, important: false, label: "Quick Actions",          roles: ["engineer"] },
@@ -1411,6 +1419,30 @@ export default function ITSMApp() {
     fetch("/api/cybernews").then(r => r.json()).then(data => {
       if (data.threats && data.threats.length > 0) setDashboardThreats(data.threats.slice(0, 5));
     }).catch(() => {});
+  }, []);
+
+  // Fetch live Meraki data
+  useEffect(() => {
+    setMerakiLoading(true);
+    fetch("/api/meraki").then(r => r.json()).then(data => {
+      if (!data.error) setMerakiData(data);
+    }).catch(() => {}).finally(() => setMerakiLoading(false));
+  }, []);
+
+  // Fetch live SolarWinds RMM data
+  useEffect(() => {
+    setSolarwindsLoading(true);
+    fetch("/api/solarwinds").then(r => r.json()).then(data => {
+      if (!data.error) setSolarwindsData(data);
+    }).catch(() => {}).finally(() => setSolarwindsLoading(false));
+  }, []);
+
+  // Fetch live Sophos data
+  useEffect(() => {
+    setSophosLoading(true);
+    fetch("/api/sophos").then(r => r.json()).then(data => {
+      if (!data.error) setSophosData(data);
+    }).catch(() => {}).finally(() => setSophosLoading(false));
   }, []);
 
   // ─── Microsoft Entra ID SSO — Token & Graph Logic ────────────────────
@@ -3120,123 +3152,112 @@ export default function ITSMApp() {
           </div>
         )}
 
-        {/* ═══ CISCO MERAKI FIREWALL ═══ */}
+        {/* ═══ CISCO MERAKI FIREWALL (Live API) ═══ */}
         {cardVisibility.merakiFirewall.on && <DashCard id="merakiFirewall"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #00BF6F, #006D36, #00BF6F)" }} />
           <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 16 }}>🔥</span> Cisco Meraki Firewall
-              <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>MX450</span>
+              {merakiData && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{merakiData.summary?.totalOrganizations || 0} Orgs</span>}
             </span>
-            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Meraki Dashboard API · Last poll: {new Date().toLocaleTimeString("en-SG", { hour12: false })}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => fetch("/api/meraki?refresh=true").then(r => r.json()).then(d => { if (d.success) setMerakiData(d); })} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
+              <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Meraki Dashboard API</span>
+            </span>
           </h3>
-          {/* Status Overview */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
-            {[
-              { label: "Status", value: "Online", icon: "●", color: "#00BF6F" },
-              { label: "Uptime", value: "47d 12h", icon: "⏱️", color: "#06B6D4" },
-              { label: "WAN IP", value: "203.116.x.x", icon: "🌐", color: "#6366F1" },
-              { label: "Throughput", value: "842 Mbps", icon: "📶", color: "#81C784" },
-              { label: "Active VPN", value: "12 peers", icon: "🔒", color: "#FFB347" },
-              { label: "Clients", value: "347", icon: "💻", color: "#CE93D8" },
-            ].map((s, i) => (
-              <div key={i} style={{ textAlign: "center", padding: "10px 8px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
-                <div style={{ fontSize: 14, marginBottom: 4 }}>{s.icon}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
-                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 2 }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-          {/* Threat & Traffic Grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-            {/* Threat Protection */}
-            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#FF6B6B", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>🛡️</span> Threat Protection (24h)
-              </div>
-              {[
-                { label: "Intrusions Blocked", value: "1,284", color: "#FF4444", bar: 85 },
-                { label: "Malware Detected", value: "23", color: "#FF6B6B", bar: 15 },
-                { label: "C2 Callbacks Blocked", value: "7", color: "#FFB347", bar: 5 },
-                { label: "AMP File Scans", value: "12,847", color: "#81C784", bar: 92 },
-                { label: "DNS Security Blocks", value: "456", color: "#6366F1", bar: 35 },
-              ].map((t, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, minWidth: 0 }}>{t.label}</span>
-                  <div style={{ width: 60, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ width: `${t.bar}%`, height: "100%", background: t.color, borderRadius: 2, transition: "width 1s ease" }} />
+          {merakiLoading ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+              <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching Meraki data...</div>
+            </div>
+          ) : !merakiData || !merakiData.success ? (
+            <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B" }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+              <div style={{ fontSize: 11 }}>Unable to connect to Meraki API</div>
+              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{merakiData?.error || "Check API configuration"}</div>
+            </div>
+          ) : (() => {
+            const s = merakiData.summary || {};
+            const onlineDevs = (merakiData.devices || []).filter(d => d.status === "online").length;
+            const totalDevs = s.totalDevices || 0;
+            const vpnPeers = (merakiData.vpnStatuses || []).reduce((n, v) => n + ((v.merakiVpnPeers || []).length + (v.thirdPartyVpnPeers || []).length), 0);
+            const wanIps = [...new Set((merakiData.uplinks || []).flatMap(u => (u.uplinks || []).filter(ul => ul.status === "Active" || ul.status === "active").map(ul => ul.publicIp)).filter(Boolean))];
+            return (<>
+              {/* Status Overview */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
+                {[
+                  { label: "Devices Online", value: `${onlineDevs}/${totalDevs}`, icon: "●", color: onlineDevs === totalDevs ? "#00BF6F" : "#FFB347" },
+                  { label: "Organizations", value: String(s.totalOrganizations || 0), icon: "🏢", color: "#06B6D4" },
+                  { label: "Networks", value: String(s.totalNetworks || 0), icon: "🌐", color: "#6366F1" },
+                  { label: "WAN IPs", value: String(wanIps.length), icon: "📡", color: "#81C784" },
+                  { label: "VPN Peers", value: String(vpnPeers), icon: "🔒", color: "#FFB347" },
+                  { label: "API Keys", value: String(s.apiKeysUsed || 0), icon: "🔑", color: "#CE93D8" },
+                ].map((st, i) => (
+                  <div key={i} style={{ textAlign: "center", padding: "10px 8px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ fontSize: 14, marginBottom: 4 }}>{st.icon}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: st.color, fontFamily: "'Space Grotesk', sans-serif" }}>{st.value}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 2 }}>{st.label}</div>
                   </div>
-                  <span style={{ fontSize: 10, color: t.color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", minWidth: 50, textAlign: "right" }}>{t.value}</span>
-                </div>
-              ))}
-            </div>
-            {/* Top Traffic & Bandwidth */}
-            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#06B6D4", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>📊</span> Top Applications (Bandwidth)
+                ))}
               </div>
-              {[
-                { app: "Microsoft 365", bw: "128 GB", pct: 32, color: "#0078D4" },
-                { app: "Web Browsing (HTTPS)", bw: "96 GB", pct: 24, color: "#6366F1" },
-                { app: "Zoom / Teams Video", bw: "64 GB", pct: 16, color: "#2D8CFF" },
-                { app: "AWS S3 / Azure Blob", bw: "52 GB", pct: 13, color: "#FFB347" },
-                { app: "DNS Traffic", bw: "12 GB", pct: 3, color: "#81C784" },
-                { app: "Other", bw: "48 GB", pct: 12, color: "#5A6178" },
-              ].map((a, i) => (
-                <div key={i} style={{ marginBottom: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                    <span style={{ fontSize: 10, color: "#C4CAD6" }}>{a.app}</span>
-                    <span style={{ fontSize: 9, color: a.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{a.bw} ({a.pct}%)</span>
+              {/* Devices & VPN Grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                {/* Device List */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#00BF6F", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>📡</span> Managed Devices
                   </div>
-                  <div style={{ width: "100%", height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ width: `${a.pct}%`, height: "100%", background: a.color, borderRadius: 2, transition: "width 1s ease" }} />
+                  {(merakiData.devices || []).slice(0, 8).map((dev, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: dev.status === "online" ? "#00BF6F" : dev.status === "alerting" ? "#FF6B6B" : "#5A6178", boxShadow: dev.status === "online" ? "0 0 6px #00BF6F66" : "none", flexShrink: 0 }} />
+                      <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dev.name || dev.serial || "Unnamed"}</span>
+                      <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{dev.model || ""}</span>
+                      <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: dev.status === "online" ? "#4CAF5022" : dev.status === "alerting" ? "#FF444422" : "#1E2130", color: dev.status === "online" ? "#4CAF50" : dev.status === "alerting" ? "#FF6B6B" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{dev.status}</span>
+                    </div>
+                  ))}
+                  {(merakiData.devices || []).length > 8 && <div style={{ fontSize: 9, color: "#5A617866", textAlign: "center", marginTop: 4 }}>+{merakiData.devices.length - 8} more devices</div>}
+                </div>
+                {/* VPN Status */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#FFB347", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>🔐</span> VPN Tunnels
+                  </div>
+                  {(merakiData.vpnStatuses || []).slice(0, 6).map((vpn, i) => (
+                    <div key={i} style={{ marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <div style={{ width: 6, height: 6, borderRadius: "50%", background: vpn.vpnMode === "hub" ? "#00BF6F" : "#06B6D4", flexShrink: 0 }} />
+                        <span style={{ fontSize: 10, color: "#C4CAD6", fontWeight: 600 }}>{vpn.networkName || vpn.networkId}</span>
+                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: vpn.vpnMode === "hub" ? "#00BF6F22" : "#06B6D422", color: vpn.vpnMode === "hub" ? "#00BF6F" : "#06B6D4", fontFamily: "'JetBrains Mono', monospace", marginLeft: "auto" }}>{vpn.vpnMode}</span>
+                      </div>
+                      {(vpn.merakiVpnPeers || []).concat(vpn.thirdPartyVpnPeers || []).slice(0, 3).map((peer, j) => (
+                        <div key={j} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px 3px 20px", fontSize: 9 }}>
+                          <div style={{ width: 4, height: 4, borderRadius: "50%", background: peer.reachability === "reachable" ? "#00BF6F" : "#FF6B6B", flexShrink: 0 }} />
+                          <span style={{ color: "#8A8FA8", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{peer.networkName || peer.publicIp || "Peer"}</span>
+                          <span style={{ color: peer.reachability === "reachable" ? "#00BF6F" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{peer.reachability || "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* WAN Uplinks */}
+              {wanIps.length > 0 && (
+                <div style={{ marginTop: 14, background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6366F1", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>🌐</span> Active WAN Uplinks
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {(merakiData.uplinks || []).flatMap(u => (u.uplinks || []).filter(ul => ul.status === "Active" || ul.status === "active").map(ul => ({ ...ul, device: u.serial }))).slice(0, 8).map((ul, i) => (
+                      <div key={i} style={{ padding: "6px 10px", background: "#0F111708", borderRadius: 4, border: "1px solid #1E213022", fontSize: 10 }}>
+                        <span style={{ color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{ul.publicIp}</span>
+                        <span style={{ color: "#5A6178", marginLeft: 6 }}>{ul.interface} · {ul.connectionType || "—"}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-          {/* Firewall Rules & VPN Tunnels */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {/* Active Firewall Rules Summary */}
-            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#00BF6F", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>📋</span> Firewall Rules Summary
-              </div>
-              {[
-                { rule: "L3 Outbound Rules", count: 42, allow: 38, deny: 4 },
-                { rule: "L7 Application Rules", count: 18, allow: 12, deny: 6 },
-                { rule: "Geo-IP Block Rules", count: 8, allow: 0, deny: 8 },
-                { rule: "Content Filtering", count: 15, allow: 9, deny: 6 },
-              ].map((r, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
-                  <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1 }}>{r.rule}</span>
-                  <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#4CAF5022", color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>✓{r.allow}</span>
-                  <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#FF444422", color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>✕{r.deny}</span>
-                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{r.count} total</span>
-                </div>
-              ))}
-            </div>
-            {/* VPN Tunnels */}
-            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#FFB347", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>🔐</span> Site-to-Site VPN Tunnels
-              </div>
-              {[
-                { site: "SG-HQ ↔ SG-DR", status: "Active", latency: "2ms", uptime: "99.99%" },
-                { site: "SG-HQ ↔ MY-KL", status: "Active", latency: "12ms", uptime: "99.95%" },
-                { site: "SG-HQ ↔ TH-BKK", status: "Active", latency: "28ms", uptime: "99.91%" },
-                { site: "SG-HQ ↔ ID-JKT", status: "Active", latency: "35ms", uptime: "99.87%" },
-                { site: "SG-HQ ↔ PH-MNL", status: "Standby", latency: "—", uptime: "—" },
-              ].map((v, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: v.status === "Active" ? "#00BF6F" : "#5A6178", boxShadow: v.status === "Active" ? "0 0 6px #00BF6F66" : "none", flexShrink: 0 }} />
-                  <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1 }}>{v.site}</span>
-                  <span style={{ fontSize: 9, color: v.status === "Active" ? "#00BF6F" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{v.latency}</span>
-                  <span style={{ fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{v.uptime}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+              )}
+            </>);
+          })()}
         </div></DashCard>}
 
         {/* ═══ OPERATIONS HUB — Problems · Changes · Requests ═══ */}
@@ -3370,6 +3391,163 @@ export default function ITSMApp() {
               </div>
             ))}
           </div>
+        </div></DashCard>}
+
+        {/* ═══ SOLARWINDS RMM (Live API) ═══ */}
+        {cardVisibility.solarwindsRmm.on && <DashCard id="solarwindsRmm"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #FF8C00, #FF6347, #FF8C00)" }} />
+          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 16 }}>🖥️</span> SolarWinds RMM
+              {solarwindsData && solarwindsData.authenticated && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>Connected</span>}
+              {solarwindsData && !solarwindsData.authenticated && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FF444422", color: "#FF6B6B", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>Auth Issue</span>}
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => fetch("/api/solarwinds?refresh=true").then(r => r.json()).then(d => setSolarwindsData(d))} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
+              <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>N-able RMM API</span>
+            </span>
+          </h3>
+          {solarwindsLoading ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+              <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching SolarWinds RMM data...</div>
+            </div>
+          ) : !solarwindsData || !solarwindsData.success ? (
+            <div style={{ textAlign: "center", padding: 30 }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+              <div style={{ fontSize: 11, color: "#FF6B6B" }}>Unable to connect to SolarWinds RMM API</div>
+              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{solarwindsData?.error || "Check API key configuration"}</div>
+              {solarwindsData && !solarwindsData.authenticated && (
+                <div style={{ marginTop: 12, padding: 12, background: "#FF444408", borderRadius: 6, border: "1px solid #FF444422" }}>
+                  <div style={{ fontSize: 10, color: "#FFB347", marginBottom: 6, fontWeight: 600 }}>Troubleshooting:</div>
+                  <div style={{ fontSize: 9, color: "#8A8FA8", lineHeight: 1.6 }}>
+                    • Verify API key in N-able RMM Dashboard → Settings → API Keys<br/>
+                    • Ensure key has not expired or been revoked<br/>
+                    • Check the correct regional endpoint is configured<br/>
+                    • Contact VGC admin to regenerate the API key if needed
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (() => {
+            const clients = solarwindsData.clients || [];
+            const servers = solarwindsData.servers || [];
+            const workstations = solarwindsData.workstations || [];
+            return (<>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
+                {[
+                  { label: "Clients", value: String(clients.length), icon: "🏢", color: "#FF8C00" },
+                  { label: "Servers", value: String(servers.length), icon: "🖥️", color: "#06B6D4" },
+                  { label: "Workstations", value: String(workstations.length), icon: "💻", color: "#81C784" },
+                  { label: "Total Endpoints", value: String(servers.length + workstations.length), icon: "📊", color: "#CE93D8" },
+                ].map((st, i) => (
+                  <div key={i} style={{ textAlign: "center", padding: "10px 8px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ fontSize: 14, marginBottom: 4 }}>{st.icon}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: st.color, fontFamily: "'Space Grotesk', sans-serif" }}>{st.value}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 2 }}>{st.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#06B6D4", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace" }}>🖥️ Managed Servers</div>
+                  {servers.slice(0, 6).map((srv, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#06B6D4", flexShrink: 0 }} />
+                      <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{srv.name || srv.description || "Server"}</span>
+                    </div>
+                  ))}
+                  {servers.length === 0 && <div style={{ fontSize: 10, color: "#5A617866", textAlign: "center", padding: 8 }}>No servers found</div>}
+                </div>
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#81C784", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace" }}>💻 Workstations</div>
+                  {workstations.slice(0, 6).map((ws, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#81C784", flexShrink: 0 }} />
+                      <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ws.name || ws.description || "Workstation"}</span>
+                    </div>
+                  ))}
+                  {workstations.length === 0 && <div style={{ fontSize: 10, color: "#5A617866", textAlign: "center", padding: 8 }}>No workstations found</div>}
+                </div>
+              </div>
+            </>);
+          })()}
+        </div></DashCard>}
+
+        {/* ═══ SOPHOS FIREWALL (Live API) ═══ */}
+        {cardVisibility.sophosFirewall.on && <DashCard id="sophosFirewall"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #0050C8, #003380, #0050C8)" }} />
+          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 16 }}>🛡️</span> Sophos Firewall
+              {sophosData && sophosData.success && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#0050C822", color: "#64B5F6", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{(sophosData.firewalls || []).length} Firewalls</span>}
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => fetch("/api/sophos?refresh=true").then(r => r.json()).then(d => { if (d.success) setSophosData(d); })} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
+              <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Sophos Central API</span>
+            </span>
+          </h3>
+          {sophosLoading ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+              <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching Sophos data...</div>
+            </div>
+          ) : !sophosData || !sophosData.success ? (
+            <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B" }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+              <div style={{ fontSize: 11 }}>Unable to connect to Sophos Central API</div>
+              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{sophosData?.error || "Check credentials"}</div>
+            </div>
+          ) : (() => {
+            const fws = sophosData.firewalls || [];
+            const groups = sophosData.firewallGroups || [];
+            const connectedCount = fws.filter(f => f.status?.connected).length;
+            return (<>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
+                {[
+                  { label: "Total Firewalls", value: String(fws.length), icon: "🛡️", color: "#0050C8" },
+                  { label: "Connected", value: String(connectedCount), icon: "●", color: "#00BF6F" },
+                  { label: "Disconnected", value: String(fws.length - connectedCount), icon: "○", color: fws.length - connectedCount > 0 ? "#FF6B6B" : "#5A6178" },
+                  { label: "Groups", value: String(groups.length), icon: "📁", color: "#FFB347" },
+                ].map((st, i) => (
+                  <div key={i} style={{ textAlign: "center", padding: "10px 8px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                    <div style={{ fontSize: 14, marginBottom: 4 }}>{st.icon}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: st.color, fontFamily: "'Space Grotesk', sans-serif" }}>{st.value}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 2 }}>{st.label}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Firewall List */}
+              <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#64B5F6", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>🔥</span> Managed Firewalls
+                </div>
+                {fws.map((fw, i) => {
+                  const hostname = fw.hostname || fw.name || "Unknown";
+                  const model = fw.model || "—";
+                  const serial = fw.serialNumber || "—";
+                  const connected = fw.status?.connected;
+                  const ip = fw.ipAddress || fw.status?.ipAddress || "—";
+                  const fwVersion = fw.firmwareVersion || fw.status?.firmwareVersion || "—";
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6, marginBottom: 6, background: "#0F111708", border: "1px solid #1E213022" }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: connected ? "#00BF6F" : "#FF6B6B", boxShadow: connected ? "0 0 6px #00BF6F66" : "0 0 6px #FF6B6B66", flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hostname}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>Model: {model} · Serial: {serial}</div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 10, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{ip}</div>
+                        <div style={{ fontSize: 8, color: "#5A617888", marginTop: 1 }}>v{fwVersion}</div>
+                      </div>
+                      <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: connected ? "#00BF6F22" : "#FF444422", color: connected ? "#00BF6F" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, flexShrink: 0 }}>{connected ? "Online" : "Offline"}</span>
+                    </div>
+                  );
+                })}
+                {fws.length === 0 && <div style={{ fontSize: 10, color: "#5A617866", textAlign: "center", padding: 10 }}>No firewalls found</div>}
+              </div>
+            </>);
+          })()}
         </div></DashCard>}
 
         {/* ═══ SECURITY ALERTS (Both views) ═══ */}

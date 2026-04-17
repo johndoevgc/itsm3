@@ -23,6 +23,17 @@ const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL || "";
 const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN || "";
 
+// Cisco Meraki Dashboard API (server-side only)
+const MERAKI_API_KEYS = (process.env.MERAKI_API_KEYS || "").split(",").map(k => k.trim()).filter(Boolean);
+
+// SolarWinds RMM / N-able API (server-side only)
+const SOLARWINDS_API_KEY = process.env.SOLARWINDS_API_KEY || "";
+const SOLARWINDS_API_HOST = process.env.SOLARWINDS_API_HOST || "www.systemmonitor.us";
+
+// Sophos Central Firewall API (server-side only)
+const SOPHOS_CLIENT_ID = process.env.SOPHOS_CLIENT_ID || "";
+const SOPHOS_CLIENT_SECRET = process.env.SOPHOS_CLIENT_SECRET || "";
+
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
 // Local admin users are configured via environment variables
@@ -910,6 +921,237 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── Cisco Meraki Dashboard API Proxy ──────────────────────────────
+  if (pathname.startsWith("/api/meraki") && req.method === "GET") {
+    if (MERAKI_API_KEYS.length === 0) return json(res, 503, { error: "Meraki API not configured" });
+    const CACHE_TTL = 5 * 60 * 1000;
+    if (!global._merakiCache) global._merakiCache = { data: null, ts: 0 };
+    const mc = global._merakiCache;
+    const forceRefresh = urlObj.searchParams.get("refresh") === "true";
+    if (mc.data && (Date.now() - mc.ts < CACHE_TTL) && !forceRefresh) {
+      return json(res, 200, { ...mc.data, cached: true, lastSync: new Date(mc.ts).toISOString() });
+    }
+    const merakiFetch = (path, apiKey) => new Promise((resolve, reject) => {
+      const opts = { hostname: "api.meraki.com", path: `/api/v1${path}`, headers: { "X-Cisco-Meraki-API-Key": apiKey } };
+      const r = https.get(opts, resp => {
+        if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+          const u = new URL(resp.headers.location);
+          const opts2 = { hostname: u.hostname, path: u.pathname + u.search, headers: { "X-Cisco-Meraki-API-Key": apiKey } };
+          const r2 = https.get(opts2, resp2 => { let d = ""; resp2.on("data", c => d += c); resp2.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+          r2.on("error", reject); r2.setTimeout(12000, () => { r2.destroy(); reject(new Error("Timeout")); });
+          return;
+        }
+        let d = ""; resp.on("data", c => d += c); resp.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+      });
+      r.on("error", reject); r.setTimeout(12000, () => { r.destroy(); reject(new Error("Timeout")); });
+    });
+    try {
+      // Aggregate data from all API keys (each key = one MSP account with multiple orgs)
+      let allOrgs = [], allDevices = [], allUplinks = [], allVpn = [], allNetworks = [];
+      for (const apiKey of MERAKI_API_KEYS) {
+        try {
+          const orgs = await merakiFetch("/organizations", apiKey);
+          if (!Array.isArray(orgs)) continue;
+          allOrgs = allOrgs.concat(orgs.map(o => ({ id: o.id, name: o.name, licensing: o.licensing?.model })));
+          // Fetch per-org data in parallel
+          const orgPromises = orgs.map(async (org) => {
+            const [devStatuses, uplinks, vpn, nets] = await Promise.allSettled([
+              merakiFetch(`/organizations/${org.id}/devices/statuses`, apiKey),
+              merakiFetch(`/organizations/${org.id}/uplinks/statuses`, apiKey),
+              merakiFetch(`/organizations/${org.id}/appliance/vpn/statuses`, apiKey),
+              merakiFetch(`/organizations/${org.id}/networks`, apiKey),
+            ]);
+            return {
+              devices: devStatuses.status === "fulfilled" && Array.isArray(devStatuses.value) ? devStatuses.value.map(d => ({
+                name: d.name || d.serial, model: d.model, serial: d.serial, status: d.status,
+                lanIp: d.lanIp, publicIp: d.publicIp, networkId: d.networkId, org: org.name,
+                lastReportedAt: d.lastReportedAt, firmware: d.firmware,
+              })) : [],
+              uplinks: uplinks.status === "fulfilled" && Array.isArray(uplinks.value) ? uplinks.value.map(u => ({
+                serial: u.serial, model: u.model, networkId: u.networkId, org: org.name,
+                highAvailability: u.highAvailability, lastReportedAt: u.lastReportedAt,
+                uplinks: (u.uplinks || []).map(ul => ({ interface: ul.interface, status: ul.status, ip: ul.ip, publicIp: ul.publicIp, gateway: ul.gateway, dns: ul.primaryDns })),
+              })) : [],
+              vpn: vpn.status === "fulfilled" && Array.isArray(vpn.value) ? vpn.value.map(v => ({
+                networkName: v.networkName, networkId: v.networkId, deviceStatus: v.deviceStatus,
+                vpnMode: v.vpnMode, org: org.name,
+                merakiPeers: (v.merakiVpnPeers || []).map(p => ({ name: p.networkName, reachability: p.reachability })),
+                thirdPartyPeers: (v.thirdPartyVpnPeers || []).map(p => ({ name: p.name, ip: p.publicIp, reachability: p.reachability })),
+                subnets: (v.exportedSubnets || []).map(s => ({ name: s.name, subnet: s.subnet })),
+              })) : [],
+              networks: nets.status === "fulfilled" && Array.isArray(nets.value) ? nets.value.map(n => ({
+                id: n.id, name: n.name, org: org.name, productTypes: n.productTypes, timeZone: n.timeZone,
+              })) : [],
+            };
+          });
+          const orgResults = await Promise.all(orgPromises);
+          orgResults.forEach(r => { allDevices = allDevices.concat(r.devices); allUplinks = allUplinks.concat(r.uplinks); allVpn = allVpn.concat(r.vpn); allNetworks = allNetworks.concat(r.networks); });
+        } catch (e) { console.error(`[MERAKI] Error for key ${apiKey.substring(0,8)}...: ${e.message}`); }
+      }
+      const result = {
+        organizations: allOrgs,
+        devices: allDevices,
+        uplinks: allUplinks,
+        vpnStatus: allVpn,
+        networks: allNetworks,
+        summary: {
+          totalOrgs: allOrgs.length,
+          totalDevices: allDevices.length,
+          onlineDevices: allDevices.filter(d => d.status === "online").length,
+          offlineDevices: allDevices.filter(d => d.status === "offline").length,
+          dormantDevices: allDevices.filter(d => d.status === "dormant").length,
+          totalNetworks: allNetworks.length,
+          vpnPeers: allVpn.reduce((s, v) => s + (v.merakiPeers?.length || 0) + (v.thirdPartyPeers?.length || 0), 0),
+        },
+      };
+      mc.data = result; mc.ts = Date.now();
+      console.log(`[MERAKI] Fetched ${allOrgs.length} orgs, ${allDevices.length} devices, ${allNetworks.length} networks`);
+      return json(res, 200, { ...result, cached: false, lastSync: new Date(mc.ts).toISOString() });
+    } catch (err) {
+      console.error("[MERAKI] Error:", err.message);
+      return json(res, 502, { error: "Failed to fetch Meraki data", detail: err.message });
+    }
+  }
+
+  // ─── SolarWinds RMM / N-able API Proxy ──────────────────────────────
+  if (pathname.startsWith("/api/solarwinds") && req.method === "GET") {
+    if (!SOLARWINDS_API_KEY) return json(res, 503, { error: "SolarWinds RMM API not configured" });
+    const CACHE_TTL = 5 * 60 * 1000;
+    if (!global._solarwindsCache) global._solarwindsCache = { data: null, ts: 0 };
+    const swc = global._solarwindsCache;
+    const forceRefresh = urlObj.searchParams.get("refresh") === "true";
+    if (swc.data && (Date.now() - swc.ts < CACHE_TTL) && !forceRefresh) {
+      return json(res, 200, { ...swc.data, cached: true, lastSync: new Date(swc.ts).toISOString() });
+    }
+    const swFetch = (service) => new Promise((resolve, reject) => {
+      const u = `https://${SOLARWINDS_API_HOST}/api/?apikey=${encodeURIComponent(SOLARWINDS_API_KEY)}&service=${service}`;
+      https.get(u, { headers: { "User-Agent": "VGC-ITSM/1.0" } }, resp => {
+        let d = ""; resp.on("data", c => d += c); resp.on("end", () => resolve(d));
+      }).on("error", reject).setTimeout(15000, function() { this.destroy(); reject(new Error("Timeout")); });
+    });
+    try {
+      // N-able RMM XML API — parse clients and devices
+      const [clientsXml, serversXml, workstationsXml] = await Promise.allSettled([
+        swFetch("list_clients"), swFetch("list_servers"), swFetch("list_workstations"),
+      ]);
+      const parseXmlItems = (xml, tagName) => {
+        if (!xml) return [];
+        const items = []; const re = new RegExp(`<${tagName}[\\s>]([\\s\\S]*?)<\\/${tagName}>`, "gi"); let m;
+        while ((m = re.exec(xml))) {
+          const block = m[1]; const item = {};
+          block.replace(/<(\w+)>([\s\S]*?)<\/\1>/g, (_, k, v) => { item[k] = v.replace(/<!\[CDATA\[|\]\]>/g, "").trim(); });
+          if (Object.keys(item).length > 0) items.push(item);
+        }
+        return items;
+      };
+      const clients = clientsXml.status === "fulfilled" ? parseXmlItems(clientsXml.value, "client") : [];
+      const servers = serversXml.status === "fulfilled" ? parseXmlItems(serversXml.value, "server") : [];
+      const workstations = workstationsXml.status === "fulfilled" ? parseXmlItems(workstationsXml.value, "workstation") : [];
+      // Check if auth failed
+      const authFailed = [clientsXml, serversXml, workstationsXml].every(r => r.status === "fulfilled" && r.value.includes("Login failed"));
+      const result = {
+        configured: true,
+        authenticated: !authFailed,
+        clients, servers, workstations,
+        summary: {
+          totalClients: clients.length,
+          totalServers: servers.length,
+          totalWorkstations: workstations.length,
+          onlineServers: servers.filter(s => s.status === "1" || s.online === "true").length,
+          onlineWorkstations: workstations.filter(w => w.status === "1" || w.online === "true").length,
+        },
+      };
+      swc.data = result; swc.ts = Date.now();
+      console.log(`[SOLARWINDS] Auth=${!authFailed}, Clients=${clients.length}, Servers=${servers.length}, Workstations=${workstations.length}`);
+      return json(res, 200, { ...result, cached: false, lastSync: new Date(swc.ts).toISOString() });
+    } catch (err) {
+      console.error("[SOLARWINDS] Error:", err.message);
+      return json(res, 502, { error: "Failed to fetch SolarWinds data", detail: err.message });
+    }
+  }
+
+  // ─── Sophos Central Firewall API Proxy ──────────────────────────────
+  if (pathname.startsWith("/api/sophos") && req.method === "GET") {
+    if (!SOPHOS_CLIENT_ID || !SOPHOS_CLIENT_SECRET) return json(res, 503, { error: "Sophos Central API not configured" });
+    const CACHE_TTL = 5 * 60 * 1000;
+    if (!global._sophosCache) global._sophosCache = { data: null, ts: 0, token: null, tokenExp: 0, tenantId: null, dataRegion: null };
+    const sc = global._sophosCache;
+    const forceRefresh = urlObj.searchParams.get("refresh") === "true";
+    if (sc.data && (Date.now() - sc.ts < CACHE_TTL) && !forceRefresh) {
+      return json(res, 200, { ...sc.data, cached: true, lastSync: new Date(sc.ts).toISOString() });
+    }
+    const httpsPost = (hostname, path, body, headers) => new Promise((resolve, reject) => {
+      const opts = { hostname, path, method: "POST", headers: { ...headers, "Content-Length": Buffer.byteLength(body) } };
+      const r = https.request(opts, resp => { let d = ""; resp.on("data", c => d += c); resp.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+      r.on("error", reject); r.setTimeout(15000, () => { r.destroy(); reject(new Error("Timeout")); });
+      r.write(body); r.end();
+    });
+    const httpsGet = (fullUrl, headers) => new Promise((resolve, reject) => {
+      const u = new URL(fullUrl);
+      const opts = { hostname: u.hostname, path: u.pathname + u.search, headers };
+      const r = https.get(opts, resp => { let d = ""; resp.on("data", c => d += c); resp.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+      r.on("error", reject); r.setTimeout(15000, () => { r.destroy(); reject(new Error("Timeout")); });
+    });
+    try {
+      // Get/refresh OAuth2 token
+      if (!sc.token || Date.now() >= sc.tokenExp) {
+        const tokenBody = `grant_type=client_credentials&client_id=${encodeURIComponent(SOPHOS_CLIENT_ID)}&client_secret=${encodeURIComponent(SOPHOS_CLIENT_SECRET)}&scope=token`;
+        const tokenResp = await httpsPost("id.sophos.com", "/api/v2/oauth2/token", tokenBody, { "Content-Type": "application/x-www-form-urlencoded" });
+        if (!tokenResp?.access_token) throw new Error("Sophos OAuth2 token exchange failed");
+        sc.token = tokenResp.access_token;
+        sc.tokenExp = Date.now() + ((tokenResp.expires_in || 3600) - 120) * 1000;
+      }
+      // Get tenant info if not cached
+      if (!sc.tenantId || !sc.dataRegion) {
+        const whoami = await httpsGet("https://api.central.sophos.com/whoami/v1", { Authorization: `Bearer ${sc.token}` });
+        if (!whoami?.id) throw new Error("Sophos whoami failed");
+        sc.tenantId = whoami.id;
+        sc.dataRegion = whoami.apiHosts?.dataRegion || "https://api.central.sophos.com";
+      }
+      const sophosHeaders = { Authorization: `Bearer ${sc.token}`, "X-Tenant-ID": sc.tenantId };
+      // Fetch firewalls
+      const firewalls = await httpsGet(`${sc.dataRegion}/firewall/v1/firewalls?pageSize=100`, sophosHeaders);
+      const fwItems = (firewalls?.items || []).map(fw => ({
+        id: fw.id, name: fw.name || fw.hostname, hostname: fw.hostname,
+        serialNumber: fw.serialNumber, model: fw.model,
+        firmware: fw.firmwareVersion,
+        connected: fw.status?.connected || false,
+        suspended: fw.status?.suspended || false,
+        managingStatus: fw.status?.managingStatus,
+        externalIps: fw.externalIpv4Addresses || [],
+        capabilities: fw.capabilities || [],
+        createdAt: fw.createdAt, updatedAt: fw.updatedAt,
+        stateChangedAt: fw.stateChangedAt,
+      }));
+      // Try to fetch firewall groups (may fail with permissions)
+      let fwGroups = [];
+      try { const g = await httpsGet(`${sc.dataRegion}/firewall/v1/firewall-groups?pageSize=50`, sophosHeaders); fwGroups = g?.items || []; } catch {}
+      // Try alerts (may need different permissions)
+      let alerts = [];
+      try { const a = await httpsGet(`${sc.dataRegion}/common/v1/alerts?pageSize=20`, sophosHeaders); alerts = (a?.items || []).map(al => ({ id: al.id, severity: al.severity, category: al.category, description: al.description, raisedAt: al.raisedAt, managedAgent: al.managedAgent })); } catch {}
+      const result = {
+        configured: true,
+        tenantId: sc.tenantId,
+        firewalls: fwItems,
+        groups: fwGroups,
+        alerts,
+        summary: {
+          totalFirewalls: fwItems.length,
+          connectedFirewalls: fwItems.filter(f => f.connected).length,
+          disconnectedFirewalls: fwItems.filter(f => !f.connected).length,
+          suspendedFirewalls: fwItems.filter(f => f.suspended).length,
+          totalAlerts: alerts.length,
+        },
+      };
+      sc.data = result; sc.ts = Date.now();
+      console.log(`[SOPHOS] Fetched ${fwItems.length} firewalls (${fwItems.filter(f=>f.connected).length} connected), ${alerts.length} alerts`);
+      return json(res, 200, { ...result, cached: false, lastSync: new Date(sc.ts).toISOString() });
+    } catch (err) {
+      console.error("[SOPHOS] Error:", err.message);
+      return json(res, 502, { error: "Failed to fetch Sophos data", detail: err.message });
+    }
+  }
+
   // ─── Cyber News: Live RSS Feeds ─────────────────────────────────────
   if (pathname === "/api/cybernews" && req.method === "GET") {
     // Cache for 10 minutes to avoid hammering feeds
@@ -1024,6 +1266,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       zendeskConfigured: !!(ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN),
       aiConfigured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
       aiModel: AZURE_OPENAI_MODEL,
+      merakiConfigured: MERAKI_API_KEYS.length > 0,
+      solarwindsConfigured: !!SOLARWINDS_API_KEY,
+      sophosConfigured: !!(SOPHOS_CLIENT_ID && SOPHOS_CLIENT_SECRET),
       timestamp: new Date().toISOString(),
     });
   }
