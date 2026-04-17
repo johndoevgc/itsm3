@@ -364,6 +364,13 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function parseBody(req, maxSize = 50000) {
+  return new Promise((resolve, reject) => {
+    let d = ""; req.on("data", c => { d += c; if (d.length > maxSize) reject(new Error("Payload too large")); });
+    req.on("end", () => { try { resolve(JSON.parse(d)); } catch(e) { reject(new Error("Invalid JSON body")); } });
+  });
+}
+
 // Valid collection names (whitelist to prevent injection)
 const VALID_COLLECTIONS = new Set([
   "incidents", "problems", "changes", "requests",
@@ -583,10 +590,7 @@ const server = http.createServer(async (req, res) => {
   // ─── Email Send Endpoint: POST /api/email/send ─────────────────────
   if (pathname === "/api/email/send" && req.method === "POST") {
     try {
-      const body = await new Promise((resolve, reject) => {
-        let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
-        req.on("end", () => resolve(JSON.parse(d)));
-      });
+      const body = await parseBody(req);
       const { to, subject, reportId, customerName } = body;
       if (!to || !subject) return json(res, 400, { error: "Missing to or subject" });
       // In production, use nodemailer with smtpConfig. For demo, log and return success.
@@ -665,20 +669,14 @@ const server = http.createServer(async (req, res) => {
       // PUT /api/zendesk/tickets/:id — update ticket (status, priority, comment)
       if (pathname.match(/^\/api\/zendesk\/tickets\/\d+$/) && req.method === "PUT") {
         const ticketId = pathname.split("/").pop();
-        const body = await new Promise((resolve, reject) => {
-          let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
-          req.on("end", () => resolve(JSON.parse(d)));
-        });
+        const body = await parseBody(req);
         const result = await zdRequest("PUT", `/tickets/${ticketId}.json`, body);
         return json(res, 200, result);
       }
 
       // POST /api/zendesk/tickets — create new ticket
       if (pathname === "/api/zendesk/tickets" && req.method === "POST") {
-        const body = await new Promise((resolve, reject) => {
-          let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
-          req.on("end", () => resolve(JSON.parse(d)));
-        });
+        const body = await parseBody(req);
         const result = await zdRequest("POST", "/tickets.json", body);
         return json(res, 200, result);
       }
@@ -714,10 +712,7 @@ const server = http.createServer(async (req, res) => {
         if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
           return json(res, 503, { error: "Azure OpenAI not configured" });
         }
-        const body = await new Promise((resolve, reject) => {
-          let d = ""; req.on("data", c => { d += c; if (d.length > 100000) reject(new Error("Payload too large")); });
-          req.on("end", () => resolve(JSON.parse(d)));
-        });
+        const body = await parseBody(req, 100000);
         const { ticketId } = body;
         if (!ticketId) return json(res, 400, { error: "ticketId required" });
 
@@ -788,10 +783,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
       // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)
       if (pathname === "/api/zendesk/auto-respond" && req.method === "POST") {
-        const body = await new Promise((resolve, reject) => {
-          let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
-          req.on("end", () => resolve(JSON.parse(d)));
-        });
+        const body = await parseBody(req);
         const { ticketId, response, priority, tags, internalNote, approvedBy } = body;
         if (!ticketId || !response) return json(res, 400, { error: "ticketId and response required" });
         if (!approvedBy) return json(res, 403, { error: "Human approval required — approvedBy field is mandatory. No auto-sending allowed." });
@@ -843,10 +835,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       return json(res, 503, { error: "Azure OpenAI not configured on server" });
     }
     try {
-      const body = await new Promise((resolve, reject) => {
-        let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
-        req.on("end", () => resolve(JSON.parse(d)));
-      });
+      const body = await parseBody(req);
       const { systemPrompt, userPrompt } = body;
       if (!systemPrompt || !userPrompt) return json(res, 400, { error: "systemPrompt and userPrompt required" });
 
