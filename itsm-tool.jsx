@@ -737,7 +737,7 @@ function buildAiResponse(topic, userMsg, ctx) {
           if (art.whenToUse) resp += `💡 When to use: ${art.whenToUse}\n`;
           resp += `\n⚡ **Quick Fix:**\n`;
           (art.quickFix || []).slice(0, 3).forEach((step, si) => { resp += `  ${si + 1}. ${step}\n`; });
-          if ((art.quickFix || []).length > 3) resp += `  ... +${art.quickFix.length - 3} more steps\n`;
+          if ((art.quickFix || []).length > 3) resp += `  ... +${(art.quickFix || []).length - 3} more steps\n`;
           resp += `📎 [Open in SharePoint](${art.spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(art.spSlug) : '#'})\n`;
           if (art.relatedArticles && art.relatedArticles.length > 0) resp += `🔗 Related: ${Array.isArray(art.relatedArticles) ? art.relatedArticles.join(", ") : art.relatedArticles}\n`;
           resp += `👁 ${art.views} views · 👍 ${art.helpful}% helpful\n\n`;
@@ -3650,7 +3650,7 @@ export default function ITSMApp() {
             </div>
             <div style={{ color: "#5A6178", fontSize: 13, marginBottom: 14 }}>{ch.description}</div>
             <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-              {ch.approvers.map((a, i) => (
+              {(ch.approvers || []).map((a, i) => (
                 <div key={i} style={{
                   display: "flex", alignItems: "center", gap: 6,
                   padding: "4px 10px", borderRadius: 4, background: "#0A0C14",
@@ -3664,10 +3664,10 @@ export default function ITSMApp() {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button style={btnStyle("#4CAF50")} onClick={() => {
-                setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Approved", approvers: c.approvers.map(a => ({ ...a, status: "Approved" })) } : c));
+                setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Approved", approvers: (c.approvers || []).map(a => ({ ...a, status: "Approved" })) } : c));
               }}>✓ Approve</button>
               <button style={btnStyle("#FF4444")} onClick={() => {
-                setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed", approvers: c.approvers.map(a => ({ ...a, status: "Rejected" })) } : c));
+                setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed", approvers: (c.approvers || []).map(a => ({ ...a, status: "Rejected" })) } : c));
               }}>✕ Reject</button>
             </div>
           </div>
@@ -3904,11 +3904,11 @@ export default function ITSMApp() {
                 <div style={{ color: "#CE93D8", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedAssignee || "Manual"}</div>
               </div>
             </div>
-            {aiSuggestion.kbSuggestions.length > 0 && (
+            {(aiSuggestion.kbSuggestions || []).length > 0 && (
               <div>
                 <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 6 }}>Suggested KB Articles</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {aiSuggestion.kbSuggestions.map(kbId => {
+                  {(aiSuggestion.kbSuggestions || []).map(kbId => {
                     const art = kbArticles.find(a => a.id === kbId);
                     return art ? (
                       <span key={kbId} style={{ cursor: "pointer" }} onClick={() => { setDetailItem(art); setModal("kbDetail"); }}>
@@ -4065,7 +4065,7 @@ export default function ITSMApp() {
             `Thank you for contacting VGC Technology regarding ${inc.id} — "${inc.title}".`,
             `We're glad this has been ${newStatus.toLowerCase()}. Your feedback helps us improve.`,
             "",
-            ...tpl.questions.map((q, i) => `${i + 1}. ${q}`),
+            ...(tpl.questions || []).map((q, i) => `${i + 1}. ${q}`),
             "",
             tpl.signOff,
             `— VGC Technology ITSM`
@@ -4637,7 +4637,7 @@ export default function ITSMApp() {
         <div style={{ marginBottom: 16 }}>
           <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>APPROVERS</span>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {ch.approvers.map((a, i) => (
+            {(ch.approvers || []).map((a, i) => (
               <div key={i} style={{
                 display: "flex", alignItems: "center", gap: 8,
                 padding: "8px 14px", borderRadius: 6, background: "#0A0C14",
@@ -4653,11 +4653,11 @@ export default function ITSMApp() {
         {ch.status === "Awaiting Approval" && (
           <div style={{ display: "flex", gap: 8 }}>
             <button style={btnStyle("#4CAF50")} onClick={() => {
-              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Approved", approvers: c.approvers.map(a => ({ ...a, status: "Approved" })) } : c));
-              setDetailItem({ ...ch, status: "Approved", approvers: ch.approvers.map(a => ({ ...a, status: "Approved" })) });
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Approved", approvers: (c.approvers || []).map(a => ({ ...a, status: "Approved" })) } : c));
+              setDetailItem({ ...ch, status: "Approved", approvers: (ch.approvers || []).map(a => ({ ...a, status: "Approved" })) });
             }}>✓ Approve</button>
             <button style={btnStyle("#FF4444")} onClick={() => {
-              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed", approvers: c.approvers.map(a => ({ ...a, status: "Rejected" })) } : c));
+              setChanges(prev => prev.map(c => c.id === ch.id ? { ...c, status: "Closed", approvers: (c.approvers || []).map(a => ({ ...a, status: "Rejected" })) } : c));
               setModal(null); setDetailItem(null);
             }}>✕ Reject</button>
           </div>
@@ -4924,8 +4924,8 @@ export default function ITSMApp() {
         </FormField>
         <FormField label="Link Incidents">
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-            {form.linkedIncidents.map(incId => (
-              <span key={incId} style={{ cursor: "pointer" }} onClick={() => setForm({ ...form, linkedIncidents: form.linkedIncidents.filter(id => id !== incId) })}>
+            {(form.linkedIncidents || []).map(incId => (
+              <span key={incId} style={{ cursor: "pointer" }} onClick={() => setForm({ ...form, linkedIncidents: (form.linkedIncidents || []).filter(id => id !== incId) })}>                
                 <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{incId} ✕</Badge>
               </span>
             ))}
@@ -5008,19 +5008,19 @@ export default function ITSMApp() {
         </FormField>
         <FormField label="Approvers">
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-            {form.approvers.map(name => (
-              <span key={name} style={{ cursor: "pointer" }} onClick={() => setForm({ ...form, approvers: form.approvers.filter(n => n !== name) })}>
+            {(form.approvers || []).map(name => (
+              <span key={name} style={{ cursor: "pointer" }} onClick={() => setForm({ ...form, approvers: (form.approvers || []).filter(n => n !== name) })}>                
                 <Badge color={{ bg: "#2D1F0A", text: "#FFB347" }}>{name} ✕</Badge>
               </span>
             ))}
           </div>
           <select style={inputStyle} value="" onChange={e => {
             if (e.target.value && !form.approvers.includes(e.target.value)) {
-              setForm({ ...form, approvers: [...form.approvers, e.target.value] });
+              setForm({ ...form, approvers: [...(form.approvers || []), e.target.value] });
             }
           }}>
             <option value="">Add approver...</option>
-            {managers.filter(u => !form.approvers.includes(u.name)).map(u => (
+            {managers.filter(u => !(form.approvers || []).includes(u.name)).map(u => (
               <option key={u.id} value={u.name}>{u.name} — {u.role}</option>
             ))}
           </select>
@@ -5031,10 +5031,10 @@ export default function ITSMApp() {
             if (!form.title) return;
             const newChange = {
               id: genId("CHG"), title: form.title, type: form.type,
-              status: form.approvers.length > 0 ? "Awaiting Approval" : "Approved",
+              status: (form.approvers || []).length > 0 ? "Awaiting Approval" : "Approved",
               priority: form.priority, risk: form.risk,
               assignee: form.assignee || "Unassigned",
-              approvers: form.approvers.map(name => ({ name, status: "Pending" })),
+              approvers: (form.approvers || []).map(name => ({ name, status: "Pending" })),
               created: 0, scheduledStart: form.scheduledStart || "TBD",
               scheduledEnd: form.scheduledEnd || "TBD", description: form.description
             };
@@ -7838,8 +7838,8 @@ export default function ITSMApp() {
                     const updated = surveyTemplates.filter(x => x.id !== tpl.id); setSurveyTemplates(updated); _save("vgc_survey_templates", updated);
                   }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12 }} title="Delete template">🗑️</button>
                 </div>
-                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6 }}>Questions ({tpl.questions.length}):</div>
-                {tpl.questions.map((q, qi) => (
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6 }}>Questions ({(tpl.questions || []).length}):</div>
+                {(tpl.questions || []).map((q, qi) => (
                   <div key={qi} style={{ fontSize: 11, color: "#C4CAD6", padding: "3px 0 3px 12px", borderLeft: "2px solid #6366F133", marginBottom: 4 }}>
                     {qi + 1}. {q}
                   </div>
@@ -8069,7 +8069,7 @@ export default function ITSMApp() {
             )}
             <FormField label="Services">
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                {customerForm.services.map((s, i) => (
+                {(customerForm.services || []).map((s, i) => (
                   <span key={i} style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, background: "#6366F122", color: "#6366F1", border: "1px solid #6366F133", display: "flex", alignItems: "center", gap: 4 }}>
                     {s} <button onClick={() => setCustomerForm(f => ({ ...f, services: f.services.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 11, padding: 0 }}>✕</button>
                   </span>
@@ -8543,7 +8543,7 @@ export default function ITSMApp() {
             ${cust?.services?.length > 0 ? `
             <div class="section">
               <div class="section-title">Subscribed Services</div>
-              <div style="display:flex;flex-wrap:wrap;gap:6px">${cust.services.map(s => `<span class="badge" style="background:#6366F122;color:#6366F1;border:1px solid #6366F144">${sanitizeHTML(s)}</span>`).join("")}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">${(cust.services || []).map(s => `<span class="badge" style="background:#6366F122;color:#6366F1;border:1px solid #6366F144">${sanitizeHTML(s)}</span>`).join("")}</div>
             </div>` : ""}
             <div class="footer">
               <p><strong>VGC Technology Pte Ltd</strong> — IT Service Management</p>
