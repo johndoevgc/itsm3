@@ -1228,6 +1228,10 @@ export default function ITSMApp() {
   const [sophosData, setSophosData] = useState(null);
   const [sophosLoading, setSophosLoading] = useState(false);
   const [expandedMerakiOrg, setExpandedMerakiOrg] = useState(null);
+  const [showKbTraining, setShowKbTraining] = useState(false);
+  const [kbEntries, setKbEntries] = useState([]);
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbForm, setKbForm] = useState({ title: "", category: "General", content: "", tags: "" });
   const [showCardSettings, setShowCardSettings] = useState(false);
   const [dashboardEditMode, setDashboardEditMode] = useState(false);
   const [cardLayout, setCardLayout] = useState(() => {
@@ -1887,6 +1891,37 @@ export default function ITSMApp() {
       return null; // Fallback to local
     }
   };
+  // ─── AI Knowledge Base Functions ────────────────────────────────────
+  const fetchKbEntries = async () => {
+    setKbLoading(true);
+    try {
+      const res = await fetch("/api/ai/knowledge");
+      if (res.ok) { const data = await res.json(); setKbEntries(data.entries || []); }
+    } catch (e) { console.warn("[KB] Fetch failed:", e.message); }
+    setKbLoading(false);
+  };
+  const submitKbEntry = async () => {
+    if (!kbForm.title.trim() || !kbForm.content.trim()) return;
+    try {
+      const res = await fetch("/api/ai/knowledge", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...kbForm, tags: kbForm.tags.split(",").map(t => t.trim()).filter(Boolean), trainedBy: currentUser.name })
+      });
+      if (res.ok) {
+        setKbForm({ title: "", category: "General", content: "", tags: "" });
+        fetchKbEntries();
+        setAiMessages(prev => [...prev, { role: "ai", text: `✅ **Knowledge trained successfully!**\n\n📝 **${kbForm.title}** has been added to the internal knowledge base.\n\nCategory: ${kbForm.category}\nTrained by: ${currentUser.name}\n\nI will now prioritize this knowledge when answering related questions.`, source: "azure" }]);
+      }
+    } catch (e) { console.warn("[KB] Submit failed:", e.message); }
+  };
+  const deleteKbEntry = async (id) => {
+    try {
+      await fetch(`/api/ai/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" });
+      fetchKbEntries();
+    } catch (e) { console.warn("[KB] Delete failed:", e.message); }
+  };
+  useEffect(() => { fetchKbEntries(); }, []);
+
   const [integrations, setIntegrations] = useState(() => _ls("vgc_integrations", INTEGRATION_CATALOG));
   const [smtpConfig, setSmtpConfig] = useState({
     host: "smtp.office365.com", port: 587, encryption: "STARTTLS",
@@ -6174,7 +6209,61 @@ export default function ITSMApp() {
                 placeholder="Ask me anything — incidents, SLA, security, briefing..."
                 onKeyDown={e => { if (e.key === "Enter") handleAiChat(); }} />
               <button style={btnStyle("#6366F1")} onClick={() => handleAiChat()}>Send</button>
+              <button onClick={() => { setShowKbTraining(!showKbTraining); if (!showKbTraining) fetchKbEntries(); }} style={{ ...btnStyle(showKbTraining ? "#FFB347" : "#00BF6F"), fontSize: 11, whiteSpace: "nowrap" }}>{showKbTraining ? "✕ Close" : "🧠 Train AI"}</button>
             </div>
+            {/* AI Training Panel */}
+            {showKbTraining && (
+              <div style={{ marginTop: 12, background: "#0A0C14", borderRadius: 10, border: "1px solid #00BF6F33", padding: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                  <h4 style={{ margin: 0, fontSize: 13, color: "#00BF6F", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>🧠</span> Train AI — Internal Knowledge Base
+                  </h4>
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", padding: "2px 8px", background: "#1E213044", borderRadius: 4 }}>{kbEntries.length} entries</span>
+                </div>
+                <div style={{ fontSize: 10, color: "#8A8FA8", marginBottom: 12, lineHeight: 1.5 }}>
+                  Add knowledge here so AI always checks internal docs first. When someone asks a question, AI will prioritize this knowledge before using external sources.
+                </div>
+                {/* Add New Knowledge Form */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                  <input style={{ ...inputStyle, fontSize: 11 }} placeholder="Title (e.g., VPN Setup Guide)" value={kbForm.title} onChange={e => setKbForm(p => ({ ...p, title: e.target.value }))} />
+                  <select style={{ ...inputStyle, fontSize: 11 }} value={kbForm.category} onChange={e => setKbForm(p => ({ ...p, category: e.target.value }))}>
+                    {["General", "Networking", "Security", "Hardware", "Software", "Email", "VPN", "Firewall", "Printing", "Onboarding", "Policy", "SOP", "Troubleshooting"].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <textarea style={{ ...inputStyle, fontSize: 11, width: "100%", minHeight: 80, resize: "vertical", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5, boxSizing: "border-box" }} placeholder="Knowledge content — procedures, solutions, policies, troubleshooting steps..." value={kbForm.content} onChange={e => setKbForm(p => ({ ...p, content: e.target.value }))} />
+                <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                  <input style={{ ...inputStyle, fontSize: 11, flex: 1 }} placeholder="Tags (comma-separated: vpn, networking, cisco)" value={kbForm.tags} onChange={e => setKbForm(p => ({ ...p, tags: e.target.value }))} />
+                  <button onClick={submitKbEntry} disabled={!kbForm.title.trim() || !kbForm.content.trim()} style={{ ...btnStyle("#00BF6F"), fontSize: 11, opacity: (!kbForm.title.trim() || !kbForm.content.trim()) ? 0.4 : 1, whiteSpace: "nowrap" }}>💾 Save Knowledge</button>
+                </div>
+                {/* Existing Knowledge Entries */}
+                {kbEntries.length > 0 && (
+                  <div style={{ borderTop: "1px solid #1E213044", paddingTop: 12 }}>
+                    <div style={{ fontSize: 11, color: "#6366F1", fontWeight: 600, marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>📚 Trained Knowledge ({kbEntries.length})</div>
+                    <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                      {kbEntries.map(e => (
+                        <div key={e.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", marginBottom: 6, background: "#0F1117", borderRadius: 6, border: "1px solid #1E213033" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                              <span style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 600 }}>{e.title}</span>
+                              <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#6366F118", color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{e.category}</span>
+                            </div>
+                            <div style={{ fontSize: 10, color: "#8A8FA8", lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{e.content}</div>
+                            <div style={{ display: "flex", gap: 8, marginTop: 4, fontSize: 9, color: "#5A617888" }}>
+                              <span>By: {e.trainedBy}</span>
+                              <span>·</span>
+                              <span>{new Date(e.createdAt).toLocaleDateString("en-SG")}</span>
+                              {e.tags && e.tags.length > 0 && <span>· Tags: {e.tags.join(", ")}</span>}
+                            </div>
+                          </div>
+                          <button onClick={() => deleteKbEntry(e.id)} style={{ background: "none", border: "1px solid #FF444433", borderRadius: 4, padding: "2px 6px", fontSize: 9, color: "#FF6B6B", cursor: "pointer", flexShrink: 0 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {kbLoading && <div style={{ textAlign: "center", fontSize: 10, color: "#5A6178", padding: 10 }}>Loading knowledge base...</div>}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               {[
                 { label: "📊 Morning Briefing", action: "Give me my morning briefing" },

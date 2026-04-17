@@ -840,6 +840,69 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── AI Knowledge Base: CRUD /api/ai/knowledge ─────────────────────
+  if (pathname === "/api/ai/knowledge" && req.method === "GET") {
+    try {
+      const items = await db.getAll("ai_knowledge");
+      const entries = items.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { entries, total: entries.length });
+    } catch (err) {
+      console.error("[AI Knowledge GET]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+  if (pathname === "/api/ai/knowledge" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { title, category, content, tags, trainedBy } = body;
+      if (!title || !content) return json(res, 400, { error: "title and content are required" });
+      const id = `kb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const entry = { id, title: title.trim(), category: (category || "General").trim(), content: content.trim(), tags: (tags || []).map(t => t.trim().toLowerCase()), trainedBy: trainedBy || "Unknown", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      await db.upsert("ai_knowledge", id, JSON.stringify(entry));
+      await db.audit("ai_knowledge", id, "create", JSON.stringify({ title, category }), trainedBy || "Unknown");
+      console.log(`[AI Knowledge] Created: "${title}" by ${trainedBy} (${category})`);
+      return json(res, 201, { entry });
+    } catch (err) {
+      console.error("[AI Knowledge POST]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+  if (pathname.startsWith("/api/ai/knowledge/") && req.method === "DELETE") {
+    try {
+      const id = pathname.split("/api/ai/knowledge/")[1];
+      if (!id) return json(res, 400, { error: "ID required" });
+      await db.deleteOne("ai_knowledge", decodeURIComponent(id));
+      console.log(`[AI Knowledge] Deleted: ${id}`);
+      return json(res, 200, { deleted: true });
+    } catch (err) {
+      console.error("[AI Knowledge DELETE]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+  if (pathname === "/api/ai/knowledge/search" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const query = (body.query || "").toLowerCase();
+      if (!query) return json(res, 400, { error: "query required" });
+      const items = await db.getAll("ai_knowledge");
+      const entries = items.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      // Score each entry by keyword match
+      const scored = entries.map(e => {
+        let score = 0;
+        const words = query.split(/\s+/).filter(w => w.length > 2);
+        const haystack = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
+        words.forEach(w => { if (haystack.includes(w)) score += 10; });
+        if (e.title.toLowerCase().includes(query)) score += 50;
+        if (e.tags && e.tags.some(t => query.includes(t))) score += 30;
+        return { ...e, score };
+      }).filter(e => e.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
+      return json(res, 200, { results: scored, total: scored.length });
+    } catch (err) {
+      console.error("[AI Knowledge Search]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
@@ -850,10 +913,36 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       const { systemPrompt, userPrompt } = body;
       if (!systemPrompt || !userPrompt) return json(res, 400, { error: "systemPrompt and userPrompt required" });
 
+      // Search internal knowledge base first
+      let kbContext = "";
+      try {
+        const kbItems = await db.getAll("ai_knowledge");
+        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        if (kbEntries.length > 0) {
+          const query = userPrompt.toLowerCase();
+          const words = query.split(/\s+/).filter(w => w.length > 2);
+          const matched = kbEntries.map(e => {
+            let score = 0;
+            const haystack = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
+            words.forEach(w => { if (haystack.includes(w)) score += 10; });
+            if (e.title.toLowerCase().includes(query)) score += 50;
+            if (e.tags && e.tags.some(t => query.includes(t))) score += 30;
+            return { ...e, score };
+          }).filter(e => e.score > 0).sort((a, b) => b.score - a.score).slice(0, 3);
+          if (matched.length > 0) {
+            kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE (PRIORITY — use this first) ===\n" +
+              matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
+              "\n=== END INTERNAL KB ===\nIMPORTANT: Always reference internal knowledge base articles first. If the internal KB has relevant info, use it as the primary source and cite it. Only supplement with external knowledge if the internal KB doesn't fully answer the question.";
+          }
+        }
+      } catch (e) { console.warn("[AI KB Search]", e.message); }
+
+      const enrichedSystemPrompt = systemPrompt + kbContext;
+
       const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
       const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 1200, temperature: 0.7 };
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 1200, temperature: 0.7 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiReqOptions = {
