@@ -1222,6 +1222,12 @@ export default function ITSMApp() {
   const [threatEmailDraft, setThreatEmailDraft] = useState(null);
   const [dashboardThreats, setDashboardThreats] = useState([]);
   const [showCardSettings, setShowCardSettings] = useState(false);
+  const [dashboardEditMode, setDashboardEditMode] = useState(false);
+  const [cardLayout, setCardLayout] = useState(() => {
+    try { const s = localStorage.getItem("vgc_card_layout"); if (s) return JSON.parse(s); } catch {}
+    return {};
+  });
+  const [dragState, setDragState] = useState(null);
   const [cardVisibility, setCardVisibility] = useState({
     execKpis:        { on: true, important: false, label: "Executive KPIs",        roles: ["management"] },
     caseAnalysis:    { on: true, important: false, label: "Case Analysis",          roles: ["management"] },
@@ -1230,6 +1236,8 @@ export default function ITSMApp() {
     teamWorkload:    { on: true, important: false, label: "Team Workload",          roles: ["management"] },
     businessImpact:  { on: false, important: false, label: "Business Impact & Cost", roles: ["management"] },
     pendingApprovals:{ on: true, important: false, label: "Pending Approvals",      roles: ["management"] },
+    opsHub:          { on: true, important: false, label: "Operations Hub",         roles: ["all"] },
+    merakiFirewall:  { on: true, important: false, label: "Cisco Meraki Firewall",  roles: ["all"] },
     personalKpis:    { on: true, important: false, label: "Personal KPIs",          roles: ["engineer"] },
     ticketQueue:     { on: true, important: false, label: "My Ticket Queue",        roles: ["engineer"] },
     quickActions:    { on: true, important: false, label: "Quick Actions",          roles: ["engineer"] },
@@ -1394,6 +1402,9 @@ export default function ITSMApp() {
   useEffect(() => {
     try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch {}
   }, [dismissedProactiveAlerts]);
+  useEffect(() => {
+    try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch {}
+  }, [cardLayout]);
 
   // Fetch live cyber news for dashboard threat feed
   useEffect(() => {
@@ -2135,6 +2146,59 @@ export default function ITSMApp() {
       if (!canToggle(cardId)) return;
       setCardVisibility(prev => ({ ...prev, [cardId]: { ...prev[cardId], on: !prev[cardId].on } }));
     };
+
+    // ─── Draggable/Resizable Card Wrapper ────────────────────────────
+    const cardOrder = cardLayout.order || [];
+    const moveCard = (cardId, dir) => {
+      const allCardIds = Object.keys(cardVisibility);
+      const current = cardOrder.length > 0 ? [...cardOrder] : [...allCardIds];
+      const idx = current.indexOf(cardId);
+      if (idx < 0) { current.push(cardId); return; }
+      const target = idx + dir;
+      if (target < 0 || target >= current.length) return;
+      [current[idx], current[target]] = [current[target], current[idx]];
+      setCardLayout(prev => ({ ...prev, order: current }));
+    };
+    const cardSizes = cardLayout.sizes || {};
+    const cycleSize = (cardId) => {
+      const sizes = ["normal", "compact", "expanded"];
+      const cur = cardSizes[cardId] || "normal";
+      const next = sizes[(sizes.indexOf(cur) + 1) % sizes.length];
+      setCardLayout(prev => ({ ...prev, sizes: { ...prev.sizes, [cardId]: next } }));
+    };
+    const getCardSize = (cardId) => cardSizes[cardId] || "normal";
+    const DashCard = ({ id, children, noPad }) => {
+      const size = getCardSize(id);
+      return (
+        <div style={{
+          position: "relative",
+          transform: size === "compact" ? "scale(0.95)" : size === "expanded" ? "none" : "none",
+          transformOrigin: "top left",
+          transition: "all 0.25s ease",
+          marginBottom: size === "compact" ? 12 : 20,
+        }}>
+          {dashboardEditMode && (
+            <div style={{
+              position: "absolute", top: -10, right: 0, zIndex: 10, display: "flex", gap: 4,
+              background: "#0F1117", border: "1px solid #6366F144", borderRadius: 6, padding: "3px 6px",
+              boxShadow: "0 2px 8px #00000044"
+            }}>
+              <button onClick={() => moveCard(id, -1)} title="Move up" style={{ border: "none", background: "none", color: "#6366F1", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>▲</button>
+              <button onClick={() => moveCard(id, 1)} title="Move down" style={{ border: "none", background: "none", color: "#6366F1", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>▼</button>
+              <button onClick={() => cycleSize(id)} title={`Size: ${size}`} style={{ border: "none", background: "none", color: "#FFB347", cursor: "pointer", fontSize: 10, padding: "2px 4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                {size === "compact" ? "▫" : size === "expanded" ? "▣" : "◻"}
+              </button>
+              <button onClick={() => toggleCard(id)} title="Hide card" style={{ border: "none", background: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✕</button>
+            </div>
+          )}
+          {dashboardEditMode && (
+            <div style={{ position: "absolute", inset: 0, border: "2px dashed #6366F133", borderRadius: 10, pointerEvents: "none", zIndex: 5 }} />
+          )}
+          {children}
+        </div>
+      );
+    };
+
     const CardHeader = ({ cardId, children }) => (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>{children}</div>
@@ -2283,6 +2347,13 @@ export default function ITSMApp() {
           </div>
           <div style={{ fontSize: 11, color: "#3A3F55" }}>|</div>
           <div style={{ fontSize: 11, color: "#5A6178" }}>{currentUser.name} · {role}</div>
+          <button onClick={() => setDashboardEditMode(!dashboardEditMode)} style={{
+            marginLeft: 6, display: "flex", alignItems: "center", gap: 6,
+            padding: "5px 12px", borderRadius: 6, border: dashboardEditMode ? "1px solid #FFB34766" : "1px solid #1E2130", background: dashboardEditMode ? "#FFB34722" : "#0F1117",
+            color: dashboardEditMode ? "#FFB347" : "#5A6178", cursor: "pointer", fontSize: 11, fontFamily: "'JetBrains Mono', monospace"
+          }}>
+            {dashboardEditMode ? "✓ Done Editing" : "✏️ Edit Layout"}
+          </button>
           <button onClick={() => setShowCardSettings(!showCardSettings)} style={{
             marginLeft: "auto", display: "flex", alignItems: "center", gap: 6,
             padding: "5px 12px", borderRadius: 6, border: "1px solid #1E2130", background: showCardSettings ? "#6366F122" : "#0F1117",
@@ -3048,6 +3119,258 @@ export default function ITSMApp() {
             </div>
           </div>
         )}
+
+        {/* ═══ CISCO MERAKI FIREWALL ═══ */}
+        {cardVisibility.merakiFirewall.on && <DashCard id="merakiFirewall"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #00BF6F, #006D36, #00BF6F)" }} />
+          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 16 }}>🔥</span> Cisco Meraki Firewall
+              <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>MX450</span>
+            </span>
+            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Meraki Dashboard API · Last poll: {new Date().toLocaleTimeString("en-SG", { hour12: false })}</span>
+          </h3>
+          {/* Status Overview */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
+            {[
+              { label: "Status", value: "Online", icon: "●", color: "#00BF6F" },
+              { label: "Uptime", value: "47d 12h", icon: "⏱️", color: "#06B6D4" },
+              { label: "WAN IP", value: "203.116.x.x", icon: "🌐", color: "#6366F1" },
+              { label: "Throughput", value: "842 Mbps", icon: "📶", color: "#81C784" },
+              { label: "Active VPN", value: "12 peers", icon: "🔒", color: "#FFB347" },
+              { label: "Clients", value: "347", icon: "💻", color: "#CE93D8" },
+            ].map((s, i) => (
+              <div key={i} style={{ textAlign: "center", padding: "10px 8px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
+                <div style={{ fontSize: 14, marginBottom: 4 }}>{s.icon}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {/* Threat & Traffic Grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+            {/* Threat Protection */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#FF6B6B", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🛡️</span> Threat Protection (24h)
+              </div>
+              {[
+                { label: "Intrusions Blocked", value: "1,284", color: "#FF4444", bar: 85 },
+                { label: "Malware Detected", value: "23", color: "#FF6B6B", bar: 15 },
+                { label: "C2 Callbacks Blocked", value: "7", color: "#FFB347", bar: 5 },
+                { label: "AMP File Scans", value: "12,847", color: "#81C784", bar: 92 },
+                { label: "DNS Security Blocks", value: "456", color: "#6366F1", bar: 35 },
+              ].map((t, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, minWidth: 0 }}>{t.label}</span>
+                  <div style={{ width: 60, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ width: `${t.bar}%`, height: "100%", background: t.color, borderRadius: 2, transition: "width 1s ease" }} />
+                  </div>
+                  <span style={{ fontSize: 10, color: t.color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", minWidth: 50, textAlign: "right" }}>{t.value}</span>
+                </div>
+              ))}
+            </div>
+            {/* Top Traffic & Bandwidth */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#06B6D4", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>📊</span> Top Applications (Bandwidth)
+              </div>
+              {[
+                { app: "Microsoft 365", bw: "128 GB", pct: 32, color: "#0078D4" },
+                { app: "Web Browsing (HTTPS)", bw: "96 GB", pct: 24, color: "#6366F1" },
+                { app: "Zoom / Teams Video", bw: "64 GB", pct: 16, color: "#2D8CFF" },
+                { app: "AWS S3 / Azure Blob", bw: "52 GB", pct: 13, color: "#FFB347" },
+                { app: "DNS Traffic", bw: "12 GB", pct: 3, color: "#81C784" },
+                { app: "Other", bw: "48 GB", pct: 12, color: "#5A6178" },
+              ].map((a, i) => (
+                <div key={i} style={{ marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, color: "#C4CAD6" }}>{a.app}</span>
+                    <span style={{ fontSize: 9, color: a.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{a.bw} ({a.pct}%)</span>
+                  </div>
+                  <div style={{ width: "100%", height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ width: `${a.pct}%`, height: "100%", background: a.color, borderRadius: 2, transition: "width 1s ease" }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Firewall Rules & VPN Tunnels */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {/* Active Firewall Rules Summary */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#00BF6F", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>📋</span> Firewall Rules Summary
+              </div>
+              {[
+                { rule: "L3 Outbound Rules", count: 42, allow: 38, deny: 4 },
+                { rule: "L7 Application Rules", count: 18, allow: 12, deny: 6 },
+                { rule: "Geo-IP Block Rules", count: 8, allow: 0, deny: 8 },
+                { rule: "Content Filtering", count: 15, allow: 9, deny: 6 },
+              ].map((r, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
+                  <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1 }}>{r.rule}</span>
+                  <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#4CAF5022", color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>✓{r.allow}</span>
+                  <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#FF444422", color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>✕{r.deny}</span>
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{r.count} total</span>
+                </div>
+              ))}
+            </div>
+            {/* VPN Tunnels */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#FFB347", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🔐</span> Site-to-Site VPN Tunnels
+              </div>
+              {[
+                { site: "SG-HQ ↔ SG-DR", status: "Active", latency: "2ms", uptime: "99.99%" },
+                { site: "SG-HQ ↔ MY-KL", status: "Active", latency: "12ms", uptime: "99.95%" },
+                { site: "SG-HQ ↔ TH-BKK", status: "Active", latency: "28ms", uptime: "99.91%" },
+                { site: "SG-HQ ↔ ID-JKT", status: "Active", latency: "35ms", uptime: "99.87%" },
+                { site: "SG-HQ ↔ PH-MNL", status: "Standby", latency: "—", uptime: "—" },
+              ].map((v, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, marginBottom: 4, background: "#0F111708" }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: v.status === "Active" ? "#00BF6F" : "#5A6178", boxShadow: v.status === "Active" ? "0 0 6px #00BF6F66" : "none", flexShrink: 0 }} />
+                  <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1 }}>{v.site}</span>
+                  <span style={{ fontSize: 9, color: v.status === "Active" ? "#00BF6F" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{v.latency}</span>
+                  <span style={{ fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{v.uptime}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div></DashCard>}
+
+        {/* ═══ OPERATIONS HUB — Problems · Changes · Requests ═══ */}
+        {cardVisibility.opsHub.on && <DashCard id="opsHub"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #CE93D8, #FFB347, #81C784)" }} />
+          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 16 }}>⚙️</span> Operations Hub
+              <span style={{ fontSize: 10, color: "#5A617888" }}>Problems · Changes · Requests</span>
+            </span>
+            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Unified Lifecycle View</span>
+          </h3>
+
+          {/* Animated Flow Diagram */}
+          <div style={{ marginBottom: 20, padding: "16px 12px", background: "#0A0C14", borderRadius: 10, border: "1px solid #1E213044" }}>
+            <div style={{ fontSize: 10, color: "#5A6178", textAlign: "center", marginBottom: 12, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>ITIL Lifecycle Flow</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0, flexWrap: "wrap" }}>
+              {[
+                { label: "Incident", icon: "🎫", color: "#FF6B6B", desc: "Issue reported", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length },
+                null,
+                { label: "Problem", icon: "🔍", color: "#CE93D8", desc: "Root cause analysis", count: problems.length },
+                null,
+                { label: "Change", icon: "📋", color: "#FFB347", desc: "Planned improvement", count: changes.length },
+                null,
+                { label: "Request", icon: "📝", color: "#81C784", desc: "Service fulfillment", count: requests.length },
+                null,
+                { label: "Resolved", icon: "✅", color: "#4CAF50", desc: "Completed & closed", count: incidents.filter(i => i.status === "Resolved" || i.status === "Closed").length },
+              ].map((step, i) => step === null ? (
+                <div key={`arrow-${i}`} style={{ display: "flex", alignItems: "center", padding: "0 2px" }}>
+                  <div style={{ width: 24, height: 2, background: "linear-gradient(90deg, #3A3F5500, #6366F1, #3A3F5500)", position: "relative" }}>
+                    <div style={{
+                      position: "absolute", right: -3, top: -3, width: 0, height: 0,
+                      borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "6px solid #6366F1",
+                    }} />
+                    <div style={{
+                      position: "absolute", left: 0, top: -1, width: 4, height: 4, borderRadius: "50%",
+                      background: "#6366F1", animation: `flowDot ${2 + i * 0.3}s ease-in-out infinite`,
+                    }} />
+                  </div>
+                </div>
+              ) : (
+                <div key={step.label} onClick={() => setActiveModule(step.label === "Incident" ? "incidents" : step.label === "Problem" ? "problems" : step.label === "Change" ? "changes" : step.label === "Request" ? "requests" : "incidents")}
+                  style={{ textAlign: "center", padding: "10px 12px", borderRadius: 8, background: `${step.color}08`, border: `1px solid ${step.color}33`, cursor: "pointer", minWidth: 90, transition: "all 0.2s", position: "relative" }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${step.color}22`; }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>{step.icon}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: step.color, fontFamily: "'Space Grotesk', sans-serif" }}>{step.label}</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginBottom: 4 }}>{step.desc}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: step.color, fontFamily: "'JetBrains Mono', monospace" }}>{step.count}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ textAlign: "center", marginTop: 10, fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>
+              Click any stage to navigate · Arrows show ITIL process flow
+            </div>
+          </div>
+
+          {/* Three-column data: Problems | Changes | Requests */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+            {/* Problems */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #CE93D822" }}>
+              <div onClick={() => setActiveModule("problems")} style={{ fontSize: 12, fontWeight: 600, color: "#CE93D8", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.opacity = "0.7"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+                🔍 Problems <span style={{ marginLeft: "auto", fontSize: 9, color: "#5A617866" }}>View All →</span>
+              </div>
+              {problems.length === 0 ? (
+                <div style={{ fontSize: 11, color: "#5A6178", padding: 10, textAlign: "center" }}>No active problems</div>
+              ) : problems.slice(0, 4).map(p => (
+                <div key={p.id} onClick={() => { setDetailItem(p); setModal("problemDetail"); }} style={{ padding: "8px 10px", marginBottom: 6, background: "#0F111708", borderRadius: 6, border: "1px solid #1E213022", cursor: "pointer", transition: "border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#CE93D844"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1E213022"}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace" }}>{p.id}</span>
+                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: p.status === "Open" ? "#FF444422" : p.status === "Investigating" ? "#FFB34722" : "#4CAF5022", color: p.status === "Open" ? "#FF6B6B" : p.status === "Investigating" ? "#FFB347" : "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>{p.status}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.3 }}>{p.title}</div>
+                </div>
+              ))}
+            </div>
+            {/* Changes */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #FFB34722" }}>
+              <div onClick={() => setActiveModule("changes")} style={{ fontSize: 12, fontWeight: 600, color: "#FFB347", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.opacity = "0.7"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+                📋 Changes <span style={{ marginLeft: "auto", fontSize: 9, color: "#5A617866" }}>View All →</span>
+              </div>
+              {changes.length === 0 ? (
+                <div style={{ fontSize: 11, color: "#5A6178", padding: 10, textAlign: "center" }}>No scheduled changes</div>
+              ) : changes.slice(0, 4).map(ch => (
+                <div key={ch.id} onClick={() => { setDetailItem(ch); setModal("changeDetail"); }} style={{ padding: "8px 10px", marginBottom: 6, background: "#0F111708", borderRadius: 6, border: "1px solid #1E213022", cursor: "pointer", transition: "border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#FFB34744"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1E213022"}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>{ch.id}</span>
+                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: ch.status === "Awaiting Approval" ? "#FFB34722" : ch.status === "Approved" ? "#4CAF5022" : "#1E2130", color: ch.status === "Awaiting Approval" ? "#FFB347" : ch.status === "Approved" ? "#4CAF50" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{ch.status}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.3 }}>{ch.title}</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 3 }}>{ch.scheduled || "TBD"} · {ch.risk} Risk</div>
+                </div>
+              ))}
+            </div>
+            {/* Requests */}
+            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #81C78422" }}>
+              <div onClick={() => setActiveModule("requests")} style={{ fontSize: 12, fontWeight: 600, color: "#81C784", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.opacity = "0.7"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+                📝 Requests <span style={{ marginLeft: "auto", fontSize: 9, color: "#5A617866" }}>View All →</span>
+              </div>
+              {requests.length === 0 ? (
+                <div style={{ fontSize: 11, color: "#5A6178", padding: 10, textAlign: "center" }}>No active requests</div>
+              ) : requests.slice(0, 4).map(req => (
+                <div key={req.id} onClick={() => { setDetailItem(req); setModal("requestDetail"); }} style={{ padding: "8px 10px", marginBottom: 6, background: "#0F111708", borderRadius: 6, border: "1px solid #1E213022", cursor: "pointer", transition: "border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#81C78444"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1E213022"}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{req.id}</span>
+                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: req.status === "Pending Approval" ? "#FFB34722" : req.status === "Open" || req.status === "In Progress" ? "#64B5F622" : "#4CAF5022", color: req.status === "Pending Approval" ? "#FFB347" : req.status === "Open" || req.status === "In Progress" ? "#64B5F6" : "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>{req.status}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.3 }}>{req.service}</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 3 }}>Requested by: {req.requestedBy || "—"}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Summary Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 14 }}>
+            {[
+              { label: "Open Problems", value: problems.filter(p => p.status === "Open" || p.status === "Investigating").length, color: "#CE93D8" },
+              { label: "Pending Changes", value: changes.filter(c => c.status === "Awaiting Approval").length, color: "#FFB347" },
+              { label: "Active Requests", value: requests.filter(r => r.status === "Open" || r.status === "In Progress").length, color: "#81C784" },
+              { label: "Total Lifecycle Items", value: problems.length + changes.length + requests.length, color: "#6366F1" },
+            ].map((s, i) => (
+              <div key={i} style={{ textAlign: "center", padding: "8px 10px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${s.color}22` }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.5px" }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div></DashCard>}
 
         {/* ═══ SECURITY ALERTS (Both views) ═══ */}
         {cardVisibility.securityAlerts.on && <div style={{ background: "#0F1117", borderRadius: 8, border: securityAlerts.some(a => a.severity === "Critical" && a.status === "Active") ? "1px solid #FF444433" : "1px solid #1E2130", padding: 20, marginBottom: 20, animation: securityAlerts.some(a => a.severity === "Critical" && a.status === "Active") ? "criticalGlow 3s ease-in-out infinite" : "none" }}>
@@ -11898,6 +12221,7 @@ export default function ITSMApp() {
         ::-webkit-scrollbar-thumb { background: #1E2130; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #2A2F45; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes flowDot { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 20px; opacity: 0; } }
         @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
         @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 8px #6366F155, 0 0 20px #8B5CF622; } 50% { box-shadow: 0 0 14px #06B6D488, 0 0 30px #8B5CF644, 0 0 40px #EC489922; } }
         @keyframes logoPulseRing { 0% { transform: scale(1); opacity: 0.6; } 50% { transform: scale(1.15); opacity: 0; } 100% { transform: scale(1); opacity: 0; } }
