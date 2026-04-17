@@ -874,6 +874,9 @@ const INTEGRATION_CATALOG = [
   { id: "INT10", name: "AWS CloudWatch", category: "Monitoring", icon: "☁️", status: "available", description: "Ingest AWS alerts as incidents automatically" },
   { id: "INT11", name: "Zendesk", category: "Support", icon: "💛", status: "connected", description: "AI Command Center — 90% auto-triage, auto-respond, auto-route, ITSM sync" },
   { id: "INT12", name: "GitHub", category: "DevOps", icon: "🐙", status: "available", description: "Link incidents to code changes and deployments" },
+  { id: "INT13", name: "SolarWinds RMM", category: "Monitoring", icon: "🖥️", status: "connected", description: "N-able RMM endpoint monitoring — clients, servers & workstations" },
+  { id: "INT14", name: "Cisco Meraki", category: "Networking", icon: "📡", status: "connected", description: "Dashboard API — orgs, devices, networks, uplinks & VPN status" },
+  { id: "INT15", name: "Sophos Central", category: "Security", icon: "🛡️", status: "connected", description: "Firewall management — groups, firewalls, alerts & threat intelligence" },
 ];
 
 const INITIAL_INCIDENTS = [
@@ -1922,7 +1925,15 @@ export default function ITSMApp() {
   };
   useEffect(() => { fetchKbEntries(); }, []);
 
-  const [integrations, setIntegrations] = useState(() => _ls("vgc_integrations", INTEGRATION_CATALOG));
+  const [integrations, setIntegrations] = useState(() => {
+    const saved = _ls("vgc_integrations", INTEGRATION_CATALOG);
+    // Merge any new catalog entries that don't exist in saved state
+    const savedIds = new Set(saved.map(i => i.id));
+    const merged = [...saved, ...INTEGRATION_CATALOG.filter(c => !savedIds.has(c.id))];
+    return merged;
+  });
+  const [swSettingsOpen, setSwSettingsOpen] = useState(false);
+  const [swConfig, setSwConfig] = useState({ apiKey: "", apiHost: "www.systemmonitor.us", testing: false, testResult: null, saving: false });
   const [smtpConfig, setSmtpConfig] = useState({
     host: "smtp.office365.com", port: 587, encryption: "STARTTLS",
     username: "itsm-noreply@vgctech.com.sg", password: "",
@@ -6696,9 +6707,108 @@ export default function ITSMApp() {
                     onClick={() => toggleIntegration(intg.id)}>
                     {intg.status === "connected" ? "Disconnect" : "Connect"}
                   </button>
+                  {intg.id === "INT13" && (
+                    <button style={{ ...btnStyle("#1E2130"), fontSize: 10, marginTop: 6, width: "100%", color: "#A78BFA", border: "1px solid #A78BFA33" }}
+                      onClick={() => setSwSettingsOpen(!swSettingsOpen)}>
+                      ⚙️ {swSettingsOpen ? "Hide Settings" : "Configure API"}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
+
+            {/* SolarWinds RMM Configuration Panel */}
+            {swSettingsOpen && (
+              <div style={{ marginTop: 20, background: "#0F1117", borderRadius: 10, border: "1px solid #A78BFA33", padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 15, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                      🖥️ SolarWinds RMM / N-able API Settings
+                    </h3>
+                    <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Configure your N-able RMM API credentials for endpoint monitoring</div>
+                  </div>
+                  {swConfig.testResult && (
+                    <Badge color={swConfig.testResult.ok ? { bg: "#0D2D1A", text: "#81C784" } : { bg: "#2D0A0A", text: "#FF6B6B" }}>
+                      {swConfig.testResult.ok ? "✓ Connected" : "✗ Auth Failed"}
+                    </Badge>
+                  )}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#A0AEC0", display: "block", marginBottom: 4 }}>API Host</label>
+                    <input value={swConfig.apiHost} onChange={e => setSwConfig(p => ({ ...p, apiHost: e.target.value, testResult: null }))}
+                      placeholder="www.systemmonitor.us"
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 12, outline: "none", boxSizing: "border-box", fontFamily: "'JetBrains Mono', monospace" }} />
+                    <div style={{ fontSize: 9, color: "#5A617866", marginTop: 2 }}>N-able RMM dashboard host (e.g. www.systemmonitor.us, www.systemmonitor.eu.com)</div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#A0AEC0", display: "block", marginBottom: 4 }}>API Key</label>
+                    <input value={swConfig.apiKey} onChange={e => setSwConfig(p => ({ ...p, apiKey: e.target.value, testResult: null }))}
+                      placeholder="Enter your N-able RMM API key"
+                      type="password"
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 12, outline: "none", boxSizing: "border-box", fontFamily: "'JetBrains Mono', monospace" }} />
+                    <div style={{ fontSize: 9, color: "#5A617866", marginTop: 2 }}>Found in N-able RMM → Settings → General Settings → API</div>
+                  </div>
+                </div>
+
+                {swConfig.testResult && !swConfig.testResult.ok && (
+                  <div style={{ background: "#2D0A0A", borderRadius: 6, border: "1px solid #FF6B6B33", padding: "10px 14px", marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, color: "#FF6B6B", fontWeight: 600, marginBottom: 4 }}>Connection Failed</div>
+                    <div style={{ fontSize: 10, color: "#FF6B6B99" }}>{swConfig.testResult.detail || "API key rejected by N-able RMM. Please verify your API key is correct and not expired."}</div>
+                  </div>
+                )}
+                {swConfig.testResult && swConfig.testResult.ok && (
+                  <div style={{ background: "#0D2D1A", borderRadius: 6, border: "1px solid #81C78433", padding: "10px 14px", marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, color: "#81C784", fontWeight: 600, marginBottom: 4 }}>Connection Successful</div>
+                    <div style={{ fontSize: 10, color: "#81C78499" }}>
+                      Clients: {swConfig.testResult.summary?.totalClients || 0} · Servers: {swConfig.testResult.summary?.totalServers || 0} · Workstations: {swConfig.testResult.summary?.totalWorkstations || 0}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button disabled={swConfig.testing || !swConfig.apiKey}
+                    style={{ ...btnStyle(swConfig.testing ? "#333" : "#06B6D4"), fontSize: 11, padding: "7px 18px", opacity: (!swConfig.apiKey || swConfig.testing) ? 0.5 : 1 }}
+                    onClick={async () => {
+                      setSwConfig(p => ({ ...p, testing: true, testResult: null }));
+                      try {
+                        const r = await fetch("/api/solarwinds/test", {
+                          method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ apiKey: swConfig.apiKey, apiHost: swConfig.apiHost })
+                        });
+                        const data = await r.json();
+                        setSwConfig(p => ({ ...p, testing: false, testResult: data }));
+                      } catch (e) {
+                        setSwConfig(p => ({ ...p, testing: false, testResult: { ok: false, detail: e.message } }));
+                      }
+                    }}>
+                    {swConfig.testing ? "Testing..." : "🔌 Test Connection"}
+                  </button>
+                  <button disabled={swConfig.saving || !swConfig.apiKey || !swConfig.testResult?.ok}
+                    style={{ ...btnStyle(swConfig.testResult?.ok ? "#81C784" : "#333"), fontSize: 11, padding: "7px 18px", opacity: (!swConfig.apiKey || !swConfig.testResult?.ok || swConfig.saving) ? 0.5 : 1 }}
+                    onClick={async () => {
+                      setSwConfig(p => ({ ...p, saving: true }));
+                      try {
+                        const r = await fetch("/api/settings/solarwinds", {
+                          method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ apiKey: swConfig.apiKey, apiHost: swConfig.apiHost })
+                        });
+                        const data = await r.json();
+                        if (data.ok) {
+                          setSwConfig(p => ({ ...p, saving: false, apiKey: "" }));
+                          setIntegrations(prev => prev.map(i => i.id === "INT13" ? { ...i, status: "connected" } : i));
+                        } else {
+                          setSwConfig(p => ({ ...p, saving: false }));
+                        }
+                      } catch { setSwConfig(p => ({ ...p, saving: false })); }
+                    }}>
+                    {swConfig.saving ? "Saving..." : "💾 Save & Apply"}
+                  </button>
+                  <div style={{ fontSize: 9, color: "#5A617866", marginLeft: 8 }}>Test connection first, then save to apply the new API key</div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

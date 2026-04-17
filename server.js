@@ -27,8 +27,8 @@ const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN || "";
 const MERAKI_API_KEYS = (process.env.MERAKI_API_KEYS || "").split(",").map(k => k.trim()).filter(Boolean);
 
 // SolarWinds RMM / N-able API (server-side only)
-const SOLARWINDS_API_KEY = process.env.SOLARWINDS_API_KEY || "";
-const SOLARWINDS_API_HOST = process.env.SOLARWINDS_API_HOST || "www.systemmonitor.us";
+let SOLARWINDS_API_KEY = process.env.SOLARWINDS_API_KEY || "";
+let SOLARWINDS_API_HOST = process.env.SOLARWINDS_API_HOST || "www.systemmonitor.us";
 
 // Sophos Central Firewall API (server-side only)
 const SOPHOS_CLIENT_ID = process.env.SOPHOS_CLIENT_ID || "";
@@ -1208,6 +1208,50 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       console.error("[MERAKI] Error:", err.message);
       return json(res, 502, { error: "Failed to fetch Meraki data", detail: err.message });
     }
+  }
+
+  // ─── SolarWinds RMM — Test Connection ────────────────────────────────
+  if (pathname === "/api/solarwinds/test" && req.method === "POST") {
+    const { apiKey, apiHost } = body || {};
+    if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
+    const host = (apiHost || "www.systemmonitor.us").replace(/^(https?:\/\/)/, "");
+    const hostFull = host.startsWith("www.") ? host : `www.${host}`;
+    const testUrl = `https://${hostFull}/api/?apikey=${encodeURIComponent(apiKey)}&service=list_clients`;
+    try {
+      const xml = await new Promise((resolve, reject) => {
+        const doGet = (url) => {
+          https.get(url, { headers: { "User-Agent": "VGC-ITSM/1.0" } }, resp => {
+            if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) return doGet(resp.headers.location);
+            let d = ""; resp.on("data", c => d += c); resp.on("end", () => resolve(d));
+          }).on("error", reject).setTimeout(15000, function() { this.destroy(); reject(new Error("Timeout")); });
+        };
+        doGet(testUrl);
+      });
+      if (xml.includes("Login failed")) {
+        return json(res, 200, { ok: false, detail: "Login failed — API key is invalid or expired. Generate a new key in N-able RMM → Settings → General Settings → API." });
+      }
+      // Parse clients to get summary
+      const clients = []; const re = /<client[\s>]([\s\S]*?)<\/client>/gi; let m;
+      while ((m = re.exec(xml))) {
+        const block = m[1]; const item = {};
+        block.replace(/<(\w+)>([\s\S]*?)<\/\1>/g, (_, k, v) => { item[k] = v.replace(/<!\[CDATA\[|\]\]>/g, "").trim(); });
+        if (Object.keys(item).length > 0) clients.push(item);
+      }
+      return json(res, 200, { ok: true, summary: { totalClients: clients.length, totalServers: 0, totalWorkstations: 0 }, detail: `Authenticated successfully. Found ${clients.length} clients.` });
+    } catch (err) {
+      return json(res, 200, { ok: false, detail: `Connection error: ${err.message}` });
+    }
+  }
+
+  // ─── SolarWinds RMM — Save Settings ────────────────────────────────
+  if (pathname === "/api/settings/solarwinds" && req.method === "POST") {
+    const { apiKey, apiHost } = body || {};
+    if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
+    SOLARWINDS_API_KEY = apiKey;
+    SOLARWINDS_API_HOST = (apiHost || "www.systemmonitor.us").replace(/^(https?:\/\/)/, "");
+    if (global._solarwindsCache) global._solarwindsCache = { data: null, ts: 0 };
+    console.log(`[SOLARWINDS] API settings updated. Host=${SOLARWINDS_API_HOST}`);
+    return json(res, 200, { ok: true, message: "SolarWinds RMM settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
   }
 
   // ─── SolarWinds RMM / N-able API Proxy ──────────────────────────────
