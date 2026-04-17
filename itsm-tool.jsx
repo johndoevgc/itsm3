@@ -2585,6 +2585,8 @@ export default function ITSMApp() {
                         <span style={{ color: "#64B5F6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{inc.id}</span>
                         <PriorityDot priority={inc.priority} />
                         <Badge color={STATUS_COLORS[inc.status] || { bg: "#1E2130", text: "#C4CAD6" }}>{inc.status}</Badge>
+                        {inc.zdTicketId && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#EC489918", color: "#EC4899", fontWeight: 600 }}>ZD#{inc.zdTicketId}</span>}
+                        {inc.aiTriaged && <span style={{ fontSize: 8, color: "#6366F1" }}>🤖</span>}
                       </div>
                       <span style={{ fontSize: 10, color: "#5A6178" }}>{timeAgo(inc.created)}</span>
                     </div>
@@ -3262,6 +3264,7 @@ export default function ITSMApp() {
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ color: "#64B5F6" }}>{r.id}</span>
                 {r.aiTriaged && <span title={`AI Triaged (${r.aiConfidence}% confidence)`} style={{ fontSize: 10, cursor: "help" }}>🤖</span>}
+                {r.zdTicketId && <span title={`Zendesk #${r.zdTicketId}`} onClick={e => { e.stopPropagation(); setActiveModule("zendesk"); }} style={{ fontSize: 9, cursor: "pointer", color: "#EC4899", fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: "#EC489918" }}>ZD</span>}
               </span>
             )},
             { label: "Title", key: "title" },
@@ -3839,6 +3842,7 @@ export default function ITSMApp() {
   const NewIncidentModal = () => {
     const [form, setForm] = useState({ title: "", priority: "Sev-C", category: "Software", subcategory: "", urgency: "Sev-C", impact: "Individual", description: "", assignee: "", contactMethod: "Portal", affectedAsset: "", affectedService: "", location: "SG-HQ", reporterEmail: "", customerId: "", customerContact: "" });
     const [aiSuggestion, setAiSuggestion] = useState(null);
+    const [aiAnalyzing, setAiAnalyzing] = useState(false);
 
     const SUBCATEGORIES = {
       Hardware: ["Laptop / Desktop", "Printer", "Monitor / Display", "Peripheral", "Server Hardware", "Mobile Device"],
@@ -3857,11 +3861,35 @@ export default function ITSMApp() {
     const LOCATIONS = ["SG-HQ", "SG-HQ-Floor1", "SG-HQ-Floor2", "SG-HQ-Floor3", "SG-HQ-Floor4", "SG-DC1", "Azure-SEA", "Remote"];
     const SERVICES_LIST = ["Email & Collaboration", "Network Services", "Database Services", "Business Applications", "End User Computing", "Print Services", "Remote Access", "Cloud Infrastructure", "Security Operations"];
 
-    const runAiAnalysis = () => {
-      if (form.title.length >= 3 || form.description.length >= 3) {
-        const result = aiAnalyzeIncident(form.title, form.description);
-        setAiSuggestion(result);
+    const runAiAnalysis = async () => {
+      if (form.title.length < 3 && form.description.length < 3) return;
+      setAiAnalyzing(true);
+      try {
+        const aiResult = await callAzureOpenAI(
+          `You are an expert IT support AI for VGC Technology Pte Ltd. Analyze the incident and return ONLY valid JSON with these fields:\n- suggestedCategory: one of Network, Security, Hardware, Software, Email, Cloud, Access, Database\n- suggestedPriority: one of Sev-A, Sev-B, Sev-C, Sev-D\n- suggestedAssignee: best agent name or empty string\n- confidence: 0-100\n- reasoning: brief explanation\nRespond ONLY with valid JSON, no markdown.`,
+          `Title: ${form.title}\nDescription: ${form.description}`
+        );
+        if (aiResult) {
+          try {
+            const parsed = JSON.parse(aiResult.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+            const localResult = aiAnalyzeIncident(form.title, form.description);
+            setAiSuggestion({
+              suggestedCategory: parsed.suggestedCategory || localResult.suggestedCategory,
+              suggestedPriority: parsed.suggestedPriority || localResult.suggestedPriority,
+              suggestedAssignee: parsed.suggestedAssignee || localResult.suggestedAssignee,
+              confidence: parsed.confidence || localResult.confidence,
+              kbSuggestions: localResult.kbSuggestions,
+              reasoning: parsed.reasoning || "",
+              source: "azure",
+            });
+          } catch { setAiSuggestion({ ...aiAnalyzeIncident(form.title, form.description), source: "azure-fallback" }); }
+        } else {
+          setAiSuggestion({ ...aiAnalyzeIncident(form.title, form.description), source: "local" });
+        }
+      } catch {
+        setAiSuggestion({ ...aiAnalyzeIncident(form.title, form.description), source: "local" });
       }
+      setAiAnalyzing(false);
     };
 
     const applyAiSuggestions = () => {
@@ -3942,14 +3970,34 @@ export default function ITSMApp() {
                 </div>
               </div>
             )}
+            {aiSuggestion?.reasoning && (
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #6366F122", marginTop: 8 }}>
+                <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>🧠 AI REASONING</div>
+                <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.4 }}>{aiSuggestion.reasoning}</div>
+              </div>
+            )}
+            {aiSuggestion?.source && (
+              <div style={{ marginTop: 6, fontSize: 9, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace" }}>
+                Source: {aiSuggestion.source === "azure" ? "Azure OpenAI" : aiSuggestion.source === "azure-fallback" ? "Azure OpenAI (parsed locally)" : "Local AI Engine"}
+              </div>
+            )}
           </div>
         )}
-        {!aiSuggestion && form.title.length < 3 && (
-          <div style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px dashed #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 14 }}>🤖</span>
-            <span style={{ fontSize: 12, color: "#5A617899" }}>AI will analyze and suggest category, priority & assignee after you enter a title</span>
-          </div>
-        )}
+        {aiAnalyzing && (
+          <div style={{ padding: "14px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16, animation: "zdSpin 1s linear infinite", display: "inline-block" }}>🤖</span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#6366F1" }}>Azure OpenAI Analyzing...</div>
+                  <div style={{ fontSize: 10, color: "#5A6178" }}>Classifying category, priority & recommended assignee</div>
+                </div>
+              </div>
+            )}
+            {!aiSuggestion && !aiAnalyzing && form.title.length < 3 && (
+              <div style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px dashed #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 14 }}>🤖</span>
+                <span style={{ fontSize: 12, color: "#5A617899" }}>AI will analyze and suggest category, priority & assignee after you enter a title</span>
+              </div>
+            )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <FormField label="Priority">
@@ -4185,11 +4233,25 @@ export default function ITSMApp() {
           onClick={e => e.stopPropagation()}>
           {/* Header */}
           <div style={{ padding: "14px 20px", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12141E", flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <span style={{ color: "#64B5F6", fontSize: 13, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{inc.id}</span>
               <h3 style={{ margin: 0, color: "#E8ECF4", fontSize: 15, fontFamily: "'Space Grotesk', sans-serif" }}>{inc.title}</h3>
               <Badge color={STATUS_COLORS[inc.status]}>{inc.status}</Badge>
               <PriorityDot priority={inc.priority} />
+              {inc.zdTicketId && (
+                <span onClick={() => { setActiveModule("zendesk"); setModal(null); setDetailItem(null); }}
+                  style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, background: "#EC489918", border: "1px solid #EC489933", color: "#EC4899", cursor: "pointer", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4, transition: "all 0.2s" }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "#EC489933"; e.currentTarget.style.transform = "scale(1.05)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "#EC489918"; e.currentTarget.style.transform = "scale(1)"; }}
+                  title={`View Zendesk Ticket #${inc.zdTicketId}`}>
+                  🎫 ZD#{inc.zdTicketId}
+                </span>
+              )}
+              {inc.aiTriaged && (
+                <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 6, background: "#6366F118", border: "1px solid #6366F133", color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                  🤖 AI {inc.aiConfidence}%
+                </span>
+              )}
             </div>
             <button onClick={() => { setModal(null); setDetailItem(null); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 20, padding: "4px 8px" }}>✕</button>
           </div>
@@ -4326,6 +4388,26 @@ export default function ITSMApp() {
                     onMouseEnter={e => e.currentTarget.style.borderColor = "#CE93D866"}
                     onMouseLeave={e => e.currentTarget.style.borderColor = "#CE93D822"}>
                     <span style={{ fontSize: 11, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace" }}>Linked Problem: {inc.linkedProblem} <span style={{ color: "#5A6178" }}>(click to view)</span></span>
+                  </div>
+                )}
+                {/* Zendesk Ticket Link */}
+                {inc.zdTicketId && (
+                  <div style={{ background: "#2D0A1A", borderRadius: 6, padding: 12, border: "1px solid #EC489822", marginBottom: 16, cursor: "pointer", transition: "all 0.2s" }}
+                    onClick={() => { setActiveModule("zendesk"); setModal(null); setDetailItem(null); }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "#EC489866"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "#EC489822"; e.currentTarget.style.transform = "translateY(0)"; }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 11, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                        🎫 Linked Zendesk Ticket: #{inc.zdTicketId}
+                      </span>
+                      <span style={{ fontSize: 10, color: "#EC489988" }}>View in Zendesk →</span>
+                    </div>
+                    {inc.aiTriaged && (
+                      <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>🤖 AI Triaged</span>
+                        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: inc.aiConfidence >= 85 ? "#81C78422" : "#FFB34722", color: inc.aiConfidence >= 85 ? "#81C784" : "#FFB347", fontWeight: 600 }}>{inc.aiConfidence}% confidence</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </>
@@ -5865,15 +5947,13 @@ export default function ITSMApp() {
                     <button onClick={async () => {
                       setAzureOpenAI(prev => ({ ...prev, testStatus: "testing" }));
                       try {
-                        const res = await fetch("/api/ai/chat", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ systemPrompt: "You are a test assistant.", userPrompt: "Hello" })
-                        });
+                        const res = await fetch("/api/ai/test");
+                        const data = await res.json();
                         setAzureOpenAI(prev => ({
                           ...prev,
                           testStatus: res.ok ? "success" : "error",
-                          lastTested: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })
+                          lastTested: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" }),
+                          model: data.model || prev.model,
                         }));
                       } catch {
                         setAzureOpenAI(prev => ({ ...prev, testStatus: "error" }));
@@ -10856,7 +10936,7 @@ export default function ITSMApp() {
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: slaPriorityColor(q.slaPriority) + "22", color: slaPriorityColor(q.slaPriority), fontWeight: 600 }}>SLA: {q.slaPriority}</span>
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: q.confidence >= 80 ? "#81C78422" : q.confidence >= 60 ? "#FFB34722" : "#FF6B6B22", color: q.confidence >= 80 ? "#81C784" : q.confidence >= 60 ? "#FFB347" : "#FF6B6B", fontWeight: 600 }}>🎯 {q.confidence}%</span>
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {q.suggestedAssignee}</span>
-                          {q.itsmIncidentId && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>🎫 {q.itsmIncidentId}</span>}
+                          {q.itsmIncidentId && <span onClick={(e) => { e.stopPropagation(); const inc = incidents.find(i => i.id === q.itsmIncidentId); if (inc) { setDetailItem(inc); setModal("incidentDetail"); } else { setActiveModule("incidents"); } }} style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => { e.currentTarget.style.background = "#6366F144"; e.currentTarget.style.transform = "scale(1.05)"; }} onMouseLeave={e => { e.currentTarget.style.background = "#6366F122"; e.currentTarget.style.transform = "scale(1)"; }} title={`Open ${q.itsmIncidentId} in Incident Detail`}>🎫 {q.itsmIncidentId} →</span>}
                           {(q.suggestedTags || []).map((tag, ti) => <span key={ti} style={{ fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "#ffffff08", color: "#A0AEC0" }}>{tag}</span>)}
                         </div>
                       </div>
@@ -11064,7 +11144,7 @@ export default function ITSMApp() {
                       <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
                         <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>{q.confidence}%</span>
                         <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{q.category}</span>
-                        {q.itsmIncidentId && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#EC489922", color: "#EC4899", fontWeight: 600 }}>{q.itsmIncidentId}</span>}
+                        {q.itsmIncidentId && <span onClick={(e) => { e.stopPropagation(); const inc = incidents.find(i => i.id === q.itsmIncidentId); if (inc) { setDetailItem(inc); setModal("incidentDetail"); } else { setActiveModule("incidents"); } }} style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#EC489922", color: "#EC4899", fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }} onMouseEnter={e => { e.currentTarget.style.background = "#EC489944"; }} onMouseLeave={e => { e.currentTarget.style.background = "#EC489922"; }} title={`Open ${q.itsmIncidentId}`}>🎫 {q.itsmIncidentId} →</span>}
                       </div>
                     </div>
                     <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(q.createdAt).toLocaleDateString("en-SG")}</span>

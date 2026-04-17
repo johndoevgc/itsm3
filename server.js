@@ -890,6 +890,40 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── Azure OpenAI Test Connection: GET /api/ai/test ─────────────────
+  if (pathname === "/api/ai/test" && req.method === "GET") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured", configured: false });
+    }
+    try {
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "user", content: "Reply with exactly: OK" }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 10, temperature: 0 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 200)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(15000, () => { aiReq.destroy(); reject(new Error("Timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      return json(res, 200, { status: "connected", model: AZURE_OPENAI_MODEL, response: text.trim(), configured: true });
+    } catch (err) {
+      return json(res, 502, { error: err.message, configured: true });
+    }
+  }
+
   // Health check
   if (pathname === "/api/health") {
     let dbOk = false;
@@ -901,6 +935,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       dbLabel: db.label,
       entraConfigured: !!ENTRA_CLIENT_SECRET,
       zendeskConfigured: !!(ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN),
+      aiConfigured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
+      aiModel: AZURE_OPENAI_MODEL,
       timestamp: new Date().toISOString(),
     });
   }
