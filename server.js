@@ -16,7 +16,7 @@ const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
 const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
 const AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
-const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-4o-mini";
+const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-mini";
 
 // Zendesk API config (server-side only — protects API token)
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";

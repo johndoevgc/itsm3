@@ -1264,7 +1264,7 @@ export default function ITSMApp() {
     const defaults = {
       endpoint: "Server-side proxy (/api/ai/chat)",
       apiKey: "Managed server-side",
-      model: "gpt-5.4-nano",
+      model: "gpt-5.4-mini",
       enabled: true,
       showKey: false,
       testStatus: null, // null | "testing" | "success" | "error"
