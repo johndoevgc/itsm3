@@ -3170,7 +3170,12 @@ export default function ITSMApp() {
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching Meraki data...</div>
             </div>
-          ) : merakiData?.error ? (
+          ) : !merakiData ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+              <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Loading Meraki data...</div>
+            </div>
+          ) : merakiData.error ? (
             <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B" }}>
               <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
               <div style={{ fontSize: 11 }}>Unable to connect to Meraki API</div>
@@ -3412,12 +3417,17 @@ export default function ITSMApp() {
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching SolarWinds RMM data...</div>
             </div>
-          ) : solarwindsData?.error ? (
+          ) : !solarwindsData ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+              <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Loading SolarWinds data...</div>
+            </div>
+          ) : solarwindsData.error ? (
             <div style={{ textAlign: "center", padding: 30 }}>
               <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
               <div style={{ fontSize: 11, color: "#FF6B6B" }}>Unable to connect to SolarWinds RMM API</div>
-              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{solarwindsData?.error || "Check API key configuration"}</div>
-              {solarwindsData && !solarwindsData.authenticated && (
+              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{solarwindsData.error}</div>
+              {!solarwindsData.authenticated && (
                 <div style={{ marginTop: 12, padding: 12, background: "#FF444408", borderRadius: 6, border: "1px solid #FF444422" }}>
                   <div style={{ fontSize: 10, color: "#FFB347", marginBottom: 6, fontWeight: 600 }}>Troubleshooting:</div>
                   <div style={{ fontSize: 9, color: "#8A8FA8", lineHeight: 1.6 }}>
@@ -3492,7 +3502,12 @@ export default function ITSMApp() {
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching Sophos data...</div>
             </div>
-          ) : sophosData?.error ? (
+          ) : !sophosData ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+              <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Loading Sophos data...</div>
+            </div>
+          ) : sophosData.error ? (
             <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B" }}>
               <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
               <div style={{ fontSize: 11 }}>Unable to connect to Sophos Central API</div>
