@@ -911,12 +911,12 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
   }
 
   // ─── Cyber News: Live RSS Feeds ─────────────────────────────────────
-  if (pathname === "/api/cybernews" && method === "GET") {
+  if (pathname === "/api/cybernews" && req.method === "GET") {
     // Cache for 10 minutes to avoid hammering feeds
     const CACHE_TTL = 10 * 60 * 1000;
     if (!global._cyberNewsCache) global._cyberNewsCache = { data: null, ts: 0 };
     const cache = global._cyberNewsCache;
-    const forceRefresh = url.searchParams?.get("refresh") === "true" || new URL(`http://localhost${req.url}`).searchParams.get("refresh") === "true";
+    const forceRefresh = urlObj.searchParams.get("refresh") === "true";
 
     if (cache.data && (Date.now() - cache.ts < CACHE_TTL) && !forceRefresh) {
       return json(res, 200, { threats: cache.data, cached: true, lastSync: new Date(cache.ts).toISOString() });
@@ -924,14 +924,14 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
     const fetchUrl = (feedUrl, timeoutMs = 12000) => new Promise((resolve, reject) => {
       const proto = feedUrl.startsWith("https") ? https : http;
-      const req = proto.get(feedUrl, { headers: { "User-Agent": "VGC-ITSM-CyberNews/1.0" } }, resp => {
+      const feedReq = proto.get(feedUrl, { headers: { "User-Agent": "VGC-ITSM-CyberNews/1.0" } }, resp => {
         if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
           return fetchUrl(resp.headers.location, timeoutMs).then(resolve, reject);
         }
         let d = ""; resp.on("data", c => d += c); resp.on("end", () => resolve(d));
       });
-      req.on("error", reject);
-      req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("Timeout")); });
+      feedReq.on("error", reject);
+      feedReq.setTimeout(timeoutMs, () => { feedReq.destroy(); reject(new Error("Timeout")); });
     });
 
     const parseRssItems = (xml, source, sourceUrl, maxItems = 8) => {
