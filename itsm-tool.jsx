@@ -2151,9 +2151,7 @@ export default function ITSMApp() {
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
     { id: "zendesk", label: "Zendesk AI", count: zdStats.open + zdStats.pending + zdAiQueue.filter(q => q.status === "pending_approval").length, critical: zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "incidents", label: "Incidents", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed"), accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
-    { id: "problems", label: "Problems", count: problems.length, accent: "#CE93D8", gradient: "linear-gradient(135deg, #CE93D808, #CE93D818)" },
-    { id: "changes", label: "Changes", count: changes.filter(c => c.status === "Awaiting Approval").length, accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
-    { id: "requests", label: "Requests", count: requests.filter(r => r.status === "Open" || r.status === "In Progress").length, accent: "#81C784", gradient: "linear-gradient(135deg, #81C78408, #81C78418)" },
+    { id: "operations", label: "Operations", count: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, accent: "#CE93D8", gradient: "linear-gradient(135deg, #CE93D808, #FFB34718)" },
     { id: "catalog", label: "Service Catalog", accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "knowledge", label: "Knowledge Portal", accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #0089D618)" },
     { id: "assets", label: "Assets / CMDB", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #06B6D418)" },
@@ -3859,6 +3857,60 @@ export default function ITSMApp() {
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search incidents..." />
           <button style={btnStyle()} onClick={() => setModal("newIncident")}>+ New Incident</button>
+          <button style={{ ...btnStyle("#EC4899"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
+            fetch("/api/zendesk/tickets").then(r => r.json()).then(data => {
+              const tickets = data.tickets || [];
+              if (tickets.length === 0) return;
+              const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+              const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+              let imported = 0;
+              tickets.forEach(t => {
+                const exists = incidents.some(i => i.zdTicketId === t.id);
+                if (!exists && t.status !== "closed") {
+                  imported++;
+                  const newInc = {
+                    id: genId("INC"), title: t.subject || "Untitled", description: t.description || "",
+                    category: (t.tags || [])[0] || "General", subcategory: "",
+                    priority: priorityMap[t.priority] || "Sev-C", urgency: t.priority === "urgent" ? "Critical" : "Standard",
+                    status: statusMap[t.status] || "New", assignee: currentUser.name,
+                    assignmentGroup: "Service Desk", reporter: "Zendesk Import",
+                    reporterName: "", reporterEmail: "", reporterRole: "",
+                    customer: "", customerContact: "", customerPhone: "", customerAddress: "",
+                    contactMethod: "Zendesk", impact: t.priority === "urgent" ? "Enterprise" : "Individual",
+                    affectedService: "", affectedAsset: "", location: "",
+                    created: Math.round((Date.now() - new Date(t.created_at).getTime()) / 3600000),
+                    slaTarget: t.priority === "urgent" ? 4 : t.priority === "high" ? 8 : 24,
+                    firstResponseTime: null, aiTriaged: false, aiConfidence: 0,
+                    workaround: "", linkedProblem: "", linkedChange: "",
+                    affectedAssets: [], zdTicketId: t.id,
+                    activityLog: [{ id: genId("AL"), type: "sync", user: "Zendesk", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Imported from Zendesk ticket #${t.id}` }]
+                  };
+                  setIncidents(prev => [newInc, ...prev]);
+                }
+              });
+            }).catch(() => {});
+          }}>🎫 Import from Zendesk</button>
+          <button style={{ ...btnStyle("#4CAF50"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
+            const zdLinked = incidents.filter(i => i.zdTicketId);
+            if (zdLinked.length === 0) return;
+            Promise.all(zdLinked.map(inc =>
+              fetch(`/api/zendesk/ticket-updates/${inc.zdTicketId}`).then(r => r.json()).catch(() => null)
+            )).then(results => {
+              results.forEach((zd, idx) => {
+                if (!zd || !zd.zdTicketId) return;
+                const inc = zdLinked[idx];
+                const changes = [];
+                const upd = { ...inc };
+                if (zd.status && zd.status !== inc.status) { upd.status = zd.status; changes.push(`Status → ${zd.status}`); }
+                if (zd.priority && zd.priority !== inc.priority) { upd.priority = zd.priority; changes.push(`Priority → ${zd.priority}`); }
+                upd.zdLastSync = new Date().toISOString();
+                if (changes.length > 0) {
+                  upd.activityLog = [...(upd.activityLog || []), { id: genId("AL"), type: "sync", user: "Zendesk", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Bulk sync: ${changes.join(", ")}` }];
+                  setIncidents(prev => prev.map(i => i.id === inc.id ? upd : i));
+                }
+              });
+            });
+          }}>🔄 Sync All from Zendesk</button>
         </div>
         <DataTable
           columns={[
@@ -3987,6 +4039,54 @@ export default function ITSMApp() {
       />
     </div>
   );
+
+  // ─── Operations Module (Combined Problems + Changes + Requests) ────
+  const [opsTab, setOpsTab] = useState("problems");
+  const OperationsModule = () => {
+    const opsTabStyle = (id) => ({
+      padding: "10px 20px", background: opsTab === id ? "#12141E" : "transparent",
+      border: "none", borderBottom: opsTab === id ? "2px solid #6366F1" : "2px solid transparent",
+      color: opsTab === id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12,
+      fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6
+    });
+    return (
+      <div>
+        {/* Stats Row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+          {[
+            { label: "Open Problems", value: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length, accent: "#CE93D8", icon: "🔍" },
+            { label: "Known Errors", value: problems.filter(p => p.status === "Known Error").length, accent: "#FF6B6B", icon: "⚠️" },
+            { label: "Pending Changes", value: changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length, accent: "#FFB347", icon: "🔄" },
+            { label: "Emergency Changes", value: changes.filter(c => c.type === "Emergency").length, accent: "#FF4444", icon: "🚨" },
+            { label: "Active Requests", value: requests.filter(r => ["Open","In Progress"].includes(r.status)).length, accent: "#81C784", icon: "📋" },
+            { label: "Pending Approval", value: requests.filter(r => r.status === "Pending Approval").length, accent: "#6366F1", icon: "⏳" },
+          ].map((s, i) => (
+            <div key={i} style={{ padding: "12px 16px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.accent}33`, cursor: "pointer" }}
+              onClick={() => { if (i < 2) setOpsTab("problems"); else if (i < 4) setOpsTab("changes"); else setOpsTab("requests"); }}>
+              <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>{s.icon} {s.label}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: s.accent }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+        {/* Tabs */}
+        <div style={{ display: "flex", borderBottom: "1px solid #1E2130", marginBottom: 16 }}>
+          <button onClick={() => setOpsTab("problems")} style={opsTabStyle("problems")}>
+            🔍 Problems <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.length}</span>
+          </button>
+          <button onClick={() => setOpsTab("changes")} style={opsTabStyle("changes")}>
+            🔄 Changes <span style={{ background: "#FFB34722", color: "#FFB347", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{changes.length}</span>
+          </button>
+          <button onClick={() => setOpsTab("requests")} style={opsTabStyle("requests")}>
+            📋 Service Requests <span style={{ background: "#81C78422", color: "#81C784", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{requests.length}</span>
+          </button>
+        </div>
+        {/* Tab Content */}
+        {opsTab === "problems" && <ProblemsModule />}
+        {opsTab === "changes" && <ChangesModule />}
+        {opsTab === "requests" && <RequestsModule />}
+      </div>
+    );
+  };
 
   // ─── Service Catalog ──────────────────────────────────────────────────
   const CatalogModule = () => {
@@ -4724,6 +4824,19 @@ export default function ITSMApp() {
       setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, status: newStatus, activityLog: updated.activityLog } : i));
       setDetailItem(updated);
 
+      // ── Zendesk bidirectional sync — push status change to linked Zendesk ticket
+      if (inc.zdTicketId) {
+        fetch("/api/zendesk/sync-incident", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ zdTicketId: inc.zdTicketId, action: "status_change", status: newStatus, comment: `[ITSM ${inc.id}] Status changed to ${newStatus} by ${currentUser.name}` })
+        }).then(r => r.json()).then(result => {
+          if (result.success) {
+            const syncEntry = { id: genId("AL"), type: "sync", user: "System", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Synced to Zendesk #${inc.zdTicketId}: status → ${newStatus}` };
+            setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, activityLog: [...(i.activityLog || []), syncEntry] } : i));
+          }
+        }).catch(() => {});
+      }
+
       // AI Customer Survey — auto-generate draft on Resolved/Closed
       if (newStatus === "Resolved" || newStatus === "Closed") {
         const tpl = inc.priority === "Critical"
@@ -5295,8 +5408,65 @@ export default function ITSMApp() {
                 setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, priority: newPri } : i));
                 setDetailItem(updated);
                 addActivity("status", `Escalated: Priority changed ${inc.priority} → ${newPri}`);
+                // Sync escalation to Zendesk
+                if (inc.zdTicketId) {
+                  fetch("/api/zendesk/sync-incident", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ zdTicketId: inc.zdTicketId, action: "escalation", priority: newPri, comment: `[ITSM ${inc.id}] Escalated: ${inc.priority} → ${newPri} by ${currentUser.name}` })
+                  }).catch(() => {});
+                }
               }
             }}>⬆ Escalate</button>}
+            {/* Zendesk Sync Actions */}
+            {inc.zdTicketId && (
+              <>
+                <span style={{ width: 1, height: 24, background: "#2A2E3E", margin: "0 4px" }} />
+                <button style={{ ...btnStyle("#EC4899"), fontSize: 10, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
+                  fetch(`/api/zendesk/ticket-updates/${inc.zdTicketId}`).then(r => r.json()).then(zd => {
+                    if (zd.zdTicketId) {
+                      const changes = [];
+                      if (zd.status && zd.status !== inc.status) changes.push(`Status: ${inc.status} → ${zd.status}`);
+                      if (zd.priority && zd.priority !== inc.priority) changes.push(`Priority: ${inc.priority} → ${zd.priority}`);
+                      const upd = { ...inc };
+                      if (zd.status && zd.status !== inc.status) upd.status = zd.status;
+                      if (zd.priority && zd.priority !== inc.priority) upd.priority = zd.priority;
+                      if (zd.subject && zd.subject !== inc.title) { upd.title = zd.subject; changes.push(`Title updated`); }
+                      upd.zdLastSync = new Date().toISOString();
+                      if (changes.length > 0) {
+                        upd.activityLog = [...(upd.activityLog || []), { id: genId("AL"), type: "sync", user: "Zendesk", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Synced from Zendesk #${inc.zdTicketId}: ${changes.join(", ")}` }];
+                      } else {
+                        upd.activityLog = [...(upd.activityLog || []), { id: genId("AL"), type: "sync", user: "Zendesk", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Zendesk #${inc.zdTicketId} is in sync — no changes` }];
+                      }
+                      setIncidents(prev => prev.map(i => i.id === inc.id ? upd : i));
+                      setDetailItem(upd);
+                    }
+                  }).catch(() => {});
+                }}>🔄 Pull from Zendesk</button>
+                <button style={{ ...btnStyle("#8B5CF6"), fontSize: 10, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
+                  fetch("/api/zendesk/sync-incident", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ zdTicketId: inc.zdTicketId, action: "full_sync", status: inc.status, priority: inc.priority, comment: `[ITSM ${inc.id}] Full sync push — Status: ${inc.status}, Priority: ${inc.priority}` })
+                  }).then(r => r.json()).then(result => {
+                    if (result.success) addActivity("sync", `Pushed to Zendesk #${inc.zdTicketId}: Status=${inc.status}, Priority=${inc.priority}`);
+                  }).catch(() => {});
+                }}>⬆ Push to Zendesk</button>
+              </>
+            )}
+            {!inc.zdTicketId && (
+              <button style={{ ...btnStyle("#EC4899"), fontSize: 10, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
+                fetch("/api/zendesk/tickets", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ ticket: { subject: `[${inc.id}] ${inc.title}`, description: inc.description || inc.title, priority: ({ "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" })[inc.priority] || "normal", tags: ["itsm-synced", inc.category?.toLowerCase().replace(/\s+/g, "-")] } })
+                }).then(r => r.json()).then(result => {
+                  const newTicketId = result?.ticket?.id;
+                  if (newTicketId) {
+                    const upd = { ...inc, zdTicketId: newTicketId, activityLog: [...(inc.activityLog || []), { id: genId("AL"), type: "sync", user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Created Zendesk ticket #${newTicketId} and linked` }] };
+                    setIncidents(prev => prev.map(i => i.id === inc.id ? upd : i));
+                    setDetailItem(upd);
+                  }
+                }).catch(() => {});
+              }}>🎫 Create Zendesk Ticket</button>
+            )}
           </div>
         </div>
       </div>
@@ -8912,6 +9082,39 @@ export default function ITSMApp() {
             ))}
           </div>
           {canEdit && <button onClick={openAdd} style={{ ...btnStyle("#6366F1"), fontSize: 12, padding: "8px 16px" }}>+ Add Customer</button>}
+          <button onClick={() => {
+            fetch("/api/zendesk/organizations").then(r => r.json()).then(data => {
+              const orgs = data.organizations || [];
+              if (orgs.length === 0) return;
+              let imported = 0;
+              orgs.forEach(org => {
+                const exists = customers.some(c => c.zdOrgId === org.id || c.name.toLowerCase() === org.name.toLowerCase());
+                if (!exists) {
+                  imported++;
+                  const newCust = {
+                    id: "CUS" + String(customers.length + imported).padStart(3, "0"),
+                    name: org.name, category: org.tags?.includes("csp") ? "CSP" : "Ad-Hoc",
+                    contactPerson: org.details || "—", email: org.domain_names?.[0] ? `contact@${org.domain_names[0]}` : "—",
+                    phone: "—", address: "—", status: "Active",
+                    contractStart: "", contractEnd: "",
+                    services: org.tags || [], notes: org.notes || "",
+                    createdBy: "Zendesk Sync", createdAt: new Date().toISOString().slice(0, 10),
+                    zdOrgId: org.id, zdOrgUrl: org.url
+                  };
+                  setCustomers(prev => [...prev, newCust]);
+                }
+              });
+              // Update existing customers with zdOrgId for future syncs
+              orgs.forEach(org => {
+                setCustomers(prev => prev.map(c => {
+                  if (!c.zdOrgId && c.name.toLowerCase() === org.name.toLowerCase()) {
+                    return { ...c, zdOrgId: org.id, zdOrgUrl: org.url };
+                  }
+                  return c;
+                }));
+              });
+            }).catch(() => {});
+          }} style={{ ...btnStyle("#EC4899"), fontSize: 11, padding: "8px 14px", display: "flex", alignItems: "center", gap: 4 }}>🎫 Sync Zendesk Orgs</button>
         </div>
 
         {/* Table View */}
@@ -8928,7 +9131,10 @@ export default function ITSMApp() {
               <tbody>
                 {filtered.map(c => (
                   <tr key={c.id} style={{ borderBottom: "1px solid #1E213066" }}>
-                    <td style={{ padding: "10px 12px", color: "#6366F1", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{c.id}</td>
+                    <td style={{ padding: "10px 12px", color: "#6366F1", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
+                      {c.id}
+                      {c.zdOrgId && <span style={{ marginLeft: 4, fontSize: 8, padding: "1px 4px", borderRadius: 3, background: "#EC489918", color: "#EC4899", fontWeight: 600 }}>ZD</span>}
+                    </td>
                     <td style={{ padding: "10px 12px", color: "#E8ECF4", fontWeight: 600 }}>{sanitizeHTML(c.name)}</td>
                     <td style={{ padding: "10px 12px" }}>
                       <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: c.category === "CSP" ? "#06B6D422" : "#FFB34722", color: c.category === "CSP" ? "#06B6D4" : "#FFB347", border: `1px solid ${c.category === "CSP" ? "#06B6D444" : "#FFB34744"}` }}>{c.category}</span>
@@ -9137,6 +9343,7 @@ export default function ITSMApp() {
       { id: "schedule", label: "Scheduled Reports", icon: "🕐" },
       { id: "templates", label: "Templates", icon: "📄" },
       { id: "servicereports", label: "Service Reports", icon: "📋" },
+      { id: "zendesk", label: "Zendesk Analytics", icon: "🎫" },
     ];
 
     const inputStyle = { width: "100%", padding: "9px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#E8ECF4", fontSize: 12, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" };
@@ -9758,6 +9965,151 @@ export default function ITSMApp() {
                     <button onClick={handleSaveReport2} style={btnStyle("#6366F1")}>{editingReportId ? "Save Changes" : "Create Report"}</button>
                   </div>
                 </Modal>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Zendesk Analytics Tab */}
+        {reportTab === "zendesk" && (() => {
+          const [zdAnalytics, setZdAnalytics] = useState(null);
+          const [zdLoading, setZdLoading] = useState(false);
+          const [zdCsat, setZdCsat] = useState(null);
+
+          const loadZdAnalytics = () => {
+            setZdLoading(true);
+            Promise.all([
+              fetch("/api/zendesk/stats").then(r => r.json()).catch(() => null),
+              fetch("/api/zendesk/satisfaction_ratings").then(r => r.json()).catch(() => ({ satisfaction_ratings: [] })),
+              fetch("/api/zendesk/organizations").then(r => r.json()).catch(() => ({ organizations: [] })),
+            ]).then(([stats, csat, orgs]) => {
+              setZdAnalytics({ stats, orgs: orgs.organizations || [] });
+              setZdCsat(csat.satisfaction_ratings || []);
+              setZdLoading(false);
+            });
+          };
+
+          const csatAvg = zdCsat && zdCsat.length > 0 ? (zdCsat.filter(r => r.score === "good").length / zdCsat.length * 100).toFixed(1) : null;
+
+          return (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, color: "#E8ECF4" }}>Zendesk Live Analytics</h3>
+                  <span style={{ fontSize: 11, color: "#5A6178" }}>Real-time data from Zendesk for reporting & offboarding readiness</span>
+                </div>
+                <button onClick={loadZdAnalytics} style={{ ...btnStyle("#EC4899"), display: "flex", alignItems: "center", gap: 6 }} disabled={zdLoading}>
+                  {zdLoading ? "Loading..." : "🔄 Fetch Zendesk Data"}
+                </button>
+              </div>
+
+              {!zdAnalytics && !zdLoading && (
+                <div style={{ padding: 40, textAlign: "center", color: "#5A6178", background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>🎫</div>
+                  <div style={{ fontSize: 14, marginBottom: 4 }}>Click "Fetch Zendesk Data" to load live analytics</div>
+                  <div style={{ fontSize: 11, color: "#5A617888" }}>Includes ticket stats, CSAT scores, and organization data</div>
+                </div>
+              )}
+
+              {zdAnalytics && (
+                <>
+                  {/* Zendesk Ticket Stats */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 20 }}>
+                    {[
+                      { label: "New Tickets", value: zdAnalytics.stats?.new || 0, color: "#64B5F6", icon: "🆕" },
+                      { label: "Open", value: zdAnalytics.stats?.open || 0, color: "#FFB347", icon: "📂" },
+                      { label: "Pending", value: zdAnalytics.stats?.pending || 0, color: "#CE93D8", icon: "⏳" },
+                      { label: "On Hold", value: zdAnalytics.stats?.hold || 0, color: "#FF6B6B", icon: "⏸" },
+                      { label: "Solved", value: zdAnalytics.stats?.solved || 0, color: "#81C784", icon: "✅" },
+                      { label: "CSAT Score", value: csatAvg ? `${csatAvg}%` : "N/A", color: csatAvg && parseFloat(csatAvg) > 80 ? "#81C784" : "#FFB347", icon: "⭐" },
+                    ].map((s, i) => (
+                      <div key={i} style={{ padding: "14px 16px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.color}33` }}>
+                        <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>{s.icon} {s.label}</div>
+                        <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* CSAT Breakdown */}
+                  {zdCsat && zdCsat.length > 0 && (
+                    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                      <h4 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4" }}>Customer Satisfaction Ratings</h4>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                        <div style={{ padding: 12, background: "#81C78411", borderRadius: 8, border: "1px solid #81C78433", textAlign: "center" }}>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: "#81C784" }}>{zdCsat.filter(r => r.score === "good").length}</div>
+                          <div style={{ fontSize: 10, color: "#81C784" }}>Good</div>
+                        </div>
+                        <div style={{ padding: 12, background: "#FF6B6B11", borderRadius: 8, border: "1px solid #FF6B6B33", textAlign: "center" }}>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: "#FF6B6B" }}>{zdCsat.filter(r => r.score === "bad").length}</div>
+                          <div style={{ fontSize: 10, color: "#FF6B6B" }}>Bad</div>
+                        </div>
+                        <div style={{ padding: 12, background: "#6366F111", borderRadius: 8, border: "1px solid #6366F133", textAlign: "center" }}>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: "#6366F1" }}>{zdCsat.length}</div>
+                          <div style={{ fontSize: 10, color: "#6366F1" }}>Total</div>
+                        </div>
+                      </div>
+                      <div style={{ maxHeight: 200, overflow: "auto" }}>
+                        {zdCsat.slice(0, 20).map((r, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1E213044", fontSize: 11 }}>
+                            <span style={{ color: "#C4CAD6" }}>Ticket #{r.ticket_id}</span>
+                            <span style={{ color: r.score === "good" ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{r.score === "good" ? "👍 Good" : "👎 Bad"}</span>
+                            <span style={{ color: "#5A6178", fontSize: 10 }}>{new Date(r.created_at).toLocaleDateString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Zendesk Organizations */}
+                  {zdAnalytics.orgs && zdAnalytics.orgs.length > 0 && (
+                    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                      <h4 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4" }}>Zendesk Organizations ({zdAnalytics.orgs.length})</h4>
+                      <div style={{ maxHeight: 300, overflow: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                          <thead><tr style={{ borderBottom: "1px solid #1E2130" }}>
+                            {["Name", "Domains", "Tags", "Created"].map(h => (
+                              <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: "#5A6178", fontWeight: 600, fontSize: 10, textTransform: "uppercase" }}>{h}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>
+                            {zdAnalytics.orgs.map((org, i) => (
+                              <tr key={i} style={{ borderBottom: "1px solid #1E213044" }}>
+                                <td style={{ padding: "8px 10px", color: "#E8ECF4", fontWeight: 600 }}>{org.name}</td>
+                                <td style={{ padding: "8px 10px", color: "#64B5F6", fontSize: 10 }}>{(org.domain_names || []).join(", ") || "—"}</td>
+                                <td style={{ padding: "8px 10px" }}>
+                                  {(org.tags || []).map((t, j) => <span key={j} style={{ marginRight: 4, padding: "1px 6px", borderRadius: 8, fontSize: 9, background: "#6366F122", color: "#6366F1" }}>{t}</span>)}
+                                </td>
+                                <td style={{ padding: "8px 10px", color: "#5A6178", fontSize: 10 }}>{org.created_at ? new Date(org.created_at).toLocaleDateString() : "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Offboarding Readiness */}
+                  <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #FFB34733", padding: 20 }}>
+                    <h4 style={{ margin: "0 0 12px", fontSize: 14, color: "#FFB347" }}>⚠️ Zendesk Offboarding Readiness</h4>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      {[
+                        { label: "ITSM Incidents (local)", value: incidents.length, status: incidents.length > 0, desc: "Incidents created in ITSM" },
+                        { label: "ZD-Linked Incidents", value: incidents.filter(i => i.zdTicketId).length, status: true, desc: "Incidents linked to Zendesk tickets" },
+                        { label: "Customers Synced", value: customers.filter(c => c.zdOrgId).length, status: customers.filter(c => c.zdOrgId).length > 0, desc: "Customers with Zendesk org link" },
+                        { label: "ZD Organizations", value: zdAnalytics.orgs.length, status: zdAnalytics.orgs.length <= customers.length, desc: "All orgs accounted for in ITSM" },
+                      ].map((item, i) => (
+                        <div key={i} style={{ padding: 12, background: item.status ? "#81C78408" : "#FF6B6B08", borderRadius: 8, border: `1px solid ${item.status ? "#81C78433" : "#FF6B6B33"}` }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                            <span style={{ fontSize: 11, color: "#C4CAD6", fontWeight: 600 }}>{item.label}</span>
+                            <span style={{ fontSize: 16, fontWeight: 700, color: item.status ? "#81C784" : "#FF6B6B" }}>{item.value}</span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "#5A6178" }}>{item.desc}</div>
+                          <div style={{ fontSize: 9, color: item.status ? "#81C784" : "#FF6B6B", marginTop: 4 }}>{item.status ? "✅ Ready" : "⚠️ Action needed"}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           );
@@ -12256,9 +12608,10 @@ export default function ITSMApp() {
       case "dashboard": return <Dashboard />;
       case "productivity": return <ProductivityDashboard />;
       case "incidents": return <IncidentsModule />;
-      case "problems": return <ProblemsModule />;
-      case "changes": return <ChangesModule />;
-      case "requests": return <RequestsModule />;
+      case "operations": return <OperationsModule />;
+      case "problems": return <OperationsModule />;
+      case "changes": return <OperationsModule />;
+      case "requests": return <OperationsModule />;
       case "catalog": return <CatalogModule />;
       case "knowledge": return <KnowledgeModule />;
       case "assets": return <AssetsModule />;

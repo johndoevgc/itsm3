@@ -941,6 +941,98 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, { agents: agents.users || [], groups: groups.groups || [] });
       }
 
+      // GET /api/zendesk/organizations — fetch all organizations (customers)
+      if (pathname === "/api/zendesk/organizations" && req.method === "GET") {
+        const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+        const page = qs.get("page") || "1";
+        const result = await zdRequest("GET", `/organizations.json?page=${page}&per_page=100`);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/organizations/:id — single organization
+      if (pathname.match(/^\/api\/zendesk\/organizations\/\d+$/) && req.method === "GET") {
+        const orgId = pathname.split("/").pop();
+        const result = await zdRequest("GET", `/organizations/${orgId}.json`);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/organizations/:id/tickets — tickets for an org
+      if (pathname.match(/^\/api\/zendesk\/organizations\/\d+\/tickets$/) && req.method === "GET") {
+        const orgId = pathname.split("/")[4];
+        const result = await zdRequest("GET", `/organizations/${orgId}/tickets.json`);
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/satisfaction_ratings — CSAT data
+      if (pathname === "/api/zendesk/satisfaction_ratings" && req.method === "GET") {
+        const result = await zdRequest("GET", "/satisfaction_ratings.json?sort_by=created_at&sort_order=desc&per_page=100").catch(() => ({ satisfaction_ratings: [] }));
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/ticket_fields — ticket custom fields
+      if (pathname === "/api/zendesk/ticket_fields" && req.method === "GET") {
+        const result = await zdRequest("GET", "/ticket_fields.json");
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/users/:id — single user details
+      if (pathname.match(/^\/api\/zendesk\/users\/\d+$/) && req.method === "GET") {
+        const userId = pathname.split("/").pop();
+        const result = await zdRequest("GET", `/users/${userId}.json`);
+        return json(res, 200, result);
+      }
+
+      // POST /api/zendesk/sync-incident — sync an ITSM incident action to Zendesk
+      if (pathname === "/api/zendesk/sync-incident" && req.method === "POST") {
+        const body = await parseBody(req);
+        const { zdTicketId, action, status, priority, comment, assignee, isInternal } = body;
+        if (!zdTicketId) return json(res, 400, { error: "zdTicketId required" });
+
+        const priorityMap = { "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" };
+        const statusMap = { "New": "new", "Open": "open", "In Progress": "open", "Pending": "pending", "On Hold": "hold", "Resolved": "solved", "Closed": "closed", "Reopened": "open" };
+        const ticketUpdate = { ticket: {} };
+
+        if (status) ticketUpdate.ticket.status = statusMap[status] || status;
+        if (priority) ticketUpdate.ticket.priority = priorityMap[priority] || priority;
+        if (comment) {
+          ticketUpdate.ticket.comment = { body: `[ITSM Sync] ${comment}`, public: isInternal === false };
+        }
+
+        if (Object.keys(ticketUpdate.ticket).length === 0) {
+          return json(res, 400, { error: "No changes to sync" });
+        }
+
+        const result = await zdRequest("PUT", `/tickets/${zdTicketId}.json`, ticketUpdate);
+        console.log(`[ZD Sync] Ticket #${zdTicketId} updated — action: ${action}, status: ${status || '-'}, priority: ${priority || '-'}`);
+        return json(res, 200, { success: true, result });
+      }
+
+      // GET /api/zendesk/ticket-updates/:id — get latest ticket state for sync back to ITSM
+      if (pathname.match(/^\/api\/zendesk\/ticket-updates\/\d+$/) && req.method === "GET") {
+        const ticketId = pathname.split("/").pop();
+        const [ticketResult, commentsResult] = await Promise.all([
+          zdRequest("GET", `/tickets/${ticketId}.json`),
+          zdRequest("GET", `/tickets/${ticketId}/comments.json?sort_order=desc&per_page=5`).catch(() => ({ comments: [] })),
+        ]);
+        const ticket = ticketResult.ticket || {};
+        const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+        const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+        return json(res, 200, {
+          zdTicketId: ticket.id,
+          status: statusMap[ticket.status] || ticket.status,
+          priority: priorityMap[ticket.priority] || "Sev-C",
+          subject: ticket.subject,
+          tags: ticket.tags || [],
+          updatedAt: ticket.updated_at,
+          assigneeId: ticket.assignee_id,
+          requesterId: ticket.requester_id,
+          organizationId: ticket.organization_id,
+          latestComments: (commentsResult.comments || []).map(c => ({
+            id: c.id, body: c.body || c.plain_body, author: c.author_id, public: c.public, createdAt: c.created_at
+          })),
+        });
+      }
+
       return json(res, 404, { error: "Zendesk endpoint not found" });
     } catch (err) {
       console.error("[Zendesk Proxy]", err.message);
