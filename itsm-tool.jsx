@@ -1322,6 +1322,8 @@ export default function ITSMApp() {
   const [zdAgents, setZdAgents] = useState([]);
   const [zdGroups, setZdGroups] = useState([]);
   const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings
+  const [zdAnalytics, setZdAnalytics] = useState(null);
+  const [zdCsat, setZdCsat] = useState(null);
   // ─── Workflow Automation Rules State ─────────────────────────────────────
   const [workflowRules, setWorkflowRules] = useState(() => {
     const saved = _ls("vgc_workflow_rules", null);
@@ -1372,6 +1374,7 @@ export default function ITSMApp() {
   const [permMatrixDraft, setPermMatrixDraft] = useState(null);
   // ─── AI Customer Survey State ───────────────────────────────────────────
   const [surveyDraft, setSurveyDraft] = useState(null); // { incidentId, subject, body, recipient, status: "draft"|"sent" }
+  const [surveyDrafts, setSurveyDrafts] = useState([]);
   const [surveyTemplates, setSurveyTemplates] = useState(() => {
     const saved = _ls("vgc_survey_templates", null);
     return saved || [
@@ -9972,10 +9975,6 @@ export default function ITSMApp() {
 
         {/* Zendesk Analytics Tab */}
         {reportTab === "zendesk" && (() => {
-          const [zdAnalytics, setZdAnalytics] = useState(null);
-          const [zdLoading, setZdLoading] = useState(false);
-          const [zdCsat, setZdCsat] = useState(null);
-
           const loadZdAnalytics = () => {
             setZdLoading(true);
             Promise.all([
