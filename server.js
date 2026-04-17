@@ -1212,6 +1212,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
   // ─── SolarWinds RMM — Test Connection ────────────────────────────────
   if (pathname === "/api/solarwinds/test" && req.method === "POST") {
+    const body = await parseBody(req);
     const { apiKey, apiHost } = body || {};
     if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
     const host = (apiHost || "www.systemmonitor.us").replace(/^(https?:\/\/)/, "");
@@ -1245,6 +1246,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
   // ─── SolarWinds RMM — Save Settings ────────────────────────────────
   if (pathname === "/api/settings/solarwinds" && req.method === "POST") {
+    const body = await parseBody(req);
     const { apiKey, apiHost } = body || {};
     if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
     SOLARWINDS_API_KEY = apiKey;
