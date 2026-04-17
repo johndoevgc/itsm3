@@ -872,7 +872,7 @@ const INTEGRATION_CATALOG = [
   { id: "INT08", name: "Confluence", category: "Documentation", icon: "📝", status: "available", description: "Sync KB articles with Confluence spaces" },
   { id: "INT09", name: "Okta", category: "Identity", icon: "🔑", status: "available", description: "Identity and access management integration" },
   { id: "INT10", name: "AWS CloudWatch", category: "Monitoring", icon: "☁️", status: "available", description: "Ingest AWS alerts as incidents automatically" },
-  { id: "INT11", name: "Zendesk", category: "Support", icon: "💛", status: "connected", description: "Customer-facing ticket sync and AI auto-triage" },
+  { id: "INT11", name: "Zendesk", category: "Support", icon: "💛", status: "connected", description: "AI Command Center — 90% auto-triage, auto-respond, auto-route, ITSM sync" },
   { id: "INT12", name: "GitHub", category: "DevOps", icon: "🐙", status: "available", description: "Link incidents to code changes and deployments" },
 ];
 
@@ -1289,6 +1289,14 @@ export default function ITSMApp() {
   const [zdAiQueue, setZdAiQueue] = useState([]); // AI-drafted responses awaiting approval
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
+  const zdPollingRef = useRef(null);
+  const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", true));
+  const [zdAutoLog, setZdAutoLog] = useState([]);
+  const [zdTriagedIds, setZdTriagedIds] = useState(new Set());
+  const [zdAutoStats, setZdAutoStats] = useState({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
+  const [zdAgents, setZdAgents] = useState([]);
+  const [zdGroups, setZdGroups] = useState([]);
+  const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings
   // ─── Workflow Automation Rules State ─────────────────────────────────────
   const [workflowRules, setWorkflowRules] = useState(() => {
     const saved = _ls("vgc_workflow_rules", null);
@@ -2043,7 +2051,7 @@ export default function ITSMApp() {
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "cybernews", label: "Cyber News", count: (() => { const sev = ["Critical","High"]; return [{ severity: "Critical", status: "Active" },{ severity: "High", status: "Investigating" },{ severity: "Medium", status: "Acknowledged" },{ severity: "Low", status: "Scheduled" },{ severity: "High", status: "Active" }].filter(a => sev.includes(a.severity)).length; })(), critical: true, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
-    { id: "zendesk", label: "Zendesk", count: zdStats.open + zdStats.pending, accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
+    { id: "zendesk", label: "Zendesk AI", count: zdStats.open + zdStats.pending + zdAiQueue.filter(q => q.status === "pending_approval").length, critical: zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "architecture", label: "Architecture", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #6366F118)" },
   ];
 
@@ -10298,8 +10306,9 @@ export default function ITSMApp() {
     return null;
   };
 
-  // ─── Zendesk Module ──────────────────────────────────────────────────
+  // ─── Zendesk Module — 90% AI Automated / 10% Human-in-the-Loop ─────
   const ZendeskModule = () => {
+    // ── Core Functions ──
     const zdConnect = async () => {
       setZdLoading(true); setZdError(null);
       try {
@@ -10308,6 +10317,11 @@ export default function ITSMApp() {
         const data = await r.json();
         setZdUser(data.user); setZdConnected(true);
         zdFetchTickets(); zdFetchStats();
+        // Fetch agents & groups for routing
+        try {
+          const ar = await fetch("/api/zendesk/agents");
+          if (ar.ok) { const ad = await ar.json(); setZdAgents(ad.agents || []); setZdGroups(ad.groups || []); }
+        } catch {}
       } catch (e) { setZdError(e.message); setZdConnected(false); }
       finally { setZdLoading(false); }
     };
@@ -10316,7 +10330,7 @@ export default function ITSMApp() {
       const s = status || zdFilter; const p = page || 1;
       setZdLoading(true);
       try {
-        const r = await fetch(`/api/zendesk/tickets?status=${s}&page=${p}&per_page=20&sort_order=desc`);
+        const r = await fetch(`/api/zendesk/tickets?status=${s}&page=${p}&per_page=25&sort_order=desc`);
         if (!r.ok) throw new Error((await r.json()).error);
         const data = await r.json();
         setZdTickets(data.tickets || data.results || []);
@@ -10344,105 +10358,183 @@ export default function ITSMApp() {
       await zdFetchComments(ticket.id);
     };
 
-    // AI Auto-Triage — analyze ticket and generate draft response
-    const zdAiTriage = async (ticket) => {
-      if (!azureOpenAI.enabled) { setZdError("AI engine is offline — enable Azure OpenAI in Admin"); return; }
-      setZdAiProcessing(true);
-      try {
-        const comments = [];
-        try {
-          const cr = await fetch(`/api/zendesk/tickets/${ticket.id}/comments`);
-          if (cr.ok) { const cd = await cr.json(); comments.push(...(cd.comments || [])); }
-        } catch {}
-        const lastComment = comments.length > 0 ? comments[comments.length - 1]?.body || "" : "";
-        const systemPrompt = `You are an expert IT support AI assistant for VGC Technology Pte Ltd — a managed IT services company. Your job is to analyze support tickets from Zendesk, classify them, and draft a professional customer-facing response.
-
-RULES:
-- Be professional, empathetic, and solution-oriented
-- Reference the ticket subject and any specific details from the conversation
-- Suggest concrete next steps
-- If it's a known issue type (password reset, VPN, email, software license, hardware), provide standard resolution steps
-- Keep responses concise but thorough (150-250 words)
-- Sign off as "VGC Technology Service Desk"
-- Include a case reference to the Zendesk ticket ID
-- Classify the ticket into: category, suggested_priority (low/normal/high/urgent), suggested_tags
-
-Respond in this JSON format:
-{"category":"<category>","priority":"<low|normal|high|urgent>","tags":["tag1","tag2"],"draft_response":"<the full customer email response>","internal_note":"<brief internal analysis for the agent>","confidence":85}`;
-
-        const userPrompt = `Analyze this Zendesk ticket and draft a response:
-
-Ticket #${ticket.id}
-Subject: ${ticket.subject || "No subject"}
-Status: ${ticket.status}
-Priority: ${ticket.priority || "not set"}
-Created: ${ticket.created_at}
-Description: ${ticket.description || "No description"}
-${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1000)}` : ""}`;
-
-        const r = await fetch("/api/ai/chat", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ systemPrompt, userPrompt }),
-        });
-        if (!r.ok) throw new Error("AI analysis failed");
-        const data = await r.json();
-        let parsed;
-        try {
-          const cleaned = data.text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-          parsed = JSON.parse(cleaned);
-        } catch { parsed = { category: "General", priority: ticket.priority || "normal", tags: [], draft_response: data.text, internal_note: "AI response (unstructured)", confidence: 60 }; }
-
-        const queueItem = {
-          id: `ZDAI-${Date.now()}`,
-          ticketId: ticket.id,
-          ticketSubject: ticket.subject,
-          ticketStatus: ticket.status,
-          category: parsed.category,
-          suggestedPriority: parsed.priority,
-          suggestedTags: parsed.tags || [],
-          draftResponse: parsed.draft_response,
-          internalNote: parsed.internal_note,
-          confidence: parsed.confidence || 75,
-          status: "pending_approval", // pending_approval | approved | rejected | sent
-          createdAt: new Date().toISOString(),
-          reviewedBy: null,
-        };
-        setZdAiQueue(prev => [queueItem, ...prev.filter(q => q.ticketId !== ticket.id)]);
-        setAzureOpenAI(prev => ({ ...prev, totalCalls: (prev.totalCalls || 0) + 1 }));
-      } catch (e) { setZdError("AI triage failed: " + e.message); }
-      finally { setZdAiProcessing(false); }
+    const addAutoLog = (entry) => {
+      setZdAutoLog(prev => [{ ...entry, id: `LOG-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, timestamp: new Date().toISOString() }, ...prev].slice(0, 200));
     };
 
-    // Batch AI triage for all open tickets
-    const zdAiTriageAll = async () => {
-      const openTickets = zdTickets.filter(t => t.status === "open" || t.status === "new");
-      for (const ticket of openTickets.slice(0, 10)) {
-        await zdAiTriage(ticket);
+    // ── AI Auto-Triage (server-side) ──
+    const zdAiTriageSingle = async (ticketId) => {
+      try {
+        const r = await fetch("/api/zendesk/auto-triage", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticketId }),
+        });
+        if (!r.ok) throw new Error("Triage failed");
+        const data = await r.json();
+        const triage = data.triage;
+        const ticket = data.ticket;
+
+        const queueItem = {
+          id: `ZDAI-${Date.now()}-${ticketId}`,
+          ticketId, ticketSubject: ticket?.subject || "No subject",
+          ticketStatus: ticket?.status,
+          category: triage.category, suggestedPriority: triage.priority,
+          suggestedTags: triage.tags || [], draftResponse: triage.draft_response,
+          internalNote: triage.internal_note, confidence: triage.confidence || 75,
+          suggestedAssignee: triage.suggested_assignee || "L1 Support",
+          autoSendable: triage.auto_sendable === true && (triage.confidence || 0) >= 85,
+          itsmCategory: triage.itsm_category || triage.category,
+          slaPriority: triage.sla_priority || "Sev-D",
+          status: "pending_approval",
+          createdAt: new Date().toISOString(), reviewedBy: null,
+        };
+
+        setZdTriagedIds(prev => new Set(prev).add(ticketId));
+        setZdAutoStats(prev => ({ ...prev, totalTriaged: prev.totalTriaged + 1, avgConfidence: Math.round(((prev.avgConfidence * prev.totalTriaged) + (triage.confidence || 75)) / (prev.totalTriaged + 1)) }));
+
+        // AUTO-SEND if high confidence & safe
+        if (zdAutoMode && queueItem.autoSendable) {
+          const sendR = await fetch("/api/zendesk/auto-respond", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ticketId, response: triage.draft_response, priority: triage.priority, tags: triage.tags, internalNote: triage.internal_note }),
+          });
+          if (sendR.ok) {
+            queueItem.status = "auto_sent";
+            queueItem.reviewedBy = "AI Engine (Auto)";
+            setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
+            addAutoLog({ type: "auto_send", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `Auto-responded to #${ticketId} (${triage.confidence}% confidence)` });
+          }
+        } else if (!queueItem.autoSendable) {
+          setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+          addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for human review (${triage.confidence}% confidence, reason: ${triage.confidence < 85 ? "low confidence" : "complex/sensitive"})` });
+        }
+
+        // AUTO-CREATE ITSM INCIDENT for high/urgent tickets
+        if ((triage.priority === "urgent" || triage.priority === "high") && triage.sla_priority) {
+          const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+          const newInc = {
+            id: genId("INC"), title: `[ZD#${ticketId}] ${ticket?.subject || "Zendesk Ticket"}`,
+            priority: triage.sla_priority, status: "Open",
+            category: triage.itsm_category || triage.category, subcategory: "",
+            urgency: triage.priority === "urgent" ? "Critical" : "High",
+            impact: triage.priority === "urgent" ? "Enterprise" : "Department",
+            assignee: triage.suggested_assignee || "Unassigned",
+            assignmentGroup: triage.suggested_assignee === "Network Engineering" ? "Network Engineering" : "Service Desk",
+            reporter: "Zendesk AI", reporterEmail: "", customer: "",
+            description: ticket?.description || "", contactMethod: "Zendesk",
+            created: 0, slaTarget: slaMap[triage.sla_priority] || 9,
+            aiTriaged: true, aiConfidence: triage.confidence || 75,
+            zdTicketId: ticketId, workaround: "", linkedProblem: "",
+            affectedAssets: [], activityLog: [
+              { id: genId("AL"), type: "status", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-created from Zendesk #${ticketId} — AI Triage (${triage.confidence}% confidence)` },
+              { id: genId("AL"), type: "note", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: triage.internal_note, isInternal: true, body: triage.internal_note },
+            ]
+          };
+          setIncidents(prev => [newInc, ...prev]);
+          setZdAutoStats(prev => ({ ...prev, incidentsCreated: prev.incidentsCreated + 1 }));
+          queueItem.itsmIncidentId = newInc.id;
+          addAutoLog({ type: "incident_created", ticketId, subject: ticket?.subject, incidentId: newInc.id, priority: triage.sla_priority, message: `ITSM ${newInc.id} auto-created from #${ticketId} — ${triage.sla_priority}` });
+        }
+
+        setZdAiQueue(prev => [queueItem, ...prev.filter(q => q.ticketId !== ticketId)]);
+        setAzureOpenAI(prev => ({ ...prev, totalCalls: (prev.totalCalls || 0) + 1 }));
+        return queueItem;
+      } catch (e) {
+        addAutoLog({ type: "error", ticketId, message: `Triage failed for #${ticketId}: ${e.message}` });
+        return null;
       }
     };
 
-    // Approve and send AI draft to Zendesk
+    // ── Batch Auto-Triage (triggered by polling or manual) ──
+    const zdAutoTriageBatch = async () => {
+      if (zdAiProcessing) return;
+      setZdAiProcessing(true);
+      try {
+        const r = await fetch("/api/zendesk/new-tickets");
+        if (!r.ok) return;
+        const data = await r.json();
+        const tickets = data.results || data.tickets || [];
+        const untriaged = tickets.filter(t => !zdTriagedIds.has(t.id));
+        if (untriaged.length === 0) { addAutoLog({ type: "info", message: "Polling: No new tickets to triage" }); return; }
+
+        addAutoLog({ type: "info", message: `Found ${untriaged.length} new ticket(s) — starting AI triage...` });
+        for (const ticket of untriaged.slice(0, 15)) {
+          await zdAiTriageSingle(ticket.id);
+        }
+        zdFetchStats();
+      } catch (e) { addAutoLog({ type: "error", message: `Batch triage error: ${e.message}` }); }
+      finally { setZdAiProcessing(false); }
+    };
+
+    // ── Human Approve & Send ──
     const zdApproveAndSend = async (queueItem) => {
       try {
         setZdLoading(true);
-        const r = await fetch(`/api/zendesk/tickets/${queueItem.ticketId}`, {
-          method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticket: { comment: { body: queueItem.draftResponse, public: true }, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags } }),
+        const r = await fetch("/api/zendesk/auto-respond", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticketId: queueItem.ticketId, response: queueItem.draftResponse, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote }),
         });
-        if (!r.ok) throw new Error("Failed to update Zendesk ticket");
-        setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", reviewedBy: currentUser?.name } : q));
+        if (!r.ok) throw new Error("Failed to send");
+        setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", reviewedBy: currentUser?.name || "Admin" } : q));
+        addAutoLog({ type: "human_approved", ticketId: queueItem.ticketId, subject: queueItem.ticketSubject, message: `#${queueItem.ticketId} approved & sent by ${currentUser?.name || "Admin"}` });
         zdFetchTickets(); zdFetchStats();
       } catch (e) { setZdError("Send failed: " + e.message); }
       finally { setZdLoading(false); }
     };
 
-    // Auto-connect on mount
+    // ── Edit & Send (human edits AI draft) ──
+    const [editingDraft, setEditingDraft] = useState(null);
+    const [editedText, setEditedText] = useState("");
+
+    const zdEditAndSend = async (queueItem) => {
+      try {
+        setZdLoading(true);
+        const r = await fetch("/api/zendesk/auto-respond", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticketId: queueItem.ticketId, response: editedText, priority: queueItem.suggestedPriority, tags: queueItem.suggestedTags, internalNote: queueItem.internalNote }),
+        });
+        if (!r.ok) throw new Error("Failed to send");
+        setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", draftResponse: editedText, reviewedBy: `${currentUser?.name || "Admin"} (edited)` } : q));
+        setEditingDraft(null); setEditedText("");
+        addAutoLog({ type: "human_edited", ticketId: queueItem.ticketId, message: `#${queueItem.ticketId} edited & sent by ${currentUser?.name || "Admin"}` });
+        zdFetchTickets(); zdFetchStats();
+      } catch (e) { setZdError("Send failed: " + e.message); }
+      finally { setZdLoading(false); }
+    };
+
+    // ── Auto-connect & start polling ──
     React.useEffect(() => {
-      if (!zdFetchedRef.current) { zdFetchedRef.current = true; zdConnect(); }
+      if (!zdFetchedRef.current) {
+        zdFetchedRef.current = true;
+        zdConnect();
+      }
     }, []);
 
+    // Auto-polling for new tickets (every 60s when automation is on)
+    React.useEffect(() => {
+      if (zdConnected && zdAutoMode && azureOpenAI.enabled) {
+        zdPollingRef.current = setInterval(() => { zdAutoTriageBatch(); }, 60000);
+        return () => clearInterval(zdPollingRef.current);
+      }
+      return () => { if (zdPollingRef.current) clearInterval(zdPollingRef.current); };
+    }, [zdConnected, zdAutoMode, azureOpenAI.enabled]);
+
     const priorityColor = (p) => ({ urgent: "#FF6B6B", high: "#FFB347", normal: "#64B5F6", low: "#81C784" }[p] || "#5A6178");
+    const slaPriorityColor = (p) => ({ "Sev-A": "#FF6B6B", "Sev-B": "#FFB347", "Sev-C": "#64B5F6", "Sev-D": "#81C784" }[p] || "#5A6178");
     const statusIcon = (s) => ({ new: "🆕", open: "📂", pending: "⏳", hold: "⏸️", solved: "✅", closed: "🔒" }[s] || "📋");
+    const pendingQueue = zdAiQueue.filter(q => q.status === "pending_approval");
+    const autoSentQueue = zdAiQueue.filter(q => q.status === "auto_sent");
+    const humanSentQueue = zdAiQueue.filter(q => q.status === "sent");
+    const rejectedQueue = zdAiQueue.filter(q => q.status === "rejected");
+
+    const cardStyle = { background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "hidden" };
+    const sectionLabel = (icon, text, count) => (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <span style={{ fontSize: 16 }}>{icon}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>{text}</span>
+        {count !== undefined && <span style={{ fontSize: 9, background: "#EC489922", color: "#EC4899", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>{count}</span>}
+      </div>
+    );
 
     return (
       <div style={{ padding: 0 }}>
@@ -10450,246 +10542,511 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1000)}` : ""}`;
           @keyframes zdPulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
           @keyframes zdSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
           @keyframes zdSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+          @keyframes zdGlow { 0%, 100% { box-shadow: 0 0 8px #EC489933; } 50% { box-shadow: 0 0 20px #EC489955; } }
+          @keyframes zdFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
         `}</style>
 
-        {/* Connection Banner */}
+        {/* ── Top Banner: Connection + Automation Status ── */}
         <div style={{
-          background: zdConnected ? "linear-gradient(135deg, #FFB34708, #0F1117)" : "#0F1117",
-          borderRadius: 10, border: `1px solid ${zdConnected ? "#FFB34733" : "#FF6B6B33"}`,
-          padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: zdConnected ? "linear-gradient(135deg, #0F1117, #EC489908, #0F1117)" : "#0F1117",
+          backgroundSize: "200% 100%", animation: zdConnected && zdAutoMode ? "zdFlow 8s linear infinite" : "none",
+          borderRadius: 12, border: `1px solid ${zdConnected ? (zdAutoMode ? "#EC489944" : "#FFB34733") : "#FF6B6B33"}`,
+          padding: "16px 22px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: zdConnected ? "#FFB34722" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>💛</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: zdAutoMode && zdConnected ? "#EC489922" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: zdAutoMode && zdConnected ? "zdGlow 3s ease infinite" : "none" }}>🤖</div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 8 }}>
-                Zendesk Integration
-                <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, fontWeight: 700, background: zdConnected ? "#81C78422" : "#FF444422", color: zdConnected ? "#81C784" : "#FF4444", animation: zdConnected ? "zdPulse 2s infinite" : "none" }}>{zdConnected ? "LIVE" : "OFFLINE"}</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 10 }}>
+                Zendesk AI Command Center
+                <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdConnected ? (zdAutoMode ? "#EC489922" : "#81C78422") : "#FF444422", color: zdConnected ? (zdAutoMode ? "#EC4899" : "#81C784") : "#FF4444", animation: zdConnected ? "zdPulse 2s infinite" : "none" }}>
+                  {zdConnected ? (zdAutoMode ? "🔴 AI AUTOPILOT ACTIVE" : "LIVE — MANUAL") : "OFFLINE"}
+                </span>
               </div>
-              <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
-                {zdConnected ? `Connected as ${zdUser?.name || "—"} · vgctech.zendesk.com` : zdError || "Not connected"}
+              <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
+                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? "Auto-triage every 60s" : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0}` : zdError || "Not connected"}
               </div>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {zdConnected && (
+              <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "AI Autopilot ENABLED — auto-triage + auto-respond for high-confidence tickets" : "AI Autopilot DISABLED — all responses require human approval" }); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdAutoMode ? "#EC489922" : "#1E2130", border: `1px solid ${zdAutoMode ? "#EC489944" : "#1E2130"}` }}>
+                <div style={{ width: 32, height: 16, borderRadius: 8, background: zdAutoMode ? "#EC4899" : "#333", position: "relative", transition: "all 0.3s" }}>
+                  <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdAutoMode ? 18 : 2, transition: "left 0.3s" }} />
+                </div>
+                <span style={{ fontSize: 9, fontWeight: 600, color: zdAutoMode ? "#EC4899" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>AUTOPILOT</span>
+              </div>
+            )}
             {zdConnected && azureOpenAI.enabled && (
-              <button onClick={zdAiTriageAll} disabled={zdAiProcessing || zdTickets.filter(t => t.status === "open" || t.status === "new").length === 0}
-                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #EC489933", background: zdAiProcessing ? "#EC489911" : "#EC489918", color: "#EC4899", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", opacity: zdAiProcessing ? 0.7 : 1 }}>
-                {zdAiProcessing ? "🔄 Processing..." : "🤖 AI Triage All Open"}
+              <button onClick={zdAutoTriageBatch} disabled={zdAiProcessing}
+                style={{ padding: "7px 16px", borderRadius: 8, border: "1px solid #6366F133", background: zdAiProcessing ? "#6366F111" : "#6366F118", color: "#6366F1", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                {zdAiProcessing ? "⟳ Processing..." : "⚡ Triage Now"}
               </button>
             )}
             <button onClick={() => { zdFetchTickets(); zdFetchStats(); }} disabled={zdLoading}
-              style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #FFB34733", background: "#FFB34718", color: "#FFB347", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
-              {zdLoading ? "⟳ Syncing..." : "🔄 Sync"}
+              style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #FFB34733", background: "#FFB34718", color: "#FFB347", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+              🔄 Sync
             </button>
             {!zdConnected && (
               <button onClick={zdConnect} disabled={zdLoading}
-                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #81C78433", background: "#81C78418", color: "#81C784", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
-                Connect
-              </button>
+                style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #81C78433", background: "#81C78418", color: "#81C784", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Connect</button>
             )}
           </div>
         </div>
 
-        {/* Stats Row */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+        {/* ── Automation Metrics Dashboard ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 20 }}>
           {[
             { label: "Open", value: zdStats.open, accent: "#64B5F6", icon: "📂" },
             { label: "Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳" },
             { label: "On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️" },
             { label: "Solved", value: zdStats.solved, accent: "#81C784", icon: "✅" },
-            { label: "AI Queue", value: zdAiQueue.filter(q => q.status === "pending_approval").length, accent: "#EC4899", icon: "🤖" },
+            { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖" },
+            { label: "Auto-Sent", value: zdAutoStats.autoSent, accent: "#06B6D4", icon: "⚡" },
+            { label: "Human Review", value: pendingQueue.length, accent: "#FFB347", icon: "👤" },
+            { label: "ITSM Created", value: zdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫" },
+            { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊" },
           ].map((s, i) => (
-            <div key={i} style={{ padding: "14px 16px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33`, animation: `zdSlideIn 0.4s ease ${i * 0.06}s both` }}>
-              <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>{s.icon} {s.label}</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: s.accent }}>{s.value}</div>
+            <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33`, animation: `zdSlideIn 0.4s ease ${i * 0.04}s both` }}>
+              <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: s.accent }}>{s.value}</div>
             </div>
           ))}
         </div>
 
-        {/* AI Approval Queue */}
-        {zdAiQueue.filter(q => q.status === "pending_approval").length > 0 && (
-          <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #EC489933", padding: 16, marginBottom: 20, animation: "zdSlideIn 0.5s ease" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 16 }}>🤖</span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>AI Responses — Awaiting Your Approval</span>
-                <span style={{ fontSize: 9, background: "#EC489922", color: "#EC4899", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>{zdAiQueue.filter(q => q.status === "pending_approval").length}</span>
-              </div>
-            </div>
-            {zdAiQueue.filter(q => q.status === "pending_approval").map((q, i) => (
-              <div key={q.id} style={{ background: "#12141E", borderRadius: 8, border: "1px solid #1E213066", padding: 14, marginBottom: 10, animation: `zdSlideIn 0.3s ease ${i * 0.05}s both` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>Ticket #{q.ticketId} — {q.ticketSubject}</div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(q.suggestedPriority) + "22", color: priorityColor(q.suggestedPriority), fontWeight: 600 }}>Priority: {q.suggestedPriority}</span>
-                      <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>Category: {q.category}</span>
-                      <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>Confidence: {q.confidence}%</span>
-                      {q.suggestedTags?.map((tag, ti) => <span key={ti} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ffffff08", color: "#A0AEC0" }}>{tag}</span>)}
-                    </div>
-                  </div>
-                </div>
-                {/* Internal note */}
-                <div style={{ background: "#FFB34708", border: "1px solid #FFB34722", borderRadius: 6, padding: "8px 10px", marginBottom: 10 }}>
-                  <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 3, fontFamily: "'JetBrains Mono', monospace" }}>🔒 INTERNAL AI ANALYSIS</div>
-                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.5 }}>{q.internalNote}</div>
-                </div>
-                {/* Draft response preview */}
-                <div style={{ background: "#0A0C14", borderRadius: 6, padding: "10px 12px", marginBottom: 12, border: "1px solid #1E213044", maxHeight: 180, overflow: "auto" }}>
-                  <div style={{ fontSize: 9, color: "#81C784", fontWeight: 600, marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>📧 DRAFT CUSTOMER RESPONSE (review before sending)</div>
-                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{q.draftResponse}</div>
-                </div>
-                {/* Action buttons */}
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                  <button onClick={() => setZdAiQueue(prev => prev.map(item => item.id === q.id ? { ...item, status: "rejected", reviewedBy: currentUser?.name } : item))}
-                    style={{ padding: "6px 16px", borderRadius: 6, border: "1px solid #FF6B6B33", background: "#FF6B6B11", color: "#FF6B6B", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>✕ Reject</button>
-                  <button onClick={() => zdApproveAndSend(q)}
-                    style={{ padding: "6px 16px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #81C784)", color: "#fff", cursor: "pointer", fontSize: 10, fontWeight: 700, boxShadow: "0 2px 8px #4CAF5033" }}>✓ Approve & Send to Customer</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Sent/Rejected History */}
-        {zdAiQueue.filter(q => q.status === "sent" || q.status === "rejected").length > 0 && (
-          <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 14, marginBottom: 20 }}>
-            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>📋 AI Response History</div>
-            {zdAiQueue.filter(q => q.status === "sent" || q.status === "rejected").slice(0, 5).map(q => (
-              <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid #1E213022" }}>
-                <span style={{ fontSize: 10, color: q.status === "sent" ? "#81C784" : "#FF6B6B" }}>{q.status === "sent" ? "✅" : "❌"}</span>
-                <span style={{ fontSize: 11, color: "#C4CAD6", flex: 1 }}>#{q.ticketId} — {q.ticketSubject}</span>
-                <span style={{ fontSize: 9, color: "#5A6178" }}>{q.status === "sent" ? "Sent" : "Rejected"} by {q.reviewedBy}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Filter Tabs */}
-        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-          {["open", "pending", "hold", "solved", "closed"].map(f => (
-            <button key={f} onClick={() => { setZdFilter(f); zdFetchTickets(f, 1); }}
-              style={{ padding: "5px 14px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer", textTransform: "capitalize", fontFamily: "'JetBrains Mono', monospace", background: zdFilter === f ? "#FFB34722" : "#ffffff06", color: zdFilter === f ? "#FFB347" : "#5A6178", border: `1px solid ${zdFilter === f ? "#FFB34744" : "#1E2130"}` }}>
-              {statusIcon(f)} {f}
+        {/* ── Tab Navigation ── */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", borderRadius: 10, padding: 4 }}>
+          {[
+            { id: "automation", label: "🤖 Automation", count: null },
+            { id: "queue", label: "👤 Human Review", count: pendingQueue.length },
+            { id: "tickets", label: "📋 All Tickets", count: zdStats.open + zdStats.pending },
+            { id: "history", label: "📊 AI History", count: autoSentQueue.length + humanSentQueue.length },
+            { id: "settings", label: "⚙️ Settings", count: null },
+          ].map(tab => (
+            <button key={tab.id} onClick={() => setZdTab(tab.id)}
+              style={{ flex: 1, padding: "8px 12px", borderRadius: 8, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", background: zdTab === tab.id ? "#1E213066" : "transparent", color: zdTab === tab.id ? "#E8ECF4" : "#5A6178", border: zdTab === tab.id ? "1px solid #1E2130" : "1px solid transparent", transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              {tab.label}
+              {tab.count > 0 && <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 8, background: tab.id === "queue" ? "#FF6B6B33" : "#6366F133", color: tab.id === "queue" ? "#FF6B6B" : "#6366F1", fontWeight: 700 }}>{tab.count}</span>}
             </button>
           ))}
         </div>
 
-        {/* Ticket List + Detail Split View */}
-        <div style={{ display: "grid", gridTemplateColumns: zdSelectedTicket ? "1fr 1.3fr" : "1fr", gap: 14 }}>
-          {/* Ticket List */}
-          <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "hidden" }}>
-            {zdLoading && zdTickets.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#5A6178" }}>
-                <div style={{ fontSize: 24, marginBottom: 8, animation: "zdSpin 1s linear infinite", display: "inline-block" }}>⟳</div>
-                <div style={{ fontSize: 12 }}>Loading tickets...</div>
+        {/* ══════════ TAB: AUTOMATION (Live Feed) ══════════ */}
+        {zdTab === "automation" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {/* Automation Pipeline */}
+            <div style={{ ...cardStyle, padding: 16 }}>
+              {sectionLabel("⚡", "AI Automation Pipeline")}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+                {[
+                  { label: "Ingest", desc: "Zendesk tickets pulled every 60s", icon: "📥", color: "#64B5F6", active: zdConnected },
+                  { label: "AI Triage", desc: "Category, priority, draft response", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled },
+                  { label: "Auto-Route", desc: "High confidence → auto-send", icon: "🚀", color: "#81C784", active: zdAutoMode },
+                ].map((step, i) => (
+                  <div key={i} style={{ padding: "12px 10px", borderRadius: 8, background: step.active ? `${step.color}08` : "#12141E", border: `1px solid ${step.active ? step.color + "33" : "#1E213033"}`, textAlign: "center" }}>
+                    <div style={{ fontSize: 20, marginBottom: 4 }}>{step.icon}</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: step.active ? step.color : "#5A6178", marginBottom: 2 }}>{step.label}</div>
+                    <div style={{ fontSize: 8, color: "#5A617888" }}>{step.desc}</div>
+                    <div style={{ marginTop: 6, width: 6, height: 6, borderRadius: "50%", background: step.active ? "#4CAF50" : "#FF4444", margin: "0 auto", animation: step.active ? "zdPulse 2s infinite" : "none" }} />
+                  </div>
+                ))}
               </div>
-            ) : zdTickets.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#5A6178", fontSize: 12 }}>No tickets found for this filter.</div>
-            ) : (
-              zdTickets.map((ticket, i) => {
-                const aiItem = zdAiQueue.find(q => q.ticketId === ticket.id);
-                return (
-                  <div key={ticket.id} onClick={() => zdSelectTicket(ticket)}
-                    style={{
-                      padding: "12px 16px", borderBottom: "1px solid #1E213033", cursor: "pointer",
-                      background: zdSelectedTicket?.id === ticket.id ? "#1E213044" : "transparent",
-                      transition: "background 0.2s", animation: `zdSlideIn 0.3s ease ${i * 0.03}s both`,
-                    }}
-                    onMouseEnter={e => { if (zdSelectedTicket?.id !== ticket.id) e.currentTarget.style.background = "#1E213022"; }}
-                    onMouseLeave={e => { if (zdSelectedTicket?.id !== ticket.id) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>#{ticket.id}</span>
-                          {ticket.priority && <span style={{ width: 6, height: 6, borderRadius: "50%", background: priorityColor(ticket.priority), flexShrink: 0 }} />}
-                          {aiItem && <span style={{ fontSize: 8, padding: "1px 4px", borderRadius: 3, background: aiItem.status === "pending_approval" ? "#EC489922" : aiItem.status === "sent" ? "#81C78422" : "#FF6B6B22", color: aiItem.status === "pending_approval" ? "#EC4899" : aiItem.status === "sent" ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{aiItem.status === "pending_approval" ? "AI DRAFT" : aiItem.status === "sent" ? "AI SENT" : "REJECTED"}</span>}
+
+              {/* Routing Rules */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>📋 Auto-Routing Rules</div>
+              {[
+                { condition: "Confidence ≥ 85% + Safe Category", action: "→ Auto-respond to customer", color: "#81C784" },
+                { condition: "Confidence < 85% or Complex/Sensitive", action: "→ Queue for human review", color: "#FFB347" },
+                { condition: "Priority = Urgent/High", action: "→ Auto-create ITSM Incident", color: "#FF6B6B" },
+                { condition: "Category = Network/Security", action: "→ Route to Network Engineering", color: "#6366F1" },
+                { condition: "Category = Hardware", action: "→ Route to L2 Support", color: "#06B6D4" },
+                { condition: "All other tickets", action: "→ Route to L1 Service Desk", color: "#EC4899" },
+              ].map((rule, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < 5 ? "1px solid #1E213022" : "none" }}>
+                  <div style={{ width: 4, height: 4, borderRadius: "50%", background: rule.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 10, color: "#A0AEC0", flex: 1 }}>{rule.condition}</span>
+                  <span style={{ fontSize: 9, color: rule.color, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{rule.action}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Live Activity Log */}
+            <div style={{ ...cardStyle, padding: 16, maxHeight: 500, display: "flex", flexDirection: "column" }}>
+              {sectionLabel("📡", "Live Activity Feed", zdAutoLog.length)}
+              <div style={{ flex: 1, overflow: "auto" }}>
+                {zdAutoLog.length === 0 ? (
+                  <div style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>
+                    <div style={{ fontSize: 28, marginBottom: 8 }}>🤖</div>
+                    <div style={{ fontSize: 11 }}>{zdAutoMode ? "AI Autopilot active — waiting for new tickets..." : "Enable Autopilot or click 'Triage Now' to start"}</div>
+                  </div>
+                ) : (
+                  zdAutoLog.slice(0, 50).map((log, i) => {
+                    const typeConfig = {
+                      auto_send: { icon: "⚡", color: "#81C784", bg: "#81C78408" },
+                      human_review: { icon: "👤", color: "#FFB347", bg: "#FFB34708" },
+                      human_approved: { icon: "✅", color: "#4CAF50", bg: "#4CAF5008" },
+                      human_edited: { icon: "✏️", color: "#64B5F6", bg: "#64B5F608" },
+                      incident_created: { icon: "🎫", color: "#6366F1", bg: "#6366F108" },
+                      error: { icon: "❌", color: "#FF6B6B", bg: "#FF6B6B08" },
+                      info: { icon: "ℹ️", color: "#5A6178", bg: "transparent" },
+                      config: { icon: "⚙️", color: "#EC4899", bg: "#EC489908" },
+                    }[log.type] || { icon: "📋", color: "#5A6178", bg: "transparent" };
+                    return (
+                      <div key={log.id} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 6, background: typeConfig.bg, borderLeft: `2px solid ${typeConfig.color}`, animation: `zdSlideIn 0.3s ease ${i * 0.02}s both` }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                          <span style={{ fontSize: 12, flexShrink: 0 }}>{typeConfig.icon}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>{log.message}</div>
+                            <div style={{ fontSize: 8, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>{new Date(log.timestamp).toLocaleString("en-SG")}</div>
+                          </div>
                         </div>
-                        <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ticket.subject || "No subject"}</div>
-                        <div style={{ fontSize: 10, color: "#5A617899", marginTop: 3 }}>{new Date(ticket.created_at).toLocaleDateString("en-SG")} · {ticket.status}</div>
                       </div>
-                      {azureOpenAI.enabled && (ticket.status === "open" || ticket.status === "new") && !aiItem && (
-                        <button onClick={e => { e.stopPropagation(); zdAiTriage(ticket); }}
-                          style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #EC489933", background: "#EC489911", color: "#EC4899", cursor: "pointer", fontSize: 9, fontWeight: 600, flexShrink: 0 }}>
-                          🤖 Triage
-                        </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════ TAB: HUMAN REVIEW QUEUE ══════════ */}
+        {zdTab === "queue" && (
+          <div>
+            {pendingQueue.length === 0 ? (
+              <div style={{ ...cardStyle, padding: 40, textAlign: "center" }}>
+                <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#81C784", marginBottom: 4 }}>All Clear — No Items Pending Review</div>
+                <div style={{ fontSize: 11, color: "#5A6178" }}>AI is handling {zdAutoStats.autoSent} ticket(s) automatically. You'll see items here only when human judgment is needed.</div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  {sectionLabel("👤", "Requires Your Decision", pendingQueue.length)}
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>These tickets need human review — low confidence, complex, or sensitive content</span>
+                </div>
+                {pendingQueue.map((q, i) => (
+                  <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.05}s both`, border: `1px solid ${q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 6 }}>Ticket #{q.ticketId} — {q.ticketSubject}</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: priorityColor(q.suggestedPriority) + "22", color: priorityColor(q.suggestedPriority), fontWeight: 600 }}>Priority: {q.suggestedPriority}</span>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{q.category}</span>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: slaPriorityColor(q.slaPriority) + "22", color: slaPriorityColor(q.slaPriority), fontWeight: 600 }}>SLA: {q.slaPriority}</span>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: q.confidence >= 80 ? "#81C78422" : q.confidence >= 60 ? "#FFB34722" : "#FF6B6B22", color: q.confidence >= 80 ? "#81C784" : q.confidence >= 60 ? "#FFB347" : "#FF6B6B", fontWeight: 600 }}>🎯 {q.confidence}%</span>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {q.suggestedAssignee}</span>
+                          {q.itsmIncidentId && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>🎫 {q.itsmIncidentId}</span>}
+                          {(q.suggestedTags || []).map((tag, ti) => <span key={ti} style={{ fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "#ffffff08", color: "#A0AEC0" }}>{tag}</span>)}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textAlign: "right" }}>
+                        <div>{!q.autoSendable ? "⚠️ Not auto-sendable" : ""}</div>
+                        <div>{new Date(q.createdAt).toLocaleString("en-SG")}</div>
+                      </div>
+                    </div>
+
+                    {/* Internal AI Analysis */}
+                    <div style={{ background: "#FFB34708", border: "1px solid #FFB34722", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>🔒 AI INTERNAL ANALYSIS</div>
+                      <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.5 }}>{q.internalNote}</div>
+                    </div>
+
+                    {/* Draft Response (editable) */}
+                    <div style={{ background: "#0A0C14", borderRadius: 8, padding: "10px 14px", marginBottom: 12, border: "1px solid #1E213044" }}>
+                      <div style={{ fontSize: 9, color: "#81C784", fontWeight: 600, marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>📧 AI DRAFT — CUSTOMER RESPONSE</div>
+                      {editingDraft === q.id ? (
+                        <textarea value={editedText} onChange={e => setEditedText(e.target.value)}
+                          style={{ width: "100%", minHeight: 150, background: "#12141E", border: "1px solid #6366F133", borderRadius: 6, padding: 10, color: "#E8ECF4", fontSize: 11, lineHeight: 1.6, resize: "vertical", fontFamily: "inherit", outline: "none" }} />
+                      ) : (
+                        <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>{q.draftResponse}</div>
+                      )}
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                      <button onClick={() => setZdAiQueue(prev => prev.map(item => item.id === q.id ? { ...item, status: "rejected", reviewedBy: currentUser?.name } : item))}
+                        style={{ padding: "7px 18px", borderRadius: 6, border: "1px solid #FF6B6B33", background: "#FF6B6B11", color: "#FF6B6B", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>✕ Reject</button>
+                      {editingDraft === q.id ? (
+                        <>
+                          <button onClick={() => { setEditingDraft(null); setEditedText(""); }}
+                            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#12141E", color: "#A0AEC0", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Cancel</button>
+                          <button onClick={() => zdEditAndSend(q)}
+                            style={{ padding: "7px 18px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #818CF8)", color: "#fff", cursor: "pointer", fontSize: 10, fontWeight: 700, boxShadow: "0 2px 8px #6366F133" }}>📤 Send Edited Response</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => { setEditingDraft(q.id); setEditedText(q.draftResponse); }}
+                            style={{ padding: "7px 18px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>✏️ Edit Draft</button>
+                          <button onClick={() => zdApproveAndSend(q)}
+                            style={{ padding: "7px 20px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #81C784)", color: "#fff", cursor: "pointer", fontSize: 10, fontWeight: 700, boxShadow: "0 2px 8px #4CAF5033" }}>✓ Approve & Send</button>
+                        </>
                       )}
                     </div>
                   </div>
-                );
-              })
-            )}
-            {/* Pagination */}
-            {zdTickets.length > 0 && (
-              <div style={{ padding: "10px 16px", display: "flex", justifyContent: "center", gap: 8 }}>
-                <button disabled={zdPage <= 1} onClick={() => zdFetchTickets(zdFilter, zdPage - 1)}
-                  style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #1E2130", background: "#12141E", color: zdPage <= 1 ? "#333" : "#A0AEC0", cursor: zdPage <= 1 ? "default" : "pointer", fontSize: 10 }}>← Prev</button>
-                <span style={{ fontSize: 10, color: "#5A6178", padding: "4px 8px" }}>Page {zdPage}</span>
-                <button onClick={() => zdFetchTickets(zdFilter, zdPage + 1)}
-                  style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #1E2130", background: "#12141E", color: "#A0AEC0", cursor: "pointer", fontSize: 10 }}>Next →</button>
+                ))}
               </div>
             )}
           </div>
+        )}
 
-          {/* Ticket Detail Panel */}
-          {zdSelectedTicket && (
-            <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "70vh" }}>
-              {/* Header */}
-              <div style={{ padding: "14px 18px", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 12, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>#{zdSelectedTicket.id}</span>
-                    <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(zdSelectedTicket.priority) + "22", color: priorityColor(zdSelectedTicket.priority), fontWeight: 600, textTransform: "uppercase" }}>{zdSelectedTicket.priority || "—"}</span>
-                    <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#1E2130", color: "#A0AEC0", textTransform: "uppercase" }}>{zdSelectedTicket.status}</span>
+        {/* ══════════ TAB: ALL TICKETS ══════════ */}
+        {zdTab === "tickets" && (
+          <div>
+            {/* Filter Tabs */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {["open", "pending", "hold", "solved", "closed"].map(f => (
+                <button key={f} onClick={() => { setZdFilter(f); zdFetchTickets(f, 1); }}
+                  style={{ padding: "6px 16px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer", textTransform: "capitalize", fontFamily: "'JetBrains Mono', monospace", background: zdFilter === f ? "#FFB34722" : "#ffffff06", color: zdFilter === f ? "#FFB347" : "#5A6178", border: `1px solid ${zdFilter === f ? "#FFB34744" : "#1E2130"}` }}>
+                  {statusIcon(f)} {f}
+                </button>
+              ))}
+            </div>
+
+            {/* Ticket List + Detail Split View */}
+            <div style={{ display: "grid", gridTemplateColumns: zdSelectedTicket ? "1fr 1.3fr" : "1fr", gap: 14 }}>
+              <div style={cardStyle}>
+                {zdLoading && zdTickets.length === 0 ? (
+                  <div style={{ padding: 40, textAlign: "center", color: "#5A6178" }}>
+                    <div style={{ fontSize: 24, marginBottom: 8, animation: "zdSpin 1s linear infinite", display: "inline-block" }}>⟳</div>
+                    <div style={{ fontSize: 12 }}>Loading tickets...</div>
                   </div>
-                  <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{zdSelectedTicket.subject || "No subject"}</div>
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {azureOpenAI.enabled && (zdSelectedTicket.status === "open" || zdSelectedTicket.status === "new") && (
-                    <button onClick={() => zdAiTriage(zdSelectedTicket)} disabled={zdAiProcessing}
-                      style={{ padding: "5px 12px", borderRadius: 5, border: "1px solid #EC489933", background: "#EC489918", color: "#EC4899", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
-                      {zdAiProcessing ? "⟳ Analyzing..." : "🤖 AI Triage"}
-                    </button>
-                  )}
-                  <button onClick={() => setZdSelectedTicket(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 16 }}>✕</button>
-                </div>
-              </div>
-              {/* Ticket info */}
-              <div style={{ padding: "12px 18px", borderBottom: "1px solid #1E213022" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                  <div><span style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2, fontFamily: "'JetBrains Mono', monospace" }}>CREATED</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{new Date(zdSelectedTicket.created_at).toLocaleString("en-SG")}</span></div>
-                  <div><span style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2, fontFamily: "'JetBrains Mono', monospace" }}>UPDATED</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{new Date(zdSelectedTicket.updated_at).toLocaleString("en-SG")}</span></div>
-                  <div><span style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2, fontFamily: "'JetBrains Mono', monospace" }}>TYPE</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{zdSelectedTicket.type || "—"}</span></div>
-                </div>
-                {zdSelectedTicket.tags?.length > 0 && (
-                  <div style={{ marginTop: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
-                    {zdSelectedTicket.tags.map((tag, i) => <span key={i} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ffffff08", color: "#A0AEC0", border: "1px solid #1E213044" }}>{tag}</span>)}
+                ) : zdTickets.length === 0 ? (
+                  <div style={{ padding: 40, textAlign: "center", color: "#5A6178", fontSize: 12 }}>No tickets found.</div>
+                ) : (
+                  zdTickets.map((ticket, i) => {
+                    const aiItem = zdAiQueue.find(q => q.ticketId === ticket.id);
+                    const triaged = zdTriagedIds.has(ticket.id);
+                    return (
+                      <div key={ticket.id} onClick={() => zdSelectTicket(ticket)}
+                        style={{ padding: "12px 16px", borderBottom: "1px solid #1E213033", cursor: "pointer", background: zdSelectedTicket?.id === ticket.id ? "#1E213044" : "transparent", transition: "background 0.2s", animation: `zdSlideIn 0.3s ease ${i * 0.02}s both` }}
+                        onMouseEnter={e => { if (zdSelectedTicket?.id !== ticket.id) e.currentTarget.style.background = "#1E213022"; }}
+                        onMouseLeave={e => { if (zdSelectedTicket?.id !== ticket.id) e.currentTarget.style.background = "transparent"; }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                              <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>#{ticket.id}</span>
+                              {ticket.priority && <span style={{ width: 6, height: 6, borderRadius: "50%", background: priorityColor(ticket.priority), flexShrink: 0 }} />}
+                              {aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: aiItem.status === "auto_sent" ? "#06B6D422" : aiItem.status === "pending_approval" ? "#EC489922" : aiItem.status === "sent" ? "#81C78422" : "#FF6B6B22", color: aiItem.status === "auto_sent" ? "#06B6D4" : aiItem.status === "pending_approval" ? "#EC4899" : aiItem.status === "sent" ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{aiItem.status === "auto_sent" ? "⚡ AUTO" : aiItem.status === "pending_approval" ? "👤 REVIEW" : aiItem.status === "sent" ? "✅ SENT" : "❌"}</span>}
+                              {triaged && !aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>✅ TRIAGED</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ticket.subject || "No subject"}</div>
+                            <div style={{ fontSize: 10, color: "#5A617899", marginTop: 3 }}>{new Date(ticket.created_at).toLocaleDateString("en-SG")} · {ticket.status}</div>
+                          </div>
+                          {azureOpenAI.enabled && !triaged && (ticket.status === "open" || ticket.status === "new") && (
+                            <button onClick={e => { e.stopPropagation(); zdAiTriageSingle(ticket.id); }}
+                              style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #EC489933", background: "#EC489911", color: "#EC4899", cursor: "pointer", fontSize: 9, fontWeight: 600, flexShrink: 0 }}>
+                              🤖 Triage
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                {zdTickets.length > 0 && (
+                  <div style={{ padding: "10px 16px", display: "flex", justifyContent: "center", gap: 8 }}>
+                    <button disabled={zdPage <= 1} onClick={() => zdFetchTickets(zdFilter, zdPage - 1)}
+                      style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #1E2130", background: "#12141E", color: zdPage <= 1 ? "#333" : "#A0AEC0", cursor: zdPage <= 1 ? "default" : "pointer", fontSize: 10 }}>← Prev</button>
+                    <span style={{ fontSize: 10, color: "#5A6178", padding: "4px 8px" }}>Page {zdPage}</span>
+                    <button onClick={() => zdFetchTickets(zdFilter, zdPage + 1)}
+                      style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #1E2130", background: "#12141E", color: "#A0AEC0", cursor: "pointer", fontSize: 10 }}>Next →</button>
                   </div>
                 )}
               </div>
-              {/* Comments / Conversation */}
-              <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-                <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>💬 CONVERSATION ({zdComments.length})</div>
-                {zdComments.map((comment, i) => (
-                  <div key={comment.id || i} style={{ marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.04}s both` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: comment.public ? "#64B5F6" : "#FFB347" }}>{comment.public ? "📧" : "🔒"} {comment.author_id}</span>
-                      <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(comment.created_at).toLocaleString("en-SG")}</span>
+
+              {/* Ticket Detail Panel */}
+              {zdSelectedTicket && (
+                <div style={{ ...cardStyle, display: "flex", flexDirection: "column", maxHeight: "70vh" }}>
+                  <div style={{ padding: "14px 18px", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 12, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>#{zdSelectedTicket.id}</span>
+                        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(zdSelectedTicket.priority) + "22", color: priorityColor(zdSelectedTicket.priority), fontWeight: 600, textTransform: "uppercase" }}>{zdSelectedTicket.priority || "—"}</span>
+                        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#1E2130", color: "#A0AEC0", textTransform: "uppercase" }}>{zdSelectedTicket.status}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{zdSelectedTicket.subject || "No subject"}</div>
                     </div>
-                    <div style={{ background: comment.public ? "#0A0C14" : "#FFB34708", borderRadius: 6, padding: "8px 10px", border: `1px solid ${comment.public ? "#1E213044" : "#FFB34722"}`, fontSize: 11, color: "#C4CAD6", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
-                      {(comment.body || "").replace(/<[^>]*>/g, "").substring(0, 2000)}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {azureOpenAI.enabled && (zdSelectedTicket.status === "open" || zdSelectedTicket.status === "new") && (
+                        <button onClick={() => zdAiTriageSingle(zdSelectedTicket.id)} disabled={zdAiProcessing}
+                          style={{ padding: "5px 12px", borderRadius: 5, border: "1px solid #EC489933", background: "#EC489918", color: "#EC4899", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
+                          {zdAiProcessing ? "⟳ Analyzing..." : "🤖 AI Triage"}
+                        </button>
+                      )}
+                      <button onClick={() => setZdSelectedTicket(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 16 }}>✕</button>
+                    </div>
+                  </div>
+                  <div style={{ padding: "12px 18px", borderBottom: "1px solid #1E213022" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                      <div><span style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2, fontFamily: "'JetBrains Mono', monospace" }}>CREATED</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{new Date(zdSelectedTicket.created_at).toLocaleString("en-SG")}</span></div>
+                      <div><span style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2, fontFamily: "'JetBrains Mono', monospace" }}>UPDATED</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{new Date(zdSelectedTicket.updated_at).toLocaleString("en-SG")}</span></div>
+                      <div><span style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2, fontFamily: "'JetBrains Mono', monospace" }}>TYPE</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{zdSelectedTicket.type || "—"}</span></div>
+                    </div>
+                    {zdSelectedTicket.tags?.length > 0 && (
+                      <div style={{ marginTop: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {zdSelectedTicket.tags.map((tag, i) => <span key={i} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ffffff08", color: "#A0AEC0", border: "1px solid #1E213044" }}>{tag}</span>)}
+                      </div>
+                    )}
+                    {/* Show AI triage results for this ticket */}
+                    {zdAiQueue.find(q => q.ticketId === zdSelectedTicket.id) && (() => {
+                      const ai = zdAiQueue.find(q => q.ticketId === zdSelectedTicket.id);
+                      return (
+                        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 6, background: "#EC489908", border: "1px solid #EC489922" }}>
+                          <div style={{ fontSize: 9, color: "#EC4899", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>🤖 AI TRIAGE RESULT</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{ai.category}</span>
+                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(ai.suggestedPriority) + "22", color: priorityColor(ai.suggestedPriority), fontWeight: 600 }}>{ai.suggestedPriority}</span>
+                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>🎯 {ai.confidence}%</span>
+                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {ai.suggestedAssignee}</span>
+                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: ai.status === "auto_sent" ? "#06B6D422" : ai.status === "sent" ? "#81C78422" : "#FFB34722", color: ai.status === "auto_sent" ? "#06B6D4" : ai.status === "sent" ? "#81C784" : "#FFB347", fontWeight: 600 }}>{ai.status === "auto_sent" ? "⚡ Auto-sent" : ai.status === "sent" ? "✅ Approved" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Pending"}</span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 6, lineHeight: 1.4 }}>{ai.internalNote}</div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
+                    <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>💬 CONVERSATION ({zdComments.length})</div>
+                    {zdComments.map((comment, i) => (
+                      <div key={comment.id || i} style={{ marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.03}s both` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: comment.public ? "#64B5F6" : "#FFB347" }}>{comment.public ? "📧" : "🔒"} {comment.author_id}</span>
+                          <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(comment.created_at).toLocaleString("en-SG")}</span>
+                        </div>
+                        <div style={{ background: comment.public ? "#0A0C14" : "#FFB34708", borderRadius: 6, padding: "8px 10px", border: `1px solid ${comment.public ? "#1E213044" : "#FFB34722"}`, fontSize: 11, color: "#C4CAD6", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
+                          {(comment.body || "").replace(/<[^>]*>/g, "").substring(0, 2000)}
+                        </div>
+                      </div>
+                    ))}
+                    {zdComments.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No comments loaded.</div>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════ TAB: AI HISTORY ══════════ */}
+        {zdTab === "history" && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              {/* Auto-Sent */}
+              <div style={{ ...cardStyle, padding: 16 }}>
+                {sectionLabel("⚡", "Auto-Sent by AI", autoSentQueue.length)}
+                {autoSentQueue.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No auto-sent responses yet</div>
+                ) : autoSentQueue.slice(0, 20).map(q => (
+                  <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ fontSize: 12 }}>⚡</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{q.ticketId} — {q.ticketSubject}</div>
+                      <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>{q.confidence}%</span>
+                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{q.category}</span>
+                        {q.itsmIncidentId && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#EC489922", color: "#EC4899", fontWeight: 600 }}>{q.itsmIncidentId}</span>}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(q.createdAt).toLocaleDateString("en-SG")}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Human-Approved + Rejected */}
+              <div style={{ ...cardStyle, padding: 16 }}>
+                {sectionLabel("👤", "Human Decisions", humanSentQueue.length + rejectedQueue.length)}
+                {humanSentQueue.length + rejectedQueue.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No human decisions yet</div>
+                ) : [...humanSentQueue, ...rejectedQueue].slice(0, 20).map(q => (
+                  <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022" }}>
+                    <span style={{ fontSize: 12 }}>{q.status === "sent" ? "✅" : "❌"}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{q.ticketId} — {q.ticketSubject}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>{q.status === "sent" ? "Approved" : "Rejected"} by {q.reviewedBy}</div>
+                    </div>
+                    <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(q.createdAt).toLocaleDateString("en-SG")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════ TAB: SETTINGS ══════════ */}
+        {zdTab === "settings" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div style={{ ...cardStyle, padding: 18 }}>
+              {sectionLabel("⚙️", "Automation Configuration")}
+              {[
+                { label: "AI Autopilot Mode", desc: "Auto-respond to high-confidence tickets (≥85%)", value: zdAutoMode, key: "autopilot" },
+              ].map(setting => (
+                <div key={setting.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1E213022" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{setting.label}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{setting.desc}</div>
+                  </div>
+                  <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); }}
+                    style={{ width: 36, height: 18, borderRadius: 9, background: setting.value ? "#4CAF50" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
+                    <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: setting.value ? 20 : 2, transition: "left 0.3s" }} />
+                  </div>
+                </div>
+              ))}
+
+              <div style={{ marginTop: 16, fontSize: 10, fontWeight: 700, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10, textTransform: "uppercase" }}>🔧 How It Works</div>
+              {[
+                { step: "1", title: "Ingest", desc: "Every 60s, polls Zendesk for new/open tickets" },
+                { step: "2", title: "AI Triage", desc: "Azure OpenAI analyzes each ticket — classifies category, priority, drafts response" },
+                { step: "3", title: "Confidence Check", desc: "If confidence ≥ 85% AND safe category → auto-send response" },
+                { step: "4", title: "Human Queue", desc: "Complex, sensitive, or low-confidence tickets → queued for human review" },
+                { step: "5", title: "ITSM Sync", desc: "High/urgent tickets → auto-create ITSM incident with SLA tracking" },
+                { step: "6", title: "Routing", desc: "AI suggests assignee based on category (Network → Network Eng, etc.)" },
+              ].map((s, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, padding: "6px 0" }}>
+                  <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#6366F122", color: "#6366F1", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{s.step}</div>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{s.title}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{s.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ ...cardStyle, padding: 18 }}>
+              {sectionLabel("🔗", "Integration Status")}
+              {[
+                { label: "Zendesk API", status: zdConnected, detail: zdConnected ? `Connected as ${zdUser?.name}` : "Not connected" },
+                { label: "Azure OpenAI", status: azureOpenAI.enabled, detail: azureOpenAI.enabled ? `Model: ${azureOpenAI.model || "gpt-4o-mini"} · Calls: ${azureOpenAI.totalCalls || 0}` : "Not configured" },
+                { label: "ITSM Database", status: true, detail: `${incidents.length} incidents · ${customers.length} customers` },
+              ].map((int, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1E213022" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: int.status ? "#4CAF50" : "#FF4444", animation: int.status ? "zdPulse 2s infinite" : "none" }} />
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{int.label}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178" }}>{int.detail}</div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: int.status ? "#81C78422" : "#FF6B6B22", color: int.status ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{int.status ? "ONLINE" : "OFFLINE"}</span>
+                </div>
+              ))}
+
+              <div style={{ marginTop: 20 }}>
+                {sectionLabel("👥", "VGC Team (Routing Targets)")}
+                {USERS.filter(u => u.role !== "End User").map(u => (
+                  <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid #1E213022" }}>
+                    <div style={{ width: 26, height: 26, borderRadius: "50%", background: "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#A0AEC0" }}>{u.avatar}</div>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{u.name}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178" }}>{u.role} · {u.team}</div>
                     </div>
                   </div>
                 ))}
-                {zdComments.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No comments loaded.</div>}
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {zdError && (
-          <div style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ marginTop: 14, padding: "8px 14px", borderRadius: 8, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>⚠️ {zdError}</span>
             <button onClick={() => setZdError(null)} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 12 }}>✕</button>
           </div>

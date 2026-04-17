@@ -709,6 +709,130 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { open: open.count || 0, pending: pending.count || 0, hold: hold.count || 0, solved: solved.count || 0 });
       }
 
+      // POST /api/zendesk/auto-triage — AI auto-triage a ticket (server-side for automation)
+      if (pathname === "/api/zendesk/auto-triage" && req.method === "POST") {
+        if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+          return json(res, 503, { error: "Azure OpenAI not configured" });
+        }
+        const body = await new Promise((resolve, reject) => {
+          let d = ""; req.on("data", c => { d += c; if (d.length > 100000) reject(new Error("Payload too large")); });
+          req.on("end", () => resolve(JSON.parse(d)));
+        });
+        const { ticketId } = body;
+        if (!ticketId) return json(res, 400, { error: "ticketId required" });
+
+        // Fetch ticket + comments from Zendesk
+        const ticket = await zdRequest("GET", `/tickets/${ticketId}.json`);
+        const comments = await zdRequest("GET", `/tickets/${ticketId}/comments.json`).catch(() => ({ comments: [] }));
+        const lastComment = (comments.comments || []).slice(-1)[0]?.body || "";
+
+        const systemPrompt = `You are an expert IT support AI for VGC Technology Pte Ltd — a managed IT services company.
+Analyze the support ticket and return a JSON object with:
+1. category — one of: Network, Security, Hardware, Software, Email, Cloud, Access/Identity, Printing, General
+2. priority — one of: low, normal, high, urgent  
+3. tags — array of relevant tags
+4. draft_response — professional customer-facing response (150-250 words), signed "VGC Technology Service Desk"
+5. internal_note — brief internal analysis for the agent
+6. confidence — 0-100 how confident you are
+7. suggested_assignee — one of: L1 Support, L2 Support, Network Engineering, Security Team, based on complexity
+8. auto_sendable — true if confidence >= 85 AND the response is safe to send without human review
+9. itsm_category — ITIL category mapping
+10. sla_priority — Sev-A (Critical, 4hr), Sev-B (High, 4hr), Sev-C (Medium, 9hr), Sev-D (Low, 27hr)
+
+IMPORTANT: Set auto_sendable=true ONLY for routine issues (password resets, basic how-to, status inquiries, simple troubleshooting). 
+Set auto_sendable=false for: security incidents, data loss, system outages, escalations, angry customers, complex issues.
+
+Respond ONLY with valid JSON, no markdown.`;
+
+        const userPrompt = `Ticket #${ticketId}
+Subject: ${ticket.ticket?.subject || "No subject"}
+Status: ${ticket.ticket?.status}
+Priority: ${ticket.ticket?.priority || "not set"}
+Created: ${ticket.ticket?.created_at}
+Description: ${ticket.ticket?.description || "No description"}
+${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
+
+        const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+        const payload = isResponsesAPI
+          ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+          : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_tokens: 1500, temperature: 0.4 };
+
+        const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({
+            hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+            method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+          }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => {
+              if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+              else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+            });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+
+        const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+        let parsed;
+        try {
+          parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+        } catch {
+          parsed = { category: "General", priority: "normal", tags: [], draft_response: text, internal_note: "Unstructured AI response", confidence: 50, suggested_assignee: "L1 Support", auto_sendable: false, itsm_category: "General", sla_priority: "Sev-D" };
+        }
+
+        return json(res, 200, { triage: parsed, ticket: ticket.ticket });
+      }
+
+      // POST /api/zendesk/auto-respond — send AI response to ticket (auto or approved)
+      if (pathname === "/api/zendesk/auto-respond" && req.method === "POST") {
+        const body = await new Promise((resolve, reject) => {
+          let d = ""; req.on("data", c => { d += c; if (d.length > 50000) reject(new Error("Payload too large")); });
+          req.on("end", () => resolve(JSON.parse(d)));
+        });
+        const { ticketId, response, priority, tags, internalNote } = body;
+        if (!ticketId || !response) return json(res, 400, { error: "ticketId and response required" });
+
+        const updatePayload = {
+          ticket: {
+            comment: { body: response, public: true },
+            ...(priority ? { priority } : {}),
+            ...(tags && tags.length > 0 ? { tags } : {}),
+          }
+        };
+        // Add internal note as a separate update if provided
+        if (internalNote) {
+          updatePayload.ticket.comment = { body: response, public: true };
+        }
+        const result = await zdRequest("PUT", `/tickets/${ticketId}.json`, updatePayload);
+        
+        // Also add internal note
+        if (internalNote) {
+          await zdRequest("PUT", `/tickets/${ticketId}.json`, {
+            ticket: { comment: { body: `[AI Internal Analysis]\n${internalNote}`, public: false } }
+          }).catch(() => {});
+        }
+
+        return json(res, 200, { success: true, result });
+      }
+
+      // GET /api/zendesk/new-tickets — fetch only new/open tickets for automation polling
+      if (pathname === "/api/zendesk/new-tickets" && req.method === "GET") {
+        const result = await zdRequest("GET", "/search.json?query=type:ticket status:new status:open&sort_by=created_at&sort_order=desc&per_page=50");
+        return json(res, 200, result);
+      }
+
+      // GET /api/zendesk/agents — fetch Zendesk agents with groups
+      if (pathname === "/api/zendesk/agents" && req.method === "GET") {
+        const [agents, groups] = await Promise.all([
+          zdRequest("GET", "/users.json?role=agent"),
+          zdRequest("GET", "/groups.json"),
+        ]);
+        return json(res, 200, { agents: agents.users || [], groups: groups.groups || [] });
+      }
+
       return json(res, 404, { error: "Zendesk endpoint not found" });
     } catch (err) {
       console.error("[Zendesk Proxy]", err.message);
