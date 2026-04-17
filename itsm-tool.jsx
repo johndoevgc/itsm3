@@ -3158,7 +3158,7 @@ export default function ITSMApp() {
           <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 16 }}>🔥</span> Cisco Meraki Firewall
-              {merakiData && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{merakiData.summary?.totalOrganizations || 0} Orgs</span>}
+              {merakiData && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{merakiData.summary?.totalOrgs || 0} Orgs</span>}
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button onClick={() => fetch("/api/meraki?refresh=true").then(r => r.json()).then(d => { if (d.success) setMerakiData(d); })} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
@@ -3170,28 +3170,28 @@ export default function ITSMApp() {
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching Meraki data...</div>
             </div>
-          ) : !merakiData || !merakiData.success ? (
+          ) : merakiData?.error ? (
             <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B" }}>
               <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
               <div style={{ fontSize: 11 }}>Unable to connect to Meraki API</div>
-              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{merakiData?.error || "Check API configuration"}</div>
+              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{merakiData.error}</div>
             </div>
           ) : (() => {
             const s = merakiData.summary || {};
             const onlineDevs = (merakiData.devices || []).filter(d => d.status === "online").length;
             const totalDevs = s.totalDevices || 0;
-            const vpnPeers = (merakiData.vpnStatuses || []).reduce((n, v) => n + ((v.merakiVpnPeers || []).length + (v.thirdPartyVpnPeers || []).length), 0);
+            const vpnPeers = (merakiData.vpnStatus || []).reduce((n, v) => n + ((v.merakiPeers || []).length + (v.thirdPartyPeers || []).length), 0);
             const wanIps = [...new Set((merakiData.uplinks || []).flatMap(u => (u.uplinks || []).filter(ul => ul.status === "Active" || ul.status === "active").map(ul => ul.publicIp)).filter(Boolean))];
             return (<>
               {/* Status Overview */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
                 {[
                   { label: "Devices Online", value: `${onlineDevs}/${totalDevs}`, icon: "●", color: onlineDevs === totalDevs ? "#00BF6F" : "#FFB347" },
-                  { label: "Organizations", value: String(s.totalOrganizations || 0), icon: "🏢", color: "#06B6D4" },
+                  { label: "Organizations", value: String(s.totalOrgs || 0), icon: "🏢", color: "#06B6D4" },
                   { label: "Networks", value: String(s.totalNetworks || 0), icon: "🌐", color: "#6366F1" },
                   { label: "WAN IPs", value: String(wanIps.length), icon: "📡", color: "#81C784" },
                   { label: "VPN Peers", value: String(vpnPeers), icon: "🔒", color: "#FFB347" },
-                  { label: "API Keys", value: String(s.apiKeysUsed || 0), icon: "🔑", color: "#CE93D8" },
+                  { label: "VPN Peers", value: String(s.vpnPeers || 0), icon: "🔑", color: "#CE93D8" },
                 ].map((st, i) => (
                   <div key={i} style={{ textAlign: "center", padding: "10px 8px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
                     <div style={{ fontSize: 14, marginBottom: 4 }}>{st.icon}</div>
@@ -3222,17 +3222,17 @@ export default function ITSMApp() {
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#FFB347", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
                     <span>🔐</span> VPN Tunnels
                   </div>
-                  {(merakiData.vpnStatuses || []).slice(0, 6).map((vpn, i) => (
+                  {(merakiData.vpnStatus || []).slice(0, 6).map((vpn, i) => (
                     <div key={i} style={{ marginBottom: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                         <div style={{ width: 6, height: 6, borderRadius: "50%", background: vpn.vpnMode === "hub" ? "#00BF6F" : "#06B6D4", flexShrink: 0 }} />
                         <span style={{ fontSize: 10, color: "#C4CAD6", fontWeight: 600 }}>{vpn.networkName || vpn.networkId}</span>
                         <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: vpn.vpnMode === "hub" ? "#00BF6F22" : "#06B6D422", color: vpn.vpnMode === "hub" ? "#00BF6F" : "#06B6D4", fontFamily: "'JetBrains Mono', monospace", marginLeft: "auto" }}>{vpn.vpnMode}</span>
                       </div>
-                      {(vpn.merakiVpnPeers || []).concat(vpn.thirdPartyVpnPeers || []).slice(0, 3).map((peer, j) => (
+                      {(vpn.merakiPeers || []).concat(vpn.thirdPartyPeers || []).slice(0, 3).map((peer, j) => (
                         <div key={j} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px 3px 20px", fontSize: 9 }}>
                           <div style={{ width: 4, height: 4, borderRadius: "50%", background: peer.reachability === "reachable" ? "#00BF6F" : "#FF6B6B", flexShrink: 0 }} />
-                          <span style={{ color: "#8A8FA8", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{peer.networkName || peer.publicIp || "Peer"}</span>
+                          <span style={{ color: "#8A8FA8", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{peer.name || peer.ip || "Peer"}</span>
                           <span style={{ color: peer.reachability === "reachable" ? "#00BF6F" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{peer.reachability || "—"}</span>
                         </div>
                       ))}
@@ -3412,7 +3412,7 @@ export default function ITSMApp() {
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching SolarWinds RMM data...</div>
             </div>
-          ) : !solarwindsData || !solarwindsData.success ? (
+          ) : solarwindsData?.error ? (
             <div style={{ textAlign: "center", padding: 30 }}>
               <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
               <div style={{ fontSize: 11, color: "#FF6B6B" }}>Unable to connect to SolarWinds RMM API</div>
@@ -3480,7 +3480,7 @@ export default function ITSMApp() {
           <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 16 }}>🛡️</span> Sophos Firewall
-              {sophosData && sophosData.success && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#0050C822", color: "#64B5F6", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{(sophosData.firewalls || []).length} Firewalls</span>}
+              {sophosData && !sophosData.error && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#0050C822", color: "#64B5F6", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{(sophosData.firewalls || []).length} Firewalls</span>}
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button onClick={() => fetch("/api/sophos?refresh=true").then(r => r.json()).then(d => { if (d.success) setSophosData(d); })} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
@@ -3492,15 +3492,15 @@ export default function ITSMApp() {
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>Fetching Sophos data...</div>
             </div>
-          ) : !sophosData || !sophosData.success ? (
+          ) : sophosData?.error ? (
             <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B" }}>
               <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
               <div style={{ fontSize: 11 }}>Unable to connect to Sophos Central API</div>
-              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{sophosData?.error || "Check credentials"}</div>
+              <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{sophosData.error}</div>
             </div>
           ) : (() => {
             const fws = sophosData.firewalls || [];
-            const groups = sophosData.firewallGroups || [];
+            const groups = sophosData.groups || [];
             const connectedCount = fws.filter(f => f.status?.connected).length;
             return (<>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
