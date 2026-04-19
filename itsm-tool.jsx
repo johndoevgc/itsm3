@@ -805,7 +805,7 @@ function buildAiResponse(topic, userMsg, ctx) {
       suggestActions.push({ label: "💡 What can you do?", action: "help" });
       suggestActions.push({ label: "📚 Knowledge Portal", action: "Show me knowledge base articles" });
       return {
-        text: `I'm your **VGC-ITSM AI Co-Pilot** 🤖\n\nEnterprise-grade AI assistant for VGC Technology Pte Ltd, Singapore.\n\n**What I do:**\n• 🧠 Context-aware incident triage & smart routing\n• 📚 SharePoint Knowledge Portal — instant article search & recommendations\n• 📋 Daily priority planning & risk assessment\n• ⚡ SLA breach prevention & proactive alerting\n• 📧 Communications drafting (you always approve first)\n• 🛡️ Security monitoring & ISO 27001 compliance\n• 🔄 Change risk analysis & approval tracking\n\n**How I work:**\nI work alongside you — never replacing you. Your expertise + my speed = better outcomes.\nI adapt within this session based on ticket outcomes and KB updates.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPowered by Azure Open AI\nEnterprise-grade data security with a Responsible AI model. 💜`,
+        text: `I'm your **VGC-ITSM AI Co-Pilot** 🚀\n\nEnterprise-grade AI assistant for VGC Technology Pte Ltd, Singapore.\n\n**What I do:**\n• 🧠 Context-aware incident triage & smart routing\n• 📚 SharePoint Knowledge Portal — instant article search & recommendations\n• 📋 Daily priority planning & risk assessment\n• ⚡ SLA breach prevention & proactive alerting\n• 📧 Communications drafting (you always approve first)\n• 🛡️ Security monitoring & ISO 27001 compliance\n• 🔄 Change risk analysis & approval tracking\n\n**How I work:**\nI work alongside you — never replacing you. Your expertise + my speed = better outcomes.\nI adapt within this session based on ticket outcomes and KB updates.`,
         suggestions: suggestActions
       };
 
@@ -1349,8 +1349,8 @@ export default function ITSMApp() {
     { id: "search", title: "🔍 Smart Search", body: "Need to find something fast? Just type here! ⚡\n\nSearch across incidents, problems, changes, assets — everything in one place. No more hunting through menus!", position: "bottom", anchor: "header", icon: "🔎" },
     { id: "weather", title: "🌤️ Singapore Weather", body: "A little local touch! ☀️ Real-time Singapore weather right in your header.\n\nBecause even IT heroes need to know if they should bring an umbrella! ☂️", position: "bottom", anchor: "header", icon: "🌏" },
     { id: "threats", title: "🚨 Security Alerts", body: "Stay safe! 🛡️ Critical and High severity cyber threats automatically pop up here with AI-powered recommendations.\n\n📧 You can even auto-draft emails to notify your team instantly!", position: "left", anchor: "threats", icon: "🔐" },
-    { id: "aiAssistant", title: "🤖 Assisted by Your AI", body: "That's me! 👋😊 Click my avatar anytime to chat.\n\nI can help you triage incidents, recommend Knowledge Portal articles from SharePoint, analyze change risks, predict SLA breaches, and much more!\n\n💬 Powered by Azure Open AI with enterprise‑grade data security.", position: "left", anchor: "aiButton", icon: "🧠" },
-    { id: "admin", title: "🔧 Admin & Settings", body: "Admins, this one's for you! ⚡ Head to the Admin panel to configure:\n\n🤖 AI Settings & Azure OpenAI\n👥 Users & RBAC\n🔐 Entra ID SSO\n🛡️ PDPA Compliance\n💳 Licensing & Billing\n\nEverything you need to run a world-class ITSM!", position: "right", anchor: "sidebar", icon: "⚙️" },
+    { id: "aiAssistant", title: "� Your AI Co-Pilot", body: "That's me! 👋😊 Click my avatar anytime to chat.\n\nI can help you triage incidents, recommend Knowledge Portal articles from SharePoint, analyze change risks, predict SLA breaches, and much more!", position: "left", anchor: "aiButton", icon: "🧠" },
+    { id: "admin", title: "🔧 Admin & Settings", body: "Admins, this one's for you! ⚡ Head to the Admin panel to configure:\n\n⚙️ AI Settings\n👥 Users & RBAC\n🔐 Entra ID SSO\n🛡️ PDPA Compliance\n💳 Licensing & Billing\n\nEverything you need to run a world-class ITSM!", position: "right", anchor: "sidebar", icon: "⚙️" },
     { id: "done", title: "🎉 You're All Set!", body: "Awesome! You now know the essentials! 🌟\n\nRemember, I'm always here in the bottom-right corner if you need help. Just click my avatar! 💜\n\n🔄 You can restart this tour anytime from Admin → General settings.\n\nHappy ITSM-ing! 🚀", position: "center", icon: "✨" },
   ];
   const [dismissedThreats, setDismissedThreats] = useState([]);
@@ -1607,6 +1607,26 @@ export default function ITSMApp() {
   useEffect(() => {
     try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch {}
   }, [cardLayout]);
+
+  // ─── Clear demo/hardcoded data for Entra ID users ─────────────────
+  // Demo seed data should only appear for local devadmin user.
+  // Entra ID users get empty arrays (real data comes from Zendesk API).
+  useEffect(() => {
+    if (!currentUser) return;
+    const isLocalDevAdmin = currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin";
+    if (!isLocalDevAdmin) {
+      // Clear Zendesk demo data — real data will be fetched from API
+      const demoCleared = sessionStorage.getItem("vgc_demo_cleared_" + currentUser.id);
+      if (!demoCleared) {
+        setZdTickets([]);
+        setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
+        setZdAiQueue([]);
+        setZdAutoLog([]);
+        setZdAutoStats({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
+        sessionStorage.setItem("vgc_demo_cleared_" + currentUser.id, "1");
+      }
+    }
+  }, [currentUser]);
 
   // Fetch live cyber news for dashboard threat feed
   useEffect(() => {
@@ -6701,17 +6721,22 @@ export default function ITSMApp() {
     setAiLoading(true);
     (async () => {
       const systemPrompt = [
-        `You are VGC-ITSM AI Co-Pilot — Assisted by ${currentUser.name} AI, an enterprise-grade AI assistant for VGC Technology Pte Ltd, Singapore.`,
-        `PRIMARY ROLE: Help engineers and administrators resolve IT tickets/incidents/requests. Provide fast, accurate, conversational guidance. Retrieve and recommend relevant Knowledge Base articles from SharePoint.`,
-        `BEHAVIOR: Be conversational, clear, action-oriented. Default to short structured replies with bullets and steps. Offer suggested next actions tailored to case type and severity.`,
-        `CONTEXT: Singapore timezone (SGT), PDPA compliance, ISO 27001:2022 certified. Use available ticket data, KB articles, and session context.`,
-        `HIGH/CRITICAL RULES: If severity High/Critical — start with "Urgency" line, provide containment steps, recommend escalation path, ask for approval BEFORE sending notices/escalations.`,
-        `APPROVAL-FIRST POLICY: Before any outbound action (customer updates, escalations, meeting scheduling, remote sessions) — propose the action, explain why, ask "Do you want me to proceed?" with 3-6 suggested options.`,
+        `You are VGC-ITSM AI Co-Pilot for VGC Technology Pte Ltd, Singapore. You work alongside ${currentUser.name} as a helpful, friendly colleague — not a bot.`,
+        `TONE & STYLE: Be warm, conversational, and human. Write like a knowledgeable colleague chatting — not a machine generating text. Use natural language, contractions, and a friendly tone. Break responses into short conversational chunks — never dump a wall of text. Ask follow-up questions to understand the full picture before jumping to solutions.`,
+        `CORE ROLE: Help engineers and administrators resolve IT tickets, incidents, requests, and problems. Provide fast, accurate guidance. Proactively suggest next steps, follow-ups, and improvements. Advise on best practices. Always seek to understand the context, tone, and scenario before responding.`,
+        `LEARN FROM ITSM DATA FIRST: Always check internal ITSM data (tickets, incidents, KB articles, change records, Zendesk historical data) before searching external sources. Learn patterns from past tickets — similar issues, recurring problems, what worked before. Reference historical resolutions when relevant.`,
+        `ZENDESK HISTORICAL DATA: When available, learn from Zendesk ticket history — past resolutions, customer interactions, common issues, and response patterns. Use this context to provide more accurate and personalized assistance.`,
+        `EMAIL DRAFTING: When drafting emails, write with sufficient detail and context. Include relevant ticket IDs, timestamps, and specifics. When referencing Microsoft products or services, include official Microsoft documentation links as hyperlinks (e.g., https://learn.microsoft.com/...). Be thorough but not over-written — professional and clear.`,
+        `PROACTIVE BEHAVIOR: Don't just answer — suggest, follow up, assist, and advise. After resolving a query, proactively offer related suggestions ("Would you also like me to check...?", "I noticed a similar issue last week — want me to look into it?"). Anticipate what the user might need next.`,
+        `CONTEXT: Singapore timezone (SGT), PDPA compliance, ISO 27001:2022 certified. Use available ticket data, KB articles, session context, and Zendesk data.`,
+        `HIGH/CRITICAL RULES: If severity High/Critical — start with "⚠️ Urgency" line, provide containment steps, recommend escalation path, ask for approval BEFORE sending notices/escalations.`,
+        `APPROVAL-FIRST POLICY: Before any outbound action (customer updates, escalations, meeting scheduling, remote sessions) — propose the action, explain why, and ask "Shall I go ahead?" with 3-6 suggested options.`,
+        `HARD RULE — HUMAN REVIEW REQUIRED: NEVER commit, approve, or execute any action that involves financial cost, budget changes, license purchases, infrastructure deletion, data loss, production deployments, or any potentially high-damage/irreversible change. ALWAYS flag these as requiring "Human Review" and present the action plan for explicit approval. Say: "This needs your sign-off before I proceed — [describe what and why]."`,
         `KB INTEGRATION: When relevant, recommend 1-3 Knowledge Cards with title, category, quick fix summary, and SharePoint link. If no KB exists, recommend creating one.`,
-        `RESPONSE FORMAT: 1) Quick Summary 2) Recommended Steps 3) Knowledge Cards (if relevant) 4) Suggested Actions 5) Approval Request (when needed).`,
-        `BRANDING: Never reveal model names/versions. Only show: "Powered by Azure Open AI" and "Enterprise-grade data security with a Responsible AI model."`,
+        `RESPONSE FORMAT: Keep it conversational. Use: 1) Quick take on the situation 2) Recommended steps 3) Knowledge Cards (if relevant) 4) "What would you like to do next?" with suggested actions. End with a friendly follow-up question or suggestion.`,
+        `BRANDING: Never reveal model names, versions, or internal engine details. Do not show any footer branding text.`,
         `SECURITY: Follow PDPA. Never output secrets, passwords, MFA codes, private keys. Minimize personal data.`,
-        `Always attribute responses as 'Assisted by ${currentUser.name} AI'. Suggest 2-3 next actions.`,
+        `Suggest 2-3 relevant next actions after each response. Be a teammate, not a tool.`,
       ].join(" ");
       const aiResp = await callAzureOpenAI(systemPrompt, userMsg);
       if (aiResp) {
@@ -6724,7 +6749,7 @@ export default function ITSMApp() {
         const topic = matchAiTopic(userMsg);
         const ctx = { incidents, changes, problems, requests, currentUser, proactiveAlerts, kbArticles };
         const result = buildAiResponse(topic, userMsg, ctx);
-        setAiMessages(prev => [...prev, { role: "ai", text: result.text + `\n\n— Assisted by ${currentUser.name} AI`, source: "local", suggestions: result.suggestions || [], prompt: userMsg }]);
+        setAiMessages(prev => [...prev, { role: "ai", text: result.text, source: "local", suggestions: result.suggestions || [], prompt: userMsg }]);
       }
       setAiLoading(false);
     })();
@@ -6960,10 +6985,7 @@ export default function ITSMApp() {
                 </button>
               ))}
             </div>
-            {/* Branding Footer */}
-            <div style={{ marginTop: 8, textAlign: "center" }}>
-              <span style={{ fontSize: 9, color: "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>Powered by Azure Open AI · Enterprise‑grade data security with a Responsible AI model.</span>
-            </div>
+
           </div>
         </div>
 
@@ -7192,7 +7214,7 @@ export default function ITSMApp() {
                           animation: "pulse 2s ease-in-out infinite", letterSpacing: 0.5
                         }}>LIVE</span>}
                       </h3>
-                      <div style={{ color: "#5A6178", fontSize: 11, marginTop: 2 }}>Powered by Azure Open AI · Enterprise‑grade data security with a Responsible AI model</div>
+                      <div style={{ color: "#5A6178", fontSize: 11, marginTop: 2 }}>Enterprise‑grade AI integration for VGC-ITSM</div>
                     </div>
                   </div>
                   <div title="Azure OpenAI is always enabled" style={{
@@ -7231,9 +7253,9 @@ export default function ITSMApp() {
 
                 {/* Responsible AI Banner */}
                 <div style={{ padding: "14px 18px", borderRadius: 8, background: "linear-gradient(135deg, #6366F108, #06B6D408)", border: "1px solid #6366F122", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 20 }}>🤖</span>
+                  <span style={{ fontSize: 20 }}>�</span>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>Powered by Azure Open AI</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>AI Integration</div>
                     <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>Enterprise‑grade data security with a Responsible AI model.</div>
                   </div>
                 </div>
@@ -15072,7 +15094,7 @@ export default function ITSMApp() {
                 <span onClick={e => { e.stopPropagation(); setNavExplainId(navExplainId === item.id ? null : item.id); }} title={AI_FEATURE_EXPLAINERS[item.id].explain} style={{
                   fontSize: 9, color: navExplainId === item.id ? "#6366F1" : "#5A6178", cursor: "pointer", padding: "2px 4px", borderRadius: 4,
                   background: navExplainId === item.id ? "#6366F122" : "transparent", transition: "all 0.2s"
-                }}>🤖</span>
+                }}>💡</span>
               )}
               {!sideCollapsed && item.count > 0 && (
                 <span style={{
@@ -15086,7 +15108,7 @@ export default function ITSMApp() {
             </button>
             {!sideCollapsed && navExplainId === item.id && AI_FEATURE_EXPLAINERS[item.id] && (
               <div style={{ margin: "0 8px 4px 0", padding: "8px 12px", background: "linear-gradient(135deg, #6366F108, #6366F115)", borderRadius: "0 0 8px 8px", border: "1px solid #6366F133", borderTop: "none" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 3, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>🤖 {AI_FEATURE_EXPLAINERS[item.id].title}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", marginBottom: 3, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>💡 {AI_FEATURE_EXPLAINERS[item.id].title}</div>
                 <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.5 }}>{AI_FEATURE_EXPLAINERS[item.id].explain}</div>
               </div>
             )}
