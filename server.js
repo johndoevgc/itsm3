@@ -8,6 +8,23 @@ const PORT = process.env.PORT || 8080;
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
 const USE_MYSQL = !USE_MSSQL && !!(process.env.MYSQL_HOST);
 
+// Extract text from Azure OpenAI response (supports Responses API + Chat Completions API)
+function extractAIText(aiResult) {
+  // Responses API: top-level "text" convenience field (gpt-5.4-pro)
+  if (typeof aiResult?.text === "string" && aiResult.text) return aiResult.text;
+  // Responses API: output_text convenience field
+  if (typeof aiResult?.output_text === "string" && aiResult.output_text) return aiResult.output_text;
+  // Responses API: find message-type output item (skip reasoning items)
+  if (Array.isArray(aiResult?.output)) {
+    const msgItem = aiResult.output.find(o => o.type === "message");
+    const t = msgItem?.content?.[0]?.text;
+    if (t) return t;
+  }
+  // Chat Completions API fallback
+  if (aiResult?.choices?.[0]?.message?.content) return aiResult.choices[0].message.content;
+  return "";
+}
+
 // Microsoft Entra ID config (client secret via env var only — NEVER in frontend)
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || "";
 const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
@@ -875,7 +892,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           aiReq.end();
         });
 
-        const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+        const text = extractAIText(aiResult);
         let parsed;
         try {
           parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
@@ -1989,7 +2006,7 @@ IMPORTANT: Reference real ticket data and resolutions from the Zendesk history a
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
 
       // Auto-save as KB entry
@@ -2073,7 +2090,7 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
 
       // Auto-save as KB entry
@@ -2183,7 +2200,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from AI" });
       return json(res, 200, { resolution: text, model: AZURE_OPENAI_MODEL });
     } catch (err) {
@@ -2309,7 +2326,7 @@ IMPORTANT: Reference real ticket data and resolutions from the Zendesk history a
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
 
       // Auto-save as KB entry
@@ -2393,7 +2410,7 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
 
       // Auto-save as KB entry
@@ -2503,7 +2520,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from AI" });
       return json(res, 200, { resolution: text, model: AZURE_OPENAI_MODEL });
     } catch (err) {
@@ -2576,7 +2593,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
       return json(res, 200, { text, model: AZURE_OPENAI_MODEL });
     } catch (err) {
@@ -2612,7 +2629,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         aiReq.write(JSON.stringify(payload));
         aiReq.end();
       });
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       return json(res, 200, { status: "connected", model: AZURE_OPENAI_MODEL, response: text.trim(), configured: true });
     } catch (err) {
       return json(res, 502, { error: err.message, configured: true });

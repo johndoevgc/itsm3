@@ -8,6 +8,23 @@ const PORT = process.env.PORT || 8080;
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
 const USE_MYSQL = !USE_MSSQL && !!(process.env.MYSQL_HOST);
 
+// Extract text from Azure OpenAI response (supports Responses API + Chat Completions API)
+function extractAIText(aiResult) {
+  // Responses API: top-level "text" convenience field (gpt-5.4-pro)
+  if (typeof aiResult?.text === "string" && aiResult.text) return aiResult.text;
+  // Responses API: output_text convenience field
+  if (typeof aiResult?.output_text === "string" && aiResult.output_text) return aiResult.output_text;
+  // Responses API: find message-type output item (skip reasoning items)
+  if (Array.isArray(aiResult?.output)) {
+    const msgItem = aiResult.output.find(o => o.type === "message");
+    const t = msgItem?.content?.[0]?.text;
+    if (t) return t;
+  }
+  // Chat Completions API fallback
+  if (aiResult?.choices?.[0]?.message?.content) return aiResult.choices[0].message.content;
+  return "";
+}
+
 // Microsoft Entra ID config (client secret via env var only — NEVER in frontend)
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || "";
 const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
@@ -875,7 +892,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           aiReq.end();
         });
 
-        const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+        const text = extractAIText(aiResult);
         let parsed;
         try {
           parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
@@ -1812,6 +1829,706 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── AI Knowledge Sync: merge Zendesk + KB into unified training ───
+  if (pathname === "/api/ai/knowledge/sync" && req.method === "POST") {
+    try {
+      let synced = 0;
+      // Import all resolved Zendesk tickets as KB entries (if not already imported)
+      try {
+        const ticketRows = await db.getAll("zendesk_tickets");
+        const tickets = ticketRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const resolved = tickets.filter(t => t.status === "solved" || t.status === "closed");
+        const commentRows = await db.getAll("zendesk_comments");
+        const allComments = commentRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const existingKb = await db.getAll("ai_knowledge");
+        const existingIds = new Set(existingKb.map(r => { try { return JSON.parse(r.data).id; } catch { return ""; } }));
+
+        for (const t of resolved) {
+          const kbId = `kb_zd_${t.id}`;
+          if (existingIds.has(kbId)) continue;
+          const tComments = allComments.filter(c => c.ticketId === t.id && c.public);
+          const resolution = tComments.length > 0 ? tComments[tComments.length - 1].body : t.description || "";
+          const entry = {
+            id: kbId, title: `[Zendesk #${t.id}] ${t.subject || "Ticket"}`, category: "Zendesk",
+            content: `Subject: ${t.subject}\nStatus: ${t.status}\nPriority: ${t.priority || "Normal"}\nTags: ${(t.tags || []).join(", ")}\n\nDescription: ${(t.description || "").substring(0, 800)}\n\nResolution: ${(resolution || "").substring(0, 1000)}`,
+            tags: ["zendesk", "auto-synced", ...(t.tags || []).slice(0, 5)],
+            trainedBy: "Daily Sync", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+            source: "zendesk-sync", type: "ticket-resolution"
+          };
+          await db.upsert("ai_knowledge", kbId, JSON.stringify(entry));
+          synced++;
+        }
+      } catch (e) { console.warn("[AI Sync] Zendesk import:", e.message); }
+
+      // Update sync metadata
+      const syncMeta = {
+        id: "sync_metadata", lastSync: new Date().toISOString(),
+        totalEntries: (await db.getAll("ai_knowledge")).length,
+        syncedThisRun: synced,
+        nextSync: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      };
+      await db.upsert("ai_knowledge", "sync_metadata", JSON.stringify(syncMeta));
+      console.log(`[AI Sync] Completed — ${synced} new entries synced, total: ${syncMeta.totalEntries}`);
+      return json(res, 200, syncMeta);
+    } catch (err) {
+      console.error("[AI Sync]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI Knowledge Sync Status ─────────────────────────────────────
+  if (pathname === "/api/ai/knowledge/sync-status" && req.method === "GET") {
+    try {
+      const meta = await db.getOne("ai_knowledge", "sync_metadata");
+      if (meta) {
+        return json(res, 200, JSON.parse(meta.data));
+      }
+      return json(res, 200, { lastSync: null, totalEntries: (await db.getAll("ai_knowledge")).length, nextSync: null });
+    } catch (err) {
+      return json(res, 200, { lastSync: null, totalEntries: 0, nextSync: null });
+    }
+  }
+
+  // ─── AI Generate Professional Guide from Zendesk History ───────────
+  if (pathname === "/api/ai/generate-guide" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { topic, category, includeScreenshots } = body || {};
+      if (!topic) return json(res, 400, { error: "topic is required" });
+
+      // Gather all Zendesk ticket history related to this topic
+      let zdContext = "";
+      try {
+        const ticketRows = await db.getAll("zendesk_tickets");
+        const tickets = ticketRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const topicLower = topic.toLowerCase();
+        const topicWords = topicLower.split(/\s+/).filter(w => w.length > 2);
+
+        const relevant = tickets.filter(t => {
+          const searchable = `${t.subject || ""} ${t.description || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
+          return topicWords.some(w => searchable.includes(w));
+        }).slice(0, 30);
+
+        if (relevant.length > 0) {
+          // Get comments for relevant tickets
+          const commentRows = await db.getAll("zendesk_comments");
+          const allComments = commentRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+          zdContext = "\n\n=== ZENDESK TICKET HISTORY (Use this as primary reference) ===\n";
+          for (const t of relevant.slice(0, 15)) {
+            const tComments = allComments.filter(c => c.ticketId === t.id && c.public);
+            const resolution = tComments.length > 0 ? tComments[tComments.length - 1].body : "";
+            zdContext += `\n--- Ticket #${t.id}: ${t.subject || "No subject"} ---\n`;
+            zdContext += `Status: ${t.status} | Priority: ${t.priority || "Normal"} | Tags: ${(t.tags || []).join(", ")}\n`;
+            zdContext += `Description: ${(t.description || "").substring(0, 400)}\n`;
+            if (resolution) zdContext += `Resolution: ${resolution.substring(0, 600)}\n`;
+          }
+          zdContext += "\n=== END ZENDESK HISTORY ===\n";
+        }
+      } catch (e) { console.warn("[AI Guide] Zendesk data fetch:", e.message); }
+
+      // Also gather internal KB entries
+      let kbContext = "";
+      try {
+        const kbItems = await db.getAll("ai_knowledge");
+        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const topicLower = topic.toLowerCase();
+        const matched = kbEntries.filter(e => {
+          const searchable = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
+          return topicLower.split(/\s+/).some(w => w.length > 2 && searchable.includes(w));
+        }).slice(0, 10);
+        if (matched.length > 0) {
+          kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE ===\n" +
+            matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
+            "\n=== END INTERNAL KB ===\n";
+        }
+      } catch (e) { console.warn("[AI Guide] KB fetch:", e.message); }
+
+      const systemPrompt = `You are a professional IT documentation writer for VGC Technology Pte Ltd, Singapore. You create comprehensive, user-friendly technical guides and documentation.
+
+TASK: Generate a COMPLETE, professional-grade technical guide/documentation on the topic: "${topic}"
+Category: ${category || "General"}
+
+REQUIREMENTS — MUST follow ALL:
+1. TITLE: Clear, professional title with document metadata (version, date, author, category)
+2. TABLE OF CONTENTS: Numbered sections
+3. OVERVIEW/INTRODUCTION: What this guide covers, who it's for, prerequisites
+4. STEP-BY-STEP INSTRUCTIONS: Every step numbered, with clear actions. Each step MUST include:
+   - 📸 [Screenshot: <description of what to capture>] — placeholder for where screenshots should be taken
+   - 💡 Tip or Note callouts for important information
+   - ⚠️ Warning callouts for critical steps
+5. TROUBLESHOOTING SECTION: Common issues and fixes (based on Zendesk history if available)
+6. FAQ SECTION: At least 5 frequently asked questions with answers
+7. REFERENCE LINKS: Official vendor documentation, Microsoft Learn links, etc.
+8. APPENDIX: Glossary of terms, related articles, version history
+
+FORMATTING RULES:
+- Use Markdown formatting throughout
+- Include screenshot placeholders: 📸 [Screenshot: description]
+- Use tables for structured data (settings, configurations, comparison)
+- Use code blocks for commands, scripts, paths
+- Use callout boxes: 💡 **Tip:** | ⚠️ **Warning:** | ℹ️ **Note:** | ✅ **Best Practice:**
+- Include estimated time for each major section
+- Professional tone but user-friendly and easy to follow
+- Minimum 2000 words — be thorough and comprehensive
+
+${zdContext}
+${kbContext}
+
+IMPORTANT: Reference real ticket data and resolutions from the Zendesk history above. Cite specific ticket numbers when referencing past issues and solutions. If no Zendesk data is available, generate based on industry best practices and common enterprise IT patterns.`;
+
+      const userPrompt = `Generate a complete professional guide on: ${topic}`;
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 4000, temperature: 0.7 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(120000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (120s)")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
+
+      // Auto-save as KB entry
+      const guideId = `kb_guide_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const entry = {
+        id: guideId, title: `Guide: ${topic}`, category: category || "General",
+        content: text, tags: ["ai-generated", "guide", ...topic.toLowerCase().split(/\s+/).filter(w => w.length > 2).slice(0, 5)],
+        trainedBy: "AI Guide Generator", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        source: "ai-generated", type: "guide"
+      };
+      await db.upsert("ai_knowledge", guideId, JSON.stringify(entry));
+      await db.audit("ai_knowledge", guideId, "create", JSON.stringify({ title: entry.title, category: entry.category, type: "ai-generated-guide" }), "AI Guide Generator");
+
+      console.log(`[AI Guide] Generated guide: "${topic}" (${text.length} chars)`);
+      return json(res, 200, { guide: text, id: guideId, title: entry.title, zdTicketsReferenced: zdContext ? zdContext.split("--- Ticket #").length - 1 : 0 });
+    } catch (err) {
+      console.error("[AI Guide Generator]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI Generate Doc from SharePoint Link ─────────────────────────
+  if (pathname === "/api/ai/generate-doc" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { url, title, docType } = body || {};
+      if (!url && !title) return json(res, 400, { error: "url or title is required" });
+
+      const systemPrompt = `You are a professional IT documentation writer for VGC Technology Pte Ltd, Singapore.
+
+TASK: Generate a professional documentation article based on the SharePoint document library resource.
+
+SharePoint URL: ${url || "N/A"}
+Document Title: ${title || "Untitled"}
+Document Type: ${docType || "General Documentation"}
+
+Create a COMPLETE professional documentation that includes:
+1. **Document Header**: Title, version, date, classification, author
+2. **Executive Summary**: 2-3 paragraph overview
+3. **Scope & Purpose**: What this document covers
+4. **Detailed Content**: Comprehensive step-by-step content with:
+   - 📸 [Screenshot: <description>] placeholders for visual references
+   - Numbered procedures with clear actions
+   - Tables for configuration settings or comparisons
+   - Code blocks for any commands or scripts
+5. **Security & Compliance Notes**: PDPA, ISO 27001 considerations
+6. **Related Documents**: Links to related SharePoint documents
+7. **Revision History**: Version tracking table
+8. **Approval Section**: Sign-off template
+
+FORMATTING: Use professional Markdown. Include screenshot placeholders. Be thorough (1500+ words).
+TONE: Professional, clear, suitable for enterprise IT documentation.
+LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Shared Documents"}`;
+
+      const userPrompt = `Generate professional documentation for: ${title || url}`;
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 3000, temperature: 0.7 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(90000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (90s)")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
+
+      // Auto-save as KB entry
+      const docId = `kb_sp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const entry = {
+        id: docId, title: title || `SharePoint Doc: ${url}`, category: docType || "General",
+        content: text, tags: ["sharepoint", "ai-generated", "documentation"],
+        trainedBy: "SharePoint Doc Generator", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        source: "sharepoint", spUrl: url, type: "sharepoint-doc"
+      };
+      await db.upsert("ai_knowledge", docId, JSON.stringify(entry));
+      await db.audit("ai_knowledge", docId, "create", JSON.stringify({ title: entry.title, url, type: "sharepoint-doc" }), "SharePoint Doc Generator");
+
+      console.log(`[AI Doc] Generated from SharePoint: "${title || url}" (${text.length} chars)`);
+      return json(res, 200, { document: text, id: docId, title: entry.title });
+    } catch (err) {
+      console.error("[AI Doc Generator]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI Error Resolver ─────────────────────────────────────────────
+  if (pathname === "/api/ai/resolve-error" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { errorType, errorCode, errorMessage, errorDetails, errorStack, context } = body || {};
+      if (!errorMessage) return json(res, 400, { error: "errorMessage is required" });
+
+      // Check internal KB for similar past errors
+      let pastResolutions = "";
+      try {
+        const kbItems = await db.getAll("ai_knowledge");
+        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const errorLower = `${errorType} ${errorCode} ${errorMessage}`.toLowerCase();
+        const matched = kbEntries.filter(e => {
+          const searchable = `${e.title} ${e.content} ${(e.tags || []).join(" ")}`.toLowerCase();
+          return errorLower.split(/\s+/).filter(w => w.length > 3).some(w => searchable.includes(w));
+        }).slice(0, 5);
+        if (matched.length > 0) {
+          pastResolutions = "\n\nPAST RESOLUTIONS FROM KNOWLEDGE BASE:\n" +
+            matched.map(m => `- ${m.title}: ${m.content.substring(0, 300)}`).join("\n");
+        }
+      } catch (e) { /* ignore */ }
+
+      const systemPrompt = `You are an expert IT troubleshooter and error resolver for VGC Technology Pte Ltd. You MUST solve every error presented to you.
+
+ERROR DETAILS:
+- Type: ${errorType || "Unknown"}
+- Code: ${errorCode || "N/A"}
+- Message: ${errorMessage}
+- Details: ${errorDetails || "N/A"}
+- Stack: ${(errorStack || "").substring(0, 500)}
+- Context: ${context || "VGC-ITSM application"}
+${pastResolutions}
+
+HARD RULES:
+1. ALWAYS provide a solution — never say "I can't help" or "contact support"
+2. Give IMMEDIATE actionable steps the user can try RIGHT NOW
+3. Provide MULTIPLE resolution paths (primary fix + alternatives)
+4. Explain WHY the error occurred in simple terms
+5. Include prevention tips so it doesn't happen again
+
+RESPONSE FORMAT:
+## 🔍 Error Analysis
+Brief explanation of what went wrong and why.
+
+## ⚡ Immediate Fix (Try This First)
+Step-by-step primary solution.
+
+## 🔄 Alternative Solutions
+2-3 alternative approaches if the primary fix doesn't work.
+
+## 🛡️ Prevention
+How to prevent this error in the future.
+
+## 📚 References
+Links to relevant documentation.
+
+Keep it conversational, actionable, and human-friendly. Be a helpful colleague, not a bot.`;
+
+      const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 2000, temperature: 0.5 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("Timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      if (!text) return json(res, 502, { error: "Empty response from AI" });
+      return json(res, 200, { resolution: text, model: AZURE_OPENAI_MODEL });
+    } catch (err) {
+      console.error("[AI Error Resolver]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI Generate Professional Guide from Zendesk History ───────────
+  if (pathname === "/api/ai/generate-guide" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { topic, category, includeScreenshots } = body || {};
+      if (!topic) return json(res, 400, { error: "topic is required" });
+
+      // Gather all Zendesk ticket history related to this topic
+      let zdContext = "";
+      try {
+        const ticketRows = await db.getAll("zendesk_tickets");
+        const tickets = ticketRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const topicLower = topic.toLowerCase();
+        const topicWords = topicLower.split(/\s+/).filter(w => w.length > 2);
+
+        const relevant = tickets.filter(t => {
+          const searchable = `${t.subject || ""} ${t.description || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
+          return topicWords.some(w => searchable.includes(w));
+        }).slice(0, 30);
+
+        if (relevant.length > 0) {
+          // Get comments for relevant tickets
+          const commentRows = await db.getAll("zendesk_comments");
+          const allComments = commentRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+          zdContext = "\n\n=== ZENDESK TICKET HISTORY (Use this as primary reference) ===\n";
+          for (const t of relevant.slice(0, 15)) {
+            const tComments = allComments.filter(c => c.ticketId === t.id && c.public);
+            const resolution = tComments.length > 0 ? tComments[tComments.length - 1].body : "";
+            zdContext += `\n--- Ticket #${t.id}: ${t.subject || "No subject"} ---\n`;
+            zdContext += `Status: ${t.status} | Priority: ${t.priority || "Normal"} | Tags: ${(t.tags || []).join(", ")}\n`;
+            zdContext += `Description: ${(t.description || "").substring(0, 400)}\n`;
+            if (resolution) zdContext += `Resolution: ${resolution.substring(0, 600)}\n`;
+          }
+          zdContext += "\n=== END ZENDESK HISTORY ===\n";
+        }
+      } catch (e) { console.warn("[AI Guide] Zendesk data fetch:", e.message); }
+
+      // Also gather internal KB entries
+      let kbContext = "";
+      try {
+        const kbItems = await db.getAll("ai_knowledge");
+        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const topicLower = topic.toLowerCase();
+        const matched = kbEntries.filter(e => {
+          const searchable = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
+          return topicLower.split(/\s+/).some(w => w.length > 2 && searchable.includes(w));
+        }).slice(0, 10);
+        if (matched.length > 0) {
+          kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE ===\n" +
+            matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
+            "\n=== END INTERNAL KB ===\n";
+        }
+      } catch (e) { console.warn("[AI Guide] KB fetch:", e.message); }
+
+      const systemPrompt = `You are a professional IT documentation writer for VGC Technology Pte Ltd, Singapore. You create comprehensive, user-friendly technical guides and documentation.
+
+TASK: Generate a COMPLETE, professional-grade technical guide/documentation on the topic: "${topic}"
+Category: ${category || "General"}
+
+REQUIREMENTS — MUST follow ALL:
+1. TITLE: Clear, professional title with document metadata (version, date, author, category)
+2. TABLE OF CONTENTS: Numbered sections
+3. OVERVIEW/INTRODUCTION: What this guide covers, who it's for, prerequisites
+4. STEP-BY-STEP INSTRUCTIONS: Every step numbered, with clear actions. Each step MUST include:
+   - 📸 [Screenshot: <description of what to capture>] — placeholder for where screenshots should be taken
+   - 💡 Tip or Note callouts for important information
+   - ⚠️ Warning callouts for critical steps
+5. TROUBLESHOOTING SECTION: Common issues and fixes (based on Zendesk history if available)
+6. FAQ SECTION: At least 5 frequently asked questions with answers
+7. REFERENCE LINKS: Official vendor documentation, Microsoft Learn links, etc.
+8. APPENDIX: Glossary of terms, related articles, version history
+
+FORMATTING RULES:
+- Use Markdown formatting throughout
+- Include screenshot placeholders: 📸 [Screenshot: description]
+- Use tables for structured data (settings, configurations, comparison)
+- Use code blocks for commands, scripts, paths
+- Use callout boxes: 💡 **Tip:** | ⚠️ **Warning:** | ℹ️ **Note:** | ✅ **Best Practice:**
+- Include estimated time for each major section
+- Professional tone but user-friendly and easy to follow
+- Minimum 2000 words — be thorough and comprehensive
+
+${zdContext}
+${kbContext}
+
+IMPORTANT: Reference real ticket data and resolutions from the Zendesk history above. Cite specific ticket numbers when referencing past issues and solutions. If no Zendesk data is available, generate based on industry best practices and common enterprise IT patterns.`;
+
+      const userPrompt = `Generate a complete professional guide on: ${topic}`;
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 4000, temperature: 0.7 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(120000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (120s)")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
+
+      // Auto-save as KB entry
+      const guideId = `kb_guide_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const entry = {
+        id: guideId, title: `Guide: ${topic}`, category: category || "General",
+        content: text, tags: ["ai-generated", "guide", ...topic.toLowerCase().split(/\s+/).filter(w => w.length > 2).slice(0, 5)],
+        trainedBy: "AI Guide Generator", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        source: "ai-generated", type: "guide"
+      };
+      await db.upsert("ai_knowledge", guideId, JSON.stringify(entry));
+      await db.audit("ai_knowledge", guideId, "create", JSON.stringify({ title: entry.title, category: entry.category, type: "ai-generated-guide" }), "AI Guide Generator");
+
+      console.log(`[AI Guide] Generated guide: "${topic}" (${text.length} chars)`);
+      return json(res, 200, { guide: text, id: guideId, title: entry.title, zdTicketsReferenced: zdContext ? zdContext.split("--- Ticket #").length - 1 : 0 });
+    } catch (err) {
+      console.error("[AI Guide Generator]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI Generate Doc from SharePoint Link ─────────────────────────
+  if (pathname === "/api/ai/generate-doc" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { url, title, docType } = body || {};
+      if (!url && !title) return json(res, 400, { error: "url or title is required" });
+
+      const systemPrompt = `You are a professional IT documentation writer for VGC Technology Pte Ltd, Singapore.
+
+TASK: Generate a professional documentation article based on the SharePoint document library resource.
+
+SharePoint URL: ${url || "N/A"}
+Document Title: ${title || "Untitled"}
+Document Type: ${docType || "General Documentation"}
+
+Create a COMPLETE professional documentation that includes:
+1. **Document Header**: Title, version, date, classification, author
+2. **Executive Summary**: 2-3 paragraph overview
+3. **Scope & Purpose**: What this document covers
+4. **Detailed Content**: Comprehensive step-by-step content with:
+   - 📸 [Screenshot: <description>] placeholders for visual references
+   - Numbered procedures with clear actions
+   - Tables for configuration settings or comparisons
+   - Code blocks for any commands or scripts
+5. **Security & Compliance Notes**: PDPA, ISO 27001 considerations
+6. **Related Documents**: Links to related SharePoint documents
+7. **Revision History**: Version tracking table
+8. **Approval Section**: Sign-off template
+
+FORMATTING: Use professional Markdown. Include screenshot placeholders. Be thorough (1500+ words).
+TONE: Professional, clear, suitable for enterprise IT documentation.
+LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Shared Documents"}`;
+
+      const userPrompt = `Generate professional documentation for: ${title || url}`;
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 3000, temperature: 0.7 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(90000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (90s)")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
+
+      // Auto-save as KB entry
+      const docId = `kb_sp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const entry = {
+        id: docId, title: title || `SharePoint Doc: ${url}`, category: docType || "General",
+        content: text, tags: ["sharepoint", "ai-generated", "documentation"],
+        trainedBy: "SharePoint Doc Generator", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        source: "sharepoint", spUrl: url, type: "sharepoint-doc"
+      };
+      await db.upsert("ai_knowledge", docId, JSON.stringify(entry));
+      await db.audit("ai_knowledge", docId, "create", JSON.stringify({ title: entry.title, url, type: "sharepoint-doc" }), "SharePoint Doc Generator");
+
+      console.log(`[AI Doc] Generated from SharePoint: "${title || url}" (${text.length} chars)`);
+      return json(res, 200, { document: text, id: docId, title: entry.title });
+    } catch (err) {
+      console.error("[AI Doc Generator]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI Error Resolver ─────────────────────────────────────────────
+  if (pathname === "/api/ai/resolve-error" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { errorType, errorCode, errorMessage, errorDetails, errorStack, context } = body || {};
+      if (!errorMessage) return json(res, 400, { error: "errorMessage is required" });
+
+      // Check internal KB for similar past errors
+      let pastResolutions = "";
+      try {
+        const kbItems = await db.getAll("ai_knowledge");
+        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        const errorLower = `${errorType} ${errorCode} ${errorMessage}`.toLowerCase();
+        const matched = kbEntries.filter(e => {
+          const searchable = `${e.title} ${e.content} ${(e.tags || []).join(" ")}`.toLowerCase();
+          return errorLower.split(/\s+/).filter(w => w.length > 3).some(w => searchable.includes(w));
+        }).slice(0, 5);
+        if (matched.length > 0) {
+          pastResolutions = "\n\nPAST RESOLUTIONS FROM KNOWLEDGE BASE:\n" +
+            matched.map(m => `- ${m.title}: ${m.content.substring(0, 300)}`).join("\n");
+        }
+      } catch (e) { /* ignore */ }
+
+      const systemPrompt = `You are an expert IT troubleshooter and error resolver for VGC Technology Pte Ltd. You MUST solve every error presented to you.
+
+ERROR DETAILS:
+- Type: ${errorType || "Unknown"}
+- Code: ${errorCode || "N/A"}
+- Message: ${errorMessage}
+- Details: ${errorDetails || "N/A"}
+- Stack: ${(errorStack || "").substring(0, 500)}
+- Context: ${context || "VGC-ITSM application"}
+${pastResolutions}
+
+HARD RULES:
+1. ALWAYS provide a solution — never say "I can't help" or "contact support"
+2. Give IMMEDIATE actionable steps the user can try RIGHT NOW
+3. Provide MULTIPLE resolution paths (primary fix + alternatives)
+4. Explain WHY the error occurred in simple terms
+5. Include prevention tips so it doesn't happen again
+
+RESPONSE FORMAT:
+## 🔍 Error Analysis
+Brief explanation of what went wrong and why.
+
+## ⚡ Immediate Fix (Try This First)
+Step-by-step primary solution.
+
+## 🔄 Alternative Solutions
+2-3 alternative approaches if the primary fix doesn't work.
+
+## 🛡️ Prevention
+How to prevent this error in the future.
+
+## 📚 References
+Links to relevant documentation.
+
+Keep it conversational, actionable, and human-friendly. Be a helpful colleague, not a bot.`;
+
+      const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
+
+      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
+      const payload = isResponsesAPI
+        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
+        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 2000, temperature: 0.5 };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("Timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      if (!text) return json(res, 502, { error: "Empty response from AI" });
+      return json(res, 200, { resolution: text, model: AZURE_OPENAI_MODEL });
+    } catch (err) {
+      console.error("[AI Error Resolver]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
   // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
@@ -1876,7 +2593,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         aiReq.end();
       });
 
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
       return json(res, 200, { text, model: AZURE_OPENAI_MODEL });
     } catch (err) {
@@ -1912,7 +2629,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         aiReq.write(JSON.stringify(payload));
         aiReq.end();
       });
-      const text = aiResult?.output?.[0]?.content?.[0]?.text || aiResult?.choices?.[0]?.message?.content || aiResult?.output_text || "";
+      const text = extractAIText(aiResult);
       return json(res, 200, { status: "connected", model: AZURE_OPENAI_MODEL, response: text.trim(), configured: true });
     } catch (err) {
       return json(res, 502, { error: err.message, configured: true });
@@ -2389,6 +3106,38 @@ async function start() {
     console.log(`VGC-ITSM serving on port ${PORT}`);
     console.log(`Database: ${db.label}`);
     console.log(`Collections:`, stats);
+
+    // Seed default KB articles if none exist
+    if (stats.kb === 0) {
+      const defaultKB = [
+        { id: "KB0001", title: "VPN Connection Troubleshooting", category: "Network", content: "1. Check internet connectivity.\n2. Restart VPN client.\n3. Verify credentials.\n4. Try alternate VPN server.\n5. Contact IT if issue persists.", status: "Published", author: "System", created: new Date().toISOString() },
+        { id: "KB0002", title: "Password Reset Procedure", category: "Security", content: "1. Go to https://portal.office.com.\n2. Click 'Can't access your account?'\n3. Follow MFA verification steps.\n4. Set new password (min 12 chars).\n5. Update saved passwords.", status: "Published", author: "System", created: new Date().toISOString() },
+        { id: "KB0003", title: "New Employee IT Onboarding", category: "General", content: "1. Submit onboarding form via ServiceDesk.\n2. IT provisions laptop, email, and VPN.\n3. Install required software (Teams, Office 365).\n4. Complete security awareness training.\n5. Set up MFA on mobile device.", status: "Published", author: "System", created: new Date().toISOString() },
+        { id: "KB0004", title: "Printer Setup Guide", category: "End User Computing", content: "1. Open Settings > Printers & Scanners.\n2. Click 'Add a printer'.\n3. Select network printer from list.\n4. Install driver if prompted.\n5. Print test page to verify.", status: "Published", author: "System", created: new Date().toISOString() },
+        { id: "KB0005", title: "Email Signature Configuration", category: "Application Support", content: "1. Open Outlook > File > Options > Mail > Signatures.\n2. Create new signature with company template.\n3. Add name, title, phone, and logo.\n4. Set as default for new messages and replies.\n5. Test by sending email to yourself.", status: "Published", author: "System", created: new Date().toISOString() },
+      ];
+      for (const kb of defaultKB) {
+        await db.upsert("kb", kb.id, JSON.stringify(kb));
+      }
+      console.log(`[Seed] Created ${defaultKB.length} default KB articles`);
+    }
+
+    // ─── Daily AI Knowledge Sync (every 24h) ────────────────────────
+    const runDailySync = async () => {
+      try {
+        console.log("[Daily Sync] Starting AI knowledge sync...");
+        const https = require("https");
+        const syncReq = require("http").request({ hostname: "localhost", port: PORT, path: "/api/ai/knowledge/sync", method: "POST", headers: { "Content-Type": "application/json" } }, (r) => {
+          let data = ""; r.on("data", c => data += c);
+          r.on("end", () => console.log("[Daily Sync] Result:", data.substring(0, 200)));
+        });
+        syncReq.on("error", e => console.warn("[Daily Sync] Error:", e.message));
+        syncReq.write("{}"); syncReq.end();
+      } catch (e) { console.warn("[Daily Sync] Failed:", e.message); }
+    };
+    // Run initial sync 30s after startup, then every 24 hours
+    setTimeout(runDailySync, 30000);
+    setInterval(runDailySync, 24 * 60 * 60 * 1000);
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
