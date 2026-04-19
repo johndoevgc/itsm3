@@ -341,7 +341,7 @@ const aiAnalyzeChange = (title, description) => {
 };
 
 const aiPredictSLA = (priority, category) => {
-  const sev = VGC_SLA_POLICY.severities[priority];
+  const sev = DEFAULT_SLA_POLICY.severities[priority];
   const baseHours = sev ? sev.worstResponse : 9;
   const catMultiplier = { Hardware: 1.3, Network: 0.9, Database: 1.1, Security: 0.8, Software: 1.0, Email: 0.7, Access: 0.5, Cloud: 1.2 };
   const predicted = Math.round(baseHours * (catMultiplier[category] || 1.0));
@@ -1014,8 +1014,8 @@ const PRIORITY_COLORS = {
   "Sev-D": { bg: "#0A2D1A", text: "#81C784", border: "#81C784", dot: "#4CAF50", label: "LOW / INQUIRY" },
 };
 
-// ─── VGC Official SLA Policy ─────────────────────────────────────────────
-const VGC_SLA_POLICY = {
+// ─── VGC Official SLA Policy (Defaults — editable via Admin Settings) ─────
+const DEFAULT_SLA_POLICY = {
   supportHours: { start: 9, end: 18, days: "Mon–Fri", hours: "9:00 AM – 6:00 PM", tz: "Asia/Singapore" },
   defaultSeverity: "Sev-C",
   ticketChannels: ["help@vgctechnology.com", "ITSM Portal"],
@@ -1382,6 +1382,20 @@ export default function ITSMApp() {
   const [uatResults, setUatResults] = useState([]);
   const [uatRunning, setUatRunning] = useState(false);
   const [uatLastRun, setUatLastRun] = useState(null);
+  const [slaPolicy, setSlaPolicy] = useState(() => _ls("vgc_sla_policy", DEFAULT_SLA_POLICY));
+  const [notifChannels, setNotifChannels] = useState(() => _ls("vgc_notif_channels", [
+    { id: "email", channel: "Email", desc: "Send notifications via email (SMTP / Exchange Online)", enabled: true, icon: "📧" },
+    { id: "teams", channel: "Microsoft Teams", desc: "Post adaptive cards to Teams channels via Webhooks", enabled: true, icon: "💬" },
+    { id: "slack", channel: "Slack", desc: "Post to configured Slack channels", enabled: true, icon: "🔗" },
+    { id: "sms", channel: "SMS", desc: "Send critical alerts via SMS (Twilio / Azure Comms)", enabled: false, icon: "📱" },
+    { id: "inapp", channel: "In-App", desc: "Push notifications within VGC-ITSM", enabled: true, icon: "🔔" },
+    { id: "pagerduty", channel: "PagerDuty", desc: "Trigger PagerDuty incidents for P1 alerts", enabled: false, icon: "🚨" },
+    { id: "webhook", channel: "Webhook", desc: "Send JSON payloads to custom HTTP endpoints", enabled: false, icon: "🌐" },
+  ]));
+  const [slaEditingSev, setSlaEditingSev] = useState(null);
+  const isEditAdmin = ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole);
+  useEffect(() => { _save("vgc_sla_policy", slaPolicy); }, [slaPolicy]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_notif_channels", notifChannels); }, [notifChannels]); // eslint-disable-line react-hooks/exhaustive-deps
   // ─── Onboarding Guided Tour ──────────────────────────────────────────
   const [tourStep, setTourStep] = useState(() => {
     const seen = typeof localStorage !== "undefined" && localStorage.getItem("vgc_tour_done");
@@ -5072,14 +5086,14 @@ export default function ITSMApp() {
     const compliant = activeInc.filter(isSlaCompliant).length;
     const total = activeInc.length;
     const compliancePct = total > 0 ? Math.round((compliant / total) * 100) : 100;
-    const firstResponseMet = activeInc.filter(i => i.firstResponseTime != null && VGC_SLA_POLICY.severities[i.priority] && i.firstResponseTime <= VGC_SLA_POLICY.severities[i.priority].firstResponse).length;
+    const firstResponseMet = activeInc.filter(i => i.firstResponseTime != null && slaPolicy.severities[i.priority] && i.firstResponseTime <= slaPolicy.severities[i.priority].firstResponse).length;
     const firstResponseTotal = activeInc.filter(i => i.firstResponseTime != null).length;
     const firstResponsePct = firstResponseTotal > 0 ? Math.round((firstResponseMet / firstResponseTotal) * 100) : 100;
 
     const byPriority = ["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => {
       const items = activeInc.filter(i => i.priority === p);
       const met = items.filter(isSlaCompliant).length;
-      const sev = VGC_SLA_POLICY.severities[p];
+      const sev = slaPolicy.severities[p];
       return { priority: p, total: items.length, met, pct: items.length > 0 ? Math.round((met / items.length) * 100) : 100, firstResponse: sev?.firstResponse, worstResponse: sev?.worstResponse, definition: sev?.definition };
     });
 
@@ -5148,7 +5162,7 @@ export default function ITSMApp() {
               { label: "Title", key: "title" },
               { label: "Severity", render: r => <PriorityDot priority={r.priority} /> },
               { label: "1st Resp", render: r => {
-                const sev = VGC_SLA_POLICY.severities[r.priority];
+                const sev = slaPolicy.severities[r.priority];
                 const target = sev?.firstResponse;
                 const actual = r.firstResponseTime;
                 if (actual == null) return <span style={{ fontSize: 11, color: "#5A6178" }}>Pending</span>;
@@ -7858,16 +7872,17 @@ export default function ITSMApp() {
                 <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Workflow Automation Rules</h3>
                 <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Editable by VGC Dev Admin & Tenant Admin · AI-assisted optimization available</div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => {
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {isEditAdmin ? <span style={{ fontSize: 9, color: "#81C784", background: "#0D2D1A", padding: "2px 6px", borderRadius: 3 }}>✏️ Editable</span> : <span style={{ fontSize: 9, color: "#5A6178", background: "#1E2130", padding: "2px 6px", borderRadius: 3 }}>🔒 View Only</span>}
+                {isEditAdmin && <button onClick={() => {
                   const suggestions = [
                     { id: genId("WF"), name: "AI: Pattern-Based Priority Adjustment", trigger: "Recurring incident pattern detected (3+ similar in 7 days)", action: "Auto-escalate priority and link to Problem record", status: "Suggested", module: "Incidents", createdBy: "AI Assist", aiSuggested: true, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: true },
                     { id: genId("WF"), name: "AI: Customer SLA Optimization", trigger: "Customer ticket history shows repeated SLA near-misses", action: "Adjust routing to faster-response team + notify account manager", status: "Suggested", module: "SLA", createdBy: "AI Assist", aiSuggested: true, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: true },
                     { id: genId("WF"), name: "AI: Off-Hours Incident Routing", trigger: "Ticket created outside business hours (Mon-Fri 9-6 SGT)", action: "Route to on-call engineer and send SMS notification", status: "Suggested", module: "Incidents", createdBy: "AI Assist", aiSuggested: true, lastModified: new Date().toISOString().split("T")[0], conditions: {}, slaLinked: false },
                   ];
                   setAiRuleSuggestions(suggestions);
-                }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>🤖 AI Suggest Rules</button>
-                <button onClick={() => setShowAddRule(!showAddRule)} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }}>{showAddRule ? "✕ Cancel" : "＋ Add Rule"}</button>
+                }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>🤖 AI Suggest Rules</button>}
+                {isEditAdmin && <button onClick={() => setShowAddRule(!showAddRule)} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }}>{showAddRule ? "✕ Cancel" : "＋ Add Rule"}</button>}
               </div>
             </div>
 
@@ -7941,14 +7956,17 @@ export default function ITSMApp() {
                   <div style={{ fontSize: 8, color: "#3A3F55", marginTop: 3 }}>By {rule.createdBy} · Modified {rule.lastModified}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                  <div onClick={() => {
+                  {isEditAdmin && <div onClick={() => {
                     const updated = workflowRules.map(r => r.id === rule.id ? { ...r, status: r.status === "Active" ? "Disabled" : "Active" } : r);
                     setWorkflowRules(updated); _save("vgc_workflow_rules", updated);
                   }} style={{ width: 40, height: 22, borderRadius: 11, cursor: "pointer", background: rule.status === "Active" ? "#6366F1" : "#1E2130", padding: 2, transition: "background 0.2s" }}>
                     <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: rule.status === "Active" ? "translateX(18px)" : "translateX(0)", transition: "transform 0.2s", boxShadow: "0 1px 3px #00000033" }}/>
-                  </div>
-                  <button onClick={() => { const updated = workflowRules.filter(r => r.id !== rule.id); setWorkflowRules(updated); _save("vgc_workflow_rules", updated); }}
-                    style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} title="Delete rule">🗑️</button>
+                  </div>}
+                  {!isEditAdmin && <div style={{ width: 40, height: 22, borderRadius: 11, background: rule.status === "Active" ? "#6366F1" : "#1E2130", padding: 2, opacity: 0.6 }}>
+                    <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: rule.status === "Active" ? "translateX(18px)" : "translateX(0)", boxShadow: "0 1px 3px #00000033" }}/>
+                  </div>}
+                  {isEditAdmin && <button onClick={() => { const updated = workflowRules.filter(r => r.id !== rule.id); setWorkflowRules(updated); _save("vgc_workflow_rules", updated); }}
+                    style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} title="Delete rule">🗑️</button>}
                 </div>
               </div>
             ))}
@@ -7980,56 +7998,113 @@ export default function ITSMApp() {
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>VGC Technology Helpdesk SLA Policy</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {isEditAdmin && <button onClick={() => { setSlaPolicy(DEFAULT_SLA_POLICY); }} style={{ ...btnStyle("#333"), fontSize: 10, padding: "5px 12px", color: "#FF6B6B" }}>↺ Reset to Defaults</button>}
+                {!isEditAdmin && <span style={{ fontSize: 10, color: "#5A6178", background: "#1E2130", padding: "4px 10px", borderRadius: 4 }}>🔒 View Only</span>}
+                {isEditAdmin && <span style={{ fontSize: 10, color: "#81C784", background: "#0D2D1A", padding: "4px 10px", borderRadius: 4 }}>✏️ Editable</span>}
+              </div>
             </div>
 
-            {/* Policy Overview */}
+            {/* Policy Overview — Editable */}
             <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", padding: 20, marginBottom: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
                 <div>
                   <div style={{ fontSize: 11, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>Support Hours</div>
-                  <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{VGC_SLA_POLICY.supportHours.days}</div>
-                  <div style={{ fontSize: 12, color: "#8B92A8" }}>{VGC_SLA_POLICY.supportHours.hours} (SGT)</div>
+                  {isEditAdmin ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <input value={slaPolicy.supportHours.hours} onChange={e => setSlaPolicy(p => ({ ...p, supportHours: { ...p.supportHours, hours: e.target.value } }))} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 12, outline: "none", width: "100%" }} />
+                      <select value={slaPolicy.supportHours.days} onChange={e => setSlaPolicy(p => ({ ...p, supportHours: { ...p.supportHours, days: e.target.value } }))} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none" }}>
+                        <option>Mon–Fri</option><option>Mon–Sat</option><option>Mon–Sun</option><option>24/7</option>
+                      </select>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{slaPolicy.supportHours.days}</div>
+                      <div style={{ fontSize: 12, color: "#8B92A8" }}>{slaPolicy.supportHours.hours} (SGT)</div>
+                    </>
+                  )}
                 </div>
                 <div>
                   <div style={{ fontSize: 11, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>Default Severity</div>
-                  <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{VGC_SLA_POLICY.defaultSeverity}</div>
-                  <div style={{ fontSize: 12, color: "#8B92A8" }}>Auto-assigned to new tickets</div>
+                  {isEditAdmin ? (
+                    <select value={slaPolicy.defaultSeverity} onChange={e => setSlaPolicy(p => ({ ...p, defaultSeverity: e.target.value }))} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 12, outline: "none" }}>
+                      <option>Sev-A</option><option>Sev-B</option><option>Sev-C</option><option>Sev-D</option>
+                    </select>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{slaPolicy.defaultSeverity}</div>
+                      <div style={{ fontSize: 12, color: "#8B92A8" }}>Auto-assigned to new tickets</div>
+                    </>
+                  )}
                 </div>
                 <div>
                   <div style={{ fontSize: 11, color: "#5A6178", textTransform: "uppercase", marginBottom: 4 }}>Ticket Channels</div>
-                  <div style={{ fontSize: 12, color: "#E8ECF4" }}>{VGC_SLA_POLICY.ticketChannels.join(", ")}</div>
+                  {isEditAdmin ? (
+                    <input value={slaPolicy.ticketChannels.join(", ")} onChange={e => setSlaPolicy(p => ({ ...p, ticketChannels: e.target.value.split(",").map(s => s.trim()).filter(Boolean) }))} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #1E2130", background: "#0A0C14", color: "#E8ECF4", fontSize: 11, outline: "none", width: "100%" }} />
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#E8ECF4" }}>{slaPolicy.ticketChannels.join(", ")}</div>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Severity SLA Table */}
-            <DataTable
-              columns={[
-                { label: "Severity", render: r => <PriorityDot priority={r.severity} /> },
-                { label: "Definition", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.definition}</span> },
-                { label: "First Response", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: "#06B6D4" }}>{r.firstResponse}</span> },
-                { label: "Worst Response", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: "#FFB347" }}>{r.worstResponse}</span> },
-                { label: "Examples", render: r => <span style={{ color: "#5A6178", fontSize: 11 }}>{r.examples}</span> },
-                { label: "Escalation", render: r => <span style={{ color: "#CE93D8", fontSize: 11 }}>{r.escalation}</span> },
-              ]}
-              data={Object.entries(VGC_SLA_POLICY.severities).map(([key, sev]) => ({
-                severity: key,
-                definition: sev.definition,
-                firstResponse: `${sev.firstResponse} biz hrs`,
-                worstResponse: `${sev.worstResponse} biz hrs`,
-                examples: Array.isArray(sev.examples) ? sev.examples.join(", ") : (sev.examples || ""),
-                escalation: sev.escalation,
-              }))}
-            />
+            {/* Severity SLA Table — Editable */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Severity Response Times</h3>
+                {isEditAdmin && <span style={{ fontSize: 9, color: "#5A6178" }}>Click a row to edit response times</span>}
+              </div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {Object.entries(slaPolicy.severities).map(([key, sev]) => (
+                  <div key={key} onClick={() => isEditAdmin && setSlaEditingSev(slaEditingSev === key ? null : key)} style={{ display: "grid", gridTemplateColumns: "90px 1fr 120px 120px 40px", alignItems: "center", gap: 10, padding: "10px 14px", background: slaEditingSev === key ? "#6366F10A" : "#0A0C14", borderRadius: 8, border: slaEditingSev === key ? "1px solid #6366F133" : "1px solid #1E213044", cursor: isEditAdmin ? "pointer" : "default", transition: "all 0.2s" }}>
+                    <PriorityDot priority={key} />
+                    <span style={{ color: "#C4CAD6", fontSize: 11 }}>{sev.definition}</span>
+                    {slaEditingSev === key && isEditAdmin ? (
+                      <>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input type="number" step="0.5" min="0.1" value={sev.firstResponse} onClick={e => e.stopPropagation()} onChange={e => { const v = parseFloat(e.target.value) || 0.5; setSlaPolicy(p => ({ ...p, severities: { ...p.severities, [key]: { ...p.severities[key], firstResponse: v } } })); }} style={{ width: 50, padding: "3px 6px", borderRadius: 4, border: "1px solid #6366F155", background: "#0A0C14", color: "#06B6D4", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, outline: "none", textAlign: "center" }} />
+                          <span style={{ fontSize: 10, color: "#5A6178" }}>hrs</span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input type="number" step="0.5" min="0.5" value={sev.worstResponse} onClick={e => e.stopPropagation()} onChange={e => { const v = parseFloat(e.target.value) || 1; setSlaPolicy(p => ({ ...p, severities: { ...p.severities, [key]: { ...p.severities[key], worstResponse: v } } })); }} style={{ width: 50, padding: "3px 6px", borderRadius: 4, border: "1px solid #FFB34755", background: "#0A0C14", color: "#FFB347", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, outline: "none", textAlign: "center" }} />
+                          <span style={{ fontSize: 10, color: "#5A6178" }}>hrs</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: "#06B6D4" }}>{sev.firstResponse} biz hrs</span>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: "#FFB347" }}>{sev.worstResponse} biz hrs</span>
+                      </>
+                    )}
+                    {isEditAdmin && <span style={{ fontSize: 10, color: "#5A617844" }}>{slaEditingSev === key ? "▲" : "✎"}</span>}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 120px 120px 40px", gap: 10, padding: "6px 14px 0", marginTop: 4 }}>
+                <span style={{ fontSize: 9, color: "#3A3F55" }}>Severity</span>
+                <span style={{ fontSize: 9, color: "#3A3F55" }}>Definition</span>
+                <span style={{ fontSize: 9, color: "#3A3F55" }}>1st Response</span>
+                <span style={{ fontSize: 9, color: "#3A3F55" }}>Worst Case</span>
+                <span />
+              </div>
+            </div>
 
-            {/* Mandatory Rules */}
+            {/* Mandatory Rules — Editable */}
             <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
-              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 Mandatory Ticketing & Communication Rules</h3>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 Mandatory Ticketing & Communication Rules</h3>
+                {isEditAdmin && <button onClick={() => setSlaPolicy(p => ({ ...p, rules: [...p.rules, "New rule — click to edit"] }))} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "4px 10px" }}>＋ Add Rule</button>}
+              </div>
               <div style={{ display: "grid", gap: 8 }}>
-                {VGC_SLA_POLICY.rules.map((rule, i) => (
+                {slaPolicy.rules.map((rule, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
                     <div style={{ width: 22, height: 22, borderRadius: 6, background: "#6366F115", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#6366F1", fontWeight: 700, flexShrink: 0 }}>{i + 1}</div>
-                    <span style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.5 }}>{rule}</span>
+                    {isEditAdmin ? (
+                      <input value={rule} onChange={e => { const upd = [...slaPolicy.rules]; upd[i] = e.target.value; setSlaPolicy(p => ({ ...p, rules: upd })); }} style={{ flex: 1, padding: "4px 8px", borderRadius: 4, border: "1px solid #1E2130", background: "transparent", color: "#C4CAD6", fontSize: 12, lineHeight: 1.5, outline: "none", fontFamily: "inherit" }} />
+                    ) : (
+                      <span style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.5 }}>{rule}</span>
+                    )}
+                    {isEditAdmin && <button onClick={() => setSlaPolicy(p => ({ ...p, rules: p.rules.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", color: "#FF6B6B55", cursor: "pointer", fontSize: 11, padding: "2px 4px", flexShrink: 0 }}>🗑️</button>}
                   </div>
                 ))}
               </div>
@@ -9178,14 +9253,29 @@ export default function ITSMApp() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                 {/* Data Retention */}
                 <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #1E2130" }}>
-                  <h5 style={{ margin: "0 0 12px", fontSize: 12, color: "#EC4899", fontWeight: 600 }}>📋 Data Retention Policies</h5>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <h5 style={{ margin: 0, fontSize: 12, color: "#EC4899", fontWeight: 600 }}>📋 Data Retention Policies</h5>
+                    {isEditAdmin ? <span style={{ fontSize: 9, color: "#81C784", background: "#0D2D1A", padding: "2px 6px", borderRadius: 3 }}>✏️ Editable</span> : <span style={{ fontSize: 9, color: "#5A6178", background: "#1E2130", padding: "2px 6px", borderRadius: 3 }}>🔒 View Only</span>}
+                  </div>
                   {pdpaConfig.retentionPolicies.map((p, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1E213033", fontSize: 11 }}>
                       <span style={{ color: "#C4CAD6" }}>{p.entity}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>{p.retention}d</span>
-                        <Badge color={p.action === "Delete" ? { bg: "#2D0A0A", text: "#FF6B6B" } : { bg: "#2D1F0A", text: "#FFB347" }}>{p.action}</Badge>
-                        <div onClick={() => setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, enabled: !rp.enabled } : rp) }))} style={{ width: 36, height: 18, borderRadius: 9, cursor: "pointer", background: p.enabled ? "#EC4899" : "#1E2130", padding: 2, flexShrink: 0 }}>
+                        {isEditAdmin ? (
+                          <input type="number" min="7" max="3650" value={p.retention} onChange={e => { const v = parseInt(e.target.value) || 90; setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, retention: v } : rp) })); }} style={{ width: 55, padding: "2px 4px", borderRadius: 3, border: "1px solid #1E2130", background: "#12141E", color: "#64B5F6", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", outline: "none", textAlign: "center" }} />
+                        ) : (
+                          <span style={{ color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>{p.retention}d</span>
+                        )}
+                        {isEditAdmin ? (
+                          <select value={p.action} onChange={e => setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, action: e.target.value } : rp) }))} style={{ padding: "2px 6px", borderRadius: 3, border: "1px solid #1E2130", background: "#12141E", color: p.action === "Delete" ? "#FF6B6B" : "#FFB347", fontSize: 9, outline: "none" }}>
+                            <option value="Anonymize">Anonymize</option>
+                            <option value="Archive">Archive</option>
+                            <option value="Delete">Delete</option>
+                          </select>
+                        ) : (
+                          <Badge color={p.action === "Delete" ? { bg: "#2D0A0A", text: "#FF6B6B" } : { bg: "#2D1F0A", text: "#FFB347" }}>{p.action}</Badge>
+                        )}
+                        <div onClick={() => isEditAdmin && setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, enabled: !rp.enabled } : rp) }))} style={{ width: 36, height: 18, borderRadius: 9, cursor: isEditAdmin ? "pointer" : "default", background: p.enabled ? "#EC4899" : "#1E2130", padding: 2, flexShrink: 0, opacity: isEditAdmin ? 1 : 0.6 }}>
                           <div style={{ width: 14, height: 14, borderRadius: 7, background: "#fff", transform: p.enabled ? "translateX(18px)" : "translateX(0)", transition: "transform 0.2s" }} />
                         </div>
                       </div>
@@ -9194,7 +9284,10 @@ export default function ITSMApp() {
                 </div>
                 {/* Privacy Controls */}
                 <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #1E2130" }}>
-                  <h5 style={{ margin: "0 0 12px", fontSize: 12, color: "#EC4899", fontWeight: 600 }}>🔒 Privacy Controls</h5>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <h5 style={{ margin: 0, fontSize: 12, color: "#EC4899", fontWeight: 600 }}>🔒 Privacy Controls</h5>
+                    {isEditAdmin ? <span style={{ fontSize: 9, color: "#81C784", background: "#0D2D1A", padding: "2px 6px", borderRadius: 3 }}>✏️ Editable</span> : <span style={{ fontSize: 9, color: "#5A6178", background: "#1E2130", padding: "2px 6px", borderRadius: 3 }}>🔒 View Only</span>}
+                  </div>
                   {[
                     { key: "consentManagement", label: "Consent Management", desc: "Track user consent for data processing", icon: "✋" },
                     { key: "dsarWorkflow", label: "DSAR Workflow", desc: "Automated Data Subject Access Requests", icon: "📨" },
@@ -9208,15 +9301,27 @@ export default function ITSMApp() {
                           <div style={{ color: "#5A6178", fontSize: 9 }}>{ctrl.desc}</div>
                         </div>
                       </div>
-                      <div onClick={() => setPdpaConfig(prev => ({ ...prev, [ctrl.key]: !prev[ctrl.key] }))} style={{ width: 36, height: 18, borderRadius: 9, cursor: "pointer", background: pdpaConfig[ctrl.key] ? "#EC4899" : "#1E2130", padding: 2, flexShrink: 0 }}>
+                      <div onClick={() => isEditAdmin && setPdpaConfig(prev => ({ ...prev, [ctrl.key]: !prev[ctrl.key] }))} style={{ width: 36, height: 18, borderRadius: 9, cursor: isEditAdmin ? "pointer" : "default", background: pdpaConfig[ctrl.key] ? "#EC4899" : "#1E2130", padding: 2, flexShrink: 0, opacity: isEditAdmin ? 1 : 0.6 }}>
                         <div style={{ width: 14, height: 14, borderRadius: 7, background: "#fff", transform: pdpaConfig[ctrl.key] ? "translateX(18px)" : "translateX(0)", transition: "transform 0.2s" }} />
                       </div>
                     </div>
                   ))}
                   <div style={{ marginTop: 10, padding: "8px 10px", background: "#12141E", borderRadius: 6, border: "1px solid #1E213033" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <span style={{ color: "#5A6178", fontSize: 10 }}>DPO Name</span>
+                      {isEditAdmin ? (
+                        <input value={pdpaConfig.dpoName} onChange={e => setPdpaConfig(prev => ({ ...prev, dpoName: e.target.value }))} style={{ padding: "2px 6px", borderRadius: 3, border: "1px solid #1E2130", background: "#0A0C14", color: "#C4CAD6", fontSize: 10, outline: "none", width: 140, textAlign: "right" }} />
+                      ) : (
+                        <span style={{ color: "#C4CAD6", fontSize: 10 }}>{pdpaConfig.dpoName}</span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                       <span style={{ color: "#5A6178", fontSize: 10 }}>DPO Contact</span>
-                      <span style={{ color: "#C4CAD6", fontSize: 10 }}>{pdpaConfig.dpoEmail}</span>
+                      {isEditAdmin ? (
+                        <input value={pdpaConfig.dpoEmail} onChange={e => setPdpaConfig(prev => ({ ...prev, dpoEmail: e.target.value }))} style={{ padding: "2px 6px", borderRadius: 3, border: "1px solid #1E2130", background: "#0A0C14", color: "#C4CAD6", fontSize: 10, outline: "none", width: 180, textAlign: "right" }} />
+                      ) : (
+                        <span style={{ color: "#C4CAD6", fontSize: 10 }}>{pdpaConfig.dpoEmail}</span>
+                      )}
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
                       <span style={{ color: "#5A6178", fontSize: 10 }}>Right to Erasure</span>
@@ -9874,34 +9979,31 @@ export default function ITSMApp() {
         {activeTab === "notifications" && (
           <div>
             <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
-              <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Notification Channels</h3>
-              {[
-                { channel: "Email", desc: "Send notifications via email (SMTP / Exchange Online)", enabled: true, icon: "📧" },
-                { channel: "Microsoft Teams", desc: "Post adaptive cards to Teams channels via Webhooks", enabled: true, icon: "💬", isTeams: true },
-                { channel: "Slack", desc: "Post to configured Slack channels", enabled: true, icon: "🔗" },
-                { channel: "SMS", desc: "Send critical alerts via SMS (Twilio / Azure Comms)", enabled: false, icon: "📱" },
-                { channel: "In-App", desc: "Push notifications within VGC-ITSM", enabled: true, icon: "🔔" },
-                { channel: "PagerDuty", desc: "Trigger PagerDuty incidents for P1 alerts", enabled: false, icon: "🚨" },
-                { channel: "Webhook", desc: "Send JSON payloads to custom HTTP endpoints", enabled: false, icon: "🌐" },
-              ].map((ch, i) => (
-                <div key={i} style={{
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Notification Channels</h3>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {isEditAdmin ? <span style={{ fontSize: 9, color: "#81C784", background: "#0D2D1A", padding: "2px 6px", borderRadius: 3 }}>✏️ Editable</span> : <span style={{ fontSize: 9, color: "#5A6178", background: "#1E2130", padding: "2px 6px", borderRadius: 3 }}>🔒 View Only</span>}
+                </div>
+              </div>
+              {notifChannels.map((ch, i) => (
+                <div key={ch.id} style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "12px 16px", background: ch.isTeams ? "#6366F106" : "#0A0C14", borderRadius: 8,
-                  border: ch.isTeams ? "1px solid #6366F122" : "1px solid #1E213044", marginBottom: 8
+                  padding: "12px 16px", background: ch.id === "teams" ? "#6366F106" : "#0A0C14", borderRadius: 8,
+                  border: ch.id === "teams" ? "1px solid #6366F122" : "1px solid #1E213044", marginBottom: 8
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <span style={{ fontSize: 20 }}>{ch.icon}</span>
                     <div>
                       <div style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{ch.channel}
-                        {ch.isTeams && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>RECOMMENDED</span>}
+                        {ch.id === "teams" && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>RECOMMENDED</span>}
                       </div>
                       <div style={{ color: "#5A6178", fontSize: 11 }}>{ch.desc}</div>
                     </div>
                   </div>
-                  <div style={{
-                    width: 44, height: 24, borderRadius: 12, cursor: "pointer",
+                  <div onClick={() => { if (!isEditAdmin) return; setNotifChannels(prev => prev.map((c, j) => j === i ? { ...c, enabled: !c.enabled } : c)); }} style={{
+                    width: 44, height: 24, borderRadius: 12, cursor: isEditAdmin ? "pointer" : "default",
                     background: ch.enabled ? "#6366F1" : "#1E2130",
-                    padding: 2, flexShrink: 0
+                    padding: 2, flexShrink: 0, opacity: isEditAdmin ? 1 : 0.6
                   }}>
                     <div style={{
                       width: 20, height: 20, borderRadius: 10, background: "#fff",
