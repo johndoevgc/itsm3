@@ -812,10 +812,18 @@ const server = http.createServer(async (req, res) => {
         const { ticketId } = body;
         if (!ticketId) return json(res, 400, { error: "ticketId required" });
 
-        // Fetch ticket + comments from Zendesk
+        // Fetch ticket + comments + requester from Zendesk
         const ticket = await zdRequest("GET", `/tickets/${ticketId}.json`);
         const comments = await zdRequest("GET", `/tickets/${ticketId}/comments.json`).catch(() => ({ comments: [] }));
         const lastComment = (comments.comments || []).slice(-1)[0]?.body || "";
+        // Fetch requester info for ITSM incident mapping
+        let requester = null;
+        if (ticket.ticket?.requester_id) {
+          try {
+            const reqData = await zdRequest("GET", `/users/${ticket.ticket.requester_id}.json`);
+            requester = reqData?.user || null;
+          } catch {}
+        }
 
         const systemPrompt = `You are an expert IT support AI for VGC Technology Pte Ltd — a managed IT services company.
 Analyze the support ticket and return a JSON object with:
@@ -874,7 +882,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           parsed = { category: "General", priority: "normal", tags: [], draft_response: text, internal_note: "Unstructured AI response", confidence: 50, suggested_assignee: "L1 Support", auto_sendable: false, itsm_category: "General", sla_priority: "Sev-D" };
         }
 
-        return json(res, 200, { triage: parsed, ticket: ticket.ticket });
+        return json(res, 200, { triage: parsed, ticket: ticket.ticket, requester: requester ? { name: requester.name, email: requester.email, phone: requester.phone, organization_id: requester.organization_id } : null });
       }
 
       // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)

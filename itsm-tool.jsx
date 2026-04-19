@@ -11715,11 +11715,14 @@ export default function ITSMApp() {
         const data = await r.json();
         const triage = data.triage;
         const ticket = data.ticket;
+        const requester = data.requester;
 
         const queueItem = {
           id: `ZDAI-${Date.now()}-${ticketId}`,
           ticketId, ticketSubject: ticket?.subject || "No subject",
           ticketStatus: ticket?.status,
+          requesterName: requester?.name || ticket?.via?.source?.from?.name || "",
+          requesterEmail: requester?.email || "",
           category: triage.category, suggestedPriority: triage.priority,
           suggestedTags: triage.tags || [], draftResponse: triage.draft_response,
           internalNote: triage.internal_note, confidence: triage.confidence || 75,
@@ -11738,32 +11741,33 @@ export default function ITSMApp() {
         setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
         addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for engineer review (${triage.confidence}% confidence) — ${queueItem.autoSendable ? "AI recommends approval" : "requires careful review"}` });
 
-        // AUTO-CREATE ITSM INCIDENT for high/urgent tickets
-        if ((triage.priority === "urgent" || triage.priority === "high") && triage.sla_priority) {
-          const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
-          const newInc = {
-            id: genId("INC"), title: `[ZD#${ticketId}] ${ticket?.subject || "Zendesk Ticket"}`,
-            priority: triage.sla_priority, status: "Open",
-            category: triage.itsm_category || triage.category, subcategory: "",
-            urgency: triage.priority === "urgent" ? "Critical" : "High",
-            impact: triage.priority === "urgent" ? "Enterprise" : "Department",
-            assignee: triage.suggested_assignee || "Unassigned",
-            assignmentGroup: triage.suggested_assignee === "Network Engineering" ? "Network Engineering" : "Service Desk",
-            reporter: "Zendesk AI", reporterEmail: "", customer: "",
-            description: ticket?.description || "", contactMethod: "Zendesk",
-            created: 0, slaTarget: slaMap[triage.sla_priority] || 9,
-            aiTriaged: true, aiConfidence: triage.confidence || 75,
-            zdTicketId: ticketId, workaround: "", linkedProblem: "",
-            affectedAssets: [], activityLog: [
-              { id: genId("AL"), type: "status", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-created from Zendesk #${ticketId} — AI Triage (${triage.confidence}% confidence)` },
-              { id: genId("AL"), type: "note", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: triage.internal_note, isInternal: true, body: triage.internal_note },
-            ]
-          };
-          setIncidents(prev => [newInc, ...prev]);
-          setZdAutoStats(prev => ({ ...prev, incidentsCreated: prev.incidentsCreated + 1 }));
-          queueItem.itsmIncidentId = newInc.id;
-          addAutoLog({ type: "incident_created", ticketId, subject: ticket?.subject, incidentId: newInc.id, priority: triage.sla_priority, message: `ITSM ${newInc.id} auto-created from #${ticketId} — ${triage.sla_priority}` });
-        }
+        // AUTO-CREATE ITSM INCIDENT for ALL triaged tickets — ensures accurate Zendesk-ITSM tracking
+        const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+        const urgencyMap = { urgent: "Critical", high: "High", normal: "Medium", low: "Low" };
+        const impactMap = { urgent: "Enterprise", high: "Department", normal: "Multiple Users", low: "Single User" };
+        const newInc = {
+          id: genId("INC"), title: `[ZD#${ticketId}] ${ticket?.subject || "Zendesk Ticket"}`,
+          priority: triage.sla_priority || "Sev-D", status: "Open",
+          category: triage.itsm_category || triage.category, subcategory: "",
+          urgency: urgencyMap[triage.priority] || "Medium",
+          impact: impactMap[triage.priority] || "Single User",
+          assignee: triage.suggested_assignee || "Unassigned",
+          assignmentGroup: triage.suggested_assignee === "Network Engineering" ? "Network Engineering" : triage.suggested_assignee === "Security Team" ? "Security Operations" : "Service Desk",
+          reporter: requester?.name || "Zendesk", reporterEmail: requester?.email || "",
+          customer: requester?.name || "",
+          description: ticket?.description || "", contactMethod: "Zendesk",
+          created: 0, slaTarget: slaMap[triage.sla_priority] || 9,
+          aiTriaged: true, aiConfidence: triage.confidence || 75,
+          zdTicketId: ticketId, workaround: "", linkedProblem: "",
+          affectedAssets: [], activityLog: [
+            { id: genId("AL"), type: "status", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-created from Zendesk #${ticketId} — AI Triage (${triage.confidence}% confidence, ${triage.priority} priority)` },
+            { id: genId("AL"), type: "note", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: triage.internal_note, isInternal: true, body: triage.internal_note },
+          ]
+        };
+        setIncidents(prev => [newInc, ...prev]);
+        setZdAutoStats(prev => ({ ...prev, incidentsCreated: prev.incidentsCreated + 1 }));
+        queueItem.itsmIncidentId = newInc.id;
+        addAutoLog({ type: "incident_created", ticketId, subject: ticket?.subject, incidentId: newInc.id, priority: triage.sla_priority || "Sev-D", customer: requester?.name || "", message: `ITSM ${newInc.id} auto-created from #${ticketId} — ${triage.sla_priority || "Sev-D"} (${requester?.name || "unknown requester"})` });
 
         setZdAiQueue(prev => [queueItem, ...prev.filter(q => q.ticketId !== ticketId)]);
         setAzureOpenAI(prev => ({ ...prev, totalCalls: (prev.totalCalls || 0) + 1 }));
@@ -12052,6 +12056,27 @@ export default function ITSMApp() {
           ))}
         </div>
 
+        {/* ── AI 90% / Human 10% Work Split Indicator ── */}
+        {zdAutoStats.totalTriaged > 0 && (
+          <div style={{ ...cardStyle, padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4", whiteSpace: "nowrap" }}>🤖 AI / 👤 Human Split</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden", background: "#1E2130" }}>
+                <div style={{ width: "90%", background: "linear-gradient(90deg, #6366F1, #818CF8)", borderRadius: "6px 0 0 6px", transition: "width 0.5s" }} />
+                <div style={{ width: "10%", background: "linear-gradient(90deg, #FFB347, #FFCC80)", borderRadius: "0 6px 6px 0", transition: "width 0.5s" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                <span style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace" }}>AI: Triage · Categorize · Draft · Route · SLA ({zdAutoStats.totalTriaged} processed)</span>
+                <span style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Human: Review · Approve ({zdAutoStats.autoSent} sent)</span>
+              </div>
+            </div>
+            <div style={{ textAlign: "center", minWidth: 60 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#81C784" }}>{zdAutoStats.totalTriaged > 0 ? Math.round((zdAutoStats.autoSent / zdAutoStats.totalTriaged) * 100) : 0}%</div>
+              <div style={{ fontSize: 8, color: "#5A6178" }}>Approval Rate</div>
+            </div>
+          </div>
+        )}
+
         {/* ── Tab Navigation ── */}
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", borderRadius: 10, padding: 4 }}>
           {[
@@ -12161,13 +12186,31 @@ export default function ITSMApp() {
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                   {sectionLabel("👤", "Requires Your Approval", pendingQueue.length)}
-                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>⚠️ Human approval required — review, edit & approve before sending to customer</span>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {pendingQueue.filter(q => q.autoSendable && q.confidence >= 85).length > 0 && (
+                      <button onClick={async () => {
+                        const highConf = pendingQueue.filter(q => q.autoSendable && q.confidence >= 85);
+                        if (!confirm(`Approve & send ${highConf.length} high-confidence (≥85%) AI responses?\n\nThis will send responses for:\n${highConf.map(q => `  #${q.ticketId} — ${q.ticketSubject} (${q.confidence}%)`).join("\n")}`)) return;
+                        addAutoLog({ type: "info", message: `Batch approving ${highConf.length} high-confidence items...` });
+                        let sent = 0;
+                        for (const q of highConf) {
+                          try { await zdApproveAndSend(q); sent++; } catch {}
+                        }
+                        addAutoLog({ type: "human_approved", message: `Batch approved: ${sent}/${highConf.length} responses sent successfully` });
+                      }} disabled={zdLoading}
+                        style={{ padding: "7px 16px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #81C784)", color: "#fff", cursor: zdLoading ? "wait" : "pointer", fontSize: 10, fontWeight: 700, boxShadow: "0 2px 8px #4CAF5033", whiteSpace: "nowrap" }}>
+                        ⚡ Batch Approve ({pendingQueue.filter(q => q.autoSendable && q.confidence >= 85).length} high-confidence)
+                      </button>
+                    )}
+                    <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>⚠️ Human approval required</span>
+                  </div>
                 </div>
                 {pendingQueue.map((q, i) => (
                   <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.05}s both`, border: `1px solid ${q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                       <div>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 6 }}>Ticket #{q.ticketId} — {q.ticketSubject}</div>
+                        {q.requesterName && <div style={{ fontSize: 10, color: "#A0AEC0", marginBottom: 6 }}>👤 {q.requesterName}{q.requesterEmail ? ` · ${q.requesterEmail}` : ""}</div>}
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: priorityColor(q.suggestedPriority) + "22", color: priorityColor(q.suggestedPriority), fontWeight: 600 }}>Priority: {q.suggestedPriority}</span>
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{q.category}</span>
