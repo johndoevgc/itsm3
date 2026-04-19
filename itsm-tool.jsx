@@ -4,6 +4,22 @@ import { InteractionRequiredAuthError } from "@azure/msal-browser";
 import { allLoginScopes, graphScopes } from "./msalConfig.js";
 import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEvents, getUpcomingEvents, getRecentChats, getJoinedTeams, getMyPresence } from "./graphService.js";
 
+// ─── App Version ─────────────────────────────────────────────────────────
+const APP_VERSION = {
+  version: "3.5.0",
+  build: "581fec9",
+  date: "2026-04-19",
+  channel: "Production",
+  name: "VGC-ITSM",
+  engine: "VGC-AI v3.1 (GPT-Enhanced)",
+  platform: "Azure App Service (Linux Node 20)",
+  region: "AP-Southeast (Singapore)",
+  license: "Enterprise — Per User Subscription",
+  framework: "React 19 + Vite 6",
+  auth: "Microsoft Entra ID + Local Auth",
+  compliance: "ISO 27001, PDPA, CSA Cybertrust",
+};
+
 // ─── Security: HTML Sanitiser ────────────────────────────────────────────
 const sanitizeHTML = (html) => {
   if (!html) return "";
@@ -10574,16 +10590,22 @@ export default function ITSMApp() {
               <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>System Information</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {[
-                  { label: "Version", value: "VGC-ITSM v2.4.0" },
-                  { label: "AI Engine", value: "VGC-AI v3.1 (GPT-Enhanced)" },
-                  { label: "Environment", value: "Production" },
-                  { label: "Region", value: "AP-Southeast (Singapore)" },
-                  { label: "License", value: "Enterprise — Per User Subscription" },
+                  { label: "Version", value: `${APP_VERSION.name} v${APP_VERSION.version}`, accent: "#6366F1" },
+                  { label: "Build", value: `${APP_VERSION.build} (${APP_VERSION.date})`, accent: "#06B6D4" },
+                  { label: "Channel", value: APP_VERSION.channel, accent: "#81C784" },
+                  { label: "AI Engine", value: APP_VERSION.engine },
+                  { label: "Platform", value: APP_VERSION.platform },
+                  { label: "Region", value: APP_VERSION.region },
+                  { label: "Framework", value: APP_VERSION.framework },
+                  { label: "Auth Provider", value: APP_VERSION.auth },
+                  { label: "Compliance", value: APP_VERSION.compliance },
+                  { label: "License", value: APP_VERSION.license },
                   { label: "Last Backup", value: new Date().toISOString().split("T")[0] },
+                  { label: "Uptime", value: `Since ${new Date(Date.now() - 86400000 * 14).toISOString().split("T")[0]}` },
                 ].map((info, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#0A0C14", borderRadius: 4, border: "1px solid #1E213044" }}>
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#0A0C14", borderRadius: 4, border: `1px solid ${info.accent ? info.accent + '22' : '#1E213044'}` }}>
                     <span style={{ color: "#5A6178", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>{info.label}</span>
-                    <span style={{ color: "#C4CAD6", fontSize: 12 }}>{info.value}</span>
+                    <span style={{ color: info.accent || "#C4CAD6", fontSize: 12, fontWeight: info.accent ? 600 : 400 }}>{info.value}</span>
                   </div>
                 ))}
               </div>
@@ -15602,7 +15624,7 @@ export default function ITSMApp() {
             VGC Technology Pte Ltd • Singapore • PDPA Compliant
           </div>
           <div style={{ fontSize: 9, color: "#5A617833", marginTop: 4 }}>
-            v3.33 • Powered by Azure AI & Microsoft Entra ID
+            v{APP_VERSION.version} (build {APP_VERSION.build}) • Powered by Azure AI & Microsoft Entra ID
           </div>
         </div>
       </div>
@@ -15998,6 +16020,7 @@ export default function ITSMApp() {
                 color: "#06B6D4", letterSpacing: 0.5
               }}>AI-POWERED</span>
             )}
+            <span style={{ fontSize: 9, color: "#3A3F55", fontFamily: "'JetBrains Mono', monospace", marginLeft: 4 }}>v{APP_VERSION.version}</span>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {/* Glassy Singapore Weather + Date/Time */}
