@@ -1229,7 +1229,7 @@ const SearchBar = ({ value, onChange, placeholder }) => (
 // ─── Main App ────────────────────────────────────────────────────────────
 export default function ITSMApp() {
   const [activeModule, setActiveModule] = useState("dashboard");
-  const DATA_VERSION = "v2.1";
+  const DATA_VERSION = "v2.2";
   const _ls = (key, fallback) => {
     try {
       const curVer = localStorage.getItem("vgc_data_version");
@@ -1437,25 +1437,55 @@ export default function ITSMApp() {
   // ─── Zendesk Integration State ──────────────────────────────────────────
   const [zdConnected, setZdConnected] = useState(false);
   const [zdUser, setZdUser] = useState(null);
-  const [zdTickets, setZdTickets] = useState([]);
-  const [zdStats, setZdStats] = useState({ open: 0, pending: 0, hold: 0, solved: 0 });
+  const [zdTickets, setZdTickets] = useState(() => _ls("vgc_zd_tickets", [
+    { id: 48201, subject: "Cannot access VPN from home network", status: "open", priority: "high", type: "incident", created_at: "2026-04-15T09:28:00Z", updated_at: "2026-04-15T09:31:00Z", tags: ["vpn","remote-access","network"], requester_id: 401, assignee_id: 301 },
+    { id: 48202, subject: "Outlook keeps crashing on startup", status: "open", priority: "normal", type: "incident", created_at: "2026-04-15T10:12:00Z", updated_at: "2026-04-15T10:16:00Z", tags: ["outlook","crash","email"], requester_id: 402, assignee_id: 302 },
+    { id: 48203, subject: "Suspicious phishing email received", status: "open", priority: "urgent", type: "incident", created_at: "2026-04-15T10:58:00Z", updated_at: "2026-04-15T11:01:00Z", tags: ["phishing","security"], requester_id: 403, assignee_id: 301 },
+    { id: 48204, subject: "Request for additional monitor", status: "open", priority: "low", type: "request", created_at: "2026-04-15T08:45:00Z", updated_at: "2026-04-15T08:50:00Z", tags: ["hardware","monitor","request"], requester_id: 404, assignee_id: 302 },
+    { id: 48205, subject: "SharePoint site not loading", status: "open", priority: "normal", type: "incident", created_at: "2026-04-14T16:30:00Z", updated_at: "2026-04-15T09:00:00Z", tags: ["sharepoint","cloud","access"], requester_id: 405, assignee_id: 303 },
+    { id: 48206, subject: "Slow internet in meeting room 3A", status: "pending", priority: "normal", type: "incident", created_at: "2026-04-14T14:20:00Z", updated_at: "2026-04-14T15:00:00Z", tags: ["network","wifi","meeting-room"], requester_id: 406, assignee_id: 301 },
+    { id: 48207, subject: "Adobe Creative Cloud license expired", status: "pending", priority: "normal", type: "request", created_at: "2026-04-14T11:10:00Z", updated_at: "2026-04-14T12:00:00Z", tags: ["software","license","adobe"], requester_id: 407, assignee_id: 304 },
+    { id: 48208, subject: "MFA prompt appearing every login", status: "open", priority: "high", type: "incident", created_at: "2026-04-14T09:05:00Z", updated_at: "2026-04-14T10:00:00Z", tags: ["mfa","authentication","entra-id"], requester_id: 408, assignee_id: 303 },
+    { id: 48195, subject: "New laptop setup request", status: "solved", priority: "low", type: "request", created_at: "2026-04-14T14:28:00Z", updated_at: "2026-04-14T15:00:00Z", tags: ["hardware","laptop","onboarding"], requester_id: 409, assignee_id: 302 },
+    { id: 48198, subject: "Printer not printing — HP LaserJet 5th floor", status: "solved", priority: "low", type: "incident", created_at: "2026-04-13T10:25:00Z", updated_at: "2026-04-13T11:00:00Z", tags: ["printer","hardware"], requester_id: 410, assignee_id: 302 },
+    { id: 48190, subject: "Teams call quality poor during peak hours", status: "hold", priority: "normal", type: "problem", created_at: "2026-04-12T15:30:00Z", updated_at: "2026-04-13T09:00:00Z", tags: ["teams","network","qos"], requester_id: 411, assignee_id: 301 },
+    { id: 48188, subject: "Need access to Finance SharePoint", status: "pending", priority: "normal", type: "request", created_at: "2026-04-12T10:15:00Z", updated_at: "2026-04-12T11:00:00Z", tags: ["access","sharepoint","permissions"], requester_id: 412, assignee_id: 303 },
+  ]));
+  const [zdStats, setZdStats] = useState(() => _ls("vgc_zd_stats", { open: 12, pending: 5, hold: 3, solved: 47 }));
   const [zdLoading, setZdLoading] = useState(false);
   const [zdError, setZdError] = useState(null);
   const [zdSelectedTicket, setZdSelectedTicket] = useState(null);
   const [zdComments, setZdComments] = useState([]);
   const [zdFilter, setZdFilter] = useState("open");
   const [zdPage, setZdPage] = useState(1);
-  const [zdAiQueue, setZdAiQueue] = useState(() => _ls("vgc_zd_ai_queue", []));
+  const [zdAiQueue, setZdAiQueue] = useState(() => _ls("vgc_zd_ai_queue", [
+    { id: "ZDAI-1001", ticketId: 48201, ticketSubject: "Cannot access VPN from home network", ticketStatus: "open", requesterName: "Sarah Tan", requesterEmail: "sarah.tan@vgctech.com", category: "Network", suggestedPriority: "High", suggestedTags: ["vpn","remote-access","network"], draftResponse: "Hi Sarah,\n\nThank you for reporting this. I understand VPN connectivity from your home network is not working. Here are a few steps:\n\n1. Please restart your VPN client (GlobalProtect/FortiClient)\n2. Check if your home router is blocking UDP ports 500/4500\n3. Try connecting via a mobile hotspot to isolate the issue\n\nIf the issue persists, we'll schedule a remote session to diagnose further.\n\nBest regards,\nIT Support", internalNote: "Likely home router firewall blocking VPN ports. May need to whitelist or use SSL VPN fallback.", confidence: 88, suggestedAssignee: "Network Engineering", autoSendable: true, itsmCategory: "Network", slaPriority: "Sev-B", status: "pending", createdAt: "2026-04-15T09:30:00Z", itsmIncidentId: "INC0021" },
+    { id: "ZDAI-1002", ticketId: 48202, ticketSubject: "Outlook keeps crashing on startup", ticketStatus: "open", requesterName: "James Lim", requesterEmail: "james.lim@vgctech.com", category: "Software", suggestedPriority: "Medium", suggestedTags: ["outlook","crash","email"], draftResponse: "Hi James,\n\nSorry to hear about the Outlook crashes. Let's try these steps:\n\n1. Open Outlook in Safe Mode: Press Win+R, type 'outlook.exe /safe'\n2. If it works in Safe Mode, disable add-ins one by one\n3. Run the Office repair tool from Control Panel\n\nPlease let me know if any of these resolve the issue.\n\nBest regards,\nIT Support", internalNote: "Common issue — usually caused by a faulty add-in or corrupted profile. Safe mode test will confirm.", confidence: 92, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Software", slaPriority: "Sev-C", status: "pending", createdAt: "2026-04-15T10:15:00Z", itsmIncidentId: "INC0022" },
+    { id: "ZDAI-1003", ticketId: 48203, ticketSubject: "Suspicious phishing email received", ticketStatus: "open", requesterName: "Wei Ming Ng", requesterEmail: "weiming.ng@vgctech.com", category: "Security", suggestedPriority: "Critical", suggestedTags: ["phishing","security","email-threat"], draftResponse: "Hi Wei Ming,\n\nThank you for reporting this immediately — you did the right thing. Our security team will investigate this phishing attempt.\n\n⚠️ Please do NOT:\n- Click any links in the email\n- Download any attachments\n- Reply to the sender\n\nWe will block the sender domain and scan all mailboxes for similar messages. You'll receive an update within 30 minutes.\n\nBest regards,\nIT Security Team", internalNote: "URGENT: Potential phishing campaign. Need to check if other users received similar emails. Block sender domain immediately.", confidence: 95, suggestedAssignee: "Network Engineering", autoSendable: false, itsmCategory: "Security", slaPriority: "Sev-A", status: "pending", createdAt: "2026-04-15T11:00:00Z", itsmIncidentId: "INC0023" },
+    { id: "ZDAI-1004", ticketId: 48195, ticketSubject: "New laptop setup request", ticketStatus: "solved", requesterName: "Amy Chen", requesterEmail: "amy.chen@vgctech.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["hardware","laptop","onboarding"], draftResponse: "Hi Amy,\n\nYour new laptop has been configured and is ready for collection at the IT office (Level 3). Please bring your employee ID.\n\nSetup includes: Windows 11, Office 365, VPN, Sophos AV, and all standard applications.\n\nBest regards,\nIT Support", internalNote: "Standard onboarding. Laptop pre-configured with standard image.", confidence: 97, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-14T15:00:00Z", createdAt: "2026-04-14T14:30:00Z", itsmIncidentId: "INC0020" },
+    { id: "ZDAI-1005", ticketId: 48198, ticketSubject: "Printer not printing — HP LaserJet 5th floor", ticketStatus: "solved", requesterName: "David Koh", requesterEmail: "david.koh@vgctech.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["printer","hardware","5th-floor"], draftResponse: "Hi David,\n\nThe HP LaserJet on the 5th floor has been fixed. The issue was a paper jam in tray 2. I've cleared the jam and run a test print.\n\nPlease try printing again and let me know if it works.\n\nBest regards,\nIT Support", internalNote: "Simple paper jam. Cleared and tested.", confidence: 96, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-13T11:00:00Z", createdAt: "2026-04-13T10:30:00Z" },
+  ]));
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
   const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", false));
-  const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", []));
+  const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", [
+    { id: "LOG-demo-001", type: "auto_send", message: "AI triaged ticket #48201 — VPN access issue → Network Engineering (88% confidence)", timestamp: "2026-04-15T09:31:00Z" },
+    { id: "LOG-demo-002", type: "incident_created", message: "ITSM Incident INC0021 created from Zendesk #48201 (Critical — VPN access)", timestamp: "2026-04-15T09:31:05Z" },
+    { id: "LOG-demo-003", type: "human_review", message: "Ticket #48202 queued for engineer review — Outlook crash (92% confidence)", timestamp: "2026-04-15T10:16:00Z" },
+    { id: "LOG-demo-004", type: "auto_send", message: "AI triaged ticket #48203 — Phishing alert → Security Team (95% confidence, flagged CRITICAL)", timestamp: "2026-04-15T11:01:00Z" },
+    { id: "LOG-demo-005", type: "human_approved", message: "Engineer Marcus Chen approved AI response for #48195 — Laptop setup (97% confidence)", timestamp: "2026-04-14T15:00:00Z" },
+    { id: "LOG-demo-006", type: "human_approved", message: "Engineer Marcus Chen approved AI response for #48198 — Printer fix (96% confidence)", timestamp: "2026-04-13T11:00:00Z" },
+    { id: "LOG-demo-007", type: "config", message: "AI Auto-Triage ENABLED — tickets triaged automatically, all responses require engineer approval", timestamp: "2026-04-13T08:00:00Z" },
+    { id: "LOG-demo-008", type: "info", message: "Connected to Zendesk: vgctech.zendesk.com — 67 tickets synced, 15 agents loaded", timestamp: "2026-04-13T07:55:00Z" },
+  ]));
   const [zdTriagedIds, setZdTriagedIds] = useState(() => { try { const v = JSON.parse(localStorage.getItem("vgc_zd_triaged_ids")); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); } });
-  const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 }));
+  const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 23, autoSent: 18, humanReview: 5, incidentsCreated: 14, avgConfidence: 89 }));
   const [zdAgents, setZdAgents] = useState([]);
   const [zdGroups, setZdGroups] = useState([]);
-  const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings
+  const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings | analytics
+  const [zdExpandedRule, setZdExpandedRule] = useState(null);
+  const [zdDetailItem, setZdDetailItem] = useState(null); // queue item detail modal
   const [zdAnalytics, setZdAnalytics] = useState(null);
   const [zdCsat, setZdCsat] = useState(null);
   // ─── Zendesk Full Sync State ────────────────────────────────────────
@@ -1512,6 +1542,19 @@ export default function ITSMApp() {
   const [customPermissions, setCustomPermissions] = useState(() => _ls("vgc_custom_permissions", RBAC_PERMISSIONS));
   const [permMatrixEditing, setPermMatrixEditing] = useState(false);
   const [permMatrixDraft, setPermMatrixDraft] = useState(null);
+  // ─── Entra ID Import State ──────────────────────────────────────────────
+  const [showEntraImport, setShowEntraImport] = useState(false);
+  const [entraImportMode, setEntraImportMode] = useState("individual"); // "individual" | "group"
+  const [entraSearchQuery, setEntraSearchQuery] = useState("");
+  const [entraSearchResults, setEntraSearchResults] = useState([]);
+  const [entraSearching, setEntraSearching] = useState(false);
+  const [entraGroups, setEntraGroups] = useState([]);
+  const [entraGroupMembers, setEntraGroupMembers] = useState([]);
+  const [entraSelectedGroup, setEntraSelectedGroup] = useState(null);
+  const [entraSelectedUsers, setEntraSelectedUsers] = useState([]); // [{id, displayName, mail, jobTitle, department, userPrincipalName}]
+  const [entraRoleMappings, setEntraRoleMappings] = useState({}); // {userId: rbacRole}
+  const [entraAiSuggestions, setEntraAiSuggestions] = useState({}); // {userId: {role, reason, confidence}}
+  const [entraImporting, setEntraImporting] = useState(false);
   // ─── AI Customer Survey State ───────────────────────────────────────────
   const [surveyDraft, setSurveyDraft] = useState(null); // { incidentId, subject, body, recipient, status: "draft"|"sent" }
   const [surveyDrafts, setSurveyDrafts] = useState([]);
@@ -7875,6 +7918,7 @@ export default function ITSMApp() {
                           </button>
                         ))}
                       </div>
+                      {canEditRBAC && <button onClick={() => setShowEntraImport(true)} style={{ ...btnStyle("#06B6D4"), display: "flex", alignItems: "center", gap: 4 }}>🔐 Import from Entra ID</button>}
                       {canEditRBAC && <button onClick={() => setShowInviteUser(true)} style={btnStyle("#6366F1")}>+ Invite User</button>}
                     </div>
                   </div>
@@ -7922,6 +7966,306 @@ export default function ITSMApp() {
                       </div>
                     </div>
                   )}
+
+                  {/* ═══ Entra ID Import Panel ═══ */}
+                  {showEntraImport && canEditRBAC && (() => {
+                    const graphToken = accounts?.[0] ? msalInstance.acquireTokenSilent({ scopes: ["User.Read.All", "Group.Read.All", "Directory.Read.All"], account: accounts[0] }).then(r => r.accessToken).catch(() => null) : null;
+
+                    const entraSearchUsers = async () => {
+                      if (!entraSearchQuery.trim()) return;
+                      setEntraSearching(true);
+                      try {
+                        const token = await graphToken;
+                        if (!token) { setEntraSearchResults([{ id: "demo-1", displayName: "Alice Wong", mail: "alice.wong@vgctech.com", jobTitle: "IT Support Specialist", department: "IT Operations", userPrincipalName: "alice.wong@vgctech.com" }, { id: "demo-2", displayName: "Benjamin Teo", mail: "ben.teo@vgctech.com", jobTitle: "Network Administrator", department: "Network Engineering", userPrincipalName: "ben.teo@vgctech.com" }, { id: "demo-3", displayName: "Catherine Lim", mail: "catherine.lim@vgctech.com", jobTitle: "Service Desk Lead", department: "IT Service Management", userPrincipalName: "catherine.lim@vgctech.com" }, { id: "demo-4", displayName: "Daniel Ng", mail: "daniel.ng@vgctech.com", jobTitle: "Change Manager", department: "IT Governance", userPrincipalName: "daniel.ng@vgctech.com" }, { id: "demo-5", displayName: "Emily Tan", mail: "emily.tan@vgctech.com", jobTitle: "Security Analyst", department: "Information Security", userPrincipalName: "emily.tan@vgctech.com" }].filter(u => u.displayName.toLowerCase().includes(entraSearchQuery.toLowerCase()) || u.mail?.toLowerCase().includes(entraSearchQuery.toLowerCase()) || u.department?.toLowerCase().includes(entraSearchQuery.toLowerCase()))); setEntraSearching(false); return; }
+                        const r = await fetch(`https://graph.microsoft.com/v1.0/users?$search="displayName:${encodeURIComponent(entraSearchQuery)}" OR "mail:${encodeURIComponent(entraSearchQuery)}"&$select=id,displayName,mail,jobTitle,department,userPrincipalName&$top=20&$count=true`, { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } });
+                        if (r.ok) { const data = await r.json(); setEntraSearchResults(data.value || []); }
+                        else setEntraSearchResults([]);
+                      } catch (e) { console.error("Entra search error:", e); setEntraSearchResults([]); }
+                      finally { setEntraSearching(false); }
+                    };
+
+                    const entraFetchGroups = async () => {
+                      setEntraSearching(true);
+                      try {
+                        const token = await graphToken;
+                        if (!token) { setEntraGroups([{ id: "grp-1", displayName: "SG-ITSM-Admins", description: "ITSM Administrators", memberCount: 3 }, { id: "grp-2", displayName: "SG-ITSM-ServiceDesk", description: "Service Desk agents", memberCount: 8 }, { id: "grp-3", displayName: "SG-ITSM-Engineers", description: "Infrastructure engineers", memberCount: 5 }, { id: "grp-4", displayName: "SG-ITSM-ChangeBoard", description: "Change Advisory Board members", memberCount: 4 }, { id: "grp-5", displayName: "SG-ITSM-AllUsers", description: "All ITSM end users", memberCount: 42 }, { id: "grp-6", displayName: "SG-IT-Security", description: "Information security team", memberCount: 3 }]); setEntraSearching(false); return; }
+                        const r = await fetch(`https://graph.microsoft.com/v1.0/groups?$filter=securityEnabled eq true&$select=id,displayName,description&$top=50`, { headers: { Authorization: `Bearer ${token}` } });
+                        if (r.ok) { const data = await r.json(); setEntraGroups(data.value || []); }
+                      } catch (e) { console.error("Entra groups error:", e); }
+                      finally { setEntraSearching(false); }
+                    };
+
+                    const entraFetchGroupMembers = async (groupId, groupName) => {
+                      setEntraSearching(true); setEntraSelectedGroup({ id: groupId, name: groupName });
+                      try {
+                        const token = await graphToken;
+                        if (!token) { const demoMembers = [{ id: `gm-${groupId}-1`, displayName: "Alice Wong", mail: "alice.wong@vgctech.com", jobTitle: "IT Support Specialist", department: "IT Operations", userPrincipalName: "alice.wong@vgctech.com" }, { id: `gm-${groupId}-2`, displayName: "Benjamin Teo", mail: "ben.teo@vgctech.com", jobTitle: "Network Admin", department: "Network Engineering", userPrincipalName: "ben.teo@vgctech.com" }, { id: `gm-${groupId}-3`, displayName: "Catherine Lim", mail: "catherine.lim@vgctech.com", jobTitle: "Service Desk Lead", department: "IT Service Management", userPrincipalName: "catherine.lim@vgctech.com" }]; setEntraGroupMembers(demoMembers); setEntraSearching(false); return; }
+                        const r = await fetch(`https://graph.microsoft.com/v1.0/groups/${encodeURIComponent(groupId)}/members?$select=id,displayName,mail,jobTitle,department,userPrincipalName&$top=100`, { headers: { Authorization: `Bearer ${token}` } });
+                        if (r.ok) { const data = await r.json(); setEntraGroupMembers((data.value || []).filter(m => m["@odata.type"] === "#microsoft.graph.user" || m.mail)); }
+                      } catch (e) { console.error("Group members error:", e); }
+                      finally { setEntraSearching(false); }
+                    };
+
+                    const aiSuggestRole = (user) => {
+                      const title = (user.jobTitle || "").toLowerCase();
+                      const dept = (user.department || "").toLowerCase();
+                      const name = (user.displayName || "").toLowerCase();
+                      let role = "End User", reason = "Default — no matching criteria", confidence = 60;
+                      if (title.includes("admin") || title.includes("administrator")) { role = "Administrator"; reason = `Job title "${user.jobTitle}" suggests admin role`; confidence = 90; }
+                      else if (title.includes("service desk lead") || title.includes("team lead") || title.includes("supervisor")) { role = "Service Desk Lead"; reason = `Job title "${user.jobTitle}" suggests team leadership`; confidence = 88; }
+                      else if (title.includes("network") || title.includes("infrastructure") || dept.includes("network")) { role = "Network Engineer"; reason = `${title.includes("network") ? "Job title" : "Department"} indicates network engineering`; confidence = 85; }
+                      else if (title.includes("security") || dept.includes("security")) { role = "Network Engineer"; reason = `Security role maps to Network Engineering team`; confidence = 82; }
+                      else if (title.includes("change") || title.includes("release")) { role = "Change Manager"; reason = `Job title "${user.jobTitle}" aligns with change management`; confidence = 87; }
+                      else if (title.includes("problem")) { role = "Problem Manager"; reason = `Job title "${user.jobTitle}" matches problem management`; confidence = 87; }
+                      else if (title.includes("asset") || dept.includes("asset")) { role = "Asset Manager"; reason = `Role involves asset lifecycle management`; confidence = 85; }
+                      else if (title.includes("l2") || title.includes("senior") || title.includes("specialist")) { role = "L2 Support Engineer"; reason = `Senior/specialist role maps to L2 support tier`; confidence = 80; }
+                      else if (title.includes("support") || title.includes("helpdesk") || title.includes("service desk") || dept.includes("service desk") || dept.includes("it support")) { role = "L1 Support Engineer"; reason = `Support role maps to L1 tier`; confidence = 83; }
+                      else if (dept.includes("it") || dept.includes("technology")) { role = "L1 Support Engineer"; reason = `IT department member — assigned L1 Support`; confidence = 70; }
+                      // Check group mappings
+                      const groupMapping = entraIdConfig.groupMappings.find(gm => entraSelectedGroup?.name === gm.entraGroup);
+                      if (groupMapping) { role = groupMapping.rbacRole; reason = `Entra ID group "${entraSelectedGroup.name}" maps to ${role}`; confidence = 95; }
+                      return { role, reason, confidence };
+                    };
+
+                    const aiSuggestAll = () => {
+                      const users = entraImportMode === "individual" ? entraSelectedUsers : entraGroupMembers.filter(u => entraSelectedUsers.some(su => su.id === u.id));
+                      const suggestions = {};
+                      const mappings = {};
+                      users.forEach(u => {
+                        const suggestion = aiSuggestRole(u);
+                        suggestions[u.id] = suggestion;
+                        mappings[u.id] = suggestion.role;
+                      });
+                      setEntraAiSuggestions(suggestions);
+                      setEntraRoleMappings(prev => ({ ...prev, ...mappings }));
+                    };
+
+                    const handleEntraImport = () => {
+                      const usersToImport = entraImportMode === "individual" ? entraSelectedUsers : entraGroupMembers.filter(u => entraSelectedUsers.some(su => su.id === u.id));
+                      if (usersToImport.length === 0) return;
+                      setEntraImporting(true);
+                      const newUsers = usersToImport.filter(u => !managedUsers.some(mu => mu.email?.toLowerCase() === u.mail?.toLowerCase())).map(u => {
+                        const roleId = entraRoleMappings[u.id] || "End User";
+                        const avatar = (u.displayName || "").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase();
+                        return { id: `U${String(managedUsers.length + usersToImport.indexOf(u)).padStart(3, "0")}`, name: u.displayName, role: u.jobTitle || "User", avatar, team: u.department || "General", gender: "other", rbacRole: roleId, email: u.mail || u.userPrincipalName, phone: "", location: "SG-HQ", department: u.department || "General", pcName: `VGC-PC-${Date.now().toString().slice(-4)}`, employeeId: `EMP${Date.now().toString().slice(-5)}`, entraId: u.id, ssoProvider: "Entra ID" };
+                      });
+                      if (newUsers.length > 0) {
+                        setManagedUsers(prev => [...prev, ...newUsers]);
+                        newUsers.forEach(nu => {
+                          setRbacAuditLog(prev => [{ id: `RA${String(prev.length + 1).padStart(3, "0")}`, action: "Entra ID Import", user: nu.name, from: "Entra ID", to: nu.rbacRole, by: currentUser.name, timestamp: new Date().toLocaleString("sv-SE", { timeZone: "Asia/Singapore" }).replace("T", " ").substring(0, 16) }, ...prev]);
+                        });
+                      }
+                      const skipped = usersToImport.length - newUsers.length;
+                      alert(`✅ Imported ${newUsers.length} user(s) from Entra ID${skipped > 0 ? ` (${skipped} already exist)` : ""}`);
+                      setEntraImporting(false); setShowEntraImport(false); setEntraSelectedUsers([]); setEntraSearchResults([]); setEntraGroupMembers([]); setEntraSelectedGroup(null); setEntraAiSuggestions({}); setEntraRoleMappings({});
+                    };
+
+                    const toggleSelectUser = (user) => {
+                      setEntraSelectedUsers(prev => prev.some(u => u.id === user.id) ? prev.filter(u => u.id !== user.id) : [...prev, user]);
+                    };
+
+                    const selectAllVisible = () => {
+                      const list = entraImportMode === "individual" ? entraSearchResults : entraGroupMembers;
+                      const allSelected = list.every(u => entraSelectedUsers.some(su => su.id === u.id));
+                      setEntraSelectedUsers(allSelected ? [] : [...list]);
+                    };
+
+                    return (
+                      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #06B6D433", padding: 24, marginBottom: 20, position: "relative" }}>
+                        <button onClick={() => { setShowEntraImport(false); setEntraSelectedUsers([]); setEntraSearchResults([]); setEntraGroupMembers([]); setEntraSelectedGroup(null); setEntraAiSuggestions({}); setEntraRoleMappings({}); }} style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+                          <span style={{ fontSize: 28 }}>🔐</span>
+                          <div>
+                            <h4 style={{ margin: 0, fontSize: 16, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Import Users from Microsoft Entra ID</h4>
+                            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>Search individual users or browse security groups · AI will suggest ITSM role mapping</div>
+                          </div>
+                        </div>
+
+                        {/* Mode Tabs */}
+                        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", borderRadius: 8, padding: 3 }}>
+                          {[
+                            { id: "individual", label: "👤 Individual Users", desc: "Search & import specific users" },
+                            { id: "group", label: "👥 Security Groups", desc: "Import all members of an Entra ID group" },
+                          ].map(m => (
+                            <button key={m.id} onClick={() => { setEntraImportMode(m.id); setEntraSelectedUsers([]); setEntraSearchResults([]); setEntraGroupMembers([]); setEntraSelectedGroup(null); setEntraAiSuggestions({}); if (m.id === "group") entraFetchGroups(); }}
+                              style={{ flex: 1, padding: "10px 12px", borderRadius: 6, border: entraImportMode === m.id ? "1px solid #06B6D433" : "1px solid transparent", background: entraImportMode === m.id ? "#06B6D411" : "transparent", color: entraImportMode === m.id ? "#06B6D4" : "#5A6178", cursor: "pointer", fontSize: 11, fontWeight: 600, textAlign: "left" }}>
+                              <div>{m.label}</div>
+                              <div style={{ fontSize: 9, fontWeight: 400, marginTop: 2, opacity: 0.7 }}>{m.desc}</div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Individual User Search */}
+                        {entraImportMode === "individual" && (
+                          <div>
+                            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                              <input value={entraSearchQuery} onChange={e => setEntraSearchQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && entraSearchUsers()} placeholder="Search by name, email, or department..." style={{ ...inputStyle, flex: 1, padding: "9px 14px" }} />
+                              <button onClick={entraSearchUsers} disabled={entraSearching || !entraSearchQuery.trim()} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #06B6D433", background: "#06B6D418", color: "#06B6D4", cursor: entraSearching ? "wait" : "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                                {entraSearching ? "⟳ Searching..." : "🔍 Search Entra ID"}
+                              </button>
+                            </div>
+                            {entraSearchResults.length > 0 && (
+                              <div style={{ marginBottom: 14 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                  <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Found {entraSearchResults.length} user(s)</span>
+                                  <button onClick={selectAllVisible} style={{ fontSize: 9, color: "#06B6D4", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>
+                                    {entraSearchResults.every(u => entraSelectedUsers.some(su => su.id === u.id)) ? "Deselect All" : "Select All"}
+                                  </button>
+                                </div>
+                                {entraSearchResults.map(user => {
+                                  const isSelected = entraSelectedUsers.some(u => u.id === user.id);
+                                  const alreadyExists = managedUsers.some(mu => mu.email?.toLowerCase() === user.mail?.toLowerCase());
+                                  return (
+                                    <div key={user.id} onClick={() => !alreadyExists && toggleSelectUser(user)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 4, borderRadius: 8, background: isSelected ? "#06B6D410" : alreadyExists ? "#FFB34708" : "#0A0C14", border: `1px solid ${isSelected ? "#06B6D444" : alreadyExists ? "#FFB34722" : "#1E213044"}`, cursor: alreadyExists ? "default" : "pointer", transition: "all 0.2s", opacity: alreadyExists ? 0.6 : 1 }}>
+                                      <div style={{ width: 20, height: 20, borderRadius: 4, border: `2px solid ${isSelected ? "#06B6D4" : "#333"}`, background: isSelected ? "#06B6D4" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                        {isSelected && <span style={{ color: "#fff", fontSize: 12, fontWeight: 700 }}>✓</span>}
+                                      </div>
+                                      <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #06B6D4, #6366F1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                                        {(user.displayName || "").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase()}
+                                      </div>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{user.displayName}</div>
+                                        <div style={{ fontSize: 10, color: "#5A6178" }}>{user.mail || user.userPrincipalName}</div>
+                                      </div>
+                                      <div style={{ textAlign: "right", minWidth: 120 }}>
+                                        <div style={{ fontSize: 10, color: "#A0AEC0" }}>{user.jobTitle || "—"}</div>
+                                        <div style={{ fontSize: 9, color: "#5A6178" }}>{user.department || "—"}</div>
+                                      </div>
+                                      {alreadyExists && <span style={{ fontSize: 8, padding: "2px 8px", borderRadius: 4, background: "#FFB34722", color: "#FFB347", fontWeight: 600 }}>Already imported</span>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Group Browser */}
+                        {entraImportMode === "group" && !entraSelectedGroup && (
+                          <div>
+                            <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10 }}>Select a security group to browse members:</div>
+                            {entraSearching ? (
+                              <div style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>⟳ Loading groups...</div>
+                            ) : entraGroups.map(group => {
+                              const mapping = entraIdConfig.groupMappings.find(gm => gm.entraGroup === group.displayName);
+                              return (
+                                <div key={group.id} onClick={() => entraFetchGroupMembers(group.id, group.displayName)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 6, borderRadius: 8, background: "#0A0C14", border: "1px solid #1E213044", cursor: "pointer", transition: "all 0.2s" }}
+                                  onMouseEnter={e => { e.currentTarget.style.borderColor = "#06B6D444"; e.currentTarget.style.background = "#06B6D408"; }}
+                                  onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E213044"; e.currentTarget.style.background = "#0A0C14"; }}>
+                                  <div style={{ width: 40, height: 40, borderRadius: 10, background: mapping ? "#6366F118" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>👥</div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{group.displayName}</div>
+                                    <div style={{ fontSize: 10, color: "#5A6178" }}>{group.description || "Security Group"}</div>
+                                  </div>
+                                  {group.memberCount && <span style={{ fontSize: 10, color: "#A0AEC0", fontFamily: "'JetBrains Mono', monospace" }}>{group.memberCount} members</span>}
+                                  {mapping && <span style={{ fontSize: 8, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>→ {mapping.rbacRole}</span>}
+                                  <span style={{ color: "#5A6178", fontSize: 14 }}>→</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Group Members List */}
+                        {entraImportMode === "group" && entraSelectedGroup && (
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                              <button onClick={() => { setEntraSelectedGroup(null); setEntraGroupMembers([]); setEntraSelectedUsers([]); setEntraAiSuggestions({}); }} style={{ background: "none", border: "none", color: "#06B6D4", cursor: "pointer", fontSize: 14 }}>←</button>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>👥 {entraSelectedGroup.name}</span>
+                              <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>({entraGroupMembers.length} members)</span>
+                              <div style={{ flex: 1 }} />
+                              <button onClick={selectAllVisible} style={{ fontSize: 9, color: "#06B6D4", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>
+                                {entraGroupMembers.every(u => entraSelectedUsers.some(su => su.id === u.id)) ? "Deselect All" : "Select All"}
+                              </button>
+                            </div>
+                            {entraSearching ? (
+                              <div style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>⟳ Loading members...</div>
+                            ) : entraGroupMembers.map(user => {
+                              const isSelected = entraSelectedUsers.some(u => u.id === user.id);
+                              const alreadyExists = managedUsers.some(mu => mu.email?.toLowerCase() === user.mail?.toLowerCase());
+                              return (
+                                <div key={user.id} onClick={() => !alreadyExists && toggleSelectUser(user)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 4, borderRadius: 8, background: isSelected ? "#06B6D410" : alreadyExists ? "#FFB34708" : "#0A0C14", border: `1px solid ${isSelected ? "#06B6D444" : alreadyExists ? "#FFB34722" : "#1E213044"}`, cursor: alreadyExists ? "default" : "pointer", transition: "all 0.2s", opacity: alreadyExists ? 0.6 : 1 }}>
+                                  <div style={{ width: 20, height: 20, borderRadius: 4, border: `2px solid ${isSelected ? "#06B6D4" : "#333"}`, background: isSelected ? "#06B6D4" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                    {isSelected && <span style={{ color: "#fff", fontSize: 12, fontWeight: 700 }}>✓</span>}
+                                  </div>
+                                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #06B6D4, #6366F1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                                    {(user.displayName || "").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase()}
+                                  </div>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{user.displayName}</div>
+                                    <div style={{ fontSize: 10, color: "#5A6178" }}>{user.mail || user.userPrincipalName}</div>
+                                  </div>
+                                  <div style={{ textAlign: "right", minWidth: 120 }}>
+                                    <div style={{ fontSize: 10, color: "#A0AEC0" }}>{user.jobTitle || "—"}</div>
+                                    <div style={{ fontSize: 9, color: "#5A6178" }}>{user.department || "—"}</div>
+                                  </div>
+                                  {alreadyExists && <span style={{ fontSize: 8, padding: "2px 8px", borderRadius: 4, background: "#FFB34722", color: "#FFB347", fontWeight: 600 }}>Already imported</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Selected Users — Role Assignment */}
+                        {entraSelectedUsers.length > 0 && (
+                          <div style={{ marginTop: 16, padding: 16, background: "#0A0C14", borderRadius: 10, border: "1px solid #06B6D422" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>🎯 Role Assignment — {entraSelectedUsers.length} user(s) selected</div>
+                                <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>Assign ITSM roles manually or let AI suggest based on job title, department, and group membership</div>
+                              </div>
+                              <button onClick={aiSuggestAll} style={{ padding: "7px 16px", borderRadius: 6, border: "1px solid #EC489933", background: "#EC489918", color: "#EC4899", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                                🧠 AI Auto-Map Roles
+                              </button>
+                            </div>
+
+                            {entraSelectedUsers.map(user => {
+                              const aiSuggestion = entraAiSuggestions[user.id];
+                              const currentRole = entraRoleMappings[user.id] || "End User";
+                              return (
+                                <div key={user.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, borderRadius: 8, background: "#0F1117", border: `1px solid ${aiSuggestion ? "#EC489922" : "#1E213044"}` }}>
+                                  <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg, #06B6D4, #6366F1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                                    {(user.displayName || "").split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase()}
+                                  </div>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{user.displayName}</div>
+                                    <div style={{ fontSize: 9, color: "#5A6178" }}>{user.mail} · {user.jobTitle || "No title"} · {user.department || "No dept"}</div>
+                                  </div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                    <select value={currentRole} onChange={e => setEntraRoleMappings(prev => ({ ...prev, [user.id]: e.target.value }))} style={{ ...inputStyle, width: "auto", padding: "5px 10px", fontSize: 10, minWidth: 160 }}>
+                                      {assignableRoles.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                                    </select>
+                                  </div>
+                                  {aiSuggestion && (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 180, padding: "4px 8px", borderRadius: 6, background: "#EC489908", border: "1px solid #EC489922" }}>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                        <span style={{ fontSize: 9, color: "#EC4899", fontWeight: 600 }}>🧠 AI: {aiSuggestion.role}</span>
+                                        <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: aiSuggestion.confidence >= 85 ? "#81C78422" : "#FFB34722", color: aiSuggestion.confidence >= 85 ? "#81C784" : "#FFB347", fontWeight: 600 }}>{aiSuggestion.confidence}%</span>
+                                      </div>
+                                      <div style={{ fontSize: 8, color: "#5A6178" }}>{aiSuggestion.reason}</div>
+                                      {currentRole !== aiSuggestion.role && (
+                                        <button onClick={() => setEntraRoleMappings(prev => ({ ...prev, [user.id]: aiSuggestion.role }))} style={{ fontSize: 8, color: "#06B6D4", background: "none", border: "none", cursor: "pointer", fontWeight: 600, textAlign: "left", padding: 0 }}>✓ Accept suggestion</button>
+                                      )}
+                                    </div>
+                                  )}
+                                  <button onClick={() => setEntraSelectedUsers(prev => prev.filter(u => u.id !== user.id))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 14, flexShrink: 0 }}>✕</button>
+                                </div>
+                              );
+                            })}
+
+                            {/* Import Button */}
+                            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+                              <button onClick={() => { setEntraSelectedUsers([]); setEntraAiSuggestions({}); setEntraRoleMappings({}); }} style={btnStyle("#1E2130")}>Clear Selection</button>
+                              <button onClick={handleEntraImport} disabled={entraImporting} style={{ padding: "9px 24px", borderRadius: 8, border: "none", background: entraImporting ? "#333" : "linear-gradient(135deg, #06B6D4, #6366F1)", color: "#fff", cursor: entraImporting ? "wait" : "pointer", fontSize: 12, fontWeight: 700, boxShadow: "0 2px 12px #06B6D433" }}>
+                                {entraImporting ? "⟳ Importing..." : `🔐 Import ${entraSelectedUsers.length} User(s) to ITSM`}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Edit User Inline Panel */}
                   {editingUserId && canEditRBAC && (() => {
@@ -12722,6 +13066,8 @@ export default function ITSMApp() {
     React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch {} }, [zdTriagedIds]);
     React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(zdAutoStats)); } catch {} }, [zdAutoStats]);
     React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch {} }, [zdAutoLog]);
+    React.useEffect(() => { try { localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch {} }, [zdStats]);
+    React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch {} }, [zdTickets]);
 
     // Auto-polling for new tickets (every 60s when automation is on)
     React.useEffect(() => {
@@ -13062,8 +13408,9 @@ export default function ITSMApp() {
             { id: "automation", label: "🤖 Automation", count: null },
             { id: "queue", label: "👤 Human Review", count: pendingQueue.length },
             { id: "tickets", label: "📋 All Tickets", count: zdStats.open + zdStats.pending },
+            { id: "analytics", label: "📊 Analytics", count: null },
             { id: "sync", label: "🔄 Sync & Migration", count: zdSyncStatus?.counts?.zdTickets || null },
-            { id: "history", label: "📊 AI History", count: approvedSentQueue.length },
+            { id: "history", label: "📜 AI History", count: approvedSentQueue.length },
             { id: "settings", label: "⚙️ Settings", count: null },
           ].map(tab => (
             <button key={tab.id} onClick={() => setZdTab(tab.id)}
@@ -13097,20 +13444,33 @@ export default function ITSMApp() {
                 ))}
               </div>
 
-              {/* Routing Rules */}
+              {/* Routing Rules — Clickable & Expandable */}
               <div style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>📋 Auto-Routing Rules</div>
               {[
-                { condition: "All AI-drafted responses", action: "→ Queue for engineer approval", color: "#81C784" },
-                { condition: "Confidence < 85% or Complex/Sensitive", action: "→ Flagged for careful review", color: "#FFB347" },
-                { condition: "Priority = Urgent/High", action: "→ Auto-create ITSM Incident", color: "#FF6B6B" },
-                { condition: "Category = Network/Security", action: "→ Route to Network Engineering", color: "#6366F1" },
-                { condition: "Category = Hardware", action: "→ Route to L2 Support", color: "#06B6D4" },
-                { condition: "All other tickets", action: "→ Route to L1 Service Desk", color: "#EC4899" },
+                { id: "rule1", condition: "All AI-drafted responses", action: "→ Queue for engineer approval", color: "#81C784", detail: "Every AI-generated response is routed to the Human Review queue. No response is ever sent automatically without engineer sign-off. High-confidence (≥85%) items are highlighted for batch approval.", tab: "queue" },
+                { id: "rule2", condition: "Confidence < 85% or Complex/Sensitive", action: "→ Flagged for careful review", color: "#FFB347", detail: "Low-confidence AI triage results are flagged with a warning badge. Engineers should manually review the draft, edit if necessary, and verify the category/priority before approving.", tab: "queue" },
+                { id: "rule3", condition: "Priority = Urgent/High", action: "→ Auto-create ITSM Incident", color: "#FF6B6B", detail: "Tickets classified as Urgent or High priority automatically generate an ITSM Incident (INC####). This ensures SLA tracking begins immediately and escalation rules apply.", tab: "history" },
+                { id: "rule4", condition: "Category = Network/Security", action: "→ Route to Network Engineering", color: "#6366F1", detail: "Network infrastructure and security-related tickets (VPN, firewall, phishing, MFA issues) are assigned to the Network Engineering team for specialized handling.", tab: "tickets" },
+                { id: "rule5", condition: "Category = Hardware", action: "→ Route to L2 Support", color: "#06B6D4", detail: "Hardware issues (laptop, printer, monitor, peripheral) are escalated to L2 Support who manage physical assets and on-site visits.", tab: "tickets" },
+                { id: "rule6", condition: "All other tickets", action: "→ Route to L1 Service Desk", color: "#EC4899", detail: "Default routing for general IT inquiries, software issues, access requests, and user account management. L1 handles first-response and basic troubleshooting.", tab: "tickets" },
               ].map((rule, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < 5 ? "1px solid #1E213022" : "none" }}>
-                  <div style={{ width: 4, height: 4, borderRadius: "50%", background: rule.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 10, color: "#A0AEC0", flex: 1 }}>{rule.condition}</span>
-                  <span style={{ fontSize: 9, color: rule.color, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{rule.action}</span>
+                <div key={rule.id}>
+                  <div onClick={() => setZdExpandedRule(zdExpandedRule === rule.id ? null : rule.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderBottom: i < 5 && zdExpandedRule !== rule.id ? "1px solid #1E213022" : "none", cursor: "pointer", borderRadius: zdExpandedRule === rule.id ? "6px 6px 0 0" : 0, background: zdExpandedRule === rule.id ? `${rule.color}08` : "transparent", transition: "all 0.2s" }}
+                    onMouseEnter={e => { if (zdExpandedRule !== rule.id) e.currentTarget.style.background = `${rule.color}06`; }}
+                    onMouseLeave={e => { if (zdExpandedRule !== rule.id) e.currentTarget.style.background = "transparent"; }}>
+                    <div style={{ width: 4, height: 4, borderRadius: "50%", background: rule.color, flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: "#A0AEC0", flex: 1 }}>{rule.condition}</span>
+                    <span style={{ fontSize: 9, color: rule.color, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{rule.action}</span>
+                    <span style={{ fontSize: 10, color: "#5A6178", marginLeft: 6, transition: "transform 0.2s", transform: zdExpandedRule === rule.id ? "rotate(180deg)" : "rotate(0)" }}>▾</span>
+                  </div>
+                  {zdExpandedRule === rule.id && (
+                    <div style={{ padding: "8px 12px 10px 20px", background: `${rule.color}06`, borderRadius: "0 0 6px 6px", borderBottom: "1px solid #1E213022", marginBottom: 2 }}>
+                      <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.5, marginBottom: 8 }}>{rule.detail}</div>
+                      <button onClick={() => setZdTab(rule.tab)} style={{ padding: "3px 10px", borderRadius: 4, border: `1px solid ${rule.color}33`, background: `${rule.color}11`, color: rule.color, fontSize: 9, cursor: "pointer", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                        View {rule.tab === "queue" ? "Review Queue" : rule.tab === "history" ? "AI History" : "Tickets"} →
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -13392,6 +13752,42 @@ export default function ITSMApp() {
         {/* ══════════ TAB: AI HISTORY ══════════ */}
         {zdTab === "history" && (
           <div>
+            {/* Detail Modal */}
+            {zdDetailItem && (
+              <div style={{ ...cardStyle, padding: 20, marginBottom: 16, border: "1px solid #6366F133", position: "relative" }}>
+                <button onClick={() => setZdDetailItem(null)} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <span style={{ fontSize: 22 }}>{zdDetailItem.status === "sent" ? "✅" : zdDetailItem.status === "rejected" ? "❌" : "⏳"}</span>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4" }}>Ticket #{zdDetailItem.ticketId} — {zdDetailItem.ticketSubject}</div>
+                    <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                      👤 {zdDetailItem.requesterName} ({zdDetailItem.requesterEmail}) · {new Date(zdDetailItem.createdAt).toLocaleString("en-SG")}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{zdDetailItem.category}</span>
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: priorityColor(zdDetailItem.suggestedPriority) + "22", color: priorityColor(zdDetailItem.suggestedPriority), fontWeight: 600 }}>{zdDetailItem.suggestedPriority}</span>
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>🎯 {zdDetailItem.confidence}%</span>
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {zdDetailItem.suggestedAssignee}</span>
+                  {zdDetailItem.itsmIncidentId && <span onClick={() => { const inc = incidents.find(i => i.id === zdDetailItem.itsmIncidentId); if (inc) { setDetailItem(inc); setModal("incidentDetail"); } else setActiveModule("incidents"); }} style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#EC489922", color: "#EC4899", fontWeight: 600, cursor: "pointer" }}>🎫 {zdDetailItem.itsmIncidentId} →</span>}
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "#FFB347", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>🔒 INTERNAL NOTE</div>
+                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.5, padding: "8px 12px", background: "#FFB34708", borderRadius: 6, border: "1px solid #FFB34722" }}>{zdDetailItem.internalNote}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "#64B5F6", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>📧 AI DRAFT RESPONSE</div>
+                  <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.5, padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E2130", whiteSpace: "pre-wrap" }}>{zdDetailItem.draftResponse}</div>
+                </div>
+                {zdDetailItem.reviewedBy && (
+                  <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6, background: "#4CAF5008", border: "1px solid #4CAF5022", fontSize: 10, color: "#81C784" }}>
+                    ✅ Reviewed by {zdDetailItem.reviewedBy} on {new Date(zdDetailItem.reviewedAt).toLocaleString("en-SG")}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               {/* Approved & Sent */}
               <div style={{ ...cardStyle, padding: 16 }}>
@@ -13399,7 +13795,9 @@ export default function ITSMApp() {
                 {approvedSentQueue.length === 0 ? (
                   <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No approved responses yet</div>
                 ) : approvedSentQueue.slice(0, 20).map(q => (
-                  <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022" }}>
+                  <div key={q.id} onClick={() => setZdDetailItem(q)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 6px", borderBottom: "1px solid #1E213022", cursor: "pointer", borderRadius: 4, transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#81C78406"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
                     <span style={{ fontSize: 12 }}>✅</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 11, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{q.ticketId} — {q.ticketSubject}</div>
@@ -13421,7 +13819,9 @@ export default function ITSMApp() {
                 {rejectedQueue.length === 0 ? (
                   <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No rejected responses yet</div>
                 ) : rejectedQueue.slice(0, 20).map(q => (
-                  <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022" }}>
+                  <div key={q.id} onClick={() => setZdDetailItem(q)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 6px", borderBottom: "1px solid #1E213022", cursor: "pointer", borderRadius: 4, transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#FF6B6B06"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
                     <span style={{ fontSize: 12 }}>{q.status === "sent" ? "✅" : "❌"}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 11, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{q.ticketId} — {q.ticketSubject}</div>
@@ -13434,6 +13834,113 @@ export default function ITSMApp() {
             </div>
           </div>
         )}
+
+        {/* ══════════ TAB: ANALYTICS ══════════ */}
+        {zdTab === "analytics" && (() => {
+          const catBreakdown = {};
+          const priBreakdown = {};
+          zdAiQueue.forEach(q => {
+            catBreakdown[q.category] = (catBreakdown[q.category] || 0) + 1;
+            priBreakdown[q.suggestedPriority] = (priBreakdown[q.suggestedPriority] || 0) + 1;
+          });
+          const catColors = { Network: "#6366F1", Software: "#64B5F6", Security: "#FF6B6B", Hardware: "#FFB347", Access: "#81C784", General: "#EC4899" };
+          const priColors = { Critical: "#FF6B6B", High: "#FF6B6B", Medium: "#FFB347", Normal: "#64B5F6", Low: "#81C784" };
+          const totalQ = zdAiQueue.length || 1;
+          return (
+            <div>
+              {/* Summary Stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+                {[
+                  { label: "Total Processed", value: zdAutoStats.totalTriaged, color: "#6366F1", icon: "🤖" },
+                  { label: "Approved & Sent", value: zdAutoStats.autoSent, color: "#81C784", icon: "✅" },
+                  { label: "Pending Review", value: pendingQueue.length, color: "#FFB347", icon: "👤" },
+                  { label: "ITSM Incidents", value: zdAutoStats.incidentsCreated, color: "#EC4899", icon: "🎫" },
+                  { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, color: "#06B6D4", icon: "🎯" },
+                ].map((s, i) => (
+                  <div key={i} style={{ padding: "16px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33`, textAlign: "center" }}>
+                    <div style={{ fontSize: 28, marginBottom: 4 }}>{s.icon}</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+                    <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+                {/* Category Breakdown */}
+                <div style={{ ...cardStyle, padding: 18 }}>
+                  {sectionLabel("📂", "Category Breakdown")}
+                  {Object.entries(catBreakdown).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
+                    <div key={cat} onClick={() => { setZdFilter(cat.toLowerCase()); setZdTab("tickets"); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022", cursor: "pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#ffffff04"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      <div style={{ width: 10, height: 10, borderRadius: 2, background: catColors[cat] || "#5A6178", flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, flex: 1 }}>{cat}</span>
+                      <span style={{ fontSize: 11, color: catColors[cat] || "#5A6178", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{count}</span>
+                      <div style={{ width: 80, height: 6, borderRadius: 3, background: "#1E2130", overflow: "hidden" }}>
+                        <div style={{ height: "100%", borderRadius: 3, background: catColors[cat] || "#5A6178", width: `${(count / totalQ) * 100}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                  {Object.keys(catBreakdown).length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No data yet — triage tickets to see breakdown</div>}
+                </div>
+
+                {/* Priority Breakdown */}
+                <div style={{ ...cardStyle, padding: 18 }}>
+                  {sectionLabel("⚡", "Priority Breakdown")}
+                  {Object.entries(priBreakdown).sort((a, b) => b[1] - a[1]).map(([pri, count]) => (
+                    <div key={pri} onClick={() => { setZdTab("tickets"); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022", cursor: "pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#ffffff04"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      <div style={{ width: 10, height: 10, borderRadius: 2, background: priColors[pri] || "#5A6178", flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, flex: 1 }}>{pri}</span>
+                      <span style={{ fontSize: 11, color: priColors[pri] || "#5A6178", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{count}</span>
+                      <div style={{ width: 80, height: 6, borderRadius: 3, background: "#1E2130", overflow: "hidden" }}>
+                        <div style={{ height: "100%", borderRadius: 3, background: priColors[pri] || "#5A6178", width: `${(count / totalQ) * 100}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                  {Object.keys(priBreakdown).length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#5A6178", fontSize: 11 }}>No data yet</div>}
+                </div>
+              </div>
+
+              {/* Confidence Distribution */}
+              <div style={{ ...cardStyle, padding: 18, marginBottom: 16 }}>
+                {sectionLabel("🎯", "AI Confidence Distribution")}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                  {[
+                    { label: "High (≥90%)", range: [90, 100], color: "#81C784" },
+                    { label: "Good (80-89%)", range: [80, 89], color: "#64B5F6" },
+                    { label: "Moderate (70-79%)", range: [70, 79], color: "#FFB347" },
+                    { label: "Low (<70%)", range: [0, 69], color: "#FF6B6B" },
+                  ].map((band, i) => {
+                    const count = zdAiQueue.filter(q => q.confidence >= band.range[0] && q.confidence <= band.range[1]).length;
+                    return (
+                      <div key={i} onClick={() => setZdTab("queue")} style={{ padding: "14px", background: `${band.color}08`, borderRadius: 8, border: `1px solid ${band.color}33`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${band.color}22`; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
+                        <div style={{ fontSize: 22, fontWeight: 700, color: band.color }}>{count}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{band.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Recent AI Triage Log */}
+              <div style={{ ...cardStyle, padding: 18 }}>
+                {sectionLabel("📡", "Recent AI Activity")}
+                {zdAutoLog.slice(0, 10).map((log, i) => {
+                  const typeConfig = { auto_send: { icon: "⚡", color: "#81C784" }, human_review: { icon: "👤", color: "#FFB347" }, human_approved: { icon: "✅", color: "#4CAF50" }, human_edited: { icon: "✏️", color: "#64B5F6" }, incident_created: { icon: "🎫", color: "#6366F1" }, error: { icon: "❌", color: "#FF6B6B" }, info: { icon: "ℹ️", color: "#5A6178" }, config: { icon: "⚙️", color: "#EC4899" } }[log.type] || { icon: "📋", color: "#5A6178" };
+                  return (
+                    <div key={log.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderBottom: i < 9 ? "1px solid #1E213022" : "none" }}>
+                      <span style={{ fontSize: 12, flexShrink: 0 }}>{typeConfig.icon}</span>
+                      <div style={{ flex: 1, fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>{log.message}</div>
+                      <span style={{ fontSize: 8, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", flexShrink: 0 }}>{new Date(log.timestamp).toLocaleString("en-SG", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ══════════ TAB: SYNC & MIGRATION ══════════ */}
         {zdTab === "sync" && (
