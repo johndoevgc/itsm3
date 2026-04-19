@@ -11806,6 +11806,7 @@ export default function ITSMApp() {
         if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || "Failed to send"); }
         const result = await r.json();
         setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", reviewedBy: currentUser?.name || "Admin" } : q));
+        setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
         const emailNote = result.email?.sent ? ` ✉️ Email sent to ${result.email.to}` : result.email?.error ? ` ⚠️ Email failed: ${result.email.error}` : "";
         addAutoLog({ type: "human_approved", ticketId: queueItem.ticketId, subject: queueItem.ticketSubject, message: `#${queueItem.ticketId} approved & sent by ${currentUser?.name || "Admin"}${emailNote}` });
         zdFetchTickets(); zdFetchStats();
@@ -11827,6 +11828,7 @@ export default function ITSMApp() {
         if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || "Failed to send"); }
         const result = await r.json();
         setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", draftResponse: editedText, reviewedBy: `${currentUser?.name || "Admin"} (edited)` } : q));
+        setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
         setEditingDraft(null); setEditedText("");
         const emailNote = result.email?.sent ? ` ✉️ Email sent to ${result.email.to}` : result.email?.error ? ` ⚠️ Email failed: ${result.email.error}` : "";
         addAutoLog({ type: "human_edited", ticketId: queueItem.ticketId, message: `#${queueItem.ticketId} edited & sent by ${currentUser?.name || "Admin"}${emailNote}` });
@@ -12201,7 +12203,7 @@ export default function ITSMApp() {
 
                     {/* Action Buttons */}
                     <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                      <button onClick={() => setZdAiQueue(prev => prev.map(item => item.id === q.id ? { ...item, status: "rejected", reviewedBy: currentUser?.name } : item))}
+                      <button onClick={() => { setZdAiQueue(prev => prev.map(item => item.id === q.id ? { ...item, status: "rejected", reviewedBy: currentUser?.name } : item)); addAutoLog({ type: "error", ticketId: q.ticketId, subject: q.ticketSubject, message: `#${q.ticketId} AI draft rejected by ${currentUser?.name || "Admin"} — response will not be sent` }); }}
                         style={{ padding: "7px 18px", borderRadius: 6, border: "1px solid #FF6B6B33", background: "#FF6B6B11", color: "#FF6B6B", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>✕ Reject</button>
                       {editingDraft === q.id ? (
                         <>
