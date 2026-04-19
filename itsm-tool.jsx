@@ -1388,6 +1388,36 @@ export default function ITSMApp() {
   const floatingChatEndRef = useRef(null);
   const [aiIdleNudge, setAiIdleNudge] = useState(null);
   const aiIdleTimerRef = useRef(null);
+  // ─── Draggable AI Chatbox State ─────────────────────────────────────
+  const [aiPos, setAiPos] = useState(() => _ls("vgc_ai_pos", { x: 24, y: 24 }));
+  const aiDragRef = useRef({ dragging: false, startX: 0, startY: 0, origX: 0, origY: 0, moved: false });
+  const aiContainerRef = useRef(null);
+  const handleAiDragStart = (e) => {
+    e.preventDefault();
+    const touch = e.touches ? e.touches[0] : e;
+    aiDragRef.current = { dragging: true, startX: touch.clientX, startY: touch.clientY, origX: aiPos.x, origY: aiPos.y, moved: false };
+    const onMove = (ev) => {
+      const t = ev.touches ? ev.touches[0] : ev;
+      const dx = t.clientX - aiDragRef.current.startX;
+      const dy = t.clientY - aiDragRef.current.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) aiDragRef.current.moved = true;
+      const newX = Math.max(0, aiDragRef.current.origX - dx);
+      const newY = Math.max(0, aiDragRef.current.origY + dy);
+      setAiPos({ x: newX, y: newY });
+    };
+    const onUp = () => {
+      aiDragRef.current.dragging = false;
+      setAiPos(p => { _save("vgc_ai_pos", p); return p; });
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+  };
   const [avatarConfig, setAvatarConfig] = useState(() => {
     const defaults = { borderStyle: "gradient", borderColor: "#6366F1", glowColor: "#6366F1", mood: "smart", shape: "rounded", animation: "float", theme: "singapore", showHeadset: true, showStatusRing: true, showSparkles: true };
     const saved = _ls("vgc_avatar", null);
@@ -16875,8 +16905,8 @@ export default function ITSMApp() {
       )}
 
       {/* Floating Assisted by AI Button — 3D Avatar */}
-      <div style={{
-        position: "fixed", bottom: 24, right: 24, zIndex: 999,
+      <div ref={aiContainerRef} style={{
+        position: "fixed", bottom: aiPos.y, right: aiPos.x, zIndex: 999,
         display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
       }}>
         {showAiPanel && (
@@ -16885,11 +16915,15 @@ export default function ITSMApp() {
             boxShadow: "0 24px 48px #00000066, 0 0 30px #6366F111",
             overflow: "hidden", animation: "aiBorderPulse 3s ease-in-out infinite"
           }}>
-            <div style={{
+            <div
+              onMouseDown={handleAiDragStart} onTouchStart={handleAiDragStart}
+              style={{
               padding: "14px 18px", background: "linear-gradient(135deg, #6366F1, #06B6D4)",
-              display: "flex", justifyContent: "space-between", alignItems: "center"
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              cursor: "grab", userSelect: "none"
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, cursor: "grab" }}>⠿</span>
                 {/* Mini avatar in header — Profile Photo */}
                 <div style={{ width: 28, height: 28, borderRadius: 8, overflow: "hidden", background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #1E2130, #0F1117)", display: "flex", alignItems: "center", justifyContent: "center", border: "1.5px solid #ffffff33" }}>
                   {!profilePhoto && <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4" }}>{currentUser.avatar}</span>}
@@ -17100,7 +17134,7 @@ export default function ITSMApp() {
           </div>
         )}
         {/* 3D Avatar Button — Profile Photo Based with Smart Animations */}
-        <button onClick={() => setShowAiPanel(!showAiPanel)} style={{
+        <button onMouseDown={!showAiPanel ? handleAiDragStart : undefined} onTouchStart={!showAiPanel ? handleAiDragStart : undefined} onClick={(e) => { if (aiDragRef.current.moved) { e.preventDefault(); return; } setShowAiPanel(!showAiPanel); }} style={{
           width: 64, height: 64,
           borderRadius: avatarConfig.shape === "circle" ? "50%" : avatarConfig.shape === "hexagon" ? 16 : 18,
           border: avatarConfig.borderStyle === "neon" ? `2.5px solid ${avatarConfig.glowColor}88` : "3px solid transparent",
