@@ -1311,14 +1311,14 @@ export default function ITSMApp() {
   const [zdComments, setZdComments] = useState([]);
   const [zdFilter, setZdFilter] = useState("open");
   const [zdPage, setZdPage] = useState(1);
-  const [zdAiQueue, setZdAiQueue] = useState([]); // AI-drafted responses awaiting approval
+  const [zdAiQueue, setZdAiQueue] = useState(() => _ls("vgc_zd_ai_queue", []));
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
   const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", false));
-  const [zdAutoLog, setZdAutoLog] = useState([]);
-  const [zdTriagedIds, setZdTriagedIds] = useState(new Set());
-  const [zdAutoStats, setZdAutoStats] = useState({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
+  const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", []));
+  const [zdTriagedIds, setZdTriagedIds] = useState(() => { try { const v = JSON.parse(localStorage.getItem("vgc_zd_triaged_ids")); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); } });
+  const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 }));
   const [zdAgents, setZdAgents] = useState([]);
   const [zdGroups, setZdGroups] = useState([]);
   const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings
@@ -11849,6 +11849,12 @@ export default function ITSMApp() {
       }
     }, []);
 
+    // ── Persist AI queue, triaged IDs, stats, and logs to localStorage ──
+    React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch {} }, [zdAiQueue]);
+    React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch {} }, [zdTriagedIds]);
+    React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(zdAutoStats)); } catch {} }, [zdAutoStats]);
+    React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch {} }, [zdAutoLog]);
+
     // Auto-polling for new tickets (every 60s when automation is on)
     React.useEffect(() => {
       if (zdConnected && zdAutoMode && azureOpenAI.enabled) {
@@ -12151,7 +12157,7 @@ export default function ITSMApp() {
             { label: "ITSM Created", value: zdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫" },
             { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊" },
           ].map((s, i) => (
-            <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33`, animation: `zdSlideIn 0.4s ease ${i * 0.04}s both` }}>
+            <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33` }}>
               <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: s.accent }}>{s.value}</div>
             </div>
@@ -12258,7 +12264,7 @@ export default function ITSMApp() {
                       config: { icon: "⚙️", color: "#EC4899", bg: "#EC489908" },
                     }[log.type] || { icon: "📋", color: "#5A6178", bg: "transparent" };
                     return (
-                      <div key={log.id} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 6, background: typeConfig.bg, borderLeft: `2px solid ${typeConfig.color}`, animation: `zdSlideIn 0.3s ease ${i * 0.02}s both` }}>
+                      <div key={log.id} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 6, background: typeConfig.bg, borderLeft: `2px solid ${typeConfig.color}` }}>
                         <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                           <span style={{ fontSize: 12, flexShrink: 0 }}>{typeConfig.icon}</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -12308,7 +12314,7 @@ export default function ITSMApp() {
                   </div>
                 </div>
                 {pendingQueue.map((q, i) => (
-                  <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.05}s both`, border: `1px solid ${q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
+                  <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, border: `1px solid ${q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                       <div>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 6 }}>Ticket #{q.ticketId} — {q.ticketSubject}</div>
@@ -12402,7 +12408,7 @@ export default function ITSMApp() {
                     const triaged = zdTriagedIds.has(ticket.id);
                     return (
                       <div key={ticket.id} onClick={() => zdSelectTicket(ticket)}
-                        style={{ padding: "12px 16px", borderBottom: "1px solid #1E213033", cursor: "pointer", background: zdSelectedTicket?.id === ticket.id ? "#1E213044" : "transparent", transition: "background 0.2s", animation: `zdSlideIn 0.3s ease ${i * 0.02}s both` }}
+                        style={{ padding: "12px 16px", borderBottom: "1px solid #1E213033", cursor: "pointer", background: zdSelectedTicket?.id === ticket.id ? "#1E213044" : "transparent", transition: "background 0.2s" }}
                         onMouseEnter={e => { if (zdSelectedTicket?.id !== ticket.id) e.currentTarget.style.background = "#1E213022"; }}
                         onMouseLeave={e => { if (zdSelectedTicket?.id !== ticket.id) e.currentTarget.style.background = "transparent"; }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -12492,7 +12498,7 @@ export default function ITSMApp() {
                   <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
                     <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>💬 CONVERSATION ({zdComments.length})</div>
                     {zdComments.map((comment, i) => (
-                      <div key={comment.id || i} style={{ marginBottom: 12, animation: `zdSlideIn 0.3s ease ${i * 0.03}s both` }}>
+                      <div key={comment.id || i} style={{ marginBottom: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                           <span style={{ fontSize: 11, fontWeight: 600, color: comment.public ? "#64B5F6" : "#FFB347" }}>{comment.public ? "📧" : "🔒"} {comment.author_id}</span>
                           <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(comment.created_at).toLocaleString("en-SG")}</span>
@@ -13797,7 +13803,8 @@ export default function ITSMApp() {
                 const isMorning = hr >= 7 && hr < 11;
                 const isMidday = hr >= 11 && hr < 14;
                 const isAfternoon = hr >= 14 && hr < 18;
-                const temp = isNight ? (25 + Math.floor(Math.random() * 2)) : isDawn || isMorning ? (26 + Math.floor(Math.random() * 2)) : isMidday ? (31 + Math.floor(Math.random() * 2)) : isAfternoon ? (30 + Math.floor(Math.random() * 2)) : (28 + Math.floor(Math.random() * 2));
+                const tempBase = isNight ? 25 : isDawn || isMorning ? 26 : isMidday ? 31 : isAfternoon ? 30 : 28;
+                const temp = tempBase + (sgNow.getMinutes() % 2);
                 const desc = isNight ? "Clear Night" : isDawn ? "Early Dawn" : isMorning ? "Partly Cloudy" : isMidday ? "Warm & Humid" : isAfternoon ? "Partly Cloudy" : isDusk ? "Sunset Glow" : "Fair";
                 const humidity = isNight ? 85 : isMidday ? 72 : 78;
                 const wind = isNight ? 8 : isAfternoon ? 14 : 11;
