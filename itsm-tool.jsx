@@ -11995,7 +11995,7 @@ export default function ITSMApp() {
               <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 10 }}>
                 Zendesk AI Command Center
                 <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdConnected ? (zdAutoMode ? "#4CAF5022" : "#81C78422") : "#FF444422", color: zdConnected ? (zdAutoMode ? "#4CAF50" : "#81C784") : "#FF4444", animation: zdConnected ? "zdPulse 2s infinite" : "none" }}>
-                  {zdConnected ? (zdAutoMode ? "� AI TRIAGE ACTIVE" : "LIVE — MANUAL") : "OFFLINE"}
+                  {zdConnected ? (zdAutoMode ? "🤖 AI TRIAGE ACTIVE" : "LIVE — MANUAL") : "OFFLINE"}
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
@@ -12569,325 +12569,136 @@ export default function ITSMApp() {
           </div>
         )}
 
-        {/* ══════════ TAB: SYNC & MIGRATION ══════════ */}
-        {zdTab === "sync" && (
-          <div>
-            {/* Sync Status Banner */}
-            <div style={{ background: zdRealTimeEnabled ? "linear-gradient(135deg, #0F1117, #4CAF5008, #0F1117)" : "#0F1117", borderRadius: 12, border: `1px solid ${zdRealTimeEnabled ? "#4CAF5044" : "#1E2130"}`, padding: "16px 22px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 12, background: zdRealTimeEnabled ? "#4CAF5022" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🔄</div>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 10 }}>
-                    Real-Time Bidirectional Sync
-                    <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdRealTimeEnabled ? "#4CAF5022" : "#FF444422", color: zdRealTimeEnabled ? "#4CAF50" : "#FF4444", animation: zdRealTimeEnabled ? "zdPulse 2s infinite" : "none" }}>
-                      {zdRealTimeEnabled ? "ACTIVE — Sync every 30s" : "PAUSED"}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
-                    Zendesk ↔ ITSM · Changes in either system auto-sync · Webhook-ready for instant updates
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <div onClick={() => { const nv = !zdRealTimeEnabled; setZdRealTimeEnabled(nv); localStorage.setItem("vgc_zd_realtime", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "Real-time sync ENABLED — incremental sync every 30s" : "Real-time sync DISABLED" }); }}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdRealTimeEnabled ? "#4CAF5022" : "#1E2130", border: `1px solid ${zdRealTimeEnabled ? "#4CAF5044" : "#1E2130"}` }}>
-                  <div style={{ width: 32, height: 16, borderRadius: 8, background: zdRealTimeEnabled ? "#4CAF50" : "#333", position: "relative", transition: "all 0.3s" }}>
-                    <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdRealTimeEnabled ? 18 : 2, transition: "left 0.3s" }} />
-                  </div>
-                  <span style={{ fontSize: 9, fontWeight: 600, color: zdRealTimeEnabled ? "#4CAF50" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>REAL-TIME</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Sync Metrics */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-              {[
-                { label: "ZD Tickets (DB)", value: zdSyncStatus?.counts?.zdTickets || 0, color: "#64B5F6", icon: "🎫" },
-                { label: "ZD Users (DB)", value: zdSyncStatus?.counts?.zdUsers || 0, color: "#EC4899", icon: "👤" },
-                { label: "ZD Orgs (DB)", value: zdSyncStatus?.counts?.zdOrgs || 0, color: "#FFB347", icon: "🏢" },
-                { label: "ZD Comments (DB)", value: zdSyncStatus?.counts?.zdComments || 0, color: "#81C784", icon: "💬" },
-                { label: "ITSM Incidents", value: zdSyncStatus?.counts?.itsmIncidents || incidents.length, color: "#6366F1", icon: "📋" },
-                { label: "Last Full Import", value: zdSyncStatus?.lastFullImport?.completedAt ? new Date(zdSyncStatus.lastFullImport.completedAt).toLocaleDateString("en-SG") : "Never", color: "#CE93D8", icon: "📦" },
-                { label: "Last Sync", value: zdSyncStatus?.lastIncrementalSync?.completedAt ? new Date(zdSyncStatus.lastIncrementalSync.completedAt).toLocaleTimeString("en-SG") : "Never", color: "#06B6D4", icon: "🔄" },
-              ].map((s, i) => (
-                <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33` }}>
-                  <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
-                  <div style={{ fontSize: typeof s.value === "number" ? 22 : 13, fontWeight: 700, color: s.color }}>{s.value}</div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              {/* Full Historical Import */}
-              <div style={{ ...cardStyle, padding: 18 }}>
-                {sectionLabel("📦", "Full Historical Import")}
-                <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.6, marginBottom: 16 }}>
-                  Import ALL Zendesk data into your ITSM database — tickets (including closed), users, organizations, comments, and attachments metadata.
-                  This enables AI-powered analysis using your full ticket history.
-                </div>
-                {zdSyncProgress && (
-                  <div style={{ padding: "10px 14px", borderRadius: 8, marginBottom: 14, background: zdSyncProgress.phase === "Error" ? "#FF6B6B08" : zdSyncProgress.phase === "Complete" ? "#81C78408" : "#6366F108", border: `1px solid ${zdSyncProgress.phase === "Error" ? "#FF6B6B33" : zdSyncProgress.phase === "Complete" ? "#81C78433" : "#6366F133"}` }}>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: zdSyncProgress.phase === "Error" ? "#FF6B6B" : zdSyncProgress.phase === "Complete" ? "#81C784" : "#6366F1", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
-                      {zdSyncProgress.phase === "Error" ? "❌" : zdSyncProgress.phase === "Complete" ? "✅" : "⟳"} {zdSyncProgress.phase}
-                    </div>
-                    <div style={{ fontSize: 10, color: "#C4CAD6" }}>{zdSyncProgress.message}</div>
-                  </div>
-                )}
-                <div style={{ display: "grid", gap: 8 }}>
-                  <button onClick={() => zdFullImport({ createIncidents: false })} disabled={zdSyncInProgress || !zdConnected}
-                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #6366F133", background: zdSyncInProgress ? "#6366F108" : "#6366F118", color: "#6366F1", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
-                    {zdSyncInProgress ? "⟳ Importing..." : "📦 Import All Zendesk Data (Data Only)"}
-                  </button>
-                  <button onClick={() => zdFullImport({ createIncidents: true })} disabled={zdSyncInProgress || !zdConnected}
-                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #EC489933", background: zdSyncInProgress ? "#EC489908" : "#EC489918", color: "#EC4899", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
-                    {zdSyncInProgress ? "⟳ Importing..." : "📦 Import + Create ITSM Incidents for All Tickets"}
-                  </button>
-                  <button onClick={zdTrainAi} disabled={zdSyncInProgress || !zdConnected}
-                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #81C78433", background: "#81C78418", color: "#81C784", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
-                    🧠 Train AI from Resolved Zendesk Tickets
-                  </button>
-                  <button onClick={async () => {
-                    try {
-                      const r = await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-                      if (r.ok) { const data = await r.json(); addAutoLog({ type: "info", message: `Orgs synced: ${data.synced} updated, ${data.created} new customers created` }); const custR = await fetch("/api/db/customers"); if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); } }
-                    } catch (e) { addAutoLog({ type: "error", message: `Org sync failed: ${e.message}` }); }
-                  }} disabled={!zdConnected}
-                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #FFB34733", background: "#FFB34718", color: "#FFB347", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
-                    🏢 Sync Organizations → ITSM Customers
-                  </button>
-                </div>
-              </div>
-
-              {/* Sync Architecture & Webhook Setup */}
-              <div style={{ ...cardStyle, padding: 18 }}>
-                {sectionLabel("🏗️", "Sync Architecture")}
-                <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
-                  {[
-                    { icon: "📥", label: "Zendesk → ITSM", desc: "Tickets, users, orgs auto-sync to local DB. Linked incidents update status/priority in real-time.", color: "#64B5F6", active: zdRealTimeEnabled },
-                    { icon: "📤", label: "ITSM → Zendesk", desc: "Status, priority, comments on ITSM incidents auto-push to linked Zendesk tickets.", color: "#EC4899", active: zdRealTimeEnabled },
-                    { icon: "🔔", label: "Webhook (Instant)", desc: "Configure Zendesk webhook to POST to /api/zendesk/webhook for instant sync on ticket events.", color: "#FFB347", active: true },
-                    { icon: "🧠", label: "AI Knowledge", desc: "Resolved Zendesk tickets feed AI knowledge base. AI learns from historical resolutions.", color: "#81C784", active: true },
-                    { icon: "🔄", label: "Incremental Sync", desc: "Every 30s polls Zendesk incremental API for changes since last sync — minimal API usage.", color: "#6366F1", active: zdRealTimeEnabled },
-                    { icon: "📊", label: "Full Data Mirror", desc: "Complete local copy of all Zendesk data for AI analysis, reporting, and Zendesk decommission prep.", color: "#CE93D8", active: (zdSyncStatus?.counts?.zdTickets || 0) > 0 },
-                  ].map((item, i) => (
-                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", borderRadius: 8, background: item.active ? `${item.color}08` : "#12141E", border: `1px solid ${item.active ? item.color + "22" : "#1E213033"}` }}>
-                      <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: item.active ? item.color : "#5A6178", display: "flex", alignItems: "center", gap: 6 }}>
-                          {item.label}
-                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: item.active ? "#4CAF50" : "#FF4444" }} />
-                        </div>
-                        <div style={{ fontSize: 9, color: "#5A617888", marginTop: 2 }}>{item.desc}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Webhook URL */}
-                <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044" }}>
-                  <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>🔔 ZENDESK WEBHOOK URL (configure in Zendesk Admin)</div>
-                  <div style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all", background: "#12141E", padding: "8px 10px", borderRadius: 4, border: "1px solid #1E213044", cursor: "pointer" }}
-                    onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/zendesk/webhook`); addAutoLog({ type: "info", message: "Webhook URL copied to clipboard" }); }}>
-                    {window.location.origin}/api/zendesk/webhook
-                    <span style={{ marginLeft: 8, fontSize: 8, color: "#5A6178" }}>(click to copy)</span>
-                  </div>
-                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 6, lineHeight: 1.5 }}>
-                    In Zendesk Admin → Webhooks → Create Webhook: paste URL above, set to HTTP POST, JSON. Then create a Trigger that fires on ticket create/update/comment events.
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Offboarding Readiness */}
-            <div style={{ ...cardStyle, padding: 18, marginTop: 14 }}>
-              {sectionLabel("🚀", "Zendesk Decommission Readiness")}
-              <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5, marginBottom: 16 }}>
-                Track progress toward fully replacing Zendesk with your ITSM tool. All items must be green before decommissioning.
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-                {[
-                  { label: "Historical Tickets Imported", value: zdSyncStatus?.counts?.zdTickets || 0, target: "all", ready: (zdSyncStatus?.counts?.zdTickets || 0) > 0, desc: "All past Zendesk tickets stored locally" },
-                  { label: "Users Imported", value: zdSyncStatus?.counts?.zdUsers || 0, target: "all", ready: (zdSyncStatus?.counts?.zdUsers || 0) > 0, desc: "Zendesk agents & end-users imported" },
-                  { label: "Organizations Synced", value: zdSyncStatus?.counts?.zdOrgs || 0, target: "all", ready: (zdSyncStatus?.counts?.zdOrgs || 0) > 0, desc: "Orgs mapped to ITSM customers" },
-                  { label: "Comments Preserved", value: zdSyncStatus?.counts?.zdComments || 0, target: "all", ready: (zdSyncStatus?.counts?.zdComments || 0) > 0, desc: "Full conversation history preserved" },
-                  { label: "ITSM Incidents Active", value: incidents.length, target: ">0", ready: incidents.length > 0, desc: "ITSM managing incident lifecycle" },
-                  { label: "AI Knowledge Trained", value: "Check KB", target: ">0", ready: true, desc: "AI trained from resolved ticket patterns" },
-                  { label: "Real-Time Sync Active", value: zdRealTimeEnabled ? "Yes" : "No", target: "yes", ready: zdRealTimeEnabled, desc: "Bidirectional sync operational" },
-                  { label: "Webhook Configured", value: "Manual", target: "configured", ready: false, desc: "Zendesk webhook pointed to ITSM" },
-                ].map((item, i) => (
-                  <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: item.ready ? "#81C78408" : "#FF6B6B08", border: `1px solid ${item.ready ? "#81C78433" : "#FF6B6B33"}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{item.label}</span>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: item.ready ? "#81C784" : "#FF6B6B" }}>{typeof item.value === "number" ? item.value : item.value}</span>
-                    </div>
-                    <div style={{ fontSize: 9, color: "#5A6178" }}>{item.desc}</div>
-                    <div style={{ fontSize: 8, color: item.ready ? "#81C784" : "#FF6B6B", marginTop: 4, fontWeight: 600 }}>{item.ready ? "✅ Ready" : "⚠️ Action Needed"}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ══════════ TAB: SETTINGS ══════════ */}
         {zdTab === "settings" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <div style={{ ...cardStyle, padding: 18 }}>
-              {sectionLabel("⚙️", "Automation Configuration")}
-              {[
-                { label: "AI Auto-Triage Mode", desc: "AI classifies & drafts responses — engineer must review, edit & approve before sending to customer", value: zdAutoMode, key: "autopilot" },
-              ].map(setting => (
-                <div key={setting.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1E213022" }}>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{setting.label}</div>
-                    <div style={{ fontSize: 9, color: "#5A6178" }}>{setting.desc}</div>
-                  </div>
-                  <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); }}
-                    style={{ width: 36, height: 18, borderRadius: 9, background: setting.value ? "#4CAF50" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
-                    <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: setting.value ? 20 : 2, transition: "left 0.3s" }} />
+          <div>
+            {/* Connection Status Card */}
+            <div style={{ ...cardStyle, padding: 18, marginBottom: 16 }}>
+              {sectionLabel("🔗", "Zendesk Connection")}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: zdConnected ? "#4CAF50" : "#FF6B6B", display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: zdConnected ? "#4CAF50" : "#FF6B6B", animation: zdConnected ? "zdPulse 2s infinite" : "none" }} />
+                    {zdConnected ? "Connected" : "Disconnected"}
                   </div>
                 </div>
-              ))}
-
-              <div style={{ marginTop: 16, fontSize: 10, fontWeight: 700, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10, textTransform: "uppercase" }}>🔧 How It Works</div>
-              {[
-                { step: "1", title: "Ingest", desc: "Every 60s, polls Zendesk for new/open tickets" },
-                { step: "2", title: "AI Triage", desc: "Azure OpenAI analyzes each ticket — classifies category, priority, drafts response" },
-                { step: "3", title: "Engineer Queue", desc: "ALL responses queued for assigned engineer to review, edit & approve" },
-                { step: "4", title: "Human Approval", desc: "Engineer reviews AI draft → edits if needed → approves & sends to customer" },
-                { step: "5", title: "ITSM Sync", desc: "High/urgent tickets → auto-create ITSM incident with SLA tracking" },
-                { step: "6", title: "Routing", desc: "AI suggests assignee based on category (Network → Network Eng, etc.)" },
-              ].map((s, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, padding: "6px 0" }}>
-                  <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#6366F122", color: "#6366F1", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{s.step}</div>
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{s.title}</div>
-                    <div style={{ fontSize: 9, color: "#5A6178" }}>{s.desc}</div>
-                  </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ACCOUNT</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4" }}>{zdUser?.name || "Not connected"}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178" }}>{zdUser?.email || ""}</div>
                 </div>
-              ))}
+              </div>
+              <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+                <button onClick={zdConnect} disabled={zdLoading}
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: zdLoading ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {zdLoading ? "⟳ Connecting..." : zdConnected ? "🔄 Reconnect" : "🔗 Connect to Zendesk"}
+                </button>
+              </div>
+              {zdError && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 6, background: "#FF6B6B08", border: "1px solid #FF6B6B33", fontSize: 10, color: "#FF6B6B" }}>❌ {zdError}</div>}
             </div>
 
-            <div style={{ ...cardStyle, padding: 18 }}>
-              {sectionLabel("🔗", "Integration Status")}
-              {[
-                { label: "Zendesk API", status: zdConnected, detail: zdConnected ? `Connected as ${zdUser?.name}` : "Not connected" },
-                { label: "Azure OpenAI", status: azureOpenAI.enabled, detail: azureOpenAI.enabled ? `Model: ${azureOpenAI.model || "gpt-4o-mini"} · Calls: ${azureOpenAI.totalCalls || 0}` : "Not configured" },
-                { label: "ITSM Database", status: true, detail: `${incidents.length} incidents · ${customers.length} customers` },
-                { label: "Real-Time Sync", status: zdRealTimeEnabled && zdConnected, detail: zdRealTimeEnabled ? "Bidirectional sync every 30s" : "Disabled" },
-                { label: "Zendesk Data Mirror", status: (zdSyncStatus?.counts?.zdTickets || 0) > 0, detail: `${zdSyncStatus?.counts?.zdTickets || 0} tickets · ${zdSyncStatus?.counts?.zdUsers || 0} users · ${zdSyncStatus?.counts?.zdOrgs || 0} orgs` },
-                { label: "AI Knowledge (ZD)", status: true, detail: "Trained from resolved Zendesk tickets" },
-              ].map((int, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1E213022" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: int.status ? "#4CAF50" : "#FF4444", animation: int.status ? "zdPulse 2s infinite" : "none" }} />
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{int.label}</div>
-                      <div style={{ fontSize: 9, color: "#5A6178" }}>{int.detail}</div>
-                    </div>
+            {/* Automation Settings */}
+            <div style={{ ...cardStyle, padding: 18, marginBottom: 16 }}>
+              {sectionLabel("🤖", "Automation Settings")}
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E213044" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>AI Auto-Triage Mode</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>Automatically draft AI responses for new tickets</div>
                   </div>
-                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: int.status ? "#81C78422" : "#FF6B6B22", color: int.status ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{int.status ? "ONLINE" : "OFFLINE"}</span>
+                  <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "AI auto-triage ENABLED" : "AI auto-triage DISABLED" }); }}
+                    style={{ width: 36, height: 18, borderRadius: 9, background: zdAutoMode ? "#4CAF50" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
+                    <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdAutoMode ? 20 : 2, transition: "left 0.3s" }} />
+                  </div>
                 </div>
-              ))}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E213044" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>Real-Time Bidirectional Sync</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>Incremental sync every 30 seconds</div>
+                  </div>
+                  <div onClick={() => { const nv = !zdRealTimeEnabled; setZdRealTimeEnabled(nv); localStorage.setItem("vgc_zd_realtime", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "Real-time sync ENABLED" : "Real-time sync DISABLED" }); }}
+                    style={{ width: 36, height: 18, borderRadius: 9, background: zdRealTimeEnabled ? "#4CAF50" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
+                    <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdRealTimeEnabled ? 20 : 2, transition: "left 0.3s" }} />
+                  </div>
+                </div>
+              </div>
+            </div>
 
-              <div style={{ marginTop: 20 }}>
-                {sectionLabel("👥", "VGC Team (Routing Targets)")}
-                {USERS.filter(u => u.role !== "End User").map(u => (
-                  <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid #1E213022" }}>
-                    <div style={{ width: 26, height: 26, borderRadius: "50%", background: "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#A0AEC0" }}>{u.avatar}</div>
-                    <div>
-                      <div style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{u.name}</div>
-                      <div style={{ fontSize: 9, color: "#5A6178" }}>{u.role} · {u.team}</div>
-                    </div>
+            {/* Ticket Stats */}
+            <div style={{ ...cardStyle, padding: 18 }}>
+              {sectionLabel("📊", "Current Ticket Statistics")}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                {[
+                  { label: "Open", value: zdStats.open, color: "#FF6B6B" },
+                  { label: "Pending", value: zdStats.pending, color: "#FFB347" },
+                  { label: "Hold", value: zdStats.hold, color: "#64B5F6" },
+                  { label: "Solved", value: zdStats.solved, color: "#81C784" },
+                ].map((s, i) => (
+                  <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.color}33`, textAlign: "center" }}>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginTop: 4 }}>{s.label}</div>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
-        )}
-
-        {zdError && (
-          <div style={{ marginTop: 14, padding: "8px 14px", borderRadius: 8, background: "#FF6B6B11", border: "1px solid #FF6B6B33", color: "#FF6B6B", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>⚠️ {zdError}</span>
-            <button onClick={() => setZdError(null)} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 12 }}>✕</button>
           </div>
         )}
       </div>
     );
   };
 
-  // ─── Architecture Diagram ──────────────────────────────────────────────
+  // ─── Architecture Diagram Component ───────────────────────────────────
   const ArchitectureDiagram = () => {
-    const [hoveredNode, setHoveredNode] = useState(null);
     const [selectedLayer, setSelectedLayer] = useState(null);
+    const [hoveredNode, setHoveredNode] = useState(null);
 
     const layers = [
-      {
-        id: "client", label: "CLIENT LAYER", icon: "🖥️", color: "#6366F1", y: 0,
-        nodes: [
-          { id: "browser", label: "Browser SPA", tech: "React 19 + Vite", desc: "Single-page application with real-time dashboard, RBAC-controlled views, and responsive dark-theme UI", icon: "🌐" },
-          { id: "msal", label: "MSAL Auth", tech: "PKCE Flow", desc: "Microsoft Authentication Library handles Entra ID SSO with secure PKCE authorization code flow", icon: "🔐" },
-          { id: "pwa", label: "Progressive Web", tech: "Service Worker", desc: "Offline-capable PWA with cached assets, push notifications, and installable desktop experience", icon: "📱" },
-        ]
-      },
-      {
-        id: "api", label: "API GATEWAY", icon: "🔀", color: "#3B82F6", y: 1,
-        nodes: [
-          { id: "rest", label: "REST API", tech: "Node.js HTTP", desc: "Lightweight HTTP server with JSON endpoints. Collection-based CRUD with bulk upsert support", icon: "⚡" },
-          { id: "auth", label: "Auth Middleware", tech: "JWT + Local", desc: "Dual authentication: Entra ID JWT validation for SSO users, SHA-256 hash for local admin fallback", icon: "🛡️" },
-          { id: "graphproxy", label: "Graph Proxy", tech: "Microsoft Graph", desc: "Server-side proxy to Microsoft Graph API for user profiles, mail, calendar, and Teams integration", icon: "📊" },
-        ]
-      },
-      {
-        id: "services", label: "SERVICE LAYER", icon: "⚙️", color: "#EC4899", y: 2,
-        nodes: [
-          { id: "incident", label: "Incident Engine", tech: "ITIL v4", desc: "Full lifecycle management: create → triage → assign → work → resolve → close with SLA enforcement", icon: "🎫" },
-          { id: "ai", label: "AI Engine", tech: "Azure OpenAI", desc: "NLP-powered ticket classification, priority suggestion, resolution recommendations, and anomaly detection", icon: "🤖" },
-          { id: "workflow", label: "Workflow Engine", tech: "Rule-based", desc: "Configurable automation rules for routing, escalation, notifications, and SLA breach alerts", icon: "🔄" },
-          { id: "email", label: "Email Engine", tech: "SMTP/Graph", desc: "Bi-directional email processing with templates, signatures, attachments, and delivery tracking", icon: "📧" },
-        ]
-      },
-      {
-        id: "data", label: "DATA LAYER", icon: "💾", color: "#FFB347", y: 3,
-        nodes: [
-          { id: "mysql", label: "Azure MySQL", tech: "Flexible Server", desc: "Primary production database with automatic backups, geo-redundancy, and point-in-time restore", icon: "🐬" },
-          { id: "audit", label: "Audit Log", tech: "Immutable Store", desc: "Tamper-proof audit trail logging every data mutation with user, timestamp, and before/after state", icon: "📝" },
-          { id: "cache", label: "In-Memory Cache", tech: "Node.js Map", desc: "Server-side caching for frequently accessed data: services, vendors, SLA configs, and workflow rules", icon: "⚡" },
-        ]
-      },
-      {
-        id: "infra", label: "INFRASTRUCTURE", icon: "☁️", color: "#81C784", y: 4,
-        nodes: [
-          { id: "appservice", label: "Azure App Service", tech: "Linux B1", desc: "Managed PaaS hosting with auto-scaling, deployment slots, custom domains, and SSL certificates", icon: "🏗️" },
-          { id: "entra", label: "Microsoft Entra ID", tech: "OAuth 2.0", desc: "Enterprise identity provider with MFA, conditional access, and SCIM user provisioning", icon: "🔑" },
-          { id: "monitor", label: "Azure Monitor", tech: "App Insights", desc: "Application performance monitoring, log analytics, custom alerts, and availability testing", icon: "📈" },
-        ]
-      }
+      { id: "frontend", label: "Frontend Layer", icon: "⚛️", color: "#6366F1", nodes: [
+        { id: "spa", icon: "🌐", label: "React SPA", tech: "React 19 + Vite 8", desc: "Single-page app with module-based architecture" },
+        { id: "msal", icon: "🔐", label: "MSAL Auth", tech: "MSAL.js 2.x", desc: "Azure AD authentication with token management" },
+        { id: "ui", icon: "🎨", label: "Dark UI", tech: "CSS-in-JS", desc: "Premium dark theme with animations" },
+      ]},
+      { id: "api", label: "API Layer", icon: "⚡", color: "#3B82F6", nodes: [
+        { id: "rest", icon: "🔌", label: "REST API", tech: "Node.js HTTP", desc: "Custom HTTP server with route handling" },
+        { id: "graph", icon: "📧", label: "Graph API", tech: "Microsoft Graph", desc: "Email, calendar, and user data integration" },
+        { id: "zendesk", icon: "🎫", label: "Zendesk API", tech: "REST + Webhook", desc: "Bidirectional ticket sync" },
+      ]},
+      { id: "services", label: "Service Layer", icon: "⚙️", color: "#EC4899", nodes: [
+        { id: "ai", icon: "🧠", label: "AI Engine", tech: "Azure OpenAI", desc: "Triage, drafting, and knowledge extraction" },
+        { id: "workflow", icon: "🔄", label: "Workflow Engine", tech: "Rule-based", desc: "Automated escalation and routing" },
+        { id: "sla", icon: "⏱️", label: "SLA Monitor", tech: "Real-time", desc: "SLA tracking with breach alerting" },
+      ]},
+      { id: "data", label: "Data Layer", icon: "💾", color: "#FFB347", nodes: [
+        { id: "db", icon: "🐬", label: "Database", tech: "MySQL / SQLite", desc: "Primary data store with audit logging" },
+        { id: "cache", icon: "📦", label: "Local Cache", tech: "localStorage", desc: "Client-side state persistence" },
+        { id: "audit", icon: "📋", label: "Audit Log", tech: "Immutable", desc: "Complete change tracking" },
+      ]},
+      { id: "cloud", label: "Cloud Infrastructure", icon: "☁️", color: "#81C784", nodes: [
+        { id: "appservice", icon: "🏗️", label: "App Service", tech: "Azure B1", desc: "Windows hosting with Node.js 20" },
+        { id: "entra", icon: "🔒", label: "Entra ID", tech: "OAuth 2.0", desc: "Identity and access management" },
+        { id: "monitor", icon: "📊", label: "Monitor", tech: "Azure Monitor", desc: "Application insights and alerting" },
+      ]},
     ];
 
     const connections = [
-      { from: "browser", to: "rest", label: "HTTPS/JSON", color: "#6366F188" },
-      { from: "msal", to: "auth", label: "OAuth Token", color: "#3B82F688" },
-      { from: "rest", to: "incident", label: "CRUD Ops", color: "#EC489988" },
-      { from: "rest", to: "ai", label: "AI Proxy", color: "#EC489988" },
-      { from: "auth", to: "entra", label: "Token Verify", color: "#81C78488" },
-      { from: "incident", to: "mysql", label: "SQL/JSON", color: "#FFB34788" },
-      { from: "workflow", to: "email", label: "Triggers", color: "#EC489988" },
-      { from: "incident", to: "audit", label: "Log Events", color: "#FFB34788" },
-      { from: "appservice", to: "rest", label: "Hosts", color: "#81C78488" },
-      { from: "graphproxy", to: "entra", label: "Graph API", color: "#81C78488" },
+      { from: "spa", to: "rest", color: "#6366F166" },
+      { from: "rest", to: "ai", color: "#3B82F666" },
+      { from: "rest", to: "db", color: "#3B82F666" },
+      { from: "ai", to: "db", color: "#EC489966" },
+      { from: "db", to: "appservice", color: "#FFB34766" },
     ];
 
     return (
       <div style={{ padding: 0 }}>
         <style>{`
-          @keyframes archFadeIn { from { opacity: 0; transform: translateY(24px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
-          @keyframes archPulse { 0%, 100% { box-shadow: 0 0 0 0 var(--pulse-color, rgba(99,102,241,0.3)); } 50% { box-shadow: 0 0 0 8px transparent; } }
-          @keyframes archFlowDash { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
-          @keyframes archGlow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-          @keyframes archNodeFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-          @keyframes archLabelSlide { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
-          @keyframes archConnectorPulse { 0% { stroke-opacity: 0.3; } 50% { stroke-opacity: 0.8; } 100% { stroke-opacity: 0.3; } }
+          @keyframes archFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+          @keyframes archNodeFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+          @keyframes archPulse { 0%, 100% { box-shadow: 0 0 0 0 var(--pulse-color); } 50% { box-shadow: 0 0 8px 2px var(--pulse-color); } }
+          @keyframes archGlow { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+          @keyframes archFlowDash { to { stroke-dashoffset: -20; } }
+          @keyframes archConnectorPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.7; } }
+          @keyframes archLabelSlide { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
         `}</style>
 
         {/* Header */}
@@ -12909,7 +12720,6 @@ export default function ITSMApp() {
 
         {/* Architecture Layers */}
         <div style={{ position: "relative" }}>
-          {/* Animated connection lines (SVG overlay) */}
           <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 0 }}>
             {connections.map((c, i) => (
               <line key={i} x1="50%" y1={`${layers.findIndex(l => l.nodes.some(n => n.id === c.from)) * 140 + 60}px`}
@@ -12919,20 +12729,14 @@ export default function ITSMApp() {
             ))}
           </svg>
 
-          {/* Layer cards */}
           {layers.filter(l => !selectedLayer || l.id === selectedLayer).map((layer, li) => (
-            <div key={layer.id} style={{
-              marginBottom: 16, position: "relative", zIndex: 1,
-              animation: `archFadeIn 0.5s ease ${li * 0.12}s both`,
-            }}>
-              {/* Layer header */}
+            <div key={layer.id} style={{ marginBottom: 16, position: "relative", zIndex: 1, animation: `archFadeIn 0.5s ease ${li * 0.12}s both` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, animation: `archLabelSlide 0.4s ease ${li * 0.12}s both` }}>
                 <span style={{ fontSize: 16, animation: "archNodeFloat 4s ease-in-out infinite" }}>{layer.icon}</span>
                 <div style={{ fontSize: 10, fontWeight: 700, color: layer.color, fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>{layer.label}</div>
                 <div style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${layer.color}44, transparent)` }} />
               </div>
 
-              {/* Node cards */}
               <div style={{ display: "grid", gridTemplateColumns: `repeat(${layer.nodes.length}, 1fr)`, gap: 12 }}>
                 {layer.nodes.map((node, ni) => {
                   const isHovered = hoveredNode === node.id;
@@ -12951,11 +12755,8 @@ export default function ITSMApp() {
                         animation: `archFadeIn 0.4s ease ${li * 0.12 + ni * 0.08}s both`,
                         "--pulse-color": layer.color + "40",
                       }}>
-                      {/* Animated corner accent */}
                       {isHovered && <div style={{ position: "absolute", top: 0, right: 0, width: 40, height: 40, background: `linear-gradient(135deg, transparent 50%, ${layer.color}15 50%)`, animation: "archGlow 2s ease-in-out infinite" }} />}
-                      {/* Status indicator */}
                       <div style={{ position: "absolute", top: 12, right: 12, width: 7, height: 7, borderRadius: "50%", background: "#4CAF50", animation: "archPulse 2s infinite", "--pulse-color": "#4CAF5040" }} />
-                      {/* Content */}
                       <div style={{ fontSize: 22, marginBottom: 8, transition: "transform 0.3s", transform: isHovered ? "scale(1.15)" : "scale(1)" }}>{node.icon}</div>
                       <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 3, fontFamily: "'Space Grotesk', sans-serif" }}>{node.label}</div>
                       <div style={{ fontSize: 9, color: layer.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, marginBottom: 8, padding: "2px 6px", background: layer.color + "12", borderRadius: 4, display: "inline-block" }}>{node.tech}</div>
@@ -12965,7 +12766,6 @@ export default function ITSMApp() {
                 })}
               </div>
 
-              {/* Down arrow connector between layers */}
               {li < layers.filter(l => !selectedLayer || l.id === selectedLayer).length - 1 && (
                 <div style={{ textAlign: "center", padding: "6px 0", position: "relative", zIndex: 2 }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" style={{ animation: `archNodeFloat 2s ease-in-out ${li * 0.3}s infinite` }}>
@@ -12994,10 +12794,7 @@ export default function ITSMApp() {
               { label: "Response", icon: "←", color: "#81C784", isArrow: true },
               { label: "Render UI", icon: "✨", color: "#81C784" },
             ].map((step, i) => (
-              <div key={i} style={{
-                display: "flex", alignItems: "center", gap: 4,
-                animation: `archFadeIn 0.3s ease ${1.1 + i * 0.08}s both`,
-              }}>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, animation: `archFadeIn 0.3s ease ${1.1 + i * 0.08}s both` }}>
                 {step.isArrow ? (
                   <div style={{ padding: "0 6px", color: step.color, fontSize: 14, fontWeight: 700, animation: `archGlow 2s ease-in-out ${i * 0.2}s infinite` }}>{step.icon}</div>
                 ) : (
