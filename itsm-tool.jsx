@@ -2864,17 +2864,18 @@ export default function ITSMApp() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
               {[
-                { label: "ZD Open", value: zdStats.open, accent: "#64B5F6", icon: "📂", source: "Zendesk" },
-                { label: "ZD Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳", source: "Zendesk" },
-                { label: "ZD On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️", source: "Zendesk" },
-                { label: "ZD Solved", value: zdStats.solved, accent: "#81C784", icon: "✅", source: "Zendesk" },
+                { label: "ZD Open", value: zdStats.open, accent: "#64B5F6", icon: "📂", source: "Zendesk", zdTab: "tickets" },
+                { label: "ZD Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳", source: "Zendesk", zdTab: "tickets" },
+                { label: "ZD On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️", source: "Zendesk", zdTab: "tickets" },
+                { label: "ZD Solved", value: zdStats.solved, accent: "#81C784", icon: "✅", source: "Zendesk", zdTab: "tickets" },
                 { label: "ITSM Total", value: totalIncidents, accent: "#6366F1", icon: "🎫", source: "ITSM" },
-                { label: "ZD Linked", value: zdLinkedCount, accent: "#06B6D4", icon: "🔗", source: "Synced" },
-                { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖", source: "AI" },
-                { label: "Pending Review", value: zdAiQueue.filter(q => q.status === "pending_approval").length, accent: "#FFB347", icon: "👤", source: "Queue" },
+                { label: "ZD Linked", value: zdLinkedCount, accent: "#06B6D4", icon: "🔗", source: "Synced", zdTab: "sync" },
+                { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖", source: "AI", zdTab: "analytics" },
+                { label: "Pending Review", value: zdAiQueue.filter(q => q.status === "pending_approval").length, accent: "#FFB347", icon: "👤", source: "Queue", zdTab: "queue" },
               ].map((s, i) => (
-                <div key={i} onClick={() => setActiveModule(s.source === "ITSM" ? "incidents" : "zendesk")} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 8, border: `1px solid ${s.accent}22`, cursor: "pointer", transition: "border-color 0.2s" }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = s.accent + "55"} onMouseLeave={e => e.currentTarget.style.borderColor = s.accent + "22"}>
+                <div key={i} onClick={() => { if (s.source === "ITSM") { setActiveModule("incidents"); } else { setActiveModule("zendesk"); if (s.zdTab) setTimeout(() => setZdTab(s.zdTab), 50); } }} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 8, border: `1px solid ${s.accent}22`, cursor: "pointer", transition: "all 0.2s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = s.accent + "55"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = s.accent + "22"; e.currentTarget.style.transform = "translateY(0)"; }}>
                   <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3, display: "flex", justifyContent: "space-between" }}>
                     <span>{s.icon} {s.label}</span>
                     <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 3, background: s.accent + "18", color: s.accent }}>{s.source}</span>
@@ -2886,7 +2887,7 @@ export default function ITSMApp() {
             {zdUnlinked > 0 && <div style={{ marginTop: 10, padding: "8px 14px", borderRadius: 6, background: "#FFB34708", border: "1px solid #FFB34722", display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 12 }}>⚠️</span>
               <span style={{ fontSize: 11, color: "#FFB347" }}>{zdUnlinked} Zendesk ticket(s) not yet imported to ITSM.</span>
-              <button onClick={() => setActiveModule("incidents")} style={{ marginLeft: "auto", padding: "3px 10px", borderRadius: 4, background: "#EC489918", border: "1px solid #EC489933", color: "#EC4899", cursor: "pointer", fontSize: 9, fontWeight: 600 }}>Import →</button>
+              <button onClick={() => { setActiveModule("zendesk"); setTimeout(() => setZdTab && setZdTab("sync"), 50); }} style={{ marginLeft: "auto", padding: "3px 10px", borderRadius: 4, background: "#EC489918", border: "1px solid #EC489933", color: "#EC4899", cursor: "pointer", fontSize: 9, fontWeight: 600 }}>Import →</button>
             </div>}
           </div></DashCard>}
 
@@ -13471,11 +13472,13 @@ export default function ITSMApp() {
                 <div style={{ width: "10%", background: "linear-gradient(90deg, #FFB347, #FFCC80)", borderRadius: "0 6px 6px 0", transition: "width 0.5s" }} />
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-                <span style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace" }}>AI: Triage · Categorize · Draft · Route · SLA ({zdAutoStats.totalTriaged} processed)</span>
-                <span style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Human: Review · Approve ({zdAutoStats.autoSent} sent)</span>
+                <span onClick={() => setZdTab("automation")} style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>AI: Triage · Categorize · Draft · Route · SLA ({zdAutoStats.totalTriaged} processed)</span>
+                <span onClick={() => setZdTab("queue")} style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>Human: Review · Approve ({zdAutoStats.autoSent} sent)</span>
               </div>
             </div>
-            <div style={{ textAlign: "center", minWidth: 60 }}>
+            <div onClick={() => setZdTab("analytics")} style={{ textAlign: "center", minWidth: 60, cursor: "pointer", transition: "transform 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.transform = "scale(1.08)"}
+              onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
               <div style={{ fontSize: 18, fontWeight: 700, color: "#81C784" }}>{zdAutoStats.totalTriaged > 0 ? Math.round((zdAutoStats.autoSent / zdAutoStats.totalTriaged) * 100) : 0}%</div>
               <div style={{ fontSize: 8, color: "#5A6178" }}>Approval Rate</div>
             </div>
@@ -13555,6 +13558,32 @@ export default function ITSMApp() {
               ))}
             </div>
 
+            {/* AI Quick Actions */}
+            <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+              {sectionLabel("⚡", "AI Quick Actions")}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                {[
+                  { label: "AI Triage All Open", icon: "🧠", desc: "Auto-triage all unprocessed open tickets", color: "#6366F1", action: () => { if (zdConnected) zdAutoTriageBatch(); else addAutoLog({ type: "error", message: "Connect to Zendesk first" }); }, disabled: !zdConnected || zdLoading },
+                  { label: "AI Train Knowledge", icon: "📚", desc: "Train AI from all resolved ticket patterns", color: "#81C784", action: () => { if (zdConnected) zdTrainAi(); }, disabled: !zdConnected },
+                  { label: "AI Sync & Import", icon: "🔄", desc: "Full bi-directional sync with Zendesk", color: "#06B6D4", action: () => { if (zdConnected) zdFullImport({ createIncidents: true }); }, disabled: !zdConnected || zdSyncInProgress },
+                  { label: "AI Push Updates", icon: "📤", desc: "Push ITSM changes back to Zendesk", color: "#EC4899", action: () => { if (zdConnected) zdPushToZendesk(); }, disabled: !zdConnected },
+                  { label: "View SLA Risks", icon: "⏱️", desc: "Jump to SLA dashboard for at-risk tickets", color: "#FF6B6B", action: () => setActiveModule("sla"), disabled: false },
+                  { label: "Open Incidents", icon: "🎫", desc: "View all AI-created ITSM incidents", color: "#FFB347", action: () => setActiveModule("incidents"), disabled: false },
+                ].map((qa, i) => (
+                  <button key={i} onClick={qa.action} disabled={qa.disabled}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 8, border: `1px solid ${qa.disabled ? "#1E2130" : qa.color + "33"}`, background: qa.disabled ? "#0A0C14" : `${qa.color}08`, color: qa.disabled ? "#5A6178" : qa.color, cursor: qa.disabled ? "not-allowed" : "pointer", textAlign: "left", transition: "all 0.2s", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}
+                    onMouseEnter={e => { if (!qa.disabled) { e.currentTarget.style.borderColor = qa.color + "66"; e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = `0 3px 10px ${qa.color}18`; } }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = qa.disabled ? "#1E2130" : qa.color + "33"; e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
+                    <span style={{ fontSize: 18, flexShrink: 0 }}>{qa.icon}</span>
+                    <div>
+                      <div>{qa.label}</div>
+                      <div style={{ fontSize: 8, fontWeight: 400, color: "#5A617888", marginTop: 1 }}>{qa.desc}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Live Activity Log */}
             <div style={{ ...cardStyle, padding: 16, maxHeight: 500, display: "flex", flexDirection: "column" }}>
               {sectionLabel("📡", "Live Activity Feed", zdAutoLog.length)}
@@ -13577,13 +13606,20 @@ export default function ITSMApp() {
                       config: { icon: "⚙️", color: "#EC4899", bg: "#EC489908" },
                     }[log.type] || { icon: "📋", color: "#5A6178", bg: "transparent" };
                     return (
-                      <div key={log.id} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 6, background: typeConfig.bg, borderLeft: `2px solid ${typeConfig.color}` }}>
+                      <div key={log.id} onClick={() => {
+                        if (log.type === "incident_created") setActiveModule("incidents");
+                        else if (log.type === "auto_send" || log.type === "human_approved" || log.type === "human_edited") setZdTab("history");
+                        else if (log.type === "human_review") setZdTab("queue");
+                      }} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 6, background: typeConfig.bg, borderLeft: `2px solid ${typeConfig.color}`, cursor: "pointer", transition: "all 0.15s" }}
+                        onMouseEnter={e => { e.currentTarget.style.background = typeConfig.color + "12"; e.currentTarget.style.transform = "translateX(2px)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = typeConfig.bg; e.currentTarget.style.transform = "translateX(0)"; }}>
                         <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                           <span style={{ fontSize: 12, flexShrink: 0 }}>{typeConfig.icon}</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>{log.message}</div>
                             <div style={{ fontSize: 8, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>{new Date(log.timestamp).toLocaleString("en-SG")}</div>
                           </div>
+                          <span style={{ fontSize: 9, color: "#5A617844", flexShrink: 0, alignSelf: "center" }}>→</span>
                         </div>
                       </div>
                     );
@@ -13601,7 +13637,21 @@ export default function ITSMApp() {
               <div style={{ ...cardStyle, padding: 40, textAlign: "center" }}>
                 <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "#81C784", marginBottom: 4 }}>All Clear — No Items Pending Review</div>
-                <div style={{ fontSize: 11, color: "#5A6178" }}>All AI-drafted responses have been reviewed. New tickets will appear here for your approval.</div>
+                <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 16 }}>All AI-drafted responses have been reviewed. New tickets will appear here for your approval.</div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                  <button onClick={() => { if (zdConnected) zdAutoTriageBatch(); }} disabled={!zdConnected}
+                    style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid #6366F133", background: "#6366F118", color: zdConnected ? "#6366F1" : "#5A6178", cursor: zdConnected ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                    🧠 AI Triage New Tickets
+                  </button>
+                  <button onClick={() => setZdTab("tickets")}
+                    style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid #1E2130", background: "#12141E", color: "#A0AEC0", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                    📋 View All Tickets
+                  </button>
+                  <button onClick={() => setZdTab("analytics")}
+                    style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid #1E2130", background: "#12141E", color: "#A0AEC0", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                    📊 View Analytics
+                  </button>
+                </div>
               </div>
             ) : (
               <div>
@@ -13801,7 +13851,7 @@ export default function ITSMApp() {
                             <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(ai.suggestedPriority) + "22", color: priorityColor(ai.suggestedPriority), fontWeight: 600 }}>{ai.suggestedPriority}</span>
                             <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>🎯 {ai.confidence}%</span>
                             <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {ai.suggestedAssignee}</span>
-                            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: ai.status === "sent" ? "#81C78422" : ai.status === "rejected" ? "#FF6B6B22" : "#FFB34722", color: ai.status === "sent" ? "#81C784" : ai.status === "rejected" ? "#FF6B6B" : "#FFB347", fontWeight: 600 }}>{ai.status === "sent" ? "✅ Approved & Sent" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Awaiting Approval"}</span>
+                            <span onClick={() => setZdTab(ai.status === "sent" || ai.status === "rejected" ? "history" : "queue")} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: ai.status === "sent" ? "#81C78422" : ai.status === "rejected" ? "#FF6B6B22" : "#FFB34722", color: ai.status === "sent" ? "#81C784" : ai.status === "rejected" ? "#FF6B6B" : "#FFB347", fontWeight: 600, cursor: "pointer" }}>{ai.status === "sent" ? "✅ Approved & Sent" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Awaiting Approval →"}</span>
                           </div>
                           <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 6, lineHeight: 1.4 }}>{ai.internalNote}</div>
                         </div>
@@ -13931,13 +13981,15 @@ export default function ITSMApp() {
               {/* Summary Stats */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
                 {[
-                  { label: "Total Processed", value: zdAutoStats.totalTriaged, color: "#6366F1", icon: "🤖" },
-                  { label: "Approved & Sent", value: zdAutoStats.autoSent, color: "#81C784", icon: "✅" },
-                  { label: "Pending Review", value: pendingQueue.length, color: "#FFB347", icon: "👤" },
-                  { label: "ITSM Incidents", value: zdAutoStats.incidentsCreated, color: "#EC4899", icon: "🎫" },
-                  { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, color: "#06B6D4", icon: "🎯" },
+                  { label: "Total Processed", value: zdAutoStats.totalTriaged, color: "#6366F1", icon: "🤖", tab: "history" },
+                  { label: "Approved & Sent", value: zdAutoStats.autoSent, color: "#81C784", icon: "✅", tab: "history" },
+                  { label: "Pending Review", value: pendingQueue.length, color: "#FFB347", icon: "👤", tab: "queue" },
+                  { label: "ITSM Incidents", value: zdAutoStats.incidentsCreated, color: "#EC4899", icon: "🎫", tab: "_incidents" },
+                  { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, color: "#06B6D4", icon: "🎯", tab: "history" },
                 ].map((s, i) => (
-                  <div key={i} style={{ padding: "16px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33`, textAlign: "center" }}>
+                  <div key={i} onClick={() => s.tab === "_incidents" ? setActiveModule("incidents") : setZdTab(s.tab)} style={{ padding: "16px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${s.color}22`; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
                     <div style={{ fontSize: 28, marginBottom: 4 }}>{s.icon}</div>
                     <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
                     <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4 }}>{s.label}</div>
@@ -13950,7 +14002,7 @@ export default function ITSMApp() {
                 <div style={{ ...cardStyle, padding: 18 }}>
                   {sectionLabel("📂", "Category Breakdown")}
                   {Object.entries(catBreakdown).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
-                    <div key={cat} onClick={() => { setZdFilter(cat.toLowerCase()); setZdTab("tickets"); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022", cursor: "pointer" }}
+                    <div key={cat} onClick={() => { setZdTab("tickets"); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1E213022", cursor: "pointer" }}
                       onMouseEnter={e => e.currentTarget.style.background = "#ffffff04"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                       <div style={{ width: 10, height: 10, borderRadius: 2, background: catColors[cat] || "#5A6178", flexShrink: 0 }} />
                       <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, flex: 1 }}>{cat}</span>
@@ -14009,8 +14061,16 @@ export default function ITSMApp() {
                 {sectionLabel("📡", "Recent AI Activity")}
                 {zdAutoLog.slice(0, 10).map((log, i) => {
                   const typeConfig = { auto_send: { icon: "⚡", color: "#81C784" }, human_review: { icon: "👤", color: "#FFB347" }, human_approved: { icon: "✅", color: "#4CAF50" }, human_edited: { icon: "✏️", color: "#64B5F6" }, incident_created: { icon: "🎫", color: "#6366F1" }, error: { icon: "❌", color: "#FF6B6B" }, info: { icon: "ℹ️", color: "#5A6178" }, config: { icon: "⚙️", color: "#EC4899" } }[log.type] || { icon: "📋", color: "#5A6178" };
+                  const logAction = () => {
+                    if (log.type === "incident_created") setActiveModule("incidents");
+                    else if (log.type === "auto_send" || log.type === "human_approved" || log.type === "human_edited") setZdTab("history");
+                    else if (log.type === "human_review") setZdTab("queue");
+                    else setZdTab("automation");
+                  };
                   return (
-                    <div key={log.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderBottom: i < 9 ? "1px solid #1E213022" : "none" }}>
+                    <div key={log.id} onClick={logAction} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderBottom: i < 9 ? "1px solid #1E213022" : "none", cursor: "pointer", borderRadius: 4, transition: "background 0.15s" }}
+                      onMouseEnter={e => e.currentTarget.style.background = typeConfig.color + "0A"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                       <span style={{ fontSize: 12, flexShrink: 0 }}>{typeConfig.icon}</span>
                       <div style={{ flex: 1, fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>{log.message}</div>
                       <span style={{ fontSize: 8, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", flexShrink: 0 }}>{new Date(log.timestamp).toLocaleString("en-SG", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
