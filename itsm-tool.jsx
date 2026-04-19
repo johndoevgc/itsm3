@@ -166,7 +166,28 @@ const AI_FEATURE_EXPLAINERS = {
   workflows: { title: "Workflow Automation", explain: "Automated rules that trigger actions based on conditions. Examples: auto-escalate Sev-A incidents after 15min, auto-approve low-risk changes, SLA breach alerts. AI can suggest new rules based on your ticket patterns. All rules are auditable." },
 };
 
-const ASSETS = [];
+const ASSETS = [
+  { id: "AST-001", name: "FortiGate 200F Primary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000123", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.1", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: ["INC0001"], customer: "VGC Technology", notes: "Primary VPN gateway — linked to INC0001 VPN outage" },
+  { id: "AST-002", name: "FortiGate 200F Secondary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000124", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.2", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "HA failover node" },
+  { id: "AST-003", name: "Core Switch Cisco C9300", type: "Switch", status: "In Use", serialNumber: "FOC2645Y0AB", manufacturer: "Cisco", model: "Catalyst 9300-48P", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.0.1", location: "SG-DC1", warranty: "2027-03-10", purchaseDate: "2024-03-10", purchaseCost: 18200, category: "Network", linkedIncidents: ["INC0001"], customer: "VGC Technology", notes: "SW-CORE-01 — referenced in INC0001 affected assets" },
+  { id: "AST-004", name: "Exchange Server 2019", type: "Server", status: "In Use", serialNumber: "MXF03926HV", manufacturer: "Dell", model: "PowerEdge R740", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.1.50", location: "SG-DC1", warranty: "2026-09-20", purchaseDate: "2023-09-20", purchaseCost: 22000, category: "Server", linkedIncidents: [], customer: "VGC Technology", notes: "On-prem Exchange — patching required per GTHR-001 CVE-2026-21413" },
+  { id: "AST-005", name: "Dell Latitude 5540 — Daniel Lim", type: "Laptop", status: "In Use", serialNumber: "DL5540SG001", manufacturer: "Dell", model: "Latitude 5540", assignee: "Daniel Lim", department: "Executive", ipAddress: "DHCP", location: "SG-HQ-Floor4", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "Kellington Group Pte Ltd", notes: "CTO laptop — VPN user affected by INC0001" },
+  { id: "AST-006", name: "Dell Latitude 5540 — Marcus Chen", type: "Laptop", status: "In Use", serialNumber: "DL5540SG002", manufacturer: "Dell", model: "Latitude 5540", assignee: "Marcus Chen", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor2", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "L1 Support Engineer workstation" },
+  { id: "AST-007", name: "Azure VM — ITSM Production", type: "Virtual Machine", status: "Running", serialNumber: "N/A", manufacturer: "Microsoft", model: "Azure B2s", assignee: "Cloud Engineering", department: "IT Infrastructure", ipAddress: "10.20.0.10", location: "Azure-SEA", warranty: "N/A", purchaseDate: "2025-11-01", purchaseCost: 0, category: "Cloud", linkedIncidents: [], customer: "VGC Technology", notes: "Hosts vgc-itsm1-app — Node.js 20 runtime" },
+  { id: "AST-008", name: "Cisco Meraki MR46 — Floor 1", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1001", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.11", location: "SG-HQ-Floor1", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "WiFi 6 access point" },
+  { id: "AST-009", name: "Cisco Meraki MR46 — Floor 2", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1002", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.12", location: "SG-HQ-Floor2", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "WiFi 6 access point" },
+  { id: "AST-010", name: "HP LaserJet Pro M428fdw", type: "Printer", status: "In Use", serialNumber: "VNB4C12345", manufacturer: "HP", model: "LaserJet Pro M428fdw", assignee: "Facilities", department: "Admin", ipAddress: "10.0.5.20", location: "SG-HQ-Floor2", warranty: "2026-08-10", purchaseDate: "2024-08-10", purchaseCost: 650, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "Shared printer — Floor 2" },
+  { id: "AST-011", name: "Microsoft 365 E3 Licenses (x120)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Microsoft", model: "M365 E3", assignee: "IT Admin", department: "All", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-04-01", purchaseCost: 43200, category: "Software", linkedIncidents: [], customer: "VGC Technology", notes: "120 E3 seats — annual renewal Apr 2026" },
+  { id: "AST-012", name: "Sophos XGS 3300", type: "Firewall", status: "In Use", serialNumber: "C44012345678", manufacturer: "Sophos", model: "XGS 3300", assignee: "Security Team", department: "IT Security", ipAddress: "10.0.1.10", location: "SG-DC1", warranty: "2027-11-01", purchaseDate: "2024-11-01", purchaseCost: 15800, category: "Security", linkedIncidents: [], customer: "VGC Technology", notes: "Web application firewall — WAF rules active" },
+  { id: "AST-013", name: "Dell PowerEdge R750 — DB Server", type: "Server", status: "In Use", serialNumber: "SVR-DB-001", manufacturer: "Dell", model: "PowerEdge R750", assignee: "Database Team", department: "IT Infrastructure", ipAddress: "10.10.2.30", location: "SG-DC1", warranty: "2027-05-20", purchaseDate: "2024-05-20", purchaseCost: 28000, category: "Server", linkedIncidents: [], customer: "VGC Technology", notes: "MSSQL production database server" },
+  { id: "AST-014", name: "Lenovo ThinkPad X1 Carbon — Priya Sharma", type: "Laptop", status: "In Use", serialNumber: "PF3KXXXX", manufacturer: "Lenovo", model: "ThinkPad X1 Carbon Gen 11", assignee: "Priya Sharma", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor3", warranty: "2027-03-01", purchaseDate: "2025-03-01", purchaseCost: 2400, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "Service Desk Lead workstation" },
+  { id: "AST-015", name: "UPS APC Smart-UPS 3000VA", type: "UPS", status: "In Use", serialNumber: "AS2430123456", manufacturer: "APC", model: "Smart-UPS SRT3000", assignee: "Facilities", department: "IT Infrastructure", ipAddress: "10.0.1.250", location: "SG-DC1", warranty: "2026-12-01", purchaseDate: "2023-12-01", purchaseCost: 4500, category: "Infrastructure", linkedIncidents: [], customer: "VGC Technology", notes: "Protects core switches and firewalls — 30min runtime" },
+  { id: "AST-016", name: "Zoom Rooms License (x10)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Zoom", model: "Zoom Rooms", assignee: "IT Admin", department: "All", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-06-01", purchaseCost: 6000, category: "Software", linkedIncidents: [], customer: "VGC Technology", notes: "Conference room licenses — 10 rooms" },
+  { id: "AST-017", name: "Dell Monitor U2723QE — Spare", type: "Monitor", status: "In Stock", serialNumber: "CN0XXXXX001", manufacturer: "Dell", model: "U2723QE 27\" 4K", assignee: "IT Store", department: "IT Support", ipAddress: "N/A", location: "SG-HQ-Floor1", warranty: "2028-01-10", purchaseDate: "2025-01-10", purchaseCost: 850, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "Spare monitor — ready for deployment" },
+  { id: "AST-018", name: "Synology NAS DS1621+", type: "NAS", status: "In Use", serialNumber: "2150SYN123456", manufacturer: "Synology", model: "DS1621+", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.3.10", location: "SG-DC1", warranty: "2027-07-01", purchaseDate: "2024-07-01", purchaseCost: 3200, category: "Storage", linkedIncidents: [], customer: "VGC Technology", notes: "Backup NAS — 48TB RAID6" },
+  { id: "AST-019", name: "SonicWall TZ470 — Branch Office", type: "Firewall", status: "Retired", serialNumber: "0017C5XXXXXX", manufacturer: "SonicWall", model: "TZ470", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "—", location: "SG-Branch", warranty: "2025-03-01", purchaseDate: "2022-03-01", purchaseCost: 3500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "Decommissioned — replaced by Sophos XGS" },
+  { id: "AST-020", name: "Adobe Creative Cloud Licenses (x5)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Adobe", model: "Creative Cloud All Apps", assignee: "Marketing", department: "Marketing", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-09-01", purchaseCost: 4200, category: "Software", linkedIncidents: [], customer: "VGC Technology", notes: "5 named-user licenses — annual renewal Sep 2026" },
+];
 
 // ─── SharePoint Knowledge Portal Config ─────────────────────────────
 const SHAREPOINT_KB_CONFIG = {
@@ -960,9 +981,30 @@ const INITIAL_INCIDENTS = [
     { id: "AL0004", type: "status", user: "Support Engineer", time: "16/04/2026, 08:36:00", detail: "Status changed: New → In Progress" },
   ]},
 ];
-const INITIAL_PROBLEMS = [];
-const INITIAL_CHANGES = [];
-const INITIAL_REQUESTS = [];
+const INITIAL_PROBLEMS = [
+  { id: "PRB0001", title: "Recurring VPN gateway memory exhaustion under load", status: "Under Investigation", priority: "Sev-A", category: "Network", assignee: "Network Engineering", reporter: "Support Engineer", created: 48, linkedIncidents: ["INC0001"], rootCause: "FortiGate connection table not clearing stale sessions — firmware regression in v7.4.3", workaround: "Scheduled nightly connection flush via automation", description: "VPN gateway hits 97% memory every 3-5 days when concurrent sessions exceed 200. HA failover does not trigger properly.", affectedAssets: ["FW-VPN-GW-01", "FW-VPN-GW-02"], customer: "VGC Technology", zdTicketId: null },
+  { id: "PRB0002", title: "Exchange 2019 CU15 causing Outlook profile corruption", status: "Root Cause Identified", priority: "Sev-B", category: "Email", assignee: "Server Team", reporter: "Marcus Chen", created: 120, linkedIncidents: [], rootCause: "Microsoft KB5035250 patch conflicts with custom transport rules — corrupts cached mode profiles", workaround: "Delete and recreate Outlook profile, disable cached mode temporarily", description: "Multiple users reporting Outlook crashes and profile corruption after March patch cycle. Affects on-prem Exchange 2019 with CU15.", affectedAssets: ["AST-004"], customer: "VGC Technology", zdTicketId: null },
+  { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", zdTicketId: null },
+  { id: "PRB0004", title: "Printer spooler crashes on shared print server", status: "Known Error", priority: "Sev-D", category: "Hardware", assignee: "Server Team", reporter: "Facilities", created: 240, linkedIncidents: [], rootCause: "HP Universal Print Driver v7.1 incompatible with Windows Server 2022 spooler service", workaround: "Restart Print Spooler service — automated via Task Scheduler every 6 hours", description: "Print spooler crashes 2-3 times daily affecting Floor 2 shared printer. HP driver update pending.", affectedAssets: ["AST-010"], customer: "VGC Technology", zdTicketId: null },
+];
+const INITIAL_CHANGES = [
+  { id: "CHG0001", title: "Emergency patch Exchange Server — CVE-2026-21413 (Critical RCE)", type: "Emergency", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Security", description: "Apply Microsoft emergency security patch for Exchange Server 2019 to mitigate CVE-2026-21413 remote code execution vulnerability. CVSS 9.8. Active exploitation detected in the wild. Requires 30-minute maintenance window.", assignee: "Server Team", requester: "Security Team", scheduledStart: "2026-04-19 22:00", scheduledEnd: "2026-04-19 23:00", backoutPlan: "Restore from pre-patch snapshot if patch causes service disruption", linkedIncident: "", linkedProblem: "PRB0002", affectedAssets: ["AST-004"], customer: "VGC Technology", approvers: [{ name: "Daniel Lim", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 2 },
+  { id: "CHG0002", title: "Upgrade FortiGate firmware to v7.4.5 — fix VPN memory leak", type: "Normal", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Network", description: "Upgrade both FortiGate 200F units (primary + secondary) from v7.4.3 to v7.4.5. Fixes connection table memory leak causing VPN gateway crashes (PRB0001). Requires HA failover procedure.", assignee: "Network Engineering", requester: "Network Engineering", scheduledStart: "2026-04-20 23:00", scheduledEnd: "2026-04-21 01:00", backoutPlan: "Rollback to v7.4.3 firmware backup if failover doesn't complete cleanly", linkedIncident: "INC0001", linkedProblem: "PRB0001", affectedAssets: ["AST-001", "AST-002"], customer: "VGC Technology", approvers: [{ name: "Change Manager", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 24 },
+  { id: "CHG0003", title: "Deploy phishing-resistant MFA (FIDO2 keys) for admin accounts", type: "Normal", status: "Awaiting Approval", risk: "Medium", impact: "Department", category: "Security", description: "Replace SMS-based MFA with FIDO2 security keys for all administrator and privileged accounts (15 users). Part of Cybertrust Mark CSA compliance roadmap.", assignee: "Security Team", requester: "CISO", scheduledStart: "2026-04-22 14:00", scheduledEnd: "2026-04-22 17:00", backoutPlan: "Revert to SMS MFA if FIDO2 enrollment fails — conditional access policy rollback", linkedIncident: "", linkedProblem: "", affectedAssets: [], customer: "VGC Technology", approvers: [{ name: "IT Manager", status: "Pending" }, { name: "CISO", status: "Approved" }], zdTicketId: null, created: 48 },
+  { id: "CHG0004", title: "Meraki AP firmware update — WiFi 6E optimization", type: "Standard", status: "Approved", risk: "Low", impact: "Department", category: "Network", description: "Update Meraki MR46 APs on Floor 1-2 to latest firmware. Addresses DNS resolution intermittent failures during peak hours (PRB0003).", assignee: "Network Engineering", requester: "L1 Support", scheduledStart: "2026-04-21 20:00", scheduledEnd: "2026-04-21 21:00", backoutPlan: "Rollback via Meraki dashboard — automatic", linkedIncident: "", linkedProblem: "PRB0003", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", approvers: [{ name: "Change Manager", status: "Approved" }], zdTicketId: null, created: 72 },
+  { id: "CHG0005", title: "Migrate ITSM database to Azure SQL Managed Instance", type: "Normal", status: "Implementing", risk: "Medium", impact: "Enterprise", category: "Cloud", description: "Migrate ITSM MSSQL database from on-prem PowerEdge R750 to Azure SQL Managed Instance for improved HA, auto-patching, and geo-redundancy. Includes data migration, connection string updates, and validation.", assignee: "Cloud Engineering", requester: "Cloud Engineering", scheduledStart: "2026-04-18 22:00", scheduledEnd: "2026-04-19 04:00", backoutPlan: "Revert connection strings to on-prem server — data sync back if needed", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-007", "AST-013"], customer: "VGC Technology", approvers: [{ name: "IT Manager", status: "Approved" }, { name: "DBA Lead", status: "Approved" }], zdTicketId: null, created: 18 },
+  { id: "CHG0006", title: "Replace SonicWall TZ470 with Sophos XGS at branch", type: "Normal", status: "Closed", risk: "Medium", impact: "Department", category: "Network", description: "Decommission legacy SonicWall TZ470 at branch office. Replace with Sophos XGS 3300 — already procured and pre-configured.", assignee: "Network Engineering", requester: "IT Manager", scheduledStart: "2026-04-10 09:00", scheduledEnd: "2026-04-10 17:00", backoutPlan: "Re-install SonicWall if Sophos config has issues", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-019", "AST-012"], customer: "VGC Technology", approvers: [{ name: "Change Manager", status: "Approved" }], zdTicketId: null, created: 216 },
+];
+const INITIAL_REQUESTS = [
+  { id: "REQ0001", service: "New Laptop Setup — Marketing Team Hire", status: "Pending Approval", priority: "Sev-C", category: "Hardware", requester: "HR Manager", requesterEmail: "hr@vgctechnology.com", assignee: "IT Support", assignmentGroup: "End User Computing", description: "New Dell Latitude 5540 needed for marketing hire starting 2026-04-22. Requires M365 E3, Adobe CC, VPN access, and standard security policy.", customer: "VGC Technology", created: 12, slaTarget: 24, zdTicketId: null },
+  { id: "REQ0002", service: "VPN Access Request — Remote Worker", status: "Pending Approval", priority: "Sev-C", category: "Access", requester: "Daniel Lim", requesterEmail: "daniel.lim@kellington.com", assignee: "", assignmentGroup: "Network Engineering", description: "Request permanent VPN access for new Kellington remote staff member. Requires FortiClient setup with MFA enrollment.", customer: "Kellington Group Pte Ltd", created: 6, slaTarget: 8, zdTicketId: null },
+  { id: "REQ0003", service: "Microsoft 365 License Upgrade — E3 to E5", status: "Pending Approval", priority: "Sev-D", category: "Software", requester: "CISO", requesterEmail: "security@vgctechnology.com", assignee: "IT Admin", assignmentGroup: "License Management", description: "Upgrade 15 security team M365 licenses from E3 to E5 for Microsoft Defender for Endpoint P2, eDiscovery Premium, and Information Protection.", customer: "VGC Technology", created: 48, slaTarget: 72, zdTicketId: null },
+  { id: "REQ0004", service: "Conference Room AV Setup — Floor 3", status: "In Progress", priority: "Sev-D", category: "Hardware", requester: "Facilities Manager", requesterEmail: "facilities@vgctechnology.com", assignee: "IT Support", assignmentGroup: "End User Computing", description: "Install Zoom Rooms setup in Floor 3 conference room B. Includes Poly Studio X30 bar, Logitech Tap controller, and Dell 55\" display.", customer: "VGC Technology", created: 96, slaTarget: 120, zdTicketId: null },
+  { id: "REQ0005", service: "Password Reset — Kellington Staff", status: "Fulfilled", priority: "Sev-D", category: "Access", requester: "Sarah Tan", requesterEmail: "sarah.tan@kellington.com", assignee: "Marcus Chen", assignmentGroup: "Service Desk", description: "Password reset for Active Directory and M365 account. User locked out after 5 failed attempts.", customer: "Kellington Group Pte Ltd", created: 168, slaTarget: 4, zdTicketId: null },
+  { id: "REQ0006", service: "Firewall Rule Change — Allow SaaS App", status: "Pending Approval", priority: "Sev-C", category: "Network", requester: "Application Team", requesterEmail: "apps@vgctechnology.com", assignee: "Network Engineering", assignmentGroup: "Network Engineering", description: "Open outbound HTTPS (443) to api.newcrm.io and cdn.newcrm.io on FortiGate for new CRM SaaS evaluation. Security review completed.", customer: "VGC Technology", created: 24, slaTarget: 48, zdTicketId: null },
+  { id: "REQ0007", service: "User Offboarding — Ex-Employee", status: "In Progress", priority: "Sev-B", category: "Access", requester: "HR Manager", requesterEmail: "hr@vgctechnology.com", assignee: "IT Admin", assignmentGroup: "Identity & Access", description: "Full offboarding for departed employee: disable AD account, revoke MFA, forward email to manager, backup OneDrive, collect laptop (AST-019 area), revoke all app access.", customer: "VGC Technology", created: 4, slaTarget: 8, zdTicketId: null },
+  { id: "REQ0008", service: "Database Backup Verification", status: "Open", priority: "Sev-C", category: "Database", requester: "DBA Lead", requesterEmail: "dba@vgctechnology.com", assignee: "Database Team", assignmentGroup: "Database", description: "Verify all production database backups from the past 7 days are restorable. Part of quarterly DR testing procedure.", customer: "VGC Technology", created: 2, slaTarget: 24, zdTicketId: null },
+];
 
 // ─── Style Constants ─────────────────────────────────────────────────────
 const PRIORITY_COLORS = {
@@ -1187,7 +1229,20 @@ const SearchBar = ({ value, onChange, placeholder }) => (
 // ─── Main App ────────────────────────────────────────────────────────────
 export default function ITSMApp() {
   const [activeModule, setActiveModule] = useState("dashboard");
-  const _ls = (key, fallback) => { try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
+  const DATA_VERSION = "v2.1";
+  const _ls = (key, fallback) => {
+    try {
+      const curVer = localStorage.getItem("vgc_data_version");
+      if (curVer !== DATA_VERSION) {
+        // Clear stale data on version bump so new seed data takes effect
+        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services"].forEach(k => localStorage.removeItem(k));
+        localStorage.setItem("vgc_data_version", DATA_VERSION);
+        return fallback;
+      }
+      const s = localStorage.getItem(key);
+      return s ? JSON.parse(s) : fallback;
+    } catch { return fallback; }
+  };
 
   // ─── Microsoft Entra ID SSO & Graph API ─────────────────────────────
   const { instance: msalInstance, accounts } = useMsal();
@@ -4795,11 +4850,11 @@ export default function ITSMApp() {
           </div>
         </div>
 
-        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Detailed SLA Status</h3>
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Detailed Incident SLA Status</h3>
           <DataTable
             columns={[
-              { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#64B5F6" }}>{r.id}</span> },
+              { label: "ID", key: "id", mono: true, render: r => <span style={{ color: r.zdTicketId ? "#EC4899" : "#64B5F6" }}>{r.id}{r.zdTicketId ? " 🎫" : ""}</span> },
               { label: "Title", key: "title" },
               { label: "Severity", render: r => <PriorityDot priority={r.priority} /> },
               { label: "1st Resp", render: r => {
@@ -4818,6 +4873,7 @@ export default function ITSMApp() {
                   {rem <= 0 ? `${Math.abs(rem)}h over` : `${rem}h left`}
                 </span>;
               }},
+              { label: "Source", render: r => r.zdTicketId ? <Badge color={{ bg: "#2D0A2D", text: "#EC4899" }}>Zendesk</Badge> : <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>ITSM</Badge> },
               { label: "Status", render: r => {
                 const pct = Math.round((r.created / r.slaTarget) * 100);
                 return <Badge color={pct >= 100 ? PRIORITY_COLORS["Sev-A"] : pct >= 75 ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>
@@ -4827,6 +4883,115 @@ export default function ITSMApp() {
             ]}
             data={activeInc}
           />
+        </div>
+
+        {/* Service Request SLA Tracking */}
+        {(() => {
+          const activeReqs = requests.filter(r => r.status !== "Fulfilled" && r.status !== "Closed");
+          const reqCompliant = activeReqs.filter(r => r.slaTarget && r.created <= r.slaTarget).length;
+          const reqTotal = activeReqs.length;
+          const reqPct = reqTotal > 0 ? Math.round((reqCompliant / reqTotal) * 100) : 100;
+          return reqTotal > 0 ? (
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #81C78433", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 Service Request SLA Tracking</h3>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{reqCompliant}/{reqTotal} within SLA</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: reqPct >= 90 ? "#4CAF50" : reqPct >= 70 ? "#FFB347" : "#FF4444", fontFamily: "'JetBrains Mono', monospace" }}>{reqPct}%</span>
+                </div>
+              </div>
+              <DataTable
+                columns={[
+                  { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#81C784" }}>{r.id}</span> },
+                  { label: "Service", key: "service" },
+                  { label: "Priority", render: r => <PriorityDot priority={r.priority} /> },
+                  { label: "Requester", key: "requester" },
+                  { label: "Customer", render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.customer || "—"}</span> },
+                  { label: "Elapsed", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.created}h</span> },
+                  { label: "SLA Target", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.slaTarget || "—"}h</span> },
+                  { label: "Status", render: r => {
+                    if (!r.slaTarget) return <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge>;
+                    const pct = Math.round((r.created / r.slaTarget) * 100);
+                    return <Badge color={pct >= 100 ? PRIORITY_COLORS["Sev-A"] : pct >= 75 ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>
+                      {pct >= 100 ? "BREACHED" : pct >= 75 ? "AT RISK" : "ON TRACK"}
+                    </Badge>;
+                  }},
+                ]}
+                data={activeReqs}
+              />
+            </div>
+          ) : null;
+        })()}
+
+        {/* Change Request SLA */}
+        {(() => {
+          const pendingChanges = changes.filter(c => !["Closed", "Implemented"].includes(c.status));
+          return pendingChanges.length > 0 ? (
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FFB34733", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🔄 Change Request SLA</h3>
+                <span style={{ fontSize: 10, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>{pendingChanges.filter(c => c.status === "Awaiting Approval").length} awaiting approval</span>
+              </div>
+              <DataTable
+                columns={[
+                  { label: "ID", key: "id", mono: true, render: r => <span style={{ color: "#FFB347" }}>{r.id}</span> },
+                  { label: "Title", key: "title" },
+                  { label: "Type", render: r => <Badge color={r.type === "Emergency" ? PRIORITY_COLORS["Sev-A"] : { bg: "#0D2137", text: "#64B5F6" }}>{r.type}</Badge> },
+                  { label: "Risk", render: r => <Badge color={PRIORITY_COLORS[r.risk === "High" ? "Sev-A" : r.risk === "Medium" ? "Sev-B" : "Sev-D"]}>{r.risk}</Badge> },
+                  { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
+                  { label: "Scheduled", render: r => <span style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{r.scheduledStart || "—"}</span> },
+                  { label: "Approvers", render: r => (
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {(r.approvers || []).map((a, i) => (
+                        <span key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: a.status === "Approved" ? "#4CAF50" : a.status === "Rejected" ? "#FF4444" : "#FFB347" }} title={`${a.name}: ${a.status}`} />
+                      ))}
+                    </div>
+                  )},
+                ]}
+                data={pendingChanges}
+              />
+            </div>
+          ) : null;
+        })()}
+
+        {/* Zendesk SLA Integration */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #EC489933", padding: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🎫 Zendesk ↔ ITSM SLA Cross-Reference</h3>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {zdConnected && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4CAF50", boxShadow: "0 0 6px #4CAF5066" }} />}
+              <span style={{ fontSize: 10, color: zdConnected ? "#4CAF50" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{zdConnected ? "Connected" : "Not connected"}</span>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+            {[
+              { label: "ITSM Incidents", value: incidents.length, color: "#64B5F6", icon: "📊" },
+              { label: "ZD-Linked", value: incidents.filter(i => i.zdTicketId).length, color: "#EC4899", icon: "🔗" },
+              { label: "SLA Compliant", value: `${compliancePct}%`, color: compliancePct >= 90 ? "#4CAF50" : "#FFB347", icon: "✅" },
+              { label: "Active Requests", value: requests.filter(r => r.status !== "Fulfilled" && r.status !== "Closed").length, color: "#81C784", icon: "📋" },
+              { label: "Pending Approvals", value: changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, color: "#FFB347", icon: "⏳" },
+              { label: "Problems Open", value: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length, color: "#CE93D8", icon: "🔍" },
+            ].map((s, i) => (
+              <div key={i} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${s.color}22` }}>
+                <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>{s.icon} {s.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+          {!zdConnected && (
+            <div style={{ padding: "16px 20px", background: "#FF6B6B08", borderRadius: 8, border: "1px solid #FF6B6B22", textAlign: "center" }}>
+              <div style={{ fontSize: 12, color: "#FF6B6B", marginBottom: 4 }}>Zendesk not connected</div>
+              <div style={{ fontSize: 11, color: "#5A6178" }}>Go to <span style={{ color: "#EC4899", cursor: "pointer", textDecoration: "underline" }} onClick={() => setActiveModule("zendesk")}>Zendesk AI Command Center</span> to connect and enable real-time SLA sync</div>
+            </div>
+          )}
+          {zdConnected && (
+            <div style={{ padding: "12px 16px", background: "#4CAF5008", borderRadius: 8, border: "1px solid #4CAF5022" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 10, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace" }}>✅ Zendesk SLA data synced — auto-triage every 60s</span>
+                <span style={{ marginLeft: "auto", fontSize: 9, color: "#5A617866" }}>Linked incidents inherit Zendesk ticket SLA timers</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -9890,7 +10055,7 @@ export default function ITSMApp() {
         </div>
 
         {/* Quick Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 14 }}>
           {[
             { label: "Total Incidents", value: totalInc, color: "#6366F1", icon: "📋", link: "incidents" },
             { label: "Open Tickets", value: openInc, color: "#FF6B6B", icon: "🔴", link: "incidents" },
@@ -9909,6 +10074,27 @@ export default function ITSMApp() {
                 <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
                 {s.link && <span style={{ fontSize: 10, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>→</span>}
               </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ITSM Cross-Module Summary */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+          {[
+            { label: "Active Changes", value: changes.filter(c => !["Closed"].includes(c.status)).length, color: "#FFB347", icon: "🔄", link: "changes" },
+            { label: "Service Requests", value: requests.filter(r => r.status !== "Fulfilled" && r.status !== "Closed").length, color: "#81C784", icon: "📝", link: "requests" },
+            { label: "Open Problems", value: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length, color: "#CE93D8", icon: "🔍", link: "problems" },
+            { label: "CMDB Assets", value: assets.length, color: "#06B6D4", icon: "💻", link: "assets" },
+            { label: "ZD-Linked", value: incidents.filter(i => i.zdTicketId).length, color: "#EC4899", icon: "🎫", link: "zendesk" },
+          ].map((s, i) => (
+            <div key={i} onClick={() => s.link && setActiveModule(s.link)} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.color}22`, cursor: "pointer", transition: "transform 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 12 }}>{s.icon}</span>
+                <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{s.label}</span>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
             </div>
           ))}
         </div>
