@@ -14,9 +14,10 @@ const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
-const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
-const AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
-const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-mini";
+// Primary: gpt-5.4-pro (East US 2) — Secondary: previous model as fallback
+let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
+let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "BCGYlxp4toZd7q4vflLPIR0Hqa6FZJo1DP4vk0JolcjSmY3TgCvNJQQJ99CDACHYHv6XJ3w3AAAAACOGjzsj";
+let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-pro";
 
 // Zendesk API config (server-side only — protects API token)
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
@@ -2042,6 +2043,26 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     } catch (err) {
       return json(res, 200, { ok: false, detail: `Connection error: ${err.message}` });
     }
+  }
+
+  // ─── Azure OpenAI — Save Settings (runtime) ─────────────────────────
+  if (pathname === "/api/settings/openai" && req.method === "POST") {
+    const body = await parseBody(req);
+    const { endpoint, apiKey, model } = body || {};
+    if (endpoint) AZURE_OPENAI_ENDPOINT = endpoint;
+    if (apiKey) AZURE_OPENAI_KEY = apiKey;
+    if (model) AZURE_OPENAI_MODEL = model;
+    console.log(`[OPENAI] Settings updated. Model=${AZURE_OPENAI_MODEL}, Endpoint=${AZURE_OPENAI_ENDPOINT.substring(0, 60)}...`);
+    return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, message: "Azure OpenAI settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
+  }
+
+  // ─── Azure OpenAI — Get Current Config: GET /api/settings/openai ────
+  if (pathname === "/api/settings/openai" && req.method === "GET") {
+    return json(res, 200, {
+      model: AZURE_OPENAI_MODEL,
+      endpoint: AZURE_OPENAI_ENDPOINT.replace(/api-key=[^&]+/, "api-key=***"),
+      configured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
+    });
   }
 
   // ─── SolarWinds RMM — Save Settings ────────────────────────────────

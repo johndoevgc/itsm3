@@ -14,9 +14,10 @@ const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
-const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
-const AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
-const AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-mini";
+// Primary: gpt-5.4-pro (East US 2) — Secondary: previous model as fallback
+let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
+let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "BCGYlxp4toZd7q4vflLPIR0Hqa6FZJo1DP4vk0JolcjSmY3TgCvNJQQJ99CDACHYHv6XJ3w3AAAAACOGjzsj";
+let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-pro";
 
 // Zendesk API config (server-side only — protects API token)
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
@@ -1747,6 +1748,70 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── AI Knowledge File Upload: POST /api/ai/knowledge/upload ───────
+  if (pathname === "/api/ai/knowledge/upload" && req.method === "POST") {
+    try {
+      const contentType = req.headers["content-type"] || "";
+      if (!contentType.includes("multipart/form-data")) {
+        return json(res, 400, { error: "multipart/form-data required" });
+      }
+      // Parse multipart form data manually (no external deps)
+      const boundary = contentType.split("boundary=")[1];
+      if (!boundary) return json(res, 400, { error: "Missing boundary" });
+      const chunks = [];
+      await new Promise((resolve, reject) => {
+        req.on("data", c => chunks.push(c));
+        req.on("end", resolve);
+        req.on("error", reject);
+      });
+      const buf = Buffer.concat(chunks);
+      const parts = buf.toString("binary").split("--" + boundary).filter(p => p.trim() && p.trim() !== "--");
+      let title = "", category = "General", tags = "", trainedBy = "Unknown", fileName = "", fileType = "", fileSize = 0, fileContent = "";
+      for (const part of parts) {
+        const [headerSection, ...bodySections] = part.split("\r\n\r\n");
+        const body = bodySections.join("\r\n\r\n").replace(/\r\n$/, "");
+        const nameMatch = headerSection.match(/name="([^"]+)"/);
+        const filenameMatch = headerSection.match(/filename="([^"]+)"/);
+        if (!nameMatch) continue;
+        const fieldName = nameMatch[1];
+        if (filenameMatch) {
+          fileName = filenameMatch[1];
+          fileSize = Buffer.byteLength(body, "binary");
+          const ext = fileName.split(".").pop().toLowerCase();
+          const typeMap = { doc: "Word", docx: "Word", xls: "Excel", xlsx: "Excel", ppt: "PowerPoint", pptx: "PowerPoint", pdf: "PDF", txt: "Text", csv: "CSV", md: "Markdown", json: "JSON", png: "Image", jpg: "Image", jpeg: "Image", gif: "Image", webp: "Image", mp4: "Video", webm: "Video", mov: "Video" };
+          fileType = typeMap[ext] || "Document";
+          // For text-based files, extract content
+          if (["txt", "csv", "md", "json"].includes(ext)) {
+            fileContent = Buffer.from(body, "binary").toString("utf8").substring(0, 10000);
+          }
+        } else {
+          const val = body.trim();
+          if (fieldName === "title") title = val;
+          else if (fieldName === "category") category = val;
+          else if (fieldName === "tags") tags = val;
+          else if (fieldName === "trainedBy") trainedBy = val;
+        }
+      }
+      if (!fileName) return json(res, 400, { error: "No file uploaded" });
+      const id = `kb_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const entry = {
+        id, title: (title || fileName).trim(), category: (category || "General").trim(),
+        content: fileContent || `[Uploaded ${fileType}: ${fileName}] (${(fileSize / 1024).toFixed(1)} KB)\n\nFile type: ${fileType}. This document has been indexed for AI training reference.`,
+        tags: tags ? tags.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [fileType.toLowerCase()],
+        trainedBy: trainedBy || "Unknown",
+        fileName, fileType, fileSize,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+      };
+      await db.upsert("ai_knowledge", id, JSON.stringify(entry));
+      await db.audit("ai_knowledge", id, "upload", JSON.stringify({ fileName, fileType, fileSize }), trainedBy);
+      console.log(`[AI Knowledge Upload] "${fileName}" (${fileType}, ${(fileSize / 1024).toFixed(1)}KB) by ${trainedBy}`);
+      return json(res, 201, { entry });
+    } catch (err) {
+      console.error("[AI Knowledge Upload]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
@@ -1978,6 +2043,26 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     } catch (err) {
       return json(res, 200, { ok: false, detail: `Connection error: ${err.message}` });
     }
+  }
+
+  // ─── Azure OpenAI — Save Settings (runtime) ─────────────────────────
+  if (pathname === "/api/settings/openai" && req.method === "POST") {
+    const body = await parseBody(req);
+    const { endpoint, apiKey, model } = body || {};
+    if (endpoint) AZURE_OPENAI_ENDPOINT = endpoint;
+    if (apiKey) AZURE_OPENAI_KEY = apiKey;
+    if (model) AZURE_OPENAI_MODEL = model;
+    console.log(`[OPENAI] Settings updated. Model=${AZURE_OPENAI_MODEL}, Endpoint=${AZURE_OPENAI_ENDPOINT.substring(0, 60)}...`);
+    return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, message: "Azure OpenAI settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
+  }
+
+  // ─── Azure OpenAI — Get Current Config: GET /api/settings/openai ────
+  if (pathname === "/api/settings/openai" && req.method === "GET") {
+    return json(res, 200, {
+      model: AZURE_OPENAI_MODEL,
+      endpoint: AZURE_OPENAI_ENDPOINT.replace(/api-key=[^&]+/, "api-key=***"),
+      configured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
+    });
   }
 
   // ─── SolarWinds RMM — Save Settings ────────────────────────────────

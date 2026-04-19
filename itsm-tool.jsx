@@ -6,12 +6,12 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.5.0",
-  build: "581fec9",
+  version: "3.6.0",
+  build: "6c1bf69",
   date: "2026-04-19",
   channel: "Production",
   name: "VGC-ITSM",
-  engine: "VGC-AI v3.1 (GPT-Enhanced)",
+  engine: "VGC-AI v3.5 (GPT-5.4-Pro)",
   platform: "Azure App Service (Linux Node 20)",
   region: "AP-Southeast (Singapore)",
   license: "Enterprise — Per User Subscription",
@@ -1502,7 +1502,7 @@ export default function ITSMApp() {
     const defaults = {
       endpoint: "Server-side proxy (/api/ai/chat)",
       apiKey: "Managed server-side",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.4-pro",
       enabled: true,
       showKey: false,
       testStatus: null, // null | "testing" | "success" | "error"
@@ -2468,7 +2468,7 @@ export default function ITSMApp() {
   const [infraConfig] = useState({
     database: { type: "Azure MySQL Flexible Server", region: "Southeast Asia (Singapore)", server: "vgc-itsm1-mysql.mysql.database.azure.com", database: "itsmdb", tier: "Burstable", sku: "Standard_B1ms", version: "8.0.21", storage: "20 GB", ha: "Disabled", backupRetention: "7 days", status: "Ready" },
     webApp: { name: "vgc-itsm1-app", region: "Southeast Asia (Singapore)", plan: "B1 (Basic)", runtime: "Node.js 20 LTS", status: "Running", url: "vgc-itsm1-app.azurewebsites.net", ssl: "Azure Managed", scaling: "Manual (1 instance)", deployment: "ZIP Deploy (az webapp deploy)" },
-    openAI: { name: "vgc-ai-model-1", region: "Southeast Asia", sku: "S0", endpoint: "https://vgc-ai-model-1.openai.azure.com/", rg: "AI-Models-RG1", status: "Active" },
+    openAI: { name: "hlain-mo2f4i57", region: "East US 2", sku: "S0", endpoint: "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/", model: "gpt-5.4-pro", rg: "AI-Models-RG1", status: "Active" },
     identity: { name: "oidc-msi-b517", type: "User Assigned Managed Identity" },
     zendesk: { domain: "vgctech.zendesk.com", status: "Connected" },
     cost: {
