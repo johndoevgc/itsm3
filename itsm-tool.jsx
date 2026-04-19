@@ -1591,6 +1591,13 @@ export default function ITSMApp() {
   });
   const [currentUser, setCurrentUser] = useState(() => _ls("vgc_current_user", null));
   const [isLoggedIn, setIsLoggedIn] = useState(() => _ls("vgc_current_user", null) !== null);
+
+  // ─── HARD RULE: Data Isolation Mode ────────────────────────────────
+  // Demo mode = local devadmin user → only demo/seed data, NO production API calls
+  // Production mode = Entra ID users → only real Zendesk/API data, NO demo/hardcoded data
+  const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
+  const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
+
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");
   const [localLoginError, setLocalLoginError] = useState("");
@@ -1608,14 +1615,13 @@ export default function ITSMApp() {
     try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch {}
   }, [cardLayout]);
 
-  // ─── Clear demo/hardcoded data for Entra ID users ─────────────────
-  // Demo seed data should only appear for local devadmin user.
-  // Entra ID users get empty arrays (real data comes from Zendesk API).
+  // ─── HARD RULE: Data Isolation — Demo vs Production ─────────────────
+  // Rule 1: Demo user (devadmin) must NEVER see production Zendesk data
+  // Rule 2: Entra ID users must ONLY see production data — zero demo/hardcoded data
   useEffect(() => {
     if (!currentUser) return;
-    const isLocalDevAdmin = currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin";
-    if (!isLocalDevAdmin) {
-      // Clear Zendesk demo data — real data will be fetched from API
+    if (isEntraProductionUser) {
+      // Clear ALL demo/hardcoded data — production users get ONLY real API data
       const demoCleared = sessionStorage.getItem("vgc_demo_cleared_" + currentUser.id);
       if (!demoCleared) {
         setZdTickets([]);
@@ -1623,10 +1629,25 @@ export default function ITSMApp() {
         setZdAiQueue([]);
         setZdAutoLog([]);
         setZdAutoStats({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
+        // Clear demo incidents/problems/changes/requests — real data comes from DB/API
+        localStorage.removeItem("vgc_incidents");
+        localStorage.removeItem("vgc_problems");
+        localStorage.removeItem("vgc_changes");
+        localStorage.removeItem("vgc_requests");
+        localStorage.removeItem("vgc_zd_tickets");
+        localStorage.removeItem("vgc_zd_stats");
+        localStorage.removeItem("vgc_zd_ai_queue");
+        localStorage.removeItem("vgc_zd_auto_log");
+        localStorage.removeItem("vgc_zd_auto_stats");
+        setIncidents([]);
+        setProblems([]);
+        setChanges([]);
+        setRequests([]);
         sessionStorage.setItem("vgc_demo_cleared_" + currentUser.id, "1");
+        console.log("[DATA ISOLATION] Production mode: all demo data cleared for Entra user", currentUser.email);
       }
     }
-  }, [currentUser]);
+  }, [currentUser, isEntraProductionUser]);
 
   // Fetch live cyber news for dashboard threat feed
   useEffect(() => {
@@ -2334,7 +2355,12 @@ export default function ITSMApp() {
   useEffect(() => { _save("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Global Auto-Sync: Zendesk ↔ ITSM (every 60s) ─────────────────
+  // HARD RULE: Demo user must NEVER trigger production API calls
   useEffect(() => {
+    if (isLocalDemoUser) {
+      console.log("[DATA ISOLATION] Demo mode: Zendesk sync disabled for local devadmin");
+      return; // No sync for demo user — only seed data
+    }
     const doSync = async () => {
       try {
         setGlobalSyncActive(true);
@@ -2368,7 +2394,7 @@ export default function ITSMApp() {
     doSync(); // immediate on mount
     globalSyncRef.current = setInterval(doSync, 60000); // every 60s
     return () => { if (globalSyncRef.current) clearInterval(globalSyncRef.current); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isLocalDemoUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // SVG Icon Components — Enterprise Cybersecurity Grade
   const NavIcon = ({ type, isActive }) => {
@@ -6720,8 +6746,11 @@ export default function ITSMApp() {
     if (!overrideMsg) setAiInput("");
     setAiLoading(true);
     (async () => {
+      const dataMode = isLocalDemoUser ? "DEMO" : "PRODUCTION";
       const systemPrompt = [
         `You are VGC-ITSM AI Co-Pilot for VGC Technology Pte Ltd, Singapore. You work alongside ${currentUser.name} as a helpful, friendly colleague — not a bot.`,
+        `CURRENT DATA MODE: ${dataMode}. ${isLocalDemoUser ? "You are in DEMO MODE — all data shown is sample/seed data only. NEVER attempt to fetch, display, or reference production Zendesk data. If the user asks about production tickets or real customer data, ALERT them: 'You are in Demo Mode — production data is not available. Please sign in with your Entra ID account to access production data.'" : "You are in PRODUCTION MODE — all data comes from live Zendesk and ITSM APIs. NEVER show demo/hardcoded data. If any response contains placeholder ticket IDs (like INC0001 or #48201-48208 from seed data), flag it immediately and refresh from live sources."}`,
+        `DATA ISOLATION GUARD (HARD RULE): If you detect a human mistake that could mix demo data into production or vice versa — IMMEDIATELY alert the user with a clear warning. Examples: trying to use demo ticket IDs in production, attempting to connect Zendesk in demo mode, referencing hardcoded data in production mode. Say: "⚠️ Data Isolation Alert: [explain the issue]. This could compromise data integrity."`,
         `TONE & STYLE: Be warm, conversational, and human. Write like a knowledgeable colleague chatting — not a machine generating text. Use natural language, contractions, and a friendly tone. Break responses into short conversational chunks — never dump a wall of text. Ask follow-up questions to understand the full picture before jumping to solutions.`,
         `CORE ROLE: Help engineers and administrators resolve IT tickets, incidents, requests, and problems. Provide fast, accurate guidance. Proactively suggest next steps, follow-ups, and improvements. Advise on best practices. Always seek to understand the context, tone, and scenario before responding.`,
         `LEARN FROM ITSM DATA FIRST: Always check internal ITSM data (tickets, incidents, KB articles, change records, Zendesk historical data) before searching external sources. Learn patterns from past tickets — similar issues, recurring problems, what worked before. Reference historical resolutions when relevant.`,
@@ -12886,6 +12915,11 @@ export default function ITSMApp() {
   const ZendeskModule = () => {
     // ── Core Functions ──
     const zdConnect = async () => {
+      // HARD RULE: Demo user must NOT connect to production Zendesk
+      if (isLocalDemoUser) {
+        setZdError("⚠️ Data Isolation: Demo mode cannot access production Zendesk. Sign in with your Entra ID account to access production data.");
+        return;
+      }
       setZdLoading(true); setZdError(null);
       try {
         const r = await fetch("/api/zendesk/me");
@@ -12903,6 +12937,7 @@ export default function ITSMApp() {
     };
 
     const zdFetchTickets = async (status, page) => {
+      if (isLocalDemoUser) return; // Data Isolation: no production API calls in demo mode
       const s = status || zdFilter; const p = page || 1;
       setZdLoading(true);
       try {
@@ -13102,6 +13137,7 @@ export default function ITSMApp() {
 
     // Real-time incremental sync polling (every 30s)
     React.useEffect(() => {
+      if (isLocalDemoUser) return; // Data Isolation: no production polling in demo mode
       if (zdConnected && zdRealTimeEnabled) {
         // Fetch sync status on connect
         fetch("/api/zendesk/sync-status").then(r => r.json()).then(data => setZdSyncStatus(data)).catch(() => {});
@@ -13137,6 +13173,7 @@ export default function ITSMApp() {
 
     // ── Full Historical Import ──
     const zdFullImport = async (options = {}) => {
+      if (isLocalDemoUser) { setZdError("⚠️ Data Isolation: Demo mode cannot run production imports."); return; }
       if (zdSyncInProgress) return;
       setZdSyncInProgress(true);
       setZdSyncProgress({ phase: "Starting", message: "Initiating full historical import from Zendesk..." });
@@ -15011,6 +15048,14 @@ export default function ITSMApp() {
                 }}>VGC-ITSM</span>
                 <span style={{ fontSize: 9, color: "#5A617899", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1.5px", textTransform: "uppercase" }}>Service Management</span>
                 <span style={{ fontSize: 7, color: "#5A617855", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.3px", display: "block", marginTop: 2 }}>Developed by VGC Technology Pte Ltd</span>
+                {/* Data Mode Indicator — Hard Rule */}
+                <span style={{
+                  fontSize: 7, fontWeight: 700, padding: "1px 6px", borderRadius: 4, display: "inline-block", marginTop: 3,
+                  fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.5px",
+                  background: isLocalDemoUser ? "#FFB34722" : "#4CAF5022",
+                  color: isLocalDemoUser ? "#FFB347" : "#4CAF50",
+                  border: `1px solid ${isLocalDemoUser ? "#FFB34733" : "#4CAF5033"}`
+                }}>{isLocalDemoUser ? "DEMO MODE" : "PRODUCTION"}</span>
               </div>
             </div>
           ) : (
