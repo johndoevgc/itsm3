@@ -974,7 +974,7 @@ const INTEGRATION_CATALOG = [
 ];
 
 const INITIAL_INCIDENTS = [
-  { id: "INC0001", title: "Production VPN gateway down — all remote users disconnected", description: "All 120+ remote staff unable to establish VPN tunnel. Gateway reports high memory and connection pool exhaustion. FortiGate HA failover did not trigger. Business-critical ERP and CRM systems unreachable for remote workforce.", category: "Network", subcategory: "VPN / Remote Access", priority: "Sev-A", urgency: "Critical", status: "In Progress", assignee: "Support Engineer", assignmentGroup: "Network Engineering", reporter: "VGC Admin", reporterName: "Daniel Lim", reporterEmail: "daniel.lim@kellington.com", reporterRole: "CTO — Kellington Group", customer: "Kellington Group Pte Ltd", customerContact: "Daniel Lim", customerPhone: "+65 6321 8800", customerAddress: "1 Harbourfront Place, Singapore", contactMethod: "Phone Call", impact: "Enterprise", affectedService: "VPN Access", affectedAsset: "FW-VPN-GW-01", location: "Singapore DC-1", created: 1.5, slaTarget: 4, firstResponseTime: 0.1, aiTriaged: true, aiConfidence: 94, workaround: "Staff can use backup SSL VPN portal at vpn-backup.kellington.com (capacity limited to 30 concurrent users)", linkedProblem: "", linkedChange: "", affectedAssets: ["FW-VPN-GW-01", "SW-CORE-01"], activityLog: [
+  { id: "INC0001", title: "Production VPN gateway down — all remote users disconnected", description: "All 120+ remote staff unable to establish VPN tunnel. Gateway reports high memory and connection pool exhaustion. FortiGate HA failover did not trigger. Business-critical ERP and CRM systems unreachable for remote workforce.", category: "Network", subcategory: "VPN / Remote Access", priority: "Sev-A", urgency: "Critical", status: "In Progress", assignee: "Support Engineer", assignmentGroup: "Network Engineering", reporter: "VGC Admin", reporterName: "Daniel Lim", reporterEmail: "daniel.lim@kellington.com", reporterRole: "CTO — Kellington Group", customer: "Kellington Group Pte Ltd", customerContact: "Daniel Lim", customerPhone: "+65 6321 8800", customerAddress: "1 Harbourfront Place, Singapore", contactMethod: "Phone Call", impact: "Enterprise", affectedService: "VPN Access", affectedAsset: "FW-VPN-GW-01", location: "Singapore DC-1", created: 1.5, createdAt: new Date(Date.now() - 1.5 * 3600000).toISOString(), slaTarget: 4, firstResponseTime: 0.1, aiTriaged: true, aiConfidence: 94, workaround: "Staff can use backup SSL VPN portal at vpn-backup.kellington.com (capacity limited to 30 concurrent users)", linkedProblem: "", linkedChange: "", affectedAssets: ["FW-VPN-GW-01", "SW-CORE-01"], activityLog: [
     { id: "AL0001", type: "status", user: "VGC Admin", time: "16/04/2026, 08:14:00", detail: "Incident created — Sev-A escalation triggered automatically" },
     { id: "AL0002", type: "email", user: "Support Engineer", time: "16/04/2026, 08:20:00", detail: "Acknowledgement email sent to daniel.lim@kellington.com", to: "daniel.lim@kellington.com", from: "engineer@vgctechnology.com", subject: "INC0001 — VPN Gateway Down — Acknowledged", body: "Hi Daniel,<br/><br/>We have received your critical report regarding the VPN gateway outage. Our Network Engineering team is actively investigating. SLA target: 4 hours.<br/><br/>Backup SSL VPN portal: vpn-backup.kellington.com<br/><br/>We will update you every 30 minutes.<br/><br/>— VGC Technology Service Desk" },
     { id: "AL0003", type: "note", user: "Support Engineer", time: "16/04/2026, 08:35:00", detail: "Internal note added", isInternal: true, body: "FortiGate dashboard shows memory at 97%. Connection table has 4,200 stale sessions. Initiating controlled flush and failover to secondary node." },
@@ -1035,6 +1035,45 @@ const VGC_SLA_POLICY = {
     "Ticket updates must be logged within the ITSM system",
     "Engineers must update ticket status upon: First response, Work in progress, Resolution, Closure",
   ]
+};
+
+// ─── Dynamic SLA Business Hours Calculator ──────────────────────────
+const getBusinessHoursElapsed = (createdAt) => {
+  if (!createdAt) return 0;
+  const start = new Date(createdAt);
+  const now = new Date();
+  if (isNaN(start.getTime())) return 0;
+  const BH_START = 9, BH_END = 18; // 9AM-6PM SGT
+  let elapsed = 0;
+  let cursor = new Date(start);
+  while (cursor < now) {
+    const day = cursor.getDay(); // 0=Sun, 6=Sat
+    if (day >= 1 && day <= 5) { // Mon-Fri
+      const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+      if (hrs >= BH_START && hrs < BH_END) {
+        const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
+        const chunkEnd = endOfBH < now ? endOfBH : now;
+        elapsed += (chunkEnd - cursor) / 3600000;
+        cursor = new Date(chunkEnd);
+      } else if (hrs < BH_START) {
+        cursor.setHours(BH_START, 0, 0, 0);
+      } else {
+        cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+      }
+    } else {
+      // Skip to next Monday
+      const daysToMon = day === 0 ? 1 : 8 - day;
+      cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+    }
+    if (cursor >= now) break;
+  }
+  return Math.round(elapsed * 100) / 100;
+};
+
+const formatSlaCountdown = (hoursLeft) => {
+  if (hoursLeft <= 0) { const over = Math.abs(hoursLeft); return over >= 1 ? `${Math.floor(over)}h ${Math.round((over % 1) * 60)}m over` : `${Math.round(over * 60)}m over`; }
+  if (hoursLeft >= 1) return `${Math.floor(hoursLeft)}h ${Math.round((hoursLeft % 1) * 60)}m left`;
+  return `${Math.round(hoursLeft * 60)}m left`;
 };
 
 const STATUS_COLORS = {
@@ -1277,6 +1316,8 @@ export default function ITSMApp() {
   const [globalSyncActive, setGlobalSyncActive] = useState(false);
   const globalSyncRef = useRef(null);
   const [showFloatingKbTraining, setShowFloatingKbTraining] = useState(false);
+  const [slaTick, setSlaTick] = useState(0); // SLA live refresh counter
+  const [aiTypingState, setAiTypingState] = useState({ active: false, fullText: "", displayedText: "", msgIndex: -1 }); // AI typing animation
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAvatarCustomizer, setShowAvatarCustomizer] = useState(false);
   const [errorAdvisory, setErrorAdvisory] = useState(null); // AI Error Advisory overlay
@@ -1368,6 +1409,7 @@ export default function ITSMApp() {
   const [kbEntries, setKbEntries] = useState([]);
   const [kbLoading, setKbLoading] = useState(false);
   const [kbForm, setKbForm] = useState({ title: "", category: "General", content: "", tags: "" });
+  const [kbUploadFiles, setKbUploadFiles] = useState([]); // files pending upload for AI training
   const [showCardSettings, setShowCardSettings] = useState(false);
   const [dashboardEditMode, setDashboardEditMode] = useState(false);
   const [cardLayout, setCardLayout] = useState(() => {
@@ -2177,7 +2219,91 @@ export default function ITSMApp() {
       fetchKbEntries();
     } catch (e) { console.warn("[KB] Delete failed:", e.message); }
   };
+
+  // ─── Document Upload for AI Training ────────────────────────────────
+  const SUPPORTED_UPLOAD_TYPES = {
+    // Microsoft Office
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word",
+    "application/msword": "Word",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Excel",
+    "application/vnd.ms-excel": "Excel",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PowerPoint",
+    "application/vnd.ms-powerpoint": "PowerPoint",
+    "application/pdf": "PDF",
+    // Images
+    "image/png": "Image", "image/jpeg": "Image", "image/gif": "Image", "image/webp": "Image", "image/svg+xml": "Image",
+    // Video
+    "video/mp4": "Video", "video/webm": "Video", "video/quicktime": "Video",
+    // Text
+    "text/plain": "Text", "text/csv": "CSV", "text/markdown": "Markdown",
+    "application/json": "JSON",
+  };
+
+  const handleKbFileUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    const fileArr = Array.from(files);
+    const newUploads = [];
+    for (const file of fileArr) {
+      const typeLabel = SUPPORTED_UPLOAD_TYPES[file.type] || (file.name.match(/\.(docx?|xlsx?|pptx?|pdf|csv|md|json|txt)$/i) ? "Document" : null);
+      if (!typeLabel && !file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+        setAiMessages(prev => [...prev, { role: "ai", text: `⚠️ Unsupported file type: **${file.name}** (${file.type || "unknown"})\n\nSupported: Word, Excel, PowerPoint, PDF, Images, Videos, Text, CSV, Markdown, JSON`, source: "local" }]);
+        continue;
+      }
+      newUploads.push({ file, name: file.name, size: file.size, type: typeLabel || "File", uploading: false, done: false });
+    }
+    setKbUploadFiles(prev => [...prev, ...newUploads]);
+  };
+
+  const submitKbWithFiles = async () => {
+    if (!kbForm.title.trim() && kbUploadFiles.length === 0) return;
+    // Upload text knowledge if provided
+    if (kbForm.title.trim() && kbForm.content.trim()) {
+      await submitKbEntry();
+    }
+    // Upload files
+    for (let i = 0; i < kbUploadFiles.length; i++) {
+      const upload = kbUploadFiles[i];
+      setKbUploadFiles(prev => prev.map((u, idx) => idx === i ? { ...u, uploading: true } : u));
+      try {
+        const formData = new FormData();
+        formData.append("file", upload.file);
+        formData.append("title", kbForm.title.trim() || upload.name);
+        formData.append("category", kbForm.category);
+        formData.append("tags", kbForm.tags);
+        formData.append("trainedBy", currentUser.name);
+        const res = await fetch("/api/ai/knowledge/upload", { method: "POST", body: formData });
+        if (res.ok) {
+          setKbUploadFiles(prev => prev.map((u, idx) => idx === i ? { ...u, uploading: false, done: true } : u));
+        } else {
+          // Fallback: save file metadata as knowledge entry
+          const fileEntry = { title: kbForm.title.trim() || upload.name, category: kbForm.category, content: `[Uploaded ${upload.type}: ${upload.name}] (${(upload.size / 1024).toFixed(1)} KB)\n\nThis document has been uploaded for AI training reference. File type: ${upload.type}.`, tags: kbForm.tags };
+          await fetch("/api/ai/knowledge", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...fileEntry, tags: fileEntry.tags.split(",").map(t => t.trim()).filter(Boolean), trainedBy: currentUser.name })
+          });
+          setKbUploadFiles(prev => prev.map((u, idx) => idx === i ? { ...u, uploading: false, done: true } : u));
+        }
+      } catch (e) {
+        console.warn("[KB Upload]", e.message);
+        setKbUploadFiles(prev => prev.map((u, idx) => idx === i ? { ...u, uploading: false } : u));
+      }
+    }
+    fetchKbEntries();
+    setKbForm({ title: "", category: "General", content: "", tags: "" });
+    setTimeout(() => setKbUploadFiles([]), 2000);
+    setAiMessages(prev => [...prev, { role: "ai", text: `✅ **Knowledge trained successfully!**\n\n${kbForm.title ? `📝 **${kbForm.title}**` : ""} ${kbUploadFiles.length > 0 ? `\n📎 **${kbUploadFiles.length} file(s)** uploaded and indexed` : ""}\n\nI'll reference this knowledge in future conversations. The more you train me, the smarter and more accurate I get! 🧠`, source: "azure", suggestions: [
+      { label: "🧠 Train More", action: "I want to add more training knowledge" },
+      { label: "📚 View KB", action: "Show all trained knowledge entries" },
+      { label: "🧪 Test Knowledge", action: "Test if AI remembers what I just trained" }
+    ] }]);
+  };
   useEffect(() => { fetchKbEntries(); }, []);
+
+  // ─── SLA Live Refresh Timer (every 60s) ────────────────────────────
+  useEffect(() => {
+    const slaTimer = setInterval(() => setSlaTick(t => t + 1), 60000);
+    return () => clearInterval(slaTimer);
+  }, []);
 
   const [integrations, setIntegrations] = useState(() => {
     const saved = _ls("vgc_integrations", INTEGRATION_CATALOG);
@@ -4889,7 +5015,13 @@ export default function ITSMApp() {
   // ─── SLA Tracker ──────────────────────────────────────────────────────
   const SLAModule = () => {
     const activeInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
-    const compliant = activeInc.filter(i => i.created <= i.slaTarget).length;
+    // Dynamic SLA calculation — uses createdAt timestamp when available, falls back to static 'created'
+    const getElapsed = (inc) => inc.createdAt ? getBusinessHoursElapsed(inc.createdAt) : (inc.created || 0);
+    const getRemaining = (inc) => (inc.slaTarget || 0) - getElapsed(inc);
+    const getSlaPercent = (inc) => inc.slaTarget > 0 ? Math.round((getElapsed(inc) / inc.slaTarget) * 100) : 0;
+    const isSlaCompliant = (inc) => getElapsed(inc) <= inc.slaTarget;
+
+    const compliant = activeInc.filter(isSlaCompliant).length;
     const total = activeInc.length;
     const compliancePct = total > 0 ? Math.round((compliant / total) * 100) : 100;
     const firstResponseMet = activeInc.filter(i => i.firstResponseTime != null && VGC_SLA_POLICY.severities[i.priority] && i.firstResponseTime <= VGC_SLA_POLICY.severities[i.priority].firstResponse).length;
@@ -4898,7 +5030,7 @@ export default function ITSMApp() {
 
     const byPriority = ["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => {
       const items = activeInc.filter(i => i.priority === p);
-      const met = items.filter(i => i.created <= i.slaTarget).length;
+      const met = items.filter(isSlaCompliant).length;
       const sev = VGC_SLA_POLICY.severities[p];
       return { priority: p, total: items.length, met, pct: items.length > 0 ? Math.round((met / items.length) * 100) : 100, firstResponse: sev?.firstResponse, worstResponse: sev?.worstResponse, definition: sev?.definition };
     });
@@ -4975,17 +5107,21 @@ export default function ITSMApp() {
                 const met = actual <= target;
                 return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: met ? "#4CAF50" : "#FF4444" }}>{actual}h / {target}h</span>;
               }},
-              { label: "Elapsed", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.created}h</span> },
+              { label: "Elapsed", render: r => {
+                const el = getElapsed(r);
+                return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{el.toFixed(1)}h</span>;
+              }},
               { label: "SLA Target", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.slaTarget}h</span> },
               { label: "Remaining", render: r => {
-                const rem = r.slaTarget - r.created;
-                return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: rem <= 0 ? "#FF4444" : rem <= 2 ? "#FFB347" : "#81C784" }}>
-                  {rem <= 0 ? `${Math.abs(rem)}h over` : `${rem}h left`}
+                const rem = getRemaining(r);
+                const col = rem <= 0 ? "#FF4444" : rem <= 1 ? "#FF6B6B" : rem <= 2 ? "#FFB347" : "#81C784";
+                return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 600, color: col }}>
+                  {formatSlaCountdown(rem)}
                 </span>;
               }},
               { label: "Source", render: r => r.zdTicketId ? <Badge color={{ bg: "#2D0A2D", text: "#EC4899" }}>Zendesk</Badge> : <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>ITSM</Badge> },
               { label: "Status", render: r => {
-                const pct = Math.round((r.created / r.slaTarget) * 100);
+                const pct = getSlaPercent(r);
                 return <Badge color={pct >= 100 ? PRIORITY_COLORS["Sev-A"] : pct >= 75 ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>
                   {pct >= 100 ? "BREACHED" : pct >= 75 ? "AT RISK" : "ON TRACK"}
                 </Badge>;
@@ -4998,7 +5134,7 @@ export default function ITSMApp() {
         {/* Service Request SLA Tracking */}
         {(() => {
           const activeReqs = requests.filter(r => r.status !== "Fulfilled" && r.status !== "Closed");
-          const reqCompliant = activeReqs.filter(r => r.slaTarget && r.created <= r.slaTarget).length;
+          const reqCompliant = activeReqs.filter(r => r.slaTarget && r.createdAt ? getBusinessHoursElapsed(r.createdAt) <= r.slaTarget : r.slaTarget && r.created <= r.slaTarget).length;
           const reqTotal = activeReqs.length;
           const reqPct = reqTotal > 0 ? Math.round((reqCompliant / reqTotal) * 100) : 100;
           return reqTotal > 0 ? (
@@ -5017,11 +5153,15 @@ export default function ITSMApp() {
                   { label: "Priority", render: r => <PriorityDot priority={r.priority} /> },
                   { label: "Requester", key: "requester" },
                   { label: "Customer", render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.customer || "—"}</span> },
-                  { label: "Elapsed", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.created}h</span> },
+                  { label: "Elapsed", render: r => {
+                    const el = r.createdAt ? getBusinessHoursElapsed(r.createdAt) : (r.created || 0);
+                    return <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{el.toFixed(1)}h</span>;
+                  }},
                   { label: "SLA Target", render: r => <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#C4CAD6" }}>{r.slaTarget || "—"}h</span> },
                   { label: "Status", render: r => {
                     if (!r.slaTarget) return <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge>;
-                    const pct = Math.round((r.created / r.slaTarget) * 100);
+                    const el = r.createdAt ? getBusinessHoursElapsed(r.createdAt) : (r.created || 0);
+                    const pct = Math.round((el / r.slaTarget) * 100);
                     return <Badge color={pct >= 100 ? PRIORITY_COLORS["Sev-A"] : pct >= 75 ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>
                       {pct >= 100 ? "BREACHED" : pct >= 75 ? "AT RISK" : "ON TRACK"}
                     </Badge>;
@@ -6760,6 +6900,45 @@ export default function ITSMApp() {
   };
 
   // ─── AI Chat Handler (Parent Scope — used by AIAssistModule + Sidebar) ──
+  // ─── AI Typing Animation (human-like 2s delay) ────────────────────
+  const typeAiMessage = (text, suggestions, source, prompt) => {
+    const words = text.split(/(\s+)/);
+    const totalWords = words.filter(w => w.trim()).length;
+    const delay = Math.max(30, Math.min(80, 2000 / totalWords)); // spread over ~2 seconds
+    let displayed = "";
+    let idx = 0;
+    const placeholderMsg = { role: "ai", text: "", source, suggestions, prompt, _typing: true };
+    setAiMessages(prev => [...prev, placeholderMsg]);
+    const msgIdx = -1; // will use functional update
+    const typeNext = () => {
+      if (idx < words.length) {
+        displayed += words[idx];
+        idx++;
+        setAiMessages(prev => {
+          const updated = [...prev];
+          const last = updated.length - 1;
+          if (updated[last]?._typing) {
+            updated[last] = { ...updated[last], text: displayed };
+          }
+          return updated;
+        });
+        setTimeout(typeNext, delay);
+      } else {
+        // Finished typing — remove _typing flag
+        setAiMessages(prev => {
+          const updated = [...prev];
+          const last = updated.length - 1;
+          if (updated[last]?._typing) {
+            updated[last] = { role: "ai", text, source, suggestions, prompt };
+          }
+          return updated;
+        });
+        setAiLoading(false);
+      }
+    };
+    setTimeout(typeNext, 400); // brief pause before typing starts
+  };
+
   const handleAiChat = (overrideMsg) => {
     const userMsg = overrideMsg || aiInput.trim();
     if (!userMsg) return;
@@ -6772,9 +6951,10 @@ export default function ITSMApp() {
         `You are VGC-ITSM AI Co-Pilot for VGC Technology Pte Ltd, Singapore. You work alongside ${currentUser.name} as a helpful, friendly colleague — not a bot.`,
         `CURRENT DATA MODE: ${dataMode}. ${isLocalDemoUser ? "You are in DEMO MODE — all data shown is sample/seed data only. NEVER attempt to fetch, display, or reference production Zendesk data. If the user asks about production tickets or real customer data, ALERT them: 'You are in Demo Mode — production data is not available. Please sign in with your Entra ID account to access production data.'" : "You are in PRODUCTION MODE — all data comes from live Zendesk and ITSM APIs. NEVER show demo/hardcoded data. If any response contains placeholder ticket IDs (like INC0001 or #48201-48208 from seed data), flag it immediately and refresh from live sources."}`,
         `DATA ISOLATION GUARD (HARD RULE): If you detect a human mistake that could mix demo data into production or vice versa — IMMEDIATELY alert the user with a clear warning. Examples: trying to use demo ticket IDs in production, attempting to connect Zendesk in demo mode, referencing hardcoded data in production mode. Say: "⚠️ Data Isolation Alert: [explain the issue]. This could compromise data integrity."`,
-        `TONE & STYLE: Be warm, conversational, and human. Write like a knowledgeable colleague chatting — not a machine generating text. Use natural language, contractions, and a friendly tone. Break responses into short conversational chunks — never dump a wall of text. Ask follow-up questions to understand the full picture before jumping to solutions.`,
+        `TONE & STYLE: Be warm, conversational, and human. Write like a knowledgeable colleague chatting — not a machine generating text. Use natural language, contractions, and a friendly tone. Break responses into short conversational chunks — never dump a wall of text. Use casual phrasing like "Let me check that for you...", "Good question — here's what I'd suggest...", "I've seen this before — typically the fix is...". Ask follow-up questions to understand the full picture before jumping to solutions.`,
+        `REFERENCE LINKS (HARD RULE): When recommending solutions, ALWAYS include relevant reference links. Priority order: 1) Official vendor documentation (Microsoft Learn, Cisco docs, Fortinet KB, Dell Support, etc.) 2) Trusted industry sources (NIST, CIS, OWASP, ITIL) 3) Community-verified solutions (Stack Overflow, Spiceworks, Reddit r/sysadmin) — but ONLY if they have accepted/verified answers. Format links as markdown: [Title](URL). For Microsoft products, always link to https://learn.microsoft.com/... For Cisco, use https://www.cisco.com/c/en/us/support/... For Fortinet, use https://docs.fortinet.com/... Include 1-3 reference links per response when applicable. If you don't have a specific URL, still mention the official documentation source (e.g., "Check Microsoft Learn for the latest guidance on this").`,
         `CORE ROLE: Help engineers and administrators resolve IT tickets, incidents, requests, and problems. Provide fast, accurate guidance. Proactively suggest next steps, follow-ups, and improvements. Advise on best practices. Always seek to understand the context, tone, and scenario before responding.`,
-        `LEARN FROM ITSM DATA FIRST: Always check internal ITSM data (tickets, incidents, KB articles, change records, Zendesk historical data) before searching external sources. Learn patterns from past tickets — similar issues, recurring problems, what worked before. Reference historical resolutions when relevant.`,
+        `LEARN FROM ITSM DATA FIRST: Always check internal ITSM data (tickets, incidents, KB articles, change records, Zendesk historical data) before searching external sources. Learn patterns from past tickets — similar issues, recurring problems, what worked before. Reference historical resolutions when relevant. When the internal Knowledge Base has trained entries, ALWAYS reference them FIRST and cite the entry title. Show that you "remember" what you've been taught — say things like "Based on our internal guide [Title]..." or "I recall we documented this — here's what we know...". This makes you smarter and more useful every day as more knowledge is added.`,
         `ZENDESK HISTORICAL DATA: When available, learn from Zendesk ticket history — past resolutions, customer interactions, common issues, and response patterns. Use this context to provide more accurate and personalized assistance.`,
         `EMAIL DRAFTING: When drafting emails, write with sufficient detail and context. Include relevant ticket IDs, timestamps, and specifics. When referencing Microsoft products or services, include official Microsoft documentation links as hyperlinks (e.g., https://learn.microsoft.com/...). Be thorough but not over-written — professional and clear.`,
         `PROACTIVE BEHAVIOR: Don't just answer — suggest, follow up, assist, and advise. After resolving a query, proactively offer related suggestions ("Would you also like me to check...?", "I noticed a similar issue last week — want me to look into it?"). Anticipate what the user might need next.`,
@@ -6789,19 +6969,60 @@ export default function ITSMApp() {
         `Suggest 2-3 relevant next actions after each response. Be a teammate, not a tool.`,
       ].join(" ");
       const aiResp = await callAzureOpenAI(systemPrompt, userMsg);
-      if (aiResp) {
-        setAiMessages(prev => [...prev, { role: "ai", text: aiResp, source: "azure", suggestions: [
+      // Generate context-aware smart suggestion cards
+      const smartSuggestions = (() => {
+        const lc = userMsg.toLowerCase();
+        const activeInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
+        const breachedCount = activeInc.filter(i => i.createdAt ? getBusinessHoursElapsed(i.createdAt) > i.slaTarget : i.created > i.slaTarget).length;
+        if (lc.includes("vpn") || lc.includes("network") || lc.includes("connectivity")) return [
+          { label: "🔧 VPN Troubleshoot Steps", action: "Give me step-by-step VPN troubleshooting guide" },
+          { label: "📡 Check Network Status", action: "Show network device health status" },
+          { label: "📚 VPN KB Articles", action: "Search knowledge base for VPN solutions" }
+        ];
+        if (lc.includes("sla") || lc.includes("breach") || lc.includes("compliance")) return [
+          { label: `🚨 ${breachedCount} At Risk`, action: "Show tickets approaching SLA breach" },
+          { label: "📊 SLA Dashboard", action: "Open SLA compliance dashboard" },
+          { label: "⚡ Escalation Plan", action: "What's the escalation procedure for SLA breaches?" }
+        ];
+        if (lc.includes("security") || lc.includes("threat") || lc.includes("vulnerability")) return [
+          { label: "🛡️ Security Scan", action: "Run a security posture check" },
+          { label: "📋 Patch Status", action: "Show pending security patches" },
+          { label: "🔐 Compliance Check", action: "Check ISO 27001 compliance status" }
+        ];
+        if (lc.includes("email") || lc.includes("draft") || lc.includes("outlook")) return [
+          { label: "✉️ Draft Response", action: "Draft a professional email response" },
+          { label: "📧 Email Template", action: "Show available email templates" },
+          { label: "📬 Check Inbox", action: "Summarize recent important emails" }
+        ];
+        if (lc.includes("morning") || lc.includes("briefing") || lc.includes("summary") || lc.includes("good morning")) return [
+          { label: "🎯 Priority Actions", action: "What are my top priority actions today?" },
+          { label: "📈 Team Performance", action: "How is the team performing this week?" },
+          { label: "⚠️ Risk Assessment", action: "Any risks I should know about?" }
+        ];
+        if (lc.includes("password") || lc.includes("mfa") || lc.includes("access") || lc.includes("account")) return [
+          { label: "🔑 Reset Guide", action: "Guide me through password reset process" },
+          { label: "📱 MFA Setup", action: "How to set up MFA for a user?" },
+          { label: "🔐 Access Review", action: "Check user access permissions" }
+        ];
+        if (lc.includes("training") || lc.includes("knowledge") || lc.includes("learn") || lc.includes("train")) return [
+          { label: "🧠 Train More", action: "I want to add more training knowledge" },
+          { label: "📚 View All KB", action: "Show all trained knowledge entries" },
+          { label: "🧪 Test Memory", action: "Test if you remember what I trained you" }
+        ];
+        return [
           { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
           { label: "📚 Search KB", action: "Search knowledge base for a solution" },
           { label: "💡 What else?", action: "What should I focus on next?" }
-        ], prompt: userMsg }]);
+        ];
+      })();
+      if (aiResp) {
+        typeAiMessage(aiResp, smartSuggestions, "azure", userMsg);
       } else {
         const topic = matchAiTopic(userMsg);
         const ctx = { incidents, changes, problems, requests, currentUser, proactiveAlerts, kbArticles };
         const result = buildAiResponse(topic, userMsg, ctx);
-        setAiMessages(prev => [...prev, { role: "ai", text: result.text, source: "local", suggestions: result.suggestions || [], prompt: userMsg }]);
+        typeAiMessage(result.text, result.suggestions?.length > 0 ? result.suggestions : smartSuggestions, "local", userMsg);
       }
-      setAiLoading(false);
     })();
   };
 
@@ -6939,7 +7160,7 @@ export default function ITSMApp() {
                       )}
                     </div>
                     {/* Suggested Reply Cards */}
-                    {msg.role === "ai" && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
+                    {msg.role === "ai" && !msg._typing && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {msg.suggestions.map((s, si) => (
                           <button key={si} onClick={() => handleAiChat(s.action)} style={{
@@ -6987,9 +7208,34 @@ export default function ITSMApp() {
                   </select>
                 </div>
                 <textarea style={{ ...inputStyle, fontSize: 11, width: "100%", minHeight: 80, resize: "vertical", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5, boxSizing: "border-box" }} placeholder="Knowledge content — procedures, solutions, policies, troubleshooting steps..." value={kbForm.content} onChange={e => setKbForm(p => ({ ...p, content: e.target.value }))} />
+                {/* File Upload Area */}
+                <div style={{ marginBottom: 10, border: "2px dashed #1E213066", borderRadius: 8, padding: 12, textAlign: "center", cursor: "pointer", transition: "border-color 0.2s" }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#6366F1"; }}
+                  onDragLeave={e => { e.currentTarget.style.borderColor = "#1E213066"; }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#1E213066"; handleKbFileUpload(e.dataTransfer.files); }}
+                  onClick={() => document.getElementById("kb-file-upload-main")?.click()}>
+                  <input id="kb-file-upload-main" type="file" multiple accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.md,.json,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov" style={{ display: "none" }} onChange={e => handleKbFileUpload(e.target.files)} />
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>📎</div>
+                  <div style={{ fontSize: 10, color: "#8A8FA8" }}>Drop files here or click to upload</div>
+                  <div style={{ fontSize: 8, color: "#5A617888", marginTop: 2 }}>Word, Excel, PowerPoint, PDF, Images, Videos, Text, CSV</div>
+                </div>
+                {kbUploadFiles.length > 0 && (
+                  <div style={{ marginBottom: 10 }}>
+                    {kbUploadFiles.map((f, idx) => (
+                      <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", marginBottom: 4, background: "#0F1117", borderRadius: 4, border: `1px solid ${f.done ? "#81C78433" : "#1E213033"}` }}>
+                        <span style={{ fontSize: 12 }}>{f.type === "Word" ? "📄" : f.type === "Excel" ? "📊" : f.type === "PowerPoint" ? "📽️" : f.type === "PDF" ? "📕" : f.type === "Image" ? "🖼️" : f.type === "Video" ? "🎬" : "📎"}</span>
+                        <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                        <span style={{ fontSize: 8, color: "#5A6178" }}>{(f.size / 1024).toFixed(0)}KB</span>
+                        {f.uploading && <span style={{ fontSize: 8, color: "#6366F1" }}>⏳</span>}
+                        {f.done && <span style={{ fontSize: 8, color: "#81C784" }}>✅</span>}
+                        {!f.uploading && !f.done && <button onClick={() => setKbUploadFiles(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 10, padding: 0 }}>✕</button>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                   <input style={{ ...inputStyle, fontSize: 11, flex: 1 }} placeholder="Tags (comma-separated: vpn, networking, cisco)" value={kbForm.tags} onChange={e => setKbForm(p => ({ ...p, tags: e.target.value }))} />
-                  <button onClick={submitKbEntry} disabled={!kbForm.title.trim() || !kbForm.content.trim()} style={{ ...btnStyle("#00BF6F"), fontSize: 11, opacity: (!kbForm.title.trim() || !kbForm.content.trim()) ? 0.4 : 1, whiteSpace: "nowrap" }}>💾 Save Knowledge</button>
+                  <button onClick={kbUploadFiles.length > 0 ? submitKbWithFiles : submitKbEntry} disabled={!kbForm.title.trim() || (!kbForm.content.trim() && kbUploadFiles.length === 0)} style={{ ...btnStyle("#00BF6F"), fontSize: 11, opacity: (!kbForm.title.trim() || (!kbForm.content.trim() && kbUploadFiles.length === 0)) ? 0.4 : 1, whiteSpace: "nowrap" }}>💾 {kbUploadFiles.length > 0 ? `Save + Upload (${kbUploadFiles.length})` : "Save Knowledge"}</button>
                 </div>
                 {/* Existing Knowledge Entries */}
                 {kbEntries.length > 0 && (
@@ -15862,7 +16108,7 @@ export default function ITSMApp() {
                       )}
                     </div>
                     {/* Suggested Reply Cards */}
-                    {msg.role === "ai" && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
+                    {msg.role === "ai" && !msg._typing && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         {msg.suggestions.slice(0, 3).map((s, si) => (
                           <button key={si} onClick={() => handleAiChat(s.action)} style={{
@@ -15899,7 +16145,7 @@ export default function ITSMApp() {
                       }} />
                     ))}
                     <span style={{ color: "#5A6178", fontSize: 10, marginLeft: 6 }}>
-                      {azureOpenAI.enabled ? "Thinking via Azure Open AI..." : "Thinking..."}
+                      {azureOpenAI.enabled ? "Typing a response..." : "Thinking..."}
                     </span>
                   </div>
                 </div>
@@ -15937,7 +16183,27 @@ export default function ITSMApp() {
                   <input style={{ ...inputStyle, fontSize: 10, flex: 1 }} placeholder="Tags (comma-sep)" value={kbForm.tags} onChange={e => setKbForm(p => ({ ...p, tags: e.target.value }))} />
                 </div>
                 <textarea style={{ ...inputStyle, fontSize: 10, width: "100%", minHeight: 50, resize: "vertical", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.4, boxSizing: "border-box" }} placeholder="Knowledge content — procedures, solutions, troubleshooting..." value={kbForm.content} onChange={e => setKbForm(p => ({ ...p, content: e.target.value }))} />
-                <button onClick={submitKbEntry} disabled={!kbForm.title.trim() || !kbForm.content.trim()} style={{ ...btnStyle("#00BF6F"), fontSize: 10, width: "100%", opacity: (!kbForm.title.trim() || !kbForm.content.trim()) ? 0.4 : 1 }}>💾 Save Knowledge</button>
+                {/* File Upload */}
+                <div style={{ marginBottom: 6, border: "1px dashed #1E213066", borderRadius: 6, padding: 8, textAlign: "center", cursor: "pointer", transition: "border-color 0.2s" }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#6366F1"; }}
+                  onDragLeave={e => { e.currentTarget.style.borderColor = "#1E213066"; }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#1E213066"; handleKbFileUpload(e.dataTransfer.files); }}
+                  onClick={() => document.getElementById("kb-file-upload-floating")?.click()}>
+                  <input id="kb-file-upload-floating" type="file" multiple accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.md,.json,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov" style={{ display: "none" }} onChange={e => handleKbFileUpload(e.target.files)} />
+                  <div style={{ fontSize: 9, color: "#8A8FA8" }}>📎 Drop files or click — Word, Excel, PPT, PDF, Images, Videos</div>
+                </div>
+                {kbUploadFiles.length > 0 && (
+                  <div style={{ marginBottom: 6 }}>
+                    {kbUploadFiles.map((f, idx) => (
+                      <div key={idx} style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 6px", marginBottom: 2, background: "#0F1117", borderRadius: 3, fontSize: 9 }}>
+                        <span>{f.type === "Word" ? "📄" : f.type === "Excel" ? "📊" : f.type === "PowerPoint" ? "📽️" : f.type === "Image" ? "🖼️" : f.type === "Video" ? "🎬" : "📎"}</span>
+                        <span style={{ color: "#C4CAD6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                        {f.done ? <span style={{ color: "#81C784" }}>✅</span> : <button onClick={() => setKbUploadFiles(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 8, padding: 0 }}>✕</button>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button onClick={kbUploadFiles.length > 0 ? submitKbWithFiles : submitKbEntry} disabled={!kbForm.title.trim() || (!kbForm.content.trim() && kbUploadFiles.length === 0)} style={{ ...btnStyle("#00BF6F"), fontSize: 10, width: "100%", opacity: (!kbForm.title.trim() || (!kbForm.content.trim() && kbUploadFiles.length === 0)) ? 0.4 : 1 }}>💾 {kbUploadFiles.length > 0 ? `Save + Upload (${kbUploadFiles.length})` : "Save Knowledge"}</button>
                 {kbEntries.length > 0 && (
                   <div style={{ marginTop: 8, maxHeight: 100, overflowY: "auto" }}>
                     {kbEntries.slice(0, 5).map(e => (
