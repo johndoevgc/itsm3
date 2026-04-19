@@ -6,12 +6,12 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.6.0",
-  build: "6c1bf69",
-  date: "2026-04-19",
+  version: "3.7.0",
+  build: "kp-ai-v1",
+  date: "2026-04-20",
   channel: "Production",
   name: "VGC-ITSM",
-  engine: "VGC-AI v3.5 (GPT-5.4-Pro)",
+  engine: "VGC-AI v3.7 (GPT-5.4-Pro)",
   platform: "Azure App Service (Linux Node 20)",
   region: "AP-Southeast (Singapore)",
   license: "Enterprise — Per User Subscription",
@@ -1340,6 +1340,22 @@ export default function ITSMApp() {
   const [disasterAlert, setDisasterAlert] = useState(null); // Weather disaster alert toast
   const disasterAlertDismissedRef = useRef(() => { try { return localStorage.getItem("vgc_disaster_dismissed") === "true"; } catch { return false; } }); // permanent dismiss
 
+  // ─── Knowledge Portal: AI Guide Generator & SharePoint Doc State ──────
+  const [guideGenerating, setGuideGenerating] = useState(false);
+  const [guideTopic, setGuideTopic] = useState("");
+  const [guideCategory, setGuideCategory] = useState("General");
+  const [guideResult, setGuideResult] = useState(null);
+  const [spDocUrl, setSpDocUrl] = useState("");
+  const [spDocTitle, setSpDocTitle] = useState("");
+  const [spDocType, setSpDocType] = useState("General Documentation");
+  const [spDocGenerating, setSpDocGenerating] = useState(false);
+  const [spDocResult, setSpDocResult] = useState(null);
+  const [kpActiveTab, setKpActiveTab] = useState("articles"); // articles | generator | sharepoint | generated
+
+  // ─── Global AI Error Resolver ─────────────────────────────────────────
+  const [aiErrorResolving, setAiErrorResolving] = useState(false);
+  const [aiErrorResolution, setAiErrorResolution] = useState(null);
+
   // ─── High-Severity Auto-Escalation State ──────────────────────────────
   const [globalHighAlert, setGlobalHighAlert] = useState(null); // Active Sev-A alert needing pickup
   const [escalationLog, setEscalationLog] = useState(() => _ls("vgc_escalation_log", [])); // Permanent log
@@ -1592,6 +1608,7 @@ export default function ITSMApp() {
   const [editingRule, setEditingRule] = useState(null);
   const [aiRuleSuggestions, setAiRuleSuggestions] = useState([]);
   // ─── Product Vendors Contact State ──────────────────────────────────────
+  const [generalSettings, setGeneralSettings] = useState(() => _ls("vgc_general_settings", { orgName: "VGC Technology Pte Ltd", timezone: "Asia/Singapore", dateFormat: "DD-MM-YYYY", language: "en" }));
   const [vendors, setVendors] = useState(() => {
     const saved = _ls("vgc_vendors", null);
     return saved || [
@@ -1693,6 +1710,31 @@ export default function ITSMApp() {
   useEffect(() => {
     try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch {}
   }, [cardLayout]);
+
+  // ─── GLOBAL AI ERROR INTERCEPTOR (Hard Rule: AI must solve every error) ──
+  useEffect(() => {
+    const handleGlobalError = (event) => {
+      // Ignore benign errors (ResizeObserver, script loading, etc.)
+      const msg = event?.message || event?.reason?.message || String(event?.reason || "");
+      if (/ResizeObserver|Script error|Loading chunk|dynamically imported module/i.test(msg)) return;
+      // Avoid infinite loops — don't trigger on AI resolver errors
+      if (/ai\/resolve-error|AI Error Resolver/i.test(msg)) return;
+      setErrorAdvisory({
+        type: "Application Error",
+        code: event?.error?.name || event?.reason?.name || "UNCAUGHT",
+        message: msg || "An unexpected error occurred",
+        timestamp: new Date().toISOString(),
+        details: event?.filename ? `File: ${event.filename}:${event.lineno}:${event.colno}` : "Unhandled promise rejection",
+        stack: event?.error?.stack || event?.reason?.stack || ""
+      });
+    };
+    window.addEventListener("error", handleGlobalError);
+    window.addEventListener("unhandledrejection", (e) => handleGlobalError({ message: e.reason?.message || String(e.reason), error: e.reason, reason: e.reason }));
+    return () => {
+      window.removeEventListener("error", handleGlobalError);
+      // unhandledrejection cleanup omitted — single listener pattern
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── HARD RULE: Data Isolation — Demo vs Production ─────────────────
   // Rule 1: Demo user (devadmin) must NEVER see production Zendesk data
@@ -2255,6 +2297,82 @@ export default function ITSMApp() {
       await fetch(`/api/ai/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" });
       fetchKbEntries();
     } catch (e) { console.warn("[KB] Delete failed:", e.message); }
+  };
+
+  // ─── AI Guide Generator (from Zendesk History) ─────────────────────
+  const generateGuide = async () => {
+    if (!guideTopic.trim()) return;
+    setGuideGenerating(true);
+    setGuideResult(null);
+    try {
+      const res = await fetch("/api/ai/generate-guide", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: guideTopic.trim(), category: guideCategory, includeScreenshots: true })
+      });
+      const data = await res.json();
+      if (res.ok && data.guide) {
+        setGuideResult({ text: data.guide, id: data.id, title: data.title, zdRefs: data.zdTicketsReferenced || 0 });
+        fetchKbEntries();
+        trackAction("Knowledge", "AI Guide Generated", guideTopic, currentUser.name);
+      } else {
+        setGuideResult({ error: data.error || "Failed to generate guide" });
+      }
+    } catch (e) {
+      setGuideResult({ error: e.message });
+    }
+    setGuideGenerating(false);
+  };
+
+  // ─── SharePoint Doc Generator ──────────────────────────────────────
+  const generateSpDoc = async () => {
+    if (!spDocUrl.trim() && !spDocTitle.trim()) return;
+    setSpDocGenerating(true);
+    setSpDocResult(null);
+    try {
+      const res = await fetch("/api/ai/generate-doc", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: spDocUrl.trim(), title: spDocTitle.trim(), docType: spDocType })
+      });
+      const data = await res.json();
+      if (res.ok && data.document) {
+        setSpDocResult({ text: data.document, id: data.id, title: data.title });
+        fetchKbEntries();
+        trackAction("Knowledge", "SharePoint Doc Generated", spDocTitle || spDocUrl, currentUser.name);
+      } else {
+        setSpDocResult({ error: data.error || "Failed to generate documentation" });
+      }
+    } catch (e) {
+      setSpDocResult({ error: e.message });
+    }
+    setSpDocGenerating(false);
+  };
+
+  // ─── Global AI Error Resolver (HARD RULE: solve every error) ───────
+  const resolveErrorWithAI = async (errorInfo) => {
+    setAiErrorResolving(true);
+    setAiErrorResolution(null);
+    try {
+      const res = await fetch("/api/ai/resolve-error", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          errorType: errorInfo.type || "Application Error",
+          errorCode: errorInfo.code || "UNKNOWN",
+          errorMessage: errorInfo.message || "Unknown error",
+          errorDetails: errorInfo.details || "",
+          errorStack: errorInfo.stack || "",
+          context: errorInfo.context || `VGC-ITSM v${APP_VERSION.version} — ${currentUser?.name || "User"}`
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.resolution) {
+        setAiErrorResolution(data.resolution);
+      } else {
+        setAiErrorResolution("⚠️ AI Error Resolver is temporarily unavailable. Please try again or contact IT support.");
+      }
+    } catch (e) {
+      setAiErrorResolution(`⚠️ Could not reach AI Error Resolver: ${e.message}. Check your network connection.`);
+    }
+    setAiErrorResolving(false);
   };
 
   // ─── Document Upload for AI Training ────────────────────────────────
@@ -4816,7 +4934,7 @@ export default function ITSMApp() {
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} /> SharePoint Connected
               </span>
             </div>
-            <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{kbArticles.length} articles · Linked to SharePoint Document Library · Auto-sync enabled</div>
+            <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{kbArticles.length} articles · {kbEntries.length} AI knowledge entries · SharePoint Document Library linked</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -4824,6 +4942,260 @@ export default function ITSMApp() {
           <button style={btnStyle()} onClick={() => setModal("newKBArticle")}>+ New Article</button>
         </div>
       </div>
+
+      {/* Knowledge Portal Tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#0A0C14", padding: 4, borderRadius: 8 }}>
+        {[
+          { id: "articles", label: "📚 Articles", count: filteredKB.length },
+          { id: "generator", label: "🤖 AI Guide Generator", count: null },
+          { id: "sharepoint", label: "📂 SharePoint Docs", count: null },
+          { id: "generated", label: "📋 Generated Docs", count: kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint").length },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setKpActiveTab(tab.id)} style={{
+            padding: "8px 16px", borderRadius: 6, border: "none", cursor: "pointer",
+            background: kpActiveTab === tab.id ? "linear-gradient(135deg, #6366F122, #06B6D418)" : "transparent",
+            color: kpActiveTab === tab.id ? "#E8ECF4" : "#5A6178",
+            fontSize: 12, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif",
+            display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s",
+            borderBottom: kpActiveTab === tab.id ? "2px solid #6366F1" : "2px solid transparent"
+          }}>
+            {tab.label} {tab.count != null && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 10, background: kpActiveTab === tab.id ? "#6366F133" : "#1E2130", color: kpActiveTab === tab.id ? "#6366F1" : "#5A6178" }}>{tab.count}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Tab: AI Guide Generator ──────────────────────────── */}
+      {kpActiveTab === "generator" && (
+        <div>
+          <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 10, border: "1px solid #6366F133", padding: 24, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, #6366F1, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🤖</div>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Professional Guide Generator</div>
+                <div style={{ fontSize: 11, color: "#5A6178" }}>Generate comprehensive documentation from Zendesk ticket history, KB articles, and AI knowledge</div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 200px", gap: 12, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4, display: "block" }}>Guide Topic</label>
+                <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder="e.g., VPN Setup Guide, Password Reset Procedure, Azure MFA Enrollment..." value={guideTopic} onChange={e => setGuideTopic(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && guideTopic.trim()) generateGuide(); }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4, display: "block" }}>Category</label>
+                <select style={{ ...inputStyle, width: "100%", boxSizing: "border-box", cursor: "pointer" }} value={guideCategory} onChange={e => setGuideCategory(e.target.value)}>
+                  {KB_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+                  <option value="General">📄 General</option>
+                  <option value="Troubleshooting">🔧 Troubleshooting</option>
+                  <option value="SOP">📋 SOP</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              <span style={{ fontSize: 10, color: "#5A6178", alignSelf: "center" }}>Quick topics:</span>
+              {["VPN Setup Guide", "Password Reset", "Azure MFA Enrollment", "Email Migration", "New Employee Onboarding", "Incident Response SOP", "Firewall Rule Changes", "Backup & Recovery"].map(t => (
+                <button key={t} onClick={() => setGuideTopic(t)} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, border: "1px solid #1E2130", background: guideTopic === t ? "#6366F122" : "#0A0C14", color: guideTopic === t ? "#6366F1" : "#8B92A8", cursor: "pointer", transition: "all 0.15s" }}>{t}</button>
+              ))}
+            </div>
+
+            <div style={{ padding: 12, borderRadius: 8, background: "#0A0C14", border: "1px solid #1E2130", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#06B6D4", marginBottom: 6 }}>📋 What AI will include in the guide:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 10, color: "#8B92A8" }}>
+                <span>✅ Professional title & metadata</span>
+                <span>✅ Table of contents</span>
+                <span>✅ Step-by-step instructions</span>
+                <span>✅ 📸 Screenshot placeholders</span>
+                <span>✅ Troubleshooting section</span>
+                <span>✅ FAQ (5+ questions)</span>
+                <span>✅ Reference links (Microsoft Learn, etc.)</span>
+                <span>✅ Zendesk ticket history references</span>
+              </div>
+            </div>
+
+            <button onClick={generateGuide} disabled={guideGenerating || !guideTopic.trim()} style={{
+              ...btnStyle("#6366F1"), width: "100%", padding: "12px 24px", fontSize: 13, fontWeight: 700,
+              opacity: (guideGenerating || !guideTopic.trim()) ? 0.5 : 1,
+              background: guideGenerating ? "#1E2130" : "linear-gradient(135deg, #6366F1, #06B6D4)",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+            }}>
+              {guideGenerating ? "⏳ Generating comprehensive guide... (this may take 30-60s)" : "🤖 Generate Professional Guide"}
+            </button>
+          </div>
+
+          {/* Guide Result */}
+          {guideResult && (
+            <div style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${guideResult.error ? "#FF6B6B33" : "#81C78433"}`, overflow: "hidden" }}>
+              {guideResult.error ? (
+                <div style={{ padding: 20, color: "#FF6B6B", fontSize: 12 }}>❌ {guideResult.error}</div>
+              ) : (
+                <>
+                  <div style={{ padding: "14px 20px", background: "linear-gradient(135deg, #81C78408, #06B6D408)", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#81C784", fontFamily: "'Space Grotesk', sans-serif" }}>✅ Guide Generated Successfully</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{guideResult.text.length.toLocaleString()} characters · {guideResult.zdRefs} Zendesk tickets referenced · Auto-saved to Knowledge Base</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => { navigator.clipboard.writeText(guideResult.text); }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>📋 Copy</button>
+                      <button onClick={() => { const blob = new Blob([guideResult.text], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${guideTopic.replace(/\s+/g, "-")}-Guide.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📥 Download .md</button>
+                    </div>
+                  </div>
+                  <div style={{ padding: 20, maxHeight: 600, overflow: "auto", fontSize: 12, color: "#C4CAD6", lineHeight: 1.7, fontFamily: "'DM Sans', sans-serif", whiteSpace: "pre-wrap" }}>
+                    {guideResult.text}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Tab: SharePoint Document Library ──────────────────── */}
+      {kpActiveTab === "sharepoint" && (
+        <div>
+          <div style={{ background: "linear-gradient(135deg, #0078D408, #0089D618)", borderRadius: 10, border: "1px solid #0078D433", padding: 24, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, #0078D4, #0089D6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📂</div>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>SharePoint Document Library Integration</div>
+                <div style={{ fontSize: 11, color: "#5A6178" }}>Provide a SharePoint document library link and AI will auto-generate professional documentation</div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 12, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4, display: "block" }}>SharePoint Document URL</label>
+                <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder="https://vgctechnology.sharepoint.com/sites/ITSM-KnowledgePortal/Shared Documents/..." value={spDocUrl} onChange={e => setSpDocUrl(e.target.value)} />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 200px", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4, display: "block" }}>Document Title</label>
+                  <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder="e.g., Network Architecture Overview, DR Runbook..." value={spDocTitle} onChange={e => setSpDocTitle(e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4, display: "block" }}>Document Type</label>
+                  <select style={{ ...inputStyle, width: "100%", boxSizing: "border-box", cursor: "pointer" }} value={spDocType} onChange={e => setSpDocType(e.target.value)}>
+                    <option>General Documentation</option>
+                    <option>SOP / Procedure</option>
+                    <option>Technical Guide</option>
+                    <option>Architecture Document</option>
+                    <option>Runbook / Playbook</option>
+                    <option>Policy Document</option>
+                    <option>Training Material</option>
+                    <option>Troubleshooting Guide</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick SharePoint Links */}
+            <div style={{ padding: 12, borderRadius: 8, background: "#0A0C14", border: "1px solid #1E2130", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#0078D4", marginBottom: 8 }}>🔗 Quick SharePoint Links</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {[
+                  { label: "📚 Knowledge Portal", url: SHAREPOINT_KB_CONFIG.baseUrl },
+                  { label: "📂 Document Library", url: SHAREPOINT_KB_CONFIG.docsUrl },
+                  { label: "📋 IT Policies", url: SHAREPOINT_KB_CONFIG.baseUrl + "/SitePages/IT-Policies.aspx" },
+                  { label: "🔧 SOPs", url: SHAREPOINT_KB_CONFIG.baseUrl + "/SitePages/SOPs.aspx" },
+                ].map(link => (
+                  <button key={link.label} onClick={() => { setSpDocUrl(link.url); setSpDocTitle(link.label.replace(/^[^\s]+\s/, "")); }} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 10, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", transition: "all 0.15s" }}
+                    onMouseOver={e => e.currentTarget.style.background = "#0078D422"}
+                    onMouseOut={e => e.currentTarget.style.background = "#0078D408"}>{link.label}</button>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={generateSpDoc} disabled={spDocGenerating || (!spDocUrl.trim() && !spDocTitle.trim())} style={{
+              ...btnStyle("#0078D4"), width: "100%", padding: "12px 24px", fontSize: 13, fontWeight: 700,
+              opacity: (spDocGenerating || (!spDocUrl.trim() && !spDocTitle.trim())) ? 0.5 : 1,
+              background: spDocGenerating ? "#1E2130" : "linear-gradient(135deg, #0078D4, #0089D6)",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+            }}>
+              {spDocGenerating ? "⏳ AI is preparing professional documentation..." : "📝 Auto-Generate Documentation"}
+            </button>
+          </div>
+
+          {/* SharePoint Doc Result */}
+          {spDocResult && (
+            <div style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${spDocResult.error ? "#FF6B6B33" : "#0078D433"}`, overflow: "hidden" }}>
+              {spDocResult.error ? (
+                <div style={{ padding: 20, color: "#FF6B6B", fontSize: 12 }}>❌ {spDocResult.error}</div>
+              ) : (
+                <>
+                  <div style={{ padding: "14px 20px", background: "linear-gradient(135deg, #0078D408, #0089D618)", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#0078D4", fontFamily: "'Space Grotesk', sans-serif" }}>✅ Documentation Generated</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{spDocResult.text.length.toLocaleString()} characters · Auto-saved to Knowledge Base · Ready for SharePoint upload</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => { navigator.clipboard.writeText(spDocResult.text); }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>📋 Copy</button>
+                      <button onClick={() => { const blob = new Blob([spDocResult.text], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${(spDocTitle || "SharePoint-Doc").replace(/\s+/g, "-")}.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📥 Download .md</button>
+                      {spDocUrl && <button onClick={() => window.open(spDocUrl, "_blank", "noopener")} style={{ ...btnStyle("#0089D6"), fontSize: 10, padding: "5px 12px" }}>🔗 Open in SharePoint</button>}
+                    </div>
+                  </div>
+                  <div style={{ padding: 20, maxHeight: 600, overflow: "auto", fontSize: 12, color: "#C4CAD6", lineHeight: 1.7, fontFamily: "'DM Sans', sans-serif", whiteSpace: "pre-wrap" }}>
+                    {spDocResult.text}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Tab: Generated Documents ──────────────────────────── */}
+      {kpActiveTab === "generated" && (
+        <div>
+          <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 AI-Generated Documents & Guides</div>
+            <button onClick={fetchKbEntries} style={{ ...btnStyle(), fontSize: 10, padding: "5px 12px" }}>🔄 Refresh</button>
+          </div>
+          {kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint").length === 0 ? (
+            <div style={{ textAlign: "center", padding: "60px 20px", color: "#5A6178" }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: "#C4CAD6", marginBottom: 4 }}>No generated documents yet</div>
+              <div style={{ fontSize: 12 }}>Use the AI Guide Generator or SharePoint Docs tab to create professional documentation.</div>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint").map(doc => (
+                <div key={doc.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, cursor: "pointer", transition: "all 0.2s" }}
+                  onMouseOver={e => e.currentTarget.style.borderColor = "#6366F133"}
+                  onMouseOut={e => e.currentTarget.style.borderColor = "#1E2130"}
+                  onClick={() => { setGuideResult({ text: doc.content, id: doc.id, title: doc.title, zdRefs: 0 }); setKpActiveTab("generator"); }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 4 }}>
+                        {doc.source === "sharepoint" ? "📂" : "🤖"} {doc.title}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5A6178", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <span>📁 {doc.category}</span>
+                        <span>📝 {(doc.content || "").length.toLocaleString()} chars</span>
+                        <span>🕐 {new Date(doc.createdAt).toLocaleDateString("en-SG")}</span>
+                        <span>👤 {doc.trainedBy}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(doc.content); }} style={{ ...btnStyle("#06B6D4"), fontSize: 9, padding: "3px 8px" }}>📋</button>
+                      <button onClick={e => { e.stopPropagation(); deleteKbEntry(doc.id); }} style={{ ...btnStyle("#FF6B6B"), fontSize: 9, padding: "3px 8px" }}>🗑</button>
+                    </div>
+                  </div>
+                  {(doc.tags || []).length > 0 && (
+                    <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
+                      {doc.tags.slice(0, 6).map((tag, i) => (
+                        <span key={i} style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#1E213044", color: "#5A6178" }}>#{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Tab: Articles (existing) ──────────────────────────── */}
+      {kpActiveTab === "articles" && (<>
 
       {/* Search & Filters */}
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -4972,14 +5344,16 @@ export default function ITSMApp() {
         <div style={{ display: "flex", gap: 20, fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
           <span>📊 Total: {kbArticles.length} articles</span>
           <span>👁 {kbArticles.reduce((s, a) => s + a.views, 0).toLocaleString()} total views</span>
-          <span>👍 {Math.round(kbArticles.reduce((s, a) => s + a.helpful, 0) / kbArticles.length)}% avg helpful</span>
+          <span>👍 {kbArticles.length > 0 ? Math.round(kbArticles.reduce((s, a) => s + a.helpful, 0) / kbArticles.length) : 0}% avg helpful</span>
           <span>✍️ {new Set(kbArticles.map(a => a.author).filter(Boolean)).size} contributors</span>
+          <span>🤖 {kbEntries.filter(e => e.source === "ai-generated" || e.source === "sharepoint").length} AI-generated docs</span>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.docsUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>📂 SharePoint Document Library</button>
           <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>🌐 SharePoint Portal</button>
         </div>
       </div>
+      </>)}
     </div>
     );
   };
@@ -7269,15 +7643,50 @@ export default function ITSMApp() {
             {/* AI Training Panel */}
             {showKbTraining && (
               <div style={{ marginTop: 12, background: "#0A0C14", borderRadius: 10, border: "1px solid #00BF6F33", padding: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                   <h4 style={{ margin: 0, fontSize: 13, color: "#00BF6F", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
-                    <span>🧠</span> Train AI — Internal Knowledge Base
+                    <span>🧠</span> Train AI — All Users Can Contribute
                   </h4>
-                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", padding: "2px 8px", background: "#1E213044", borderRadius: 4 }}>{kbEntries.length} entries</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", padding: "2px 8px", background: "#1E213044", borderRadius: 4 }}>{kbEntries.length} entries</span>
+                    <button onClick={async () => {
+                      try {
+                        const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+                        const d = await r.json();
+                        setAiMessages(prev => [...prev, { role: "ai", text: `🔄 **Knowledge Sync Complete!**\n\n📊 Synced ${d.syncedThisRun || 0} new entries from Zendesk\n📚 Total knowledge entries: ${d.totalEntries}\n🕐 Last sync: ${new Date(d.lastSync).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}\n⏭ Next auto-sync: ${new Date(d.nextSync).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}\n\nAll training is shared across the entire system — every user benefits!`, source: "azure" }]);
+                        fetchKbEntries();
+                      } catch (e) { setAiMessages(prev => [...prev, { role: "ai", text: `⚠️ Sync failed: ${e.message}`, source: "azure" }]); }
+                    }} style={{ ...btnStyle("#06B6D4"), fontSize: 9, padding: "3px 8px" }} title="Sync all Zendesk tickets + KB into unified AI training">🔄 Sync Now</button>
+                  </div>
                 </div>
+
+                {/* Sync Status Banner */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 6, background: "#06B6D408", border: "1px solid #06B6D422", marginBottom: 12 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />
+                  <div style={{ fontSize: 9, color: "#8A8FA8", flex: 1 }}>
+                    <strong style={{ color: "#06B6D4" }}>Daily Auto-Sync Active</strong> — All training syncs to every user's AI Assist daily. Zendesk tickets, KB articles, uploaded docs — everything is shared system-wide.
+                  </div>
+                </div>
+
                 <div style={{ fontSize: 10, color: "#8A8FA8", marginBottom: 12, lineHeight: 1.5 }}>
-                  Add knowledge here so AI always checks internal docs first. When someone asks a question, AI will prioritize this knowledge before using external sources.
+                  👥 <strong style={{ color: "#E8ECF4" }}>Every user</strong> can add knowledge here. AI checks internal docs first when answering questions. Training is shared across the <strong style={{ color: "#81C784" }}>entire organization</strong>.
                 </div>
+
+                {/* Quick Train Shortcuts */}
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
+                  <span style={{ fontSize: 9, color: "#5A6178", alignSelf: "center" }}>Quick:</span>
+                  {[
+                    { label: "📧 Email Issue Fix", cat: "Email" },
+                    { label: "🔒 VPN Troubleshoot", cat: "VPN" },
+                    { label: "🔑 Password Reset", cat: "Security" },
+                    { label: "🖨️ Printer Setup", cat: "Printing" },
+                    { label: "💻 New PC Setup", cat: "Onboarding" },
+                    { label: "🛡️ Security Alert", cat: "Security" },
+                  ].map(q => (
+                    <button key={q.label} onClick={() => { setKbForm(p => ({ ...p, title: q.label.replace(/^[^\s]+\s/, ""), category: q.cat })); }} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 8, border: "1px solid #1E213066", background: "#0F1117", color: "#8A8FA8", cursor: "pointer" }}>{q.label}</button>
+                  ))}
+                </div>
+
                 {/* Add New Knowledge Form */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                   <input style={{ ...inputStyle, fontSize: 11 }} placeholder="Title (e.g., VPN Setup Guide)" value={kbForm.title} onChange={e => setKbForm(p => ({ ...p, title: e.target.value }))} />
@@ -10567,20 +10976,20 @@ export default function ITSMApp() {
               <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>General Settings</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <FormField label="Organization Name">
-                  <input style={inputStyle} defaultValue="VGC Technology Pte Ltd" />
+                  <input style={inputStyle} value={generalSettings.orgName} onChange={e => { const v = e.target.value; setGeneralSettings(p => { const u = { ...p, orgName: v }; _save("vgc_general_settings", u); return u; }); }} />
                 </FormField>
                 <FormField label="Timezone">
-                  <select style={inputStyle} defaultValue="Asia/Singapore">
+                  <select style={inputStyle} value={generalSettings.timezone} onChange={e => { const v = e.target.value; setGeneralSettings(p => { const u = { ...p, timezone: v }; _save("vgc_general_settings", u); return u; }); }}>
                     <option>Asia/Singapore</option><option>UTC</option><option>US/Eastern</option><option>Europe/London</option>
                   </select>
                 </FormField>
                 <FormField label="Date Format">
-                  <select style={inputStyle} defaultValue="DD-MM-YYYY">
+                  <select style={inputStyle} value={generalSettings.dateFormat} onChange={e => { const v = e.target.value; setGeneralSettings(p => { const u = { ...p, dateFormat: v }; _save("vgc_general_settings", u); return u; }); }}>
                     <option>DD-MM-YYYY</option><option>YYYY-MM-DD</option><option>DD/MM/YYYY</option><option>MM/DD/YYYY</option>
                   </select>
                 </FormField>
                 <FormField label="Language">
-                  <select style={inputStyle} defaultValue="en">
+                  <select style={inputStyle} value={generalSettings.language} onChange={e => { const v = e.target.value; setGeneralSettings(p => { const u = { ...p, language: v }; _save("vgc_general_settings", u); return u; }); }}>
                     <option value="en">English</option><option value="zh">Chinese</option><option value="ms">Malay</option><option value="ja">Japanese</option>
                   </select>
                 </FormField>
@@ -10647,30 +11056,35 @@ export default function ITSMApp() {
                 setVendors(prev => { const u = [...prev, v]; _save("vgc_vendors", u); return u; });
               }} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }}>＋ Add Vendor</button>
             </div>
-            {vendors.map((v, vi) => (
+            {vendors.map((v, vi) => {
+              const updateVendor = (field, val) => { const updated = vendors.map((x, i) => i === vi ? { ...x, [field]: val } : x); setVendors(updated); _save("vgc_vendors", updated); };
+              return (
               <div key={v.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, marginBottom: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <div style={{ flex: 1, display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: 16 }}>🏢</span>
-                      <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{v.name || "New Vendor"}</span>
-                      <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>{v.category}</Badge>
+                      <input style={{ ...inputStyle, fontSize: 13, fontWeight: 600, flex: 1 }} value={v.name} onChange={e => updateVendor("name", e.target.value)} placeholder="Vendor Name" />
+                      <select style={{ ...inputStyle, width: 160, fontSize: 11 }} value={v.category} onChange={e => updateVendor("category", e.target.value)}>
+                        <option>Software</option><option>Hardware & Infrastructure</option><option>Cloud & Productivity</option><option>Network Security</option><option>Networking & Communication</option><option>CSP / Licensing Partner</option><option>Managed Services</option><option>Other</option>
+                      </select>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "#5A6178" }}>
-                      <div>📧 {v.supportEmail || "—"}</div>
-                      <div>📞 {v.supportPhone || "—"}</div>
-                      <div>⏱️ {v.responseExpectation || "—"}</div>
-                      <div>📋 {v.docLinks?.length || 0} doc links</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11 }}>📧</span><input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={v.supportEmail} onChange={e => updateVendor("supportEmail", e.target.value)} placeholder="support@vendor.com" /></div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11 }}>📞</span><input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={v.supportPhone} onChange={e => updateVendor("supportPhone", e.target.value)} placeholder="+65 1234 5678" /></div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11 }}>⏱️</span><input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={v.responseExpectation} onChange={e => updateVendor("responseExpectation", e.target.value)} placeholder="Sev-A: 1hr, Sev-B: 4hrs" /></div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11 }}>📋</span><span style={{ fontSize: 10, color: "#5A6178" }}>{v.docLinks?.length || 0} doc links</span></div>
                     </div>
-                    {v.escalationSOP && <div style={{ fontSize: 10, color: "#FFB347", marginTop: 4 }}>🚨 Escalation: {v.escalationSOP}</div>}
-                    {v.procedures && <div style={{ fontSize: 10, color: "#81C784", marginTop: 2 }}>📖 {v.procedures}</div>}
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11 }}>🚨</span><input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={v.escalationSOP || ""} onChange={e => updateVendor("escalationSOP", e.target.value)} placeholder="Escalation SOP" /></div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11 }}>📖</span><input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={v.procedures || ""} onChange={e => updateVendor("procedures", e.target.value)} placeholder="Support procedures" /></div>
                   </div>
                   <button onClick={() => {
                     const updated = vendors.filter(x => x.id !== v.id); setVendors(updated); _save("vgc_vendors", updated);
-                  }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12 }} title="Delete vendor">🗑️</button>
+                  }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12, marginLeft: 8 }} title="Delete vendor">🗑️</button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -10707,27 +11121,39 @@ export default function ITSMApp() {
               </div>
             </div>
 
-            {surveyTemplates.map((tpl) => (
+            {surveyTemplates.map((tpl, tplIdx) => {
+              const updateTpl = (field, val) => { const updated = surveyTemplates.map((x, i) => i === tplIdx ? { ...x, [field]: val } : x); setSurveyTemplates(updated); _save("vgc_survey_templates", updated); };
+              return (
               <div key={tpl.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, marginBottom: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
                     <span style={{ fontSize: 14 }}>📋</span>
-                    <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{tpl.name}</span>
-                    <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>{tpl.tone}</Badge>
+                    <input style={{ ...inputStyle, fontSize: 13, fontWeight: 600, flex: 1 }} value={tpl.name} onChange={e => updateTpl("name", e.target.value)} placeholder="Template Name" />
+                    <select style={{ ...inputStyle, width: 120, fontSize: 11 }} value={tpl.tone || "Professional"} onChange={e => updateTpl("tone", e.target.value)}>
+                      <option>Professional</option><option>Friendly</option><option>Formal</option><option>Empathetic</option>
+                    </select>
                   </div>
                   <button onClick={() => {
                     const updated = surveyTemplates.filter(x => x.id !== tpl.id); setSurveyTemplates(updated); _save("vgc_survey_templates", updated);
-                  }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12 }} title="Delete template">🗑️</button>
+                  }} style={{ background: "none", border: "none", color: "#FF6B6B66", cursor: "pointer", fontSize: 12, marginLeft: 8 }} title="Delete template">🗑️</button>
                 </div>
-                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6 }}>Questions ({(tpl.questions || []).length}):</div>
+                <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>Questions ({(tpl.questions || []).length}):
+                  <button onClick={() => updateTpl("questions", [...(tpl.questions || []), "New question?"])} style={{ background: "none", border: "1px solid #6366F133", borderRadius: 3, color: "#6366F1", cursor: "pointer", fontSize: 9, padding: "1px 6px" }}>+ Add</button>
+                </div>
                 {(tpl.questions || []).map((q, qi) => (
-                  <div key={qi} style={{ fontSize: 11, color: "#C4CAD6", padding: "3px 0 3px 12px", borderLeft: "2px solid #6366F133", marginBottom: 4 }}>
-                    {qi + 1}. {q}
+                  <div key={qi} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, width: 16, flexShrink: 0 }}>{qi + 1}.</span>
+                    <input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={q} onChange={e => { const qs = [...(tpl.questions || [])]; qs[qi] = e.target.value; updateTpl("questions", qs); }} />
+                    <button onClick={() => updateTpl("questions", (tpl.questions || []).filter((_, j) => j !== qi))} style={{ background: "none", border: "none", color: "#FF6B6B55", cursor: "pointer", fontSize: 10, flexShrink: 0 }}>✕</button>
                   </div>
                 ))}
-                <div style={{ fontSize: 10, color: "#81C784", marginTop: 6, fontStyle: "italic" }}>Sign-off: {tpl.signOff}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                  <span style={{ fontSize: 10, color: "#81C784", flexShrink: 0 }}>Sign-off:</span>
+                  <input style={{ ...inputStyle, fontSize: 11, flex: 1 }} value={tpl.signOff || ""} onChange={e => updateTpl("signOff", e.target.value)} placeholder="Thank you for your feedback!" />
+                </div>
               </div>
-            ))}
+              );
+            })}
 
             {/* Pending Survey Drafts */}
             {surveyDrafts.length > 0 && (
@@ -16563,11 +16989,29 @@ export default function ITSMApp() {
             {/* Inline AI Training Panel */}
             {showFloatingKbTraining && (
               <div style={{ padding: "10px 14px", borderTop: "1px solid #00BF6F33", background: "#0A0C14" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#00BF6F", marginBottom: 8, display: "flex", alignItems: "center", gap: 6, fontFamily: "'Space Grotesk', sans-serif" }}>
-                  <span>🧠</span> Train AI — Add Knowledge
-                  <span style={{ marginLeft: "auto", fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{kbEntries.length} entries</span>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#00BF6F", marginBottom: 6, display: "flex", alignItems: "center", gap: 6, fontFamily: "'Space Grotesk', sans-serif" }}>
+                  <span>🧠</span> Train AI — All Users
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+                    <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{kbEntries.length} entries</span>
+                    <button onClick={async () => {
+                      try { const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const d = await r.json(); fetchKbEntries(); setAiMessages(prev => [...prev, { role: "ai", text: `🔄 Synced! ${d.syncedThisRun || 0} new entries. Total: ${d.totalEntries}`, source: "azure" }]); } catch {}
+                    }} style={{ background: "none", border: "1px solid #06B6D433", borderRadius: 3, padding: "1px 5px", fontSize: 8, color: "#06B6D4", cursor: "pointer" }} title="Sync all knowledge system-wide">🔄</button>
+                  </span>
                 </div>
-                <div style={{ fontSize: 9, color: "#8A8FA8", marginBottom: 8, lineHeight: 1.4 }}>Add internal knowledge so AI references it first. Primary: Azure OpenAI · Fallback: Local AI</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderRadius: 4, background: "#06B6D408", border: "1px solid #06B6D418", marginBottom: 6 }}>
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#81C784" }} />
+                  <span style={{ fontSize: 8, color: "#8A8FA8" }}>Daily sync active · All users' training shared system-wide</span>
+                </div>
+                <div style={{ fontSize: 9, color: "#8A8FA8", marginBottom: 8, lineHeight: 1.4 }}>👥 Every user can add knowledge. AI checks internal docs first. Training syncs to whole system daily.
+                  <button onClick={async () => {
+                    try { const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const d = await r.json(); fetchKbEntries(); setAiMessages(prev => [...prev, { role: "ai", text: `🔄 Synced! ${d.syncedThisRun || 0} new entries. Total: ${d.totalEntries}`, source: "azure" }]); } catch {}
+                  }} style={{ background: "none", border: "1px solid #06B6D433", borderRadius: 3, padding: "1px 5px", fontSize: 8, color: "#06B6D4", cursor: "pointer" }} title="Sync all knowledge system-wide">🔄</button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderRadius: 4, background: "#06B6D408", border: "1px solid #06B6D418", marginBottom: 6 }}>
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#81C784" }} />
+                  <span style={{ fontSize: 8, color: "#8A8FA8" }}>Daily sync active · All users' training shared system-wide</span>
+                </div>
+                <div style={{ fontSize: 9, color: "#8A8FA8", marginBottom: 8, lineHeight: 1.4 }}>👥 Every user can add knowledge. AI checks internal docs first. Training syncs to whole system daily.</div>
                 <input style={{ ...inputStyle, fontSize: 10, width: "100%", marginBottom: 6, boxSizing: "border-box" }} placeholder="Title (e.g. VPN Setup Guide)" value={kbForm.title} onChange={e => setKbForm(p => ({ ...p, title: e.target.value }))} />
                 <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                   <select style={{ ...inputStyle, fontSize: 10, flex: 1 }} value={kbForm.category} onChange={e => setKbForm(p => ({ ...p, category: e.target.value }))}>
@@ -17036,21 +17480,6 @@ export default function ITSMApp() {
       {errorAdvisory && (() => {
         const ea = errorAdvisory;
         const sgTime = new Date(ea.timestamp).toLocaleString("en-SG", { timeZone: "Asia/Singapore", dateStyle: "medium", timeStyle: "medium" });
-        const aiSteps = ea.type === "SSO Login" ? [
-          { icon: "🔍", text: "Check if popup blocker is disabled for this site" },
-          { icon: "🌐", text: "Verify your network connection is stable" },
-          { icon: "🔑", text: "Ensure your Microsoft account has access to this tenant" },
-          { icon: "🔄", text: "Clear browser cache & cookies, then try again" },
-          { icon: "⚙️", text: "Ask IT Admin to verify Azure AD App Registration redirect URIs" },
-          { icon: "📧", text: "If issue persists, contact developer via the button below" },
-        ] : [
-          { icon: "🔐", text: "Verify API permissions are granted in Azure AD (Mail.Read, Calendars.Read, etc.)" },
-          { icon: "✅", text: "Ensure Admin Consent is granted for all Microsoft Graph permissions" },
-          { icon: "🔄", text: "Try signing out and signing back in to refresh your token" },
-          { icon: "🌐", text: "Check network connectivity to Microsoft Graph API endpoints" },
-          { icon: "⏱️", text: "Wait a moment and click Retry — the issue may be temporary" },
-          { icon: "📧", text: "If issue persists, contact developer via the button below" },
-        ];
         const screenshotInfo = `Error Type: ${ea.type}\nError Code: ${ea.code}\nMessage: ${ea.message}\nTimestamp: ${sgTime}\nBrowser: ${navigator.userAgent}\nURL: ${window.location.href}\n\nDetails:\n${ea.details}\n\nStack Trace:\n${ea.stack || "N/A"}`;
         const emailSubject = encodeURIComponent(`[VGC-ITSM] Error Report — ${ea.type} (${ea.code})`);
         const emailBody = encodeURIComponent(
@@ -17076,29 +17505,34 @@ export default function ITSMApp() {
         );
         const mailtoLink = `mailto:help@vgctechnology.com?subject=${emailSubject}&body=${emailBody}`;
 
+        // Auto-trigger AI resolution on mount
+        if (!aiErrorResolution && !aiErrorResolving) {
+          resolveErrorWithAI(ea);
+        }
+
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", animation: "alertSlideDown 0.3s ease-out" }}
-            onClick={e => { if (e.target === e.currentTarget) setErrorAdvisory(null); }}>
-            <div style={{ width: 560, maxHeight: "88vh", background: "#0F1117", borderRadius: 16, border: "1px solid #FF6B6B33", overflow: "hidden", boxShadow: "0 24px 64px rgba(255,107,107,0.15), 0 8px 24px #00000088", animation: "alertSlideDown 0.35s ease-out" }}>
+            onClick={e => { if (e.target === e.currentTarget) { setErrorAdvisory(null); setAiErrorResolution(null); } }}>
+            <div style={{ width: 620, maxHeight: "90vh", background: "#0F1117", borderRadius: 16, border: "1px solid #FF6B6B33", overflow: "hidden", boxShadow: "0 24px 64px rgba(255,107,107,0.15), 0 8px 24px #00000088", animation: "alertSlideDown 0.35s ease-out" }}>
               {/* Header */}
               <div style={{ padding: "16px 20px", background: "linear-gradient(135deg, #FF6B6B10, #FF444408)", borderBottom: "1px solid #FF6B6B22", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #FF6B6B22, #FF444411)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, animation: "aiBreathe 3s ease-in-out infinite" }}>🤖</div>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Error Advisory</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Error Resolver</div>
                     <div style={{ fontSize: 10, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
-                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#FF6B6B", animation: "pulse 1.5s infinite" }} />
-                      {ea.type} Error Detected
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: aiErrorResolving ? "#FFB347" : "#FF6B6B", animation: "pulse 1.5s infinite" }} />
+                      {aiErrorResolving ? "AI is analyzing and resolving..." : `${ea.type} Error Detected — AI Solution Ready`}
                     </div>
                   </div>
                 </div>
-                <button onClick={() => setErrorAdvisory(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18, padding: "4px 6px", borderRadius: 6, transition: "all 0.2s" }}
+                <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18, padding: "4px 6px", borderRadius: 6, transition: "all 0.2s" }}
                   onMouseEnter={e => e.currentTarget.style.color = "#FF6B6B"}
                   onMouseLeave={e => e.currentTarget.style.color = "#5A6178"}>✕</button>
               </div>
 
               {/* Content */}
-              <div style={{ padding: 20, maxHeight: "60vh", overflow: "auto" }}>
+              <div style={{ padding: 20, maxHeight: "65vh", overflow: "auto" }}>
                 {/* Error Info Card */}
                 <div style={{ padding: 14, borderRadius: 10, background: "#FF6B6B08", border: "1px solid #FF6B6B1A", marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
@@ -17111,21 +17545,26 @@ export default function ITSMApp() {
                   <div style={{ marginTop: 8, fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>🕐 {sgTime}</div>
                 </div>
 
-                {/* AI Recommended Steps */}
+                {/* AI Resolution — Dynamic, not hardcoded */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#06B6D4", marginBottom: 10, display: "flex", alignItems: "center", gap: 6, fontFamily: "'Space Grotesk', sans-serif" }}>
-                    <span style={{ fontSize: 13 }}>💡</span> AI Recommended Actions
+                    <span style={{ fontSize: 13 }}>🤖</span> AI-Powered Resolution
+                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>GPT-5.4-Pro</span>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {aiSteps.map((step, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, background: "#ffffff03", border: "1px solid #1E2130", animation: `loginFeatureFade 0.4s ease-out ${i * 0.08}s both` }}>
-                        <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{step.icon}</span>
-                        <div style={{ fontSize: 11, color: "#C8CDD8", lineHeight: 1.5, fontFamily: "'DM Sans', sans-serif" }}>
-                          <span style={{ fontWeight: 600, color: "#E8ECF4" }}>Step {i + 1}:</span> {step.text}
-                        </div>
+                  {aiErrorResolving ? (
+                    <div style={{ padding: 20, borderRadius: 10, background: "#06B6D408", border: "1px solid #06B6D422", textAlign: "center" }}>
+                      <div style={{ fontSize: 24, marginBottom: 10, animation: "aiBreathe 2s ease-in-out infinite" }}>🤖</div>
+                      <div style={{ fontSize: 12, color: "#06B6D4", fontWeight: 600 }}>AI is analyzing the error...</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4 }}>Checking knowledge base, Zendesk history, and generating resolution steps</div>
+                      <div style={{ marginTop: 12, width: 200, height: 3, borderRadius: 3, background: "#1E2130", margin: "12px auto 0" }}>
+                        <div style={{ width: "60%", height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #6366F1, #06B6D4)", animation: "shimmerBg 1.5s ease-in-out infinite" }} />
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ) : aiErrorResolution ? (
+                    <div style={{ padding: 16, borderRadius: 10, background: "#ffffff03", border: "1px solid #1E2130", fontSize: 12, color: "#C4CAD6", lineHeight: 1.7, fontFamily: "'DM Sans', sans-serif", whiteSpace: "pre-wrap" }}>
+                      {aiErrorResolution}
+                    </div>
+                  ) : null}
                 </div>
 
                 {/* Screenshot Tip */}
@@ -17139,14 +17578,18 @@ export default function ITSMApp() {
                   </div>
                 </div>
 
-                {/* Copy Error Info */}
+                {/* Action Buttons */}
                 <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                  <button onClick={() => { navigator.clipboard.writeText(screenshotInfo).then(() => { const btn = document.getElementById("vgc-copy-err-btn"); if(btn) { btn.textContent = "✅ Copied!"; setTimeout(() => { if(btn) btn.textContent = "📋 Copy Error Info"; }, 2000); } }); }}
-                    id="vgc-copy-err-btn"
+                  <button onClick={() => { navigator.clipboard.writeText(screenshotInfo + "\n\n─── AI RESOLUTION ───\n" + (aiErrorResolution || "Pending...")); }}
                     style={{ flex: 1, padding: "9px 0", borderRadius: 8, background: "#1E2130", border: "1px solid #2A2F45", color: "#E8ECF4", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s" }}
-                    onMouseEnter={e => { e.currentTarget.style.background = "#2A2F45"; e.currentTarget.style.borderColor = "#6366F155"; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = "#1E2130"; e.currentTarget.style.borderColor = "#2A2F45"; }}
-                  >📋 Copy Error Info</button>
+                    onMouseEnter={e => { e.currentTarget.style.background = "#2A2F45"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "#1E2130"; }}
+                  >📋 Copy Error + AI Resolution</button>
+                  {!aiErrorResolving && <button onClick={() => resolveErrorWithAI(ea)}
+                    style={{ padding: "9px 16px", borderRadius: 8, background: "#6366F115", border: "1px solid #6366F133", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#6366F125"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "#6366F115"; }}
+                  >🔄 Re-analyze</button>}
                 </div>
               </div>
 
@@ -17159,15 +17602,15 @@ export default function ITSMApp() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
                   Email Developer — help@vgctechnology.com
                 </a>
-                <button onClick={() => { setErrorAdvisory(null); if (ea.type !== "SSO Login") { graphFetchedRef.current = false; fetchGraphData(); } }}
+                <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); if (ea.type !== "SSO Login") { graphFetchedRef.current = false; fetchGraphData(); } }}
                   style={{ padding: "11px 20px", borderRadius: 10, background: "#FF6B6B15", border: "1px solid #FF6B6B33", color: "#FF6B6B", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s", whiteSpace: "nowrap" }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#FF6B6B25"; e.currentTarget.style.borderColor = "#FF6B6B55"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = "#FF6B6B15"; e.currentTarget.style.borderColor = "#FF6B6B33"; }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "#FF6B6B25"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "#FF6B6B15"; }}
                 >🔄 Retry</button>
-                <button onClick={() => setErrorAdvisory(null)}
+                <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); }}
                   style={{ padding: "11px 16px", borderRadius: 10, background: "transparent", border: "1px solid #1E2130", color: "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s" }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = "#2A2F45"; e.currentTarget.style.color = "#E8ECF4"; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.color = "#5A6178"; }}
+                  onMouseEnter={e => { e.currentTarget.style.color = "#E8ECF4"; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = "#5A6178"; }}
                 >Dismiss</button>
               </div>
             </div>
