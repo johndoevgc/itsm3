@@ -1645,6 +1645,26 @@ export default function ITSMApp() {
         setRequests([]);
         sessionStorage.setItem("vgc_demo_cleared_" + currentUser.id, "1");
         console.log("[DATA ISOLATION] Production mode: all demo data cleared for Entra user", currentUser.email);
+        // Re-hydrate from server DB so production user gets real data
+        (async () => {
+          try {
+            const collections = [
+              ["incidents", setIncidents], ["problems", setProblems],
+              ["changes", setChanges], ["requests", setRequests],
+              ["assets", setAssets], ["kb", setKbArticles],
+              ["customers", setCustomers],
+            ];
+            for (const [coll, setter] of collections) {
+              const r = await fetch(`/api/db/${coll}`);
+              if (r.ok) {
+                const data = await r.json();
+                const items = Array.isArray(data) ? data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d)) : (data.data || []);
+                if (items.length > 0) setter(items);
+              }
+            }
+            console.log("[DATA ISOLATION] Production data re-hydrated from server DB");
+          } catch (e) { console.warn("[DATA ISOLATION] DB re-hydration failed:", e.message); }
+        })();
       }
     }
   }, [currentUser, isEntraProductionUser]);
@@ -13128,6 +13148,7 @@ export default function ITSMApp() {
 
     // Auto-polling for new tickets (every 60s when automation is on)
     React.useEffect(() => {
+      if (isLocalDemoUser) return; // Data Isolation
       if (zdConnected && zdAutoMode && azureOpenAI.enabled) {
         zdPollingRef.current = setInterval(() => { zdAutoTriageBatch(); }, 60000);
         return () => clearInterval(zdPollingRef.current);
@@ -15086,6 +15107,8 @@ export default function ITSMApp() {
                 animation: "orbitDot 6s linear infinite",
                 top: "calc(50% - 2px)", left: "calc(50% - 2px)"
               }} />
+              {/* Data mode dot indicator on collapsed sidebar */}
+              <div style={{ width: 6, height: 6, borderRadius: "50%", margin: "6px auto 0", background: isLocalDemoUser ? "#FFB347" : "#4CAF50", boxShadow: `0 0 6px ${isLocalDemoUser ? "#FFB34788" : "#4CAF5088"}` }} title={isLocalDemoUser ? "Demo Mode" : "Production"} />
             </div>
           )}
           <button onClick={() => setSideCollapsed(!sideCollapsed)} className="sidebar-collapse-btn" style={{
