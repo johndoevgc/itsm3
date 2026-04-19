@@ -1291,9 +1291,26 @@ export default function ITSMApp() {
   const [aiTrainingTab, setAiTrainingTab] = useState("documents");
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
-  const DATA_VERSION = "v2.2";
+  const DATA_VERSION = "v2.3";
+  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests"];
   const _ls = (key, fallback) => {
     try {
+      // HARD RULE: Entra users must NEVER see seed/demo data — start empty, hydrate from DB
+      const savedUser = localStorage.getItem("vgc_current_user");
+      if (savedUser) {
+        try {
+          const u = JSON.parse(savedUser);
+          if (u.authType === "entra" && PRODUCTION_COLLECTIONS.includes(key)) {
+            const s = localStorage.getItem(key);
+            // Only return cached data if it looks like production data (has zdTicketId or real IDs)
+            if (s) {
+              const parsed = JSON.parse(s);
+              if (Array.isArray(parsed) && parsed.length > 0 && !parsed.some(r => /^(INC000|PRB000|CHG000|REQ000)\d$/.test(r.id))) return parsed;
+            }
+            return []; // Empty fallback — DB hydration will load production data
+          }
+        } catch {}
+      }
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
         // Clear stale data on version bump so new seed data takes effect
@@ -1789,53 +1806,40 @@ export default function ITSMApp() {
   useEffect(() => {
     if (!currentUser) return;
     if (isEntraProductionUser) {
-      // Clear ALL demo/hardcoded data — production users get ONLY real API data
-      const demoCleared = sessionStorage.getItem("vgc_demo_cleared_" + currentUser.id);
-      if (!demoCleared) {
-        setZdTickets([]);
-        setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
-        setZdAiQueue([]);
-        setZdAutoLog([]);
-        setZdAutoStats({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
-        // Clear demo incidents/problems/changes/requests — real data comes from DB/API
-        localStorage.removeItem("vgc_incidents");
-        localStorage.removeItem("vgc_problems");
-        localStorage.removeItem("vgc_changes");
-        localStorage.removeItem("vgc_requests");
-        localStorage.removeItem("vgc_zd_tickets");
-        localStorage.removeItem("vgc_zd_stats");
-        localStorage.removeItem("vgc_zd_ai_queue");
-        localStorage.removeItem("vgc_zd_auto_log");
-        localStorage.removeItem("vgc_zd_auto_stats");
-        setIncidents([]);
-        setProblems([]);
-        setChanges([]);
-        setRequests([]);
-        sessionStorage.setItem("vgc_demo_cleared_" + currentUser.id, "1");
-        console.log("[DATA ISOLATION] Production mode: all demo data cleared for Entra user", currentUser.email);
-        // Re-hydrate from server DB so production user gets real data
-        (async () => {
-          try {
-            const collections = [
-              ["incidents", setIncidents], ["problems", setProblems],
-              ["changes", setChanges], ["requests", setRequests],
-              ["assets", setAssets], ["kb", setKbArticles],
-              ["customers", setCustomers],
-            ];
-            for (const [coll, setter] of collections) {
-              const r = await fetch(`/api/db/${coll}`);
-              if (r.ok) {
-                const data = await r.json();
-                const items = Array.isArray(data) ? data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d)) : (data.data || []);
-                if (items.length > 0) setter(items);
-              }
+      // Always clear Zendesk demo state for Entra users
+      setZdTickets([]);
+      setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
+      setZdAiQueue([]);
+      setZdAutoLog([]);
+      setZdAutoStats({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
+      // Clear any cached demo data from localStorage
+      ["vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
+      console.log("[DATA ISOLATION] Production mode: Entra user", currentUser.email);
+      // ALWAYS re-hydrate ITSM data from server DB for production users
+      // This ensures Entra users ONLY see Zendesk-synced production data
+      (async () => {
+        try {
+          const seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
+          const collections = [
+            ["incidents", setIncidents], ["problems", setProblems],
+            ["changes", setChanges], ["requests", setRequests],
+            ["assets", setAssets], ["customers", setCustomers],
+          ];
+          for (const [coll, setter] of collections) {
+            const r = await fetch(`/api/db/${coll}`);
+            if (r.ok) {
+              const data = await r.json();
+              const items = Array.isArray(data) ? data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d)) : (data.data || []);
+              // Filter out any seed data that may have leaked into the DB
+              const productionItems = items.filter(item => !seedPattern.test(item.id));
+              setter(productionItems.length > 0 ? productionItems : []);
             }
-            console.log("[DATA ISOLATION] Production data re-hydrated from server DB");
-          } catch (e) { console.warn("[DATA ISOLATION] DB re-hydration failed:", e.message); }
-        })();
-      }
+          }
+          console.log("[DATA ISOLATION] Production data re-hydrated from server DB");
+        } catch (e) { console.warn("[DATA ISOLATION] DB re-hydration failed:", e.message); }
+      })();
     }
-  }, [currentUser, isEntraProductionUser]);
+  }, [currentUser, isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch live cyber news for dashboard threat feed
   useEffect(() => {
@@ -2928,42 +2932,62 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         ["customers", stats.collections?.customers, setCustomers, "vgc_customers"],
       ];
       for (const [coll, count, setter, lsKey] of hydrateMap) {
-        if (count > 0 && !localStorage.getItem(lsKey)) {
+        // For Entra users: always hydrate from DB (production data only)
+        // For demo users: only hydrate if localStorage is empty
+        const shouldHydrate = isEntraProductionUser ? (count > 0) : (count > 0 && !localStorage.getItem(lsKey));
+        if (shouldHydrate) {
           try {
             const r = await fetch(`${DB_API}/${coll}`);
             if (r.ok) {
               const data = await r.json();
               if (Array.isArray(data) && data.length > 0) {
                 const items = data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d));
-                setter(items);
+                // For Entra users: filter out any seed data that leaked into DB
+                if (isEntraProductionUser) {
+                  const seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
+                  const filtered = items.filter(item => !seedPattern.test(item.id));
+                  if (filtered.length > 0) setter(filtered);
+                } else {
+                  setter(items);
+                }
               }
             }
           } catch {}
         }
       }
-      // Seed DB from state if DB is empty
-      const syncMap = [
-        ["incidents", incidents], ["problems", problems], ["changes", changes],
-        ["requests", requests], ["assets", assets], ["kb", kbArticles],
-        ["services", serviceCatalog], ["users", managedUsers], ["vendors", vendors],
-        ["workflow_rules", workflowRules], ["survey_templates", surveyTemplates],
-        ["smart_tasks", smartTasks],
-        ["customers", customers], ["service_reports", serviceReports],
-      ];
-      for (const [coll, data] of syncMap) {
-        if ((!stats.collections[coll] || stats.collections[coll] === 0) && data && data.length > 0) {
-          _dbSync(coll, data);
+      // Seed DB from state if DB is empty — ONLY for demo/local users
+      // HARD RULE: Entra production users must NEVER seed the DB with demo data
+      if (!isEntraProductionUser) {
+        const syncMap = [
+          ["incidents", incidents], ["problems", problems], ["changes", changes],
+          ["requests", requests], ["assets", assets], ["kb", kbArticles],
+          ["services", serviceCatalog], ["users", managedUsers], ["vendors", vendors],
+          ["workflow_rules", workflowRules], ["survey_templates", surveyTemplates],
+          ["smart_tasks", smartTasks],
+          ["customers", customers], ["service_reports", serviceReports],
+        ];
+        for (const [coll, data] of syncMap) {
+          if ((!stats.collections[coll] || stats.collections[coll] === 0) && data && data.length > 0) {
+            _dbSync(coll, data);
+          }
         }
       }
       console.log("[VGC-ITSM] Database sync check complete", stats.collections);
     }).catch(() => console.log("[VGC-ITSM] Backend DB not available — using localStorage only"));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Dual-write: localStorage + SQLite DB
-  useEffect(() => { _save("vgc_incidents", incidents); _dbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_problems", problems); _dbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_changes", changes); _dbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_requests", requests); _dbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Dual-write: localStorage + DB — for Entra users, block seed data from contaminating DB
+  const _seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
+  const _safeDbSync = (coll, data) => {
+    if (!data || !Array.isArray(data) || data.length === 0) return;
+    // For Entra users: never sync seed data patterns to DB
+    if (isEntraProductionUser && data.some(r => _seedPattern.test(r.id))) return;
+    _dbSync(coll, data);
+  };
+  useEffect(() => { _save("vgc_incidents", incidents); _safeDbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_problems", problems); _safeDbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_changes", changes); _safeDbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_requests", requests); _safeDbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_assets", assets); _dbSync("assets", assets); }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
