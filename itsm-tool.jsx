@@ -10787,6 +10787,28 @@ export default function ITSMApp() {
         emailSubject: "URGENT: APT Campaign 'Typhoon Silk' Targeting Singapore Infrastructure",
         emailBody: "Dear Team,\n\nCSA Singapore has issued an URGENT advisory regarding APT group 'Typhoon Silk' actively targeting Singapore critical infrastructure, including financial services.\n\nTHIS IS A NATION-STATE LEVEL THREAT.\n\nIMMEDIATE ACTIONS REQUIRED:\n1. Review ALL privileged access accounts\n2. Verify network segmentation is intact\n3. Audit recent software supply chain updates\n4. Enable enhanced logging on domain controllers\n5. Report ANY suspicious activity to CSA Singapore\n\nAdditional threat hunting exercise will be conducted. Standby for further instructions.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations\nAutomated via VGC-ITSM AI Engine",
         status: "open" },
+      { id: "GTHR-009", severity: "Medium", title: "Kubernetes API server misconfiguration exposes cluster metadata — CVE-2026-1882", source: "SecurityWeek", sourceUrl: "https://www.securityweek.com/", region: "Global", time: "2 days ago", timestamp: Date.now() - 48*3600000, isNew: false,
+        aiSummary: "Kubernetes API server in certain configurations leaks cluster metadata to unauthenticated users. Our AKS clusters use RBAC with Azure AD integration — low direct risk. Verify kube-apiserver flags as precaution.",
+        affectsUs: false, category: "Vulnerability", cve: "CVE-2026-1882", cvss: 5.3, cvssVector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+        affectedSystems: ["Kubernetes 1.28.x", "Kubernetes 1.29.x (pre-patch)"],
+        mitreTactics: ["Discovery (T1613)"],
+        iocs: ["Scanning from 198.51.100.x/24"],
+        nextSteps: ["Verify AKS RBAC configuration", "Review kube-apiserver audit logs"],
+        references: [{ title: "SecurityWeek Analysis", url: "https://www.securityweek.com/" }, { title: "Kubernetes Security Advisory", url: "https://kubernetes.io/docs/reference/issues-security/" }],
+        emailSubject: "FYI: Kubernetes API Misconfiguration — CVE-2026-1882",
+        emailBody: "Dear Team,\n\nA medium-severity vulnerability in Kubernetes API server has been disclosed. Our AKS clusters use RBAC with Azure AD — low direct risk. No immediate action required.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "monitoring" },
+      { id: "GTHR-010", severity: "Low", title: "OpenSSL 3.3.x advisory — minor TLS session resumption flaw", source: "NVD / CVE", sourceUrl: "https://nvd.nist.gov/", region: "Global", time: "3 days ago", timestamp: Date.now() - 72*3600000, isNew: false,
+        aiSummary: "Minor flaw in TLS 1.3 session resumption in OpenSSL 3.3.0-3.3.1. No known exploitation. Our infrastructure uses Azure-managed TLS termination — not directly affected. Patch available in OpenSSL 3.3.2.",
+        affectsUs: false, category: "Advisory", cve: "CVE-2026-5102", cvss: 3.7, cvssVector: "AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+        affectedSystems: ["OpenSSL 3.3.0", "OpenSSL 3.3.1"],
+        mitreTactics: ["Credential Access (T1557)"],
+        iocs: [],
+        nextSteps: ["No action required — Azure-managed TLS", "Archived for reference"],
+        references: [{ title: "NVD CVE-2026-5102", url: "https://nvd.nist.gov/" }, { title: "OpenSSL Security Advisory", url: "https://www.openssl.org/news/secadv/" }],
+        emailSubject: "FYI: OpenSSL 3.3.x Minor TLS Flaw",
+        emailBody: "Dear Team,\n\nA low-severity flaw in OpenSSL 3.3.x has been disclosed. Our infrastructure uses Azure-managed TLS termination — not affected. No action required.\n\nBest regards,\nVGC Technology Pte Ltd — IT Security Operations",
+        status: "closed" },
     ];
 
     const allThreats = liveThreats.length > 0 ? liveThreats : fallbackThreats;
@@ -10835,6 +10857,188 @@ export default function ITSMApp() {
     ];
 
     const cvssColor = (score) => score >= 9.0 ? "#FF4444" : score >= 7.0 ? "#FF6B6B" : score >= 4.0 ? "#FFB347" : "#4CAF50";
+
+    const renderThreatCard = (threat, mode) => {
+      const isExpanded = expandedThreat === threat.id;
+      const status = getStatus(threat);
+      const progress = getStepProgress(threat);
+      const isFeatured = mode === "featured";
+      const isCompact = mode === "archived";
+      if (isCompact) {
+        return (
+          <div key={threat.id} onClick={() => setExpandedThreat(isExpanded ? null : threat.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213066", borderLeft: `3px solid ${sevColors[threat.severity]}`, marginBottom: 4, cursor: "pointer", transition: "all 0.2s" }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: sevColors[threat.severity], flexShrink: 0 }} />
+            <span style={{ fontSize: 9, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace", minWidth: 50 }}>{threat.severity.toUpperCase()}</span>
+            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 65 }}>{threat.id}</span>
+            {threat.cve && <span style={{ padding: "1px 5px", borderRadius: 3, background: "#6366F118", fontSize: 8, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{threat.cve}</span>}
+            <span style={{ fontSize: 10, color: "#A0AEC0", flex: 1 }}>{threat.title}</span>
+            <span style={{ padding: "1px 6px", borderRadius: 3, background: statusColors[status] + "22", color: statusColors[status], fontSize: 8, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{statusLabels[status]}</span>
+            <span style={{ fontSize: 8, color: "#5A617866" }}>{threat.time}</span>
+            <span style={{ color: "#5A6178", fontSize: 9, transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>▼</span>
+          </div>
+        );
+      }
+      return (
+        <div key={threat.id} style={{
+          marginBottom: isFeatured ? 14 : 8, background: isFeatured && threat.affectsUs ? "#FF444408" : "#0F1117",
+          borderRadius: isFeatured ? 12 : 8, border: `1px solid ${isFeatured && threat.affectsUs ? sevColors[threat.severity] + '33' : '#1E2130'}`,
+          borderLeft: `${isFeatured ? 4 : 3}px solid ${sevColors[threat.severity]}`, position: "relative", overflow: "hidden",
+          transition: "all 0.2s", boxShadow: isFeatured ? `0 4px 20px ${sevColors[threat.severity]}11` : "none"
+        }}>
+          {isFeatured && threat.severity === "Critical" && (
+            <div style={{ position: "absolute", top: -1, right: -1, padding: "3px 12px", borderRadius: "0 12px 0 8px", background: "#FF4444", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>⚡ IMMEDIATE ACTION</div>
+          )}
+          {isFeatured && threat.severity === "High" && (
+            <div style={{ position: "absolute", top: -1, right: -1, padding: "3px 12px", borderRadius: "0 12px 0 8px", background: "#FF6B6B", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>⚡ ACTION REQUIRED</div>
+          )}
+          <div onClick={() => setExpandedThreat(isExpanded ? null : threat.id)} style={{ padding: isFeatured ? "18px 20px" : "10px 14px", cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: isFeatured ? 14 : 10 }}>
+              <div style={{ width: isFeatured ? 10 : 7, height: isFeatured ? 10 : 7, borderRadius: "50%", background: sevColors[threat.severity], boxShadow: isFeatured ? `0 0 10px ${sevColors[threat.severity]}88` : "none", marginTop: 5, flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: isFeatured ? 8 : 4, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: isFeatured ? 11 : 9, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace" }}>{threat.severity.toUpperCase()}</span>
+                  <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.id}</span>
+                  {threat.cve && <><span style={{ fontSize: 9, color: "#3A3F55" }}>·</span><span style={{ padding: "1px 6px", borderRadius: 3, background: "#6366F118", fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{threat.cve}</span></>}
+                  {threat.cvss && <span style={{ padding: "2px 6px", borderRadius: 3, background: cvssColor(threat.cvss) + "22", color: cvssColor(threat.cvss), fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>CVSS {threat.cvss}</span>}
+                  <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
+                  <a href={threat.sourceUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6", textDecoration: "none" }}>{threat.source} ↗</a>
+                  <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6" }}>{threat.region}</span>
+                  <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E213066", fontSize: 9, color: "#A0AEC0" }}>{threat.category}</span>
+                  {threat.affectsUs && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#FF444422", fontSize: 9, color: "#FF6B6B", fontWeight: 600 }}>⚠ AFFECTS US</span>}
+                  <span style={{ padding: "2px 6px", borderRadius: 3, background: statusColors[status] + "22", color: statusColors[status], fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{statusLabels[status]?.toUpperCase()}</span>
+                  <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto" }}>{threat.time}</span>
+                  <span style={{ color: "#5A6178", fontSize: 10, transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>▼</span>
+                </div>
+                <div style={{ fontSize: isFeatured ? 15 : 12, color: "#E8ECF4", fontWeight: isFeatured ? 600 : 500, lineHeight: 1.4 }}>{threat.title}</div>
+                <div style={{ marginTop: isFeatured ? 10 : 6, padding: isFeatured ? "10px 12px" : "6px 8px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🧠 AI THREAT ANALYSIS</span>
+                    {azureOpenAI.enabled && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />}
+                    {progress.total > 0 && progress.done > 0 && <span style={{ marginLeft: "auto", fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{progress.done}/{progress.total} steps done</span>}
+                  </div>
+                  <div style={{ fontSize: isFeatured ? 12 : 10, color: "#A0AEC0", lineHeight: 1.6 }}>{threat.aiSummary}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          {isExpanded && (
+            <div style={{ padding: "0 16px 16px 36px", borderTop: "1px solid #1E213044" }}>
+              {threat.cvss && (
+                <div style={{ marginTop: 12, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>CVSS SCORE</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 120, height: 6, background: "#1E2130", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ width: `${threat.cvss * 10}%`, height: "100%", background: cvssColor(threat.cvss), borderRadius: 3, transition: "width 0.5s" }} />
+                      </div>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: cvssColor(threat.cvss), fontFamily: "'JetBrains Mono', monospace" }}>{threat.cvss}/10</span>
+                      <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.cvss >= 9 ? "CRITICAL" : threat.cvss >= 7 ? "HIGH" : threat.cvss >= 4 ? "MEDIUM" : "LOW"}</span>
+                    </div>
+                  </div>
+                  {threat.cvssVector && <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Vector: {threat.cvssVector}</div>}
+                </div>
+              )}
+              {threat.affectedSystems && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>💻 AFFECTED SYSTEMS</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {threat.affectedSystems.map((s, i) => (
+                      <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3E", fontSize: 10, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>{s}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {threat.mitreTactics && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🎯 MITRE ATT&CK TACTICS</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {threat.mitreTactics.map((tactic, i) => (
+                      <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#CE93D818", border: "1px solid #CE93D833", fontSize: 10, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace" }}>{tactic}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {threat.iocs && threat.iocs.length > 0 && (
+                <div style={{ marginTop: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🔍 INDICATORS OF COMPROMISE (IoC)</div>
+                  {threat.iocs.map((ioc, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0" }}>
+                      <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#FF6B6B", flexShrink: 0 }} />
+                      <code style={{ fontSize: 10, color: "#A0AEC0", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{ioc}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ marginTop: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>✅ RECOMMENDED ACTIONS</div>
+                  {progress.total > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ width: 80, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${progress.pct}%`, height: "100%", background: progress.pct === 100 ? "#4CAF50" : "#6366F1", borderRadius: 2, transition: "width 0.3s" }} />
+                      </div>
+                      <span style={{ fontSize: 9, color: progress.pct === 100 ? "#4CAF50" : "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{progress.pct}%</span>
+                    </div>
+                  )}
+                </div>
+                {threat.nextSteps.map((step, i) => {
+                  const checked = (checkedSteps[threat.id] || {})[i];
+                  return (
+                    <div key={i} onClick={() => toggleStep(threat.id, i)} style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 3,
+                      background: checked ? "#4CAF5008" : "#0A0C14", borderRadius: 6,
+                      border: `1px solid ${checked ? "#4CAF5033" : "#1E2130"}`,
+                      cursor: "pointer", transition: "all 0.2s"
+                    }}>
+                      <span style={{
+                        width: 18, height: 18, borderRadius: 4, border: `2px solid ${checked ? "#4CAF50" : "#2A2E3E"}`,
+                        background: checked ? "#4CAF50" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 10, color: "#fff", flexShrink: 0, transition: "all 0.2s"
+                      }}>{checked ? "✓" : ""}</span>
+                      <span style={{ fontSize: 11, color: checked ? "#5A6178" : "#C4CAD6", textDecoration: checked ? "line-through" : "none", flex: 1 }}>{step}</span>
+                      <span style={{ width: 18, height: 18, borderRadius: 4, background: "#0A0C14", border: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: checked ? "#4CAF50" : "#5A6178", flexShrink: 0 }}>{i + 1}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {threat.references && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>📚 REFERENCE SOURCES</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {threat.references.map((ref, i) => (
+                      <a key={i} href={ref.url} target="_blank" rel="noopener noreferrer" style={{
+                        padding: "4px 10px", borderRadius: 5, background: "#1E2130", border: "1px solid #2A2E3E",
+                        fontSize: 10, color: "#64B5F6", textDecoration: "none", display: "flex", alignItems: "center", gap: 4,
+                        transition: "all 0.2s"
+                      }}>
+                        <span style={{ fontSize: 10 }}>🔗</span> {ref.title} ↗
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <select value={status} onChange={e => setThreatStatuses(prev => ({ ...prev, [threat.id]: e.target.value }))}
+                  style={{ padding: "6px 10px", background: statusColors[status] + "18", border: `1px solid ${statusColors[status]}44`, borderRadius: 6, color: statusColors[status], fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
+                  {Object.entries(statusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <button onClick={(e) => { e.stopPropagation(); setThreatEmailDraft(threat); }} style={{
+                  padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118",
+                  color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                  display: "flex", alignItems: "center", gap: 6
+                }}>📧 Draft Advisory Email</button>
+                <button onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(threat.iocs?.join("\n") || ""); }} style={{
+                  padding: "6px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14",
+                  color: "#A0AEC0", cursor: "pointer", fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
+                  display: "flex", alignItems: "center", gap: 6
+                }}>📋 Copy IoCs</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
 
     return (
       <div>
@@ -10899,6 +11103,108 @@ export default function ITSMApp() {
             <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>Affects Us</div>
           </div>
         </div>
+
+        {/* ═══ STORYTELLING EXECUTIVE SUMMARY ═══ */}
+        {(() => {
+          const criticalThreats = allThreats.filter(t => t.severity === "Critical");
+          const highThreats = allThreats.filter(t => t.severity === "High");
+          const affectsUsThreats = allThreats.filter(t => t.affectsUs);
+          const openCount = allThreats.filter(t => getStatus(t) === "open").length;
+          const mitigatedCount = allThreats.filter(t => getStatus(t) === "mitigated" || getStatus(t) === "closed").length;
+          const totalSteps = allThreats.reduce((a, t) => a + t.nextSteps.length, 0);
+          const doneSteps = allThreats.reduce((a, t) => { const s = checkedSteps[t.id] || {}; return a + Object.values(s).filter(Boolean).length; }, 0);
+          return (
+            <div style={{ marginBottom: 20, background: "linear-gradient(135deg, #0A0C14, #0F1117, #12141E)", borderRadius: 12, border: "1px solid #6366F133", padding: 24, position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #6366F1, #EC4899, #06B6D4)" }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <span style={{ fontSize: 20 }}>📖</span>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Threat Intelligence Executive Summary</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>AI-generated analysis • {new Date().toLocaleDateString("en-SG", { weekday: "long", day: "numeric", month: "long", year: "numeric" })} • Auto-refreshed every 60s</div>
+                </div>
+              </div>
+
+              {/* Situation Overview */}
+              <div style={{ padding: "14px 16px", background: "#6366F108", borderRadius: 8, border: "1px solid #6366F122", marginBottom: 14 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8, letterSpacing: 1 }}>🧠 SITUATION OVERVIEW</div>
+                <div style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.8 }}>
+                  Our AI threat engine is currently tracking <span style={{ color: "#E8ECF4", fontWeight: 700 }}>{allThreats.length} active threats</span> across global and Singapore-specific intelligence feeds. Of these, <span style={{ color: "#FF4444", fontWeight: 700 }}>{criticalThreats.length} are Critical</span> and <span style={{ color: "#FF6B6B", fontWeight: 700 }}>{highThreats.length} are High severity</span>, with <span style={{ color: "#FFB347", fontWeight: 700 }}>{affectsUsThreats.length} directly affecting our infrastructure</span>. {openCount > 0 ? `There are ${openCount} threats requiring immediate attention.` : "All threats have been addressed."} {mitigatedCount > 0 && `${mitigatedCount} threats have been mitigated or closed.`}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+                {/* AI Actions Taken */}
+                <div style={{ padding: "14px 16px", background: "#0A0C14", borderRadius: 8, border: "1px solid #81C78433" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#81C784", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10, letterSpacing: 1 }}>🧠 AI ACTIONS COMPLETED</div>
+                  {[
+                    "Analyzed & classified all incoming threat feeds",
+                    "Correlated CVEs against our infrastructure inventory",
+                    "Generated IoC watchlists for SIEM ingestion",
+                    "Auto-drafted advisory emails for critical threats",
+                    "Mapped threats to MITRE ATT&CK framework",
+                    "Calculated risk scores for affected systems",
+                  ].map((a, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", fontSize: 11, color: "#C4CAD6" }}>
+                      <span style={{ color: "#81C784", fontSize: 10 }}>✓</span> {a}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Team Follow-Up Actions */}
+                <div style={{ padding: "14px 16px", background: "#0A0C14", borderRadius: 8, border: "1px solid #FFB34733" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10, letterSpacing: 1 }}>👥 TEAM FOLLOW-UP ACTIONS</div>
+                  {[
+                    { action: "Apply Exchange patch KB5035432", owner: "Infra Team", urgency: "4 hours", done: false },
+                    { action: "Block .iso attachments at email gateway", owner: "Security Team", urgency: "Immediate", done: true },
+                    { action: "Review Entra ID Conditional Access policies", owner: "IAM Team", urgency: "Today", done: false },
+                    { action: "Force Chrome update via Intune", owner: "Endpoint Team", urgency: "Today", done: false },
+                    { action: "Conduct privilege access audit (Typhoon Silk)", owner: "Security Team", urgency: "24 hours", done: false },
+                    { action: "Train staff on MFA bypass phishing", owner: "HR / IT Training", urgency: "This week", done: false },
+                  ].map((a, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 0", borderBottom: "1px solid #1E213022", fontSize: 11 }}>
+                      <span style={{ color: a.done ? "#81C784" : "#FFB347", fontSize: 10 }}>{a.done ? "✓" : "○"}</span>
+                      <span style={{ color: a.done ? "#5A6178" : "#C4CAD6", flex: 1, textDecoration: a.done ? "line-through" : "none" }}>{a.action}</span>
+                      <span style={{ color: "#5A6178", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>{a.owner}</span>
+                      <span style={{ padding: "1px 6px", borderRadius: 3, background: a.urgency === "Immediate" || a.urgency === "4 hours" ? "#FF444422" : "#FFB34722", color: a.urgency === "Immediate" || a.urgency === "4 hours" ? "#FF6B6B" : "#FFB347", fontSize: 8, fontWeight: 600 }}>{a.urgency}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* What Should We Do Next */}
+              <div style={{ padding: "14px 16px", background: "#EC489908", borderRadius: 8, border: "1px solid #EC489933" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace", marginBottom: 10, letterSpacing: 1 }}>🎯 WHAT SHOULD WE DO NEXT</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  {[
+                    { priority: "P0", title: "Patch Exchange CVE-2026-21413", desc: "Active exploitation confirmed. Patch window: 4 hours. Coordinate with change management for emergency change.", color: "#FF4444" },
+                    { priority: "P0", title: "Threat Hunt — Typhoon Silk APT", desc: "Nation-state campaign targeting SG. Emergency threat hunting on domain controllers and privileged workstations.", color: "#FF4444" },
+                    { priority: "P1", title: "Deploy Phishing-Resistant MFA", desc: "EvilProxy bypasses standard MFA. Accelerate FIDO2 / Windows Hello rollout for all Entra ID users.", color: "#FF6B6B" },
+                    { priority: "P1", title: "Browser Force-Update Campaign", desc: "Chrome zero-day under active exploitation. Push Intune policies to force update all managed endpoints.", color: "#FF6B6B" },
+                    { priority: "P2", title: "Staff Security Awareness Training", desc: "Brief all staff on MFA bypass phishing, .iso attachment risks, and suspicious email reporting.", color: "#FFB347" },
+                    { priority: "P3", title: "Review Third-Party Vendor Security", desc: "Verify partner organizations have patched FortiOS. Update vendor risk register.", color: "#06B6D4" },
+                  ].map((n, i) => (
+                    <div key={i} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${n.color}22`, borderLeft: `3px solid ${n.color}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <span style={{ padding: "1px 6px", borderRadius: 3, background: n.color + "22", color: n.color, fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{n.priority}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{n.title}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.5 }}>{n.desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>Response Progress</span>
+                <div style={{ flex: 1, height: 6, background: "#1E2130", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ width: `${totalSteps > 0 ? Math.round(doneSteps / totalSteps * 100) : 0}%`, height: "100%", background: "linear-gradient(90deg, #6366F1, #EC4899)", borderRadius: 3, transition: "width 0.5s" }} />
+                </div>
+                <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{totalSteps > 0 ? Math.round(doneSteps / totalSteps * 100) : 0}% ({doneSteps}/{totalSteps} steps)</span>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 2, marginBottom: 16, background: "#0A0C14", borderRadius: 8, padding: 3 }}>
@@ -10976,197 +11282,55 @@ export default function ITSMApp() {
               Showing {filtered.length} of {allThreats.length} threats {searchQuery && `matching "${searchQuery}"`}
             </div>
 
-            {/* Threat Cards */}
-            {filtered.map(threat => {
-              const isExpanded = expandedThreat === threat.id;
-              const status = getStatus(threat);
-              const progress = getStepProgress(threat);
+            {/* ─── TIER 1: CRITICAL & HIGH (Featured — Bigger Cards) ─── */}
+            {(() => {
+              const featuredThreats = filtered.filter(t => t.severity === "Critical" || t.severity === "High").sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 3);
+              const activeThreats = filtered.filter(t => t.severity === "Medium" || t.severity === "Low").sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 5);
+              const featuredIds = new Set(featuredThreats.map(t => t.id));
+              const activeIds = new Set(activeThreats.map(t => t.id));
+              const archivedThreats = filtered.filter(t => !featuredIds.has(t.id) && !activeIds.has(t.id));
               return (
-                <div key={threat.id} style={{
-                  marginBottom: 10, background: threat.isNew && threat.affectsUs ? "#FF444408" : "#0F1117",
-                  borderRadius: 10, border: `1px solid ${threat.isNew && threat.affectsUs ? sevColors[threat.severity] + '33' : '#1E2130'}`,
-                  borderLeft: `3px solid ${sevColors[threat.severity]}`, position: "relative", overflow: "hidden",
-                  transition: "all 0.2s"
-                }}>
-                  {/* ACTION REQUIRED badge */}
-                  {threat.isNew && threat.severity === "Critical" && (
-                    <div style={{ position: "absolute", top: -1, right: -1, padding: "2px 10px", borderRadius: "0 10px 0 6px", background: "#FF4444", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "pulse 2s infinite" }}>⚡ IMMEDIATE ACTION</div>
-                  )}
-                  {threat.isNew && threat.severity === "High" && (
-                    <div style={{ position: "absolute", top: -1, right: -1, padding: "2px 10px", borderRadius: "0 10px 0 6px", background: "#FF6B6B", color: "#fff", fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>⚡ ACTION REQUIRED</div>
-                  )}
-
-                  {/* Main row — clickable */}
-                  <div onClick={() => setExpandedThreat(isExpanded ? null : threat.id)} style={{ padding: "14px 16px", cursor: "pointer" }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: sevColors[threat.severity], boxShadow: threat.isNew ? `0 0 8px ${sevColors[threat.severity]}88` : "none", marginTop: 5, flexShrink: 0 }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: sevColors[threat.severity], fontFamily: "'JetBrains Mono', monospace" }}>{threat.severity.toUpperCase()}</span>
-                          <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
-                          <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.id}</span>
-                          {threat.cve && <><span style={{ fontSize: 9, color: "#3A3F55" }}>·</span><span style={{ padding: "1px 6px", borderRadius: 3, background: "#6366F118", fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{threat.cve}</span></>}
-                          {threat.cvss && <span style={{ padding: "2px 6px", borderRadius: 3, background: cvssColor(threat.cvss) + "22", color: cvssColor(threat.cvss), fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>CVSS {threat.cvss}</span>}
-                          <span style={{ fontSize: 9, color: "#3A3F55" }}>·</span>
-                          <a href={threat.sourceUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6", textDecoration: "none" }}>{threat.source} ↗</a>
-                          <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6" }}>{threat.region}</span>
-                          <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E213066", fontSize: 9, color: "#A0AEC0" }}>{threat.category}</span>
-                          {threat.affectsUs && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#FF444422", fontSize: 9, color: "#FF6B6B", fontWeight: 600 }}>⚠ AFFECTS US</span>}
-                          <span style={{ padding: "2px 6px", borderRadius: 3, background: statusColors[status] + "22", color: statusColors[status], fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{statusLabels[status]?.toUpperCase()}</span>
-                          <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto" }}>{threat.time}</span>
-                          <span style={{ color: "#5A6178", fontSize: 10, transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>▼</span>
-                        </div>
-                        <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 500 }}>{threat.title}</div>
-                        {/* AI Summary - always visible */}
-                        <div style={{ marginTop: 8, padding: "8px 10px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                            <span style={{ fontSize: 11 }}>🤖</span>
-                            <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>AI THREAT ANALYSIS</span>
-                            {azureOpenAI.enabled && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />}
-                            {progress.total > 0 && progress.done > 0 && <span style={{ marginLeft: "auto", fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{progress.done}/{progress.total} steps done</span>}
-                          </div>
-                          <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.6 }}>{threat.aiSummary}</div>
-                        </div>
+                <>
+                  {featuredThreats.length > 0 && (
+                    <div style={{ marginBottom: 20 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                        <span style={{ fontSize: 14 }}>🔥</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#FF4444", fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>CRITICAL & HIGH SEVERITY</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FF444422", color: "#FF4444", fontSize: 9, fontWeight: 700 }}>{featuredThreats.length} THREATS</span>
+                        <div style={{ flex: 1, height: 1, background: "#FF444422" }} />
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Expanded Details */}
-                  {isExpanded && (
-                    <div style={{ padding: "0 16px 16px 36px", borderTop: "1px solid #1E213044" }}>
-
-                      {/* CVSS Details */}
-                      {threat.cvss && (
-                        <div style={{ marginTop: 12, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>CVSS SCORE</span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ width: 120, height: 6, background: "#1E2130", borderRadius: 3, overflow: "hidden" }}>
-                                <div style={{ width: `${threat.cvss * 10}%`, height: "100%", background: cvssColor(threat.cvss), borderRadius: 3, transition: "width 0.5s" }} />
-                              </div>
-                              <span style={{ fontSize: 14, fontWeight: 700, color: cvssColor(threat.cvss), fontFamily: "'JetBrains Mono', monospace" }}>{threat.cvss}/10</span>
-                              <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{threat.cvss >= 9 ? "CRITICAL" : threat.cvss >= 7 ? "HIGH" : threat.cvss >= 4 ? "MEDIUM" : "LOW"}</span>
-                            </div>
-                          </div>
-                          {threat.cvssVector && <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Vector: {threat.cvssVector}</div>}
-                        </div>
-                      )}
-
-                      {/* Affected Systems */}
-                      {threat.affectedSystems && (
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>💻 AFFECTED SYSTEMS</div>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                            {threat.affectedSystems.map((s, i) => (
-                              <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3E", fontSize: 10, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>{s}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* MITRE ATT&CK Tactics */}
-                      {threat.mitreTactics && (
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🎯 MITRE ATT&CK TACTICS</div>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                            {threat.mitreTactics.map((tactic, i) => (
-                              <span key={i} style={{ padding: "3px 8px", borderRadius: 4, background: "#CE93D818", border: "1px solid #CE93D833", fontSize: 10, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace" }}>{tactic}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Indicators of Compromise */}
-                      {threat.iocs && (
-                        <div style={{ marginTop: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>🔍 INDICATORS OF COMPROMISE (IoC)</div>
-                          {threat.iocs.map((ioc, i) => (
-                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0" }}>
-                              <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#FF6B6B", flexShrink: 0 }} />
-                              <code style={{ fontSize: 10, color: "#A0AEC0", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{ioc}</code>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Recommended Actions with Checkboxes */}
-                      <div style={{ marginTop: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>✅ RECOMMENDED ACTIONS</div>
-                          {progress.total > 0 && (
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ width: 80, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
-                                <div style={{ width: `${progress.pct}%`, height: "100%", background: progress.pct === 100 ? "#4CAF50" : "#6366F1", borderRadius: 2, transition: "width 0.3s" }} />
-                              </div>
-                              <span style={{ fontSize: 9, color: progress.pct === 100 ? "#4CAF50" : "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{progress.pct}%</span>
-                            </div>
-                          )}
-                        </div>
-                        {threat.nextSteps.map((step, i) => {
-                          const checked = (checkedSteps[threat.id] || {})[i];
-                          return (
-                            <div key={i} onClick={() => toggleStep(threat.id, i)} style={{
-                              display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 3,
-                              background: checked ? "#4CAF5008" : "#0A0C14", borderRadius: 6,
-                              border: `1px solid ${checked ? "#4CAF5033" : "#1E2130"}`,
-                              cursor: "pointer", transition: "all 0.2s"
-                            }}>
-                              <span style={{
-                                width: 18, height: 18, borderRadius: 4, border: `2px solid ${checked ? "#4CAF50" : "#2A2E3E"}`,
-                                background: checked ? "#4CAF50" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
-                                fontSize: 10, color: "#fff", flexShrink: 0, transition: "all 0.2s"
-                              }}>{checked ? "✓" : ""}</span>
-                              <span style={{ fontSize: 11, color: checked ? "#5A6178" : "#C4CAD6", textDecoration: checked ? "line-through" : "none", flex: 1 }}>{step}</span>
-                              <span style={{ width: 18, height: 18, borderRadius: 4, background: "#0A0C14", border: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: checked ? "#4CAF50" : "#5A6178", flexShrink: 0 }}>{i + 1}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {/* References */}
-                      {threat.references && (
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>📚 REFERENCE SOURCES</div>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                            {threat.references.map((ref, i) => (
-                              <a key={i} href={ref.url} target="_blank" rel="noopener noreferrer" style={{
-                                padding: "4px 10px", borderRadius: 5, background: "#1E2130", border: "1px solid #2A2E3E",
-                                fontSize: 10, color: "#64B5F6", textDecoration: "none", display: "flex", alignItems: "center", gap: 4,
-                                transition: "all 0.2s"
-                              }}
-                                onMouseEnter={e => { e.currentTarget.style.background = "#2A2E3E"; e.currentTarget.style.borderColor = "#64B5F6"; }}
-                                onMouseLeave={e => { e.currentTarget.style.background = "#1E2130"; e.currentTarget.style.borderColor = "#2A2E3E"; }}
-                              >
-                                <span style={{ fontSize: 10 }}>🔗</span> {ref.title} ↗
-                              </a>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Action Buttons */}
-                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {/* Status Change */}
-                        <select value={status} onChange={e => setThreatStatuses(prev => ({ ...prev, [threat.id]: e.target.value }))}
-                          style={{ padding: "6px 10px", background: statusColors[status] + "18", border: `1px solid ${statusColors[status]}44`, borderRadius: 6, color: statusColors[status], fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
-                          {Object.entries(statusLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                        </select>
-                        <button onClick={(e) => { e.stopPropagation(); setThreatEmailDraft(threat); }} style={{
-                          padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118",
-                          color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-                          display: "flex", alignItems: "center", gap: 6
-                        }}>📧 Draft Advisory Email</button>
-                        <button onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(threat.iocs?.join("\n") || ""); }} style={{
-                          padding: "6px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14",
-                          color: "#A0AEC0", cursor: "pointer", fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
-                          display: "flex", alignItems: "center", gap: 6
-                        }}>📋 Copy IoCs</button>
-                      </div>
+                      {featuredThreats.map(t => renderThreatCard(t, "featured"))}
                     </div>
                   )}
-                </div>
+
+                  {/* ─── TIER 2: MEDIUM & LOW (Active — Smaller Cards) ─── */}
+                  {activeThreats.length > 0 && (
+                    <div style={{ marginBottom: 20 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                        <span style={{ fontSize: 14 }}>📋</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>MEDIUM & LOW SEVERITY</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FFB34722", color: "#FFB347", fontSize: 9, fontWeight: 700 }}>{activeThreats.length} THREATS</span>
+                        <div style={{ flex: 1, height: 1, background: "#FFB34722" }} />
+                      </div>
+                      {activeThreats.map(t => renderThreatCard(t, "active"))}
+                    </div>
+                  )}
+
+                  {/* ─── TIER 3: ARCHIVED (Compact) ─── */}
+                  {archivedThreats.length > 0 && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <span style={{ fontSize: 12 }}>📦</span>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>ARCHIVED / REMAINING</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 4, background: "#1E2130", color: "#5A6178", fontSize: 9, fontWeight: 700 }}>{archivedThreats.length}</span>
+                        <div style={{ flex: 1, height: 1, background: "#1E2130" }} />
+                      </div>
+                      {archivedThreats.map(t => renderThreatCard(t, "archived"))}
+                    </div>
+                  )}
+                </>
               );
-            })}
+            })()}
           </div>
         )}
 
@@ -11197,8 +11361,7 @@ export default function ITSMApp() {
                     <div style={{ fontSize: 14, color: "#E8ECF4", fontWeight: 600, marginBottom: 10 }}>{threat.title}</div>
                     <div style={{ padding: "10px 12px", background: "#6366F108", borderRadius: 8, border: "1px solid #6366F122", marginBottom: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                        <span style={{ fontSize: 12 }}>🤖</span>
-                        <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>AI RECOMMENDATION</span>
+                        <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🧠 AI RECOMMENDATION</span>
                       </div>
                       <div style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.6 }}>{threat.aiSummary}</div>
                     </div>
