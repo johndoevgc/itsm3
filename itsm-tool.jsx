@@ -1272,7 +1272,7 @@ export default function ITSMApp() {
     try { const saved = localStorage.getItem("vgc_dismissed_alerts"); return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
   const [aiMessages, setAiMessages] = useState([
-    { role: "ai", text: `Hello! 👋 I'm your AI Co-Pilot — Assisted by ${USERS[0]?.name || "VGC ITSM"} AI.\n\nI'm your enterprise-grade assistant for VGC Technology Pte Ltd:\n• 📊 Daily priority plan & risk assessment\n• 🎫 Incident triage & severity-based routing\n• 📚 SharePoint Knowledge Portal — instant article search\n• ⚠️ SLA breach prevention & proactive alerting\n• 📧 Draft communications — you always approve first\n• 🛡️ Security monitoring & compliance (ISO 27001)\n\nTry "Good morning" for your daily briefing, or describe an issue for KB recommendations.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPowered by Azure Open AI\nEnterprise-grade data security with a Responsible AI model.`, suggestions: [
+    { role: "ai", text: `👋 AI Co-Pilot ready — triage, SLA alerts, KB search, drafts & security monitoring. Try "Good morning" for your briefing.`, suggestions: [
       { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
       { label: "📚 Knowledge Portal", action: "Search knowledge base" },
       { label: "🎫 Open Tickets", action: "Show open incidents" },
@@ -12426,17 +12426,20 @@ export default function ITSMApp() {
         {/* ── Automation Metrics Dashboard ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 20 }}>
           {[
-            { label: "Open", value: zdStats.open, accent: "#64B5F6", icon: "📂" },
-            { label: "Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳" },
-            { label: "On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️" },
-            { label: "Solved", value: zdStats.solved, accent: "#81C784", icon: "✅" },
-            { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖" },
-            { label: "Approved & Sent", value: zdAutoStats.autoSent, accent: "#06B6D4", icon: "✅" },
-            { label: "Pending Review", value: pendingQueue.length, accent: "#FFB347", icon: "👤" },
-            { label: "ITSM Created", value: zdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫" },
-            { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊" },
+            { label: "Open", value: zdStats.open, accent: "#64B5F6", icon: "📂", tab: "tickets" },
+            { label: "Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳", tab: "tickets" },
+            { label: "On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️", tab: "tickets" },
+            { label: "Solved", value: zdStats.solved, accent: "#81C784", icon: "✅", tab: "tickets" },
+            { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖", tab: "automation" },
+            { label: "Approved & Sent", value: zdAutoStats.autoSent, accent: "#06B6D4", icon: "✅", tab: "history" },
+            { label: "Pending Review", value: pendingQueue.length, accent: "#FFB347", icon: "👤", tab: "queue" },
+            { label: "ITSM Created", value: zdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫", tab: "history" },
+            { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊", tab: "automation" },
           ].map((s, i) => (
-            <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33` }}>
+            <div key={i} onClick={() => { if (s.tab === "tickets") { setZdFilter(s.label.toLowerCase() === "on hold" ? "hold" : s.label.toLowerCase() === "solved" ? "solved" : s.label.toLowerCase() === "pending" ? "pending" : "open"); zdFetchTickets(s.label.toLowerCase() === "on hold" ? "hold" : s.label.toLowerCase() === "solved" ? "solved" : s.label.toLowerCase() === "pending" ? "pending" : "open", 1); } setZdTab(s.tab); }}
+              style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33`, cursor: "pointer", transition: "all 0.2s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = s.accent + "88"; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${s.accent}22`; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = s.accent + "33"; e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
               <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: s.accent }}>{s.value}</div>
             </div>
@@ -12490,11 +12493,13 @@ export default function ITSMApp() {
               {sectionLabel("⚡", "AI Automation Pipeline")}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
                 {[
-                  { label: "Ingest", desc: "Zendesk tickets pulled every 60s", icon: "📥", color: "#64B5F6", active: zdConnected },
-                  { label: "AI Triage", desc: "Category, priority, draft response", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled },
-                  { label: "Engineer Queue", desc: "All responses → human approval", icon: "👤", color: "#81C784", active: zdAutoMode },
+                  { label: "Ingest", desc: "Zendesk tickets pulled every 60s", icon: "📥", color: "#64B5F6", active: zdConnected, tab: "tickets" },
+                  { label: "AI Triage", desc: "Category, priority, draft response", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled, tab: "history" },
+                  { label: "Engineer Queue", desc: "All responses → human approval", icon: "👤", color: "#81C784", active: zdAutoMode, tab: "queue" },
                 ].map((step, i) => (
-                  <div key={i} style={{ padding: "12px 10px", borderRadius: 8, background: step.active ? `${step.color}08` : "#12141E", border: `1px solid ${step.active ? step.color + "33" : "#1E213033"}`, textAlign: "center" }}>
+                  <div key={i} onClick={() => setZdTab(step.tab)} style={{ padding: "12px 10px", borderRadius: 8, background: step.active ? `${step.color}08` : "#12141E", border: `1px solid ${step.active ? step.color + "33" : "#1E213033"}`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${step.color}22`; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
                     <div style={{ fontSize: 20, marginBottom: 4 }}>{step.icon}</div>
                     <div style={{ fontSize: 10, fontWeight: 700, color: step.active ? step.color : "#5A6178", marginBottom: 2 }}>{step.label}</div>
                     <div style={{ fontSize: 8, color: "#5A617888" }}>{step.desc}</div>
@@ -12874,15 +12879,17 @@ export default function ITSMApp() {
             {/* Sync Metrics */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
               {[
-                { label: "ZD Tickets (DB)", value: zdSyncStatus?.counts?.zdTickets || 0, color: "#64B5F6", icon: "🎫" },
-                { label: "ZD Users (DB)", value: zdSyncStatus?.counts?.zdUsers || 0, color: "#EC4899", icon: "👤" },
-                { label: "ZD Orgs (DB)", value: zdSyncStatus?.counts?.zdOrgs || 0, color: "#FFB347", icon: "🏢" },
-                { label: "ZD Comments (DB)", value: zdSyncStatus?.counts?.zdComments || 0, color: "#81C784", icon: "💬" },
-                { label: "ITSM Incidents", value: zdSyncStatus?.counts?.itsmIncidents || incidents.length, color: "#6366F1", icon: "📋" },
-                { label: "Last Full Import", value: zdSyncStatus?.lastFullImport?.completedAt ? new Date(zdSyncStatus.lastFullImport.completedAt).toLocaleDateString("en-SG") : "Never", color: "#CE93D8", icon: "📦" },
-                { label: "Last Sync", value: zdSyncStatus?.lastIncrementalSync?.completedAt ? new Date(zdSyncStatus.lastIncrementalSync.completedAt).toLocaleTimeString("en-SG") : "Never", color: "#06B6D4", icon: "🔄" },
+                { label: "ZD Tickets (DB)", value: zdSyncStatus?.counts?.zdTickets || 0, color: "#64B5F6", icon: "🎫", tab: "tickets" },
+                { label: "ZD Users (DB)", value: zdSyncStatus?.counts?.zdUsers || 0, color: "#EC4899", icon: "👤", tab: "settings" },
+                { label: "ZD Orgs (DB)", value: zdSyncStatus?.counts?.zdOrgs || 0, color: "#FFB347", icon: "🏢", tab: "settings" },
+                { label: "ZD Comments (DB)", value: zdSyncStatus?.counts?.zdComments || 0, color: "#81C784", icon: "💬", tab: "tickets" },
+                { label: "ITSM Incidents", value: zdSyncStatus?.counts?.itsmIncidents || incidents.length, color: "#6366F1", icon: "📋", action: () => setActiveModule("incidents") },
+                { label: "Last Full Import", value: zdSyncStatus?.lastFullImport?.completedAt ? new Date(zdSyncStatus.lastFullImport.completedAt).toLocaleDateString("en-SG") : "Never", color: "#CE93D8", icon: "📦", tab: "sync" },
+                { label: "Last Sync", value: zdSyncStatus?.lastIncrementalSync?.completedAt ? new Date(zdSyncStatus.lastIncrementalSync.completedAt).toLocaleTimeString("en-SG") : "Never", color: "#06B6D4", icon: "🔄", tab: "sync" },
               ].map((s, i) => (
-                <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33` }}>
+                <div key={i} onClick={() => s.action ? s.action() : s.tab && setZdTab(s.tab)} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33`, cursor: "pointer", transition: "all 0.2s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = s.color + "88"; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${s.color}22`; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = s.color + "33"; e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
                   <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
                   <div style={{ fontSize: typeof s.value === "number" ? 22 : 13, fontWeight: 700, color: s.color }}>{s.value}</div>
                 </div>
@@ -12935,14 +12942,16 @@ export default function ITSMApp() {
                 {sectionLabel("🏗️", "Sync Architecture")}
                 <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
                   {[
-                    { icon: "📥", label: "Zendesk → ITSM", desc: "Tickets, users, orgs auto-sync to local DB. Linked incidents update status/priority in real-time.", color: "#64B5F6", active: zdRealTimeEnabled },
-                    { icon: "📤", label: "ITSM → Zendesk", desc: "Status, priority, comments on ITSM incidents auto-push to linked Zendesk tickets.", color: "#EC4899", active: zdRealTimeEnabled },
-                    { icon: "🔔", label: "Webhook (Instant)", desc: "Configure Zendesk webhook to POST to /api/zendesk/webhook for instant sync on ticket events.", color: "#FFB347", active: true },
-                    { icon: "🧠", label: "AI Knowledge", desc: "Resolved Zendesk tickets feed AI knowledge base. AI learns from historical resolutions.", color: "#81C784", active: true },
-                    { icon: "🔄", label: "Incremental Sync", desc: "Every 30s polls Zendesk incremental API for changes since last sync — minimal API usage.", color: "#6366F1", active: zdRealTimeEnabled },
-                    { icon: "📊", label: "Full Data Mirror", desc: "Complete local copy of all Zendesk data for AI analysis, reporting, and Zendesk decommission prep.", color: "#CE93D8", active: (zdSyncStatus?.counts?.zdTickets || 0) > 0 },
+                    { icon: "📥", label: "Zendesk → ITSM", desc: "Tickets, users, orgs auto-sync to local DB. Linked incidents update status/priority in real-time.", color: "#64B5F6", active: zdRealTimeEnabled, action: () => setZdTab("tickets") },
+                    { icon: "📤", label: "ITSM → Zendesk", desc: "Status, priority, comments on ITSM incidents auto-push to linked Zendesk tickets.", color: "#EC4899", active: zdRealTimeEnabled, action: () => setActiveModule("incidents") },
+                    { icon: "🔔", label: "Webhook (Instant)", desc: "Configure Zendesk webhook to POST to /api/zendesk/webhook for instant sync on ticket events.", color: "#FFB347", active: true, action: null },
+                    { icon: "🧠", label: "AI Knowledge", desc: "Resolved Zendesk tickets feed AI knowledge base. AI learns from historical resolutions.", color: "#81C784", active: true, action: () => setActiveModule("knowledge") },
+                    { icon: "🔄", label: "Incremental Sync", desc: "Every 30s polls Zendesk incremental API for changes since last sync — minimal API usage.", color: "#6366F1", active: zdRealTimeEnabled, action: () => setZdTab("settings") },
+                    { icon: "📊", label: "Full Data Mirror", desc: "Complete local copy of all Zendesk data for AI analysis, reporting, and Zendesk decommission prep.", color: "#CE93D8", active: (zdSyncStatus?.counts?.zdTickets || 0) > 0, action: () => setZdTab("sync") },
                   ].map((item, i) => (
-                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", borderRadius: 8, background: item.active ? `${item.color}08` : "#12141E", border: `1px solid ${item.active ? item.color + "22" : "#1E213033"}` }}>
+                    <div key={i} onClick={() => item.action && item.action()} style={{ display: "flex", gap: 10, padding: "8px 12px", borderRadius: 8, background: item.active ? `${item.color}08` : "#12141E", border: `1px solid ${item.active ? item.color + "22" : "#1E213033"}`, cursor: item.action ? "pointer" : "default", transition: "all 0.2s" }}
+                      onMouseEnter={e => { if (item.action) { e.currentTarget.style.borderColor = item.color + "55"; e.currentTarget.style.transform = "translateY(-1px)"; } }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = item.active ? item.color + "22" : "#1E213033"; e.currentTarget.style.transform = "translateY(0)"; }}>
                       <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 11, fontWeight: 600, color: item.active ? item.color : "#5A6178", display: "flex", alignItems: "center", gap: 6 }}>
@@ -12978,16 +12987,18 @@ export default function ITSMApp() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
                 {[
-                  { label: "Historical Tickets Imported", value: zdSyncStatus?.counts?.zdTickets || 0, target: "all", ready: (zdSyncStatus?.counts?.zdTickets || 0) > 0, desc: "All past Zendesk tickets stored locally" },
-                  { label: "Users Imported", value: zdSyncStatus?.counts?.zdUsers || 0, target: "all", ready: (zdSyncStatus?.counts?.zdUsers || 0) > 0, desc: "Zendesk agents & end-users imported" },
-                  { label: "Organizations Synced", value: zdSyncStatus?.counts?.zdOrgs || 0, target: "all", ready: (zdSyncStatus?.counts?.zdOrgs || 0) > 0, desc: "Orgs mapped to ITSM customers" },
-                  { label: "Comments Preserved", value: zdSyncStatus?.counts?.zdComments || 0, target: "all", ready: (zdSyncStatus?.counts?.zdComments || 0) > 0, desc: "Full conversation history preserved" },
-                  { label: "ITSM Incidents Active", value: incidents.length, target: ">0", ready: incidents.length > 0, desc: "ITSM managing incident lifecycle" },
-                  { label: "AI Knowledge Trained", value: "Check KB", target: ">0", ready: true, desc: "AI trained from resolved ticket patterns" },
-                  { label: "Real-Time Sync Active", value: zdRealTimeEnabled ? "Yes" : "No", target: "yes", ready: zdRealTimeEnabled, desc: "Bidirectional sync operational" },
-                  { label: "Webhook Configured", value: "Manual", target: "configured", ready: false, desc: "Zendesk webhook pointed to ITSM" },
+                  { label: "Historical Tickets Imported", value: zdSyncStatus?.counts?.zdTickets || 0, target: "all", ready: (zdSyncStatus?.counts?.zdTickets || 0) > 0, desc: "All past Zendesk tickets stored locally", action: () => setZdTab("tickets") },
+                  { label: "Users Imported", value: zdSyncStatus?.counts?.zdUsers || 0, target: "all", ready: (zdSyncStatus?.counts?.zdUsers || 0) > 0, desc: "Zendesk agents & end-users imported", action: () => setZdTab("settings") },
+                  { label: "Organizations Synced", value: zdSyncStatus?.counts?.zdOrgs || 0, target: "all", ready: (zdSyncStatus?.counts?.zdOrgs || 0) > 0, desc: "Orgs mapped to ITSM customers", action: () => setActiveModule("customers") },
+                  { label: "Comments Preserved", value: zdSyncStatus?.counts?.zdComments || 0, target: "all", ready: (zdSyncStatus?.counts?.zdComments || 0) > 0, desc: "Full conversation history preserved", action: () => setZdTab("tickets") },
+                  { label: "ITSM Incidents Active", value: incidents.length, target: ">0", ready: incidents.length > 0, desc: "ITSM managing incident lifecycle", action: () => setActiveModule("incidents") },
+                  { label: "AI Knowledge Trained", value: "Check KB", target: ">0", ready: true, desc: "AI trained from resolved ticket patterns", action: () => setActiveModule("knowledge") },
+                  { label: "Real-Time Sync Active", value: zdRealTimeEnabled ? "Yes" : "No", target: "yes", ready: zdRealTimeEnabled, desc: "Bidirectional sync operational", action: () => setZdTab("settings") },
+                  { label: "Webhook Configured", value: "Manual", target: "configured", ready: false, desc: "Zendesk webhook pointed to ITSM", action: () => setZdTab("sync") },
                 ].map((item, i) => (
-                  <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: item.ready ? "#81C78408" : "#FF6B6B08", border: `1px solid ${item.ready ? "#81C78433" : "#FF6B6B33"}` }}>
+                  <div key={i} onClick={item.action} style={{ padding: "12px 14px", borderRadius: 8, background: item.ready ? "#81C78408" : "#FF6B6B08", border: `1px solid ${item.ready ? "#81C78433" : "#FF6B6B33"}`, cursor: "pointer", transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${item.ready ? "#81C784" : "#FF6B6B"}22`; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                       <span style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{item.label}</span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: item.ready ? "#81C784" : "#FF6B6B" }}>{typeof item.value === "number" ? item.value : item.value}</span>
@@ -13062,12 +13073,15 @@ export default function ITSMApp() {
               {sectionLabel("📊", "Current Ticket Statistics")}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
                 {[
-                  { label: "Open", value: zdStats.open, color: "#FF6B6B" },
-                  { label: "Pending", value: zdStats.pending, color: "#FFB347" },
-                  { label: "Hold", value: zdStats.hold, color: "#64B5F6" },
-                  { label: "Solved", value: zdStats.solved, color: "#81C784" },
+                  { label: "Open", value: zdStats.open, color: "#FF6B6B", filter: "open" },
+                  { label: "Pending", value: zdStats.pending, color: "#FFB347", filter: "pending" },
+                  { label: "Hold", value: zdStats.hold, color: "#64B5F6", filter: "hold" },
+                  { label: "Solved", value: zdStats.solved, color: "#81C784", filter: "solved" },
                 ].map((s, i) => (
-                  <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.color}33`, textAlign: "center" }}>
+                  <div key={i} onClick={() => { setZdFilter(s.filter); zdFetchTickets(s.filter, 1); setZdTab("tickets"); }}
+                    style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.color}33`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = s.color + "88"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = s.color + "33"; e.currentTarget.style.transform = "translateY(0)"; }}>
                     <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
                     <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginTop: 4 }}>{s.label}</div>
                   </div>
