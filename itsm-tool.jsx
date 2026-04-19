@@ -1455,7 +1455,6 @@ export default function ITSMApp() {
     { id: "webhook", channel: "Webhook", desc: "Send JSON payloads to custom HTTP endpoints", enabled: false, icon: "🌐" },
   ]));
   const [slaEditingSev, setSlaEditingSev] = useState(null);
-  const isEditAdmin = ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole);
   useEffect(() => { _save("vgc_sla_policy", slaPolicy); }, [slaPolicy]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_notif_channels", notifChannels); }, [notifChannels]); // eslint-disable-line react-hooks/exhaustive-deps
   // ─── Onboarding Guided Tour ──────────────────────────────────────────
@@ -1723,6 +1722,7 @@ export default function ITSMApp() {
   // Production mode = Entra ID users → only real Zendesk/API data, NO demo/hardcoded data
   const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
   const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
+  const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
 
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");
