@@ -947,6 +947,30 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, result);
       }
 
+      // GET /api/zendesk/historical-tickets?page=1 — paginated fetch of ALL tickets for ITSM import
+      if (pathname === "/api/zendesk/historical-tickets" && req.method === "GET") {
+        const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+        const page = parseInt(qs.get("page") || "1");
+        const statuses = qs.get("statuses") || "new,open,pending,hold,solved,closed";
+        const query = `type:ticket ${statuses.split(",").map(s => `status:${s.trim()}`).join(" ")}`;
+        const result = await zdRequest("GET", `/search.json?query=${encodeURIComponent(query)}&page=${page}&per_page=100&sort_by=created_at&sort_order=desc`);
+        const tickets = result.results || result.tickets || [];
+        // Batch-fetch unique requester IDs
+        const requesterIds = [...new Set(tickets.map(t => t.requester_id).filter(Boolean))];
+        const requesters = {};
+        // Fetch in batches of 100 using show_many
+        for (let i = 0; i < requesterIds.length; i += 100) {
+          const batch = requesterIds.slice(i, i + 100);
+          try {
+            const usersResult = await zdRequest("GET", `/users/show_many.json?ids=${batch.join(",")}`);
+            (usersResult.users || []).forEach(u => { requesters[u.id] = { name: u.name, email: u.email, phone: u.phone }; });
+          } catch {}
+        }
+        // Attach requester to each ticket
+        const enriched = tickets.map(t => ({ ...t, requester: requesters[t.requester_id] || null }));
+        return json(res, 200, { tickets: enriched, count: result.count || tickets.length, next_page: result.next_page || null, page });
+      }
+
       // GET /api/zendesk/agents — fetch Zendesk agents with groups
       if (pathname === "/api/zendesk/agents" && req.method === "GET") {
         const [agents, groups] = await Promise.all([

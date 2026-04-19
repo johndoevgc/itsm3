@@ -11962,6 +11962,108 @@ export default function ITSMApp() {
       }
     };
 
+    // ── Import Historical Zendesk Tickets into ITSM ──
+    const [zdImportProgress, setZdImportProgress] = useState(null);
+    const zdImportHistorical = async () => {
+      if (zdImportProgress?.running) return;
+      setZdImportProgress({ running: true, page: 0, imported: 0, skipped: 0, total: 0, phase: "Starting..." });
+      addAutoLog({ type: "info", message: "Historical Zendesk import started — fetching all tickets..." });
+
+      try {
+        // Build a set of already-linked Zendesk ticket IDs from existing incidents
+        const existingZdIds = new Set();
+        incidents.forEach(inc => { if (inc.zdTicketId) existingZdIds.add(Number(inc.zdTicketId)); });
+        zdAiQueue.forEach(q => { if (q.ticketId) existingZdIds.add(Number(q.ticketId)); });
+
+        let page = 1;
+        let hasMore = true;
+        let totalImported = 0;
+        let totalSkipped = 0;
+        let totalCount = 0;
+        const newIncidents = [];
+
+        while (hasMore) {
+          setZdImportProgress(prev => ({ ...prev, page, phase: `Fetching page ${page}...` }));
+          const r = await fetch(`/api/zendesk/historical-tickets?page=${page}`);
+          if (!r.ok) throw new Error(`Failed to fetch page ${page}`);
+          const data = await r.json();
+          const tickets = data.tickets || [];
+          totalCount = data.count || totalCount;
+
+          if (tickets.length === 0) { hasMore = false; break; }
+
+          for (const t of tickets) {
+            if (existingZdIds.has(t.id)) { totalSkipped++; continue; }
+
+            // Map Zendesk status → ITSM status
+            const statusMap = { new: "New", open: "Open", pending: "Pending", hold: "On Hold", solved: "Resolved", closed: "Closed" };
+            // Map Zendesk priority → SLA priority
+            const priMap = { urgent: "Sev-A", high: "Sev-B", normal: "Sev-C", low: "Sev-D" };
+            const urgMap = { urgent: "Critical", high: "High", normal: "Medium", low: "Low" };
+            const impMap = { urgent: "Enterprise", high: "Department", normal: "Multiple Users", low: "Single User" };
+            const zdPri = t.priority || "normal";
+            const sla = priMap[zdPri] || "Sev-D";
+            const slaHours = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+
+            // Determine ITSM category from tags or subject
+            let category = "General";
+            const tagStr = (t.tags || []).join(" ").toLowerCase();
+            const subj = (t.subject || "").toLowerCase();
+            if (tagStr.includes("network") || subj.includes("network") || subj.includes("wifi") || subj.includes("vpn")) category = "Network";
+            else if (tagStr.includes("security") || subj.includes("security") || subj.includes("phishing") || subj.includes("malware")) category = "Security";
+            else if (tagStr.includes("hardware") || subj.includes("hardware") || subj.includes("laptop") || subj.includes("monitor") || subj.includes("printer")) category = "Hardware";
+            else if (tagStr.includes("software") || subj.includes("software") || subj.includes("install") || subj.includes("update") || subj.includes("license")) category = "Software";
+            else if (tagStr.includes("email") || subj.includes("email") || subj.includes("outlook") || subj.includes("mail")) category = "Email";
+            else if (tagStr.includes("cloud") || subj.includes("azure") || subj.includes("aws") || subj.includes("cloud") || subj.includes("teams")) category = "Cloud";
+            else if (tagStr.includes("access") || subj.includes("password") || subj.includes("login") || subj.includes("access") || subj.includes("mfa")) category = "Access/Identity";
+            else if (tagStr.includes("print") || subj.includes("print")) category = "Printing";
+
+            const inc = {
+              id: genId("INC"), title: `[ZD#${t.id}] ${t.subject || "Zendesk Ticket"}`,
+              priority: sla, status: statusMap[t.status] || "Open",
+              category, subcategory: "",
+              urgency: urgMap[zdPri] || "Medium", impact: impMap[zdPri] || "Single User",
+              assignee: "Unassigned", assignmentGroup: "Service Desk",
+              reporter: t.requester?.name || "Zendesk", reporterEmail: t.requester?.email || "",
+              customer: t.requester?.name || "",
+              description: t.description || t.subject || "", contactMethod: "Zendesk",
+              created: new Date(t.created_at).getTime ? new Date(t.created_at).getTime() : 0,
+              slaTarget: slaHours[sla] || 9,
+              aiTriaged: false, aiConfidence: 0,
+              zdTicketId: t.id, workaround: "", linkedProblem: "",
+              affectedAssets: [], activityLog: [
+                { id: genId("AL"), type: "status", user: "Historical Import", time: new Date(t.created_at).toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Imported from Zendesk #${t.id} (created ${new Date(t.created_at).toLocaleDateString("en-SG")}, status: ${t.status}, priority: ${zdPri})` },
+                ...(t.status === "solved" || t.status === "closed" ? [{ id: genId("AL"), type: "status", user: "Zendesk", time: new Date(t.updated_at || t.created_at).toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Ticket ${t.status} in Zendesk` }] : []),
+              ]
+            };
+            newIncidents.push(inc);
+            existingZdIds.add(t.id);
+            totalImported++;
+          }
+
+          setZdImportProgress(prev => ({ ...prev, imported: totalImported, skipped: totalSkipped, total: totalCount, phase: `Page ${page} done — ${totalImported} imported, ${totalSkipped} skipped` }));
+
+          // Check if there are more pages
+          if (!data.next_page || tickets.length < 100) { hasMore = false; }
+          else { page++; }
+
+          // Small delay to avoid rate-limiting
+          await new Promise(r => setTimeout(r, 500));
+        }
+
+        // Batch-add all new incidents
+        if (newIncidents.length > 0) {
+          setIncidents(prev => [...newIncidents, ...prev]);
+        }
+
+        setZdImportProgress({ running: false, page, imported: totalImported, skipped: totalSkipped, total: totalCount, phase: `Complete — ${totalImported} tickets imported, ${totalSkipped} already existed` });
+        addAutoLog({ type: "human_approved", message: `Historical import complete: ${totalImported} Zendesk tickets imported as ITSM incidents (${totalSkipped} already existed, ${totalCount} total in Zendesk)` });
+      } catch (e) {
+        setZdImportProgress(prev => ({ ...prev, running: false, phase: `Error: ${e.message}` }));
+        addAutoLog({ type: "error", message: `Historical import failed: ${e.message}` });
+      }
+    };
+
     const priorityColor = (p) => ({ urgent: "#FF6B6B", high: "#FFB347", normal: "#64B5F6", low: "#81C784" }[p] || "#5A6178");
     const slaPriorityColor = (p) => ({ "Sev-A": "#FF6B6B", "Sev-B": "#FFB347", "Sev-C": "#64B5F6", "Sev-D": "#81C784" }[p] || "#5A6178");
     const statusIcon = (s) => ({ new: "🆕", open: "📂", pending: "⏳", hold: "⏸️", solved: "✅", closed: "🔒" }[s] || "📋");
@@ -12671,7 +12773,7 @@ export default function ITSMApp() {
             </div>
 
             {/* Ticket Stats */}
-            <div style={{ ...cardStyle, padding: 18 }}>
+            <div style={{ ...cardStyle, padding: 18, marginBottom: 16 }}>
               {sectionLabel("📊", "Current Ticket Statistics")}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
                 {[
@@ -12686,6 +12788,53 @@ export default function ITSMApp() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* Historical Ticket Import */}
+            <div style={{ ...cardStyle, padding: 18 }}>
+              {sectionLabel("📥", "Historical Zendesk Import")}
+              <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5, marginBottom: 14 }}>
+                Import all past Zendesk tickets as ITSM incidents. Tickets already linked to ITSM will be skipped automatically.
+                Each imported ticket gets mapped with proper priority, category, SLA, requester info, and status.
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <button onClick={zdImportHistorical} disabled={!zdConnected || (zdImportProgress?.running)}
+                  style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: zdImportProgress?.running ? "#333" : "linear-gradient(135deg, #6366F1, #818CF8)", color: "#fff", cursor: zdImportProgress?.running ? "wait" : "pointer", fontSize: 12, fontWeight: 700, boxShadow: "0 2px 12px #6366F133" }}>
+                  {zdImportProgress?.running ? "⟳ Importing..." : "📥 Import All Historical Tickets"}
+                </button>
+                {!zdConnected && <span style={{ fontSize: 10, color: "#FF6B6B" }}>Connect to Zendesk first</span>}
+              </div>
+              {zdImportProgress && (
+                <div style={{ background: "#0F1117", borderRadius: 8, padding: 14, border: `1px solid ${zdImportProgress.running ? "#6366F133" : zdImportProgress.imported > 0 ? "#81C78433" : "#FFB34733"}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: zdImportProgress.running ? "#6366F1" : "#81C784" }}>{zdImportProgress.phase}</span>
+                    {zdImportProgress.running && <span style={{ fontSize: 10, color: "#5A6178", animation: "zdSpin 1s linear infinite", display: "inline-block" }}>⟳</span>}
+                  </div>
+                  {zdImportProgress.running && zdImportProgress.total > 0 && (
+                    <div style={{ height: 6, borderRadius: 3, background: "#1E2130", overflow: "hidden", marginBottom: 8 }}>
+                      <div style={{ height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #6366F1, #818CF8)", width: `${Math.min(100, ((zdImportProgress.imported + zdImportProgress.skipped) / zdImportProgress.total) * 100)}%`, transition: "width 0.3s" }} />
+                    </div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#81C784" }}>{zdImportProgress.imported}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>IMPORTED</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#FFB347" }}>{zdImportProgress.skipped}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>SKIPPED</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#64B5F6" }}>{zdImportProgress.total}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>TOTAL IN ZD</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#6366F1" }}>{zdImportProgress.page}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>PAGES</div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
