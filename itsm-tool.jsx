@@ -6,12 +6,12 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.7.0",
-  build: "kp-ai-v1",
+  version: "3.8.1",
+  build: "kp-harmony-v1",
   date: "2026-04-20",
   channel: "Production",
   name: "VGC-ITSM",
-  engine: "VGC-AI v3.7 (GPT-5.4-Pro)",
+  engine: "VGC-AI v3.8 (GPT-5.4-Pro)",
   platform: "Azure App Service (Linux Node 20)",
   region: "AP-Southeast (Singapore)",
   license: "Enterprise — Per User Subscription",
@@ -169,10 +169,10 @@ const AI_FEATURE_EXPLAINERS = {
   catalog: { title: "Service Catalog", explain: "Self-service portal where users can request IT services. Each card shows the service name, category, SLA target, and a description. Click 'Request →' to submit. Services are organized by category and based on common Zendesk ticket patterns." },
   knowledge: { title: "Knowledge Base", explain: "SharePoint-connected knowledge portal. Articles are organized by category with Quick Fix steps, related articles, and AI recommendations. When an incident matches a KB article, AI automatically suggests it. Engineers can create new articles from resolved incidents." },
   sla: { title: "SLA Management", explain: "Tracks SLA compliance for all tickets against VGC's official SLA policy. Shows response times, resolution targets, and breach alerts. SLA countdown pauses outside business hours (Mon-Fri 9AM-6PM SGT). Auto-escalation triggers when thresholds are exceeded." },
-  ai: { title: "AI Assist", explain: "Your AI co-pilot dashboard. Shows automation rates, AI activity log, confidence scores, and the AI chat interface. Primary engine: Azure OpenAI. Fallback: Local AI. Use 'Train AI' to add internal knowledge that AI references first when answering questions." },
+  ai: { title: "AI Assist", explain: "Your AI co-pilot dashboard. Shows automation rates, AI activity log, confidence scores, and the AI chat interface. Primary engine: VGC-AI Engine. Fallback: Local AI. Use 'Train AI' to add internal knowledge that AI references first when answering questions." },
   zendesk: { title: "Zendesk AI Command Center", explain: "Full Zendesk integration hub. Auto-triage incoming tickets using AI, manage the approval queue (human-in-the-loop), view real-time ticket sync, run historical imports, and configure automation rules. All AI actions require your approval before execution." },
   reports: { title: "Reports & Analytics", explain: "Generate and view ITSM reports: incident trends, SLA compliance, team performance, category breakdown, and AI efficiency metrics. Export to PDF or share via email. Data updates in real-time from all integrated sources." },
-  admin: { title: "Administration", explain: "System configuration hub. Manage users & RBAC roles, Azure OpenAI settings, SLA policies, escalation rules, workflow automation, vendor contacts, and system integrations. Only accessible to Admin and VGC Dev Admin roles." },
+  admin: { title: "Administration", explain: "System configuration hub. Manage users & RBAC roles, VGC-AI Engine settings, SLA policies, escalation rules, workflow automation, vendor contacts, and system integrations. Only accessible to Admin and VGC Dev Admin roles." },
   assets: { title: "Asset Management", explain: "CMDB for tracking IT assets: laptops, servers, network devices, licenses. Each asset links to incidents, changes, and users. Supports lifecycle management from procurement to decommission. Auto-discovery integrates with Intune and Azure AD." },
   customers: { title: "Customer Management", explain: "Zendesk-sourced customer directory. Organizations from Zendesk are auto-synced every 60 seconds to keep your ITSM customer list up to date. Links customers to incidents, service requests, and SLA agreements. Supports manual entry and Zendesk org sync." },
   cybernews: { title: "Cyber Threat Intelligence", explain: "Real-time security alerts and vulnerability feeds. AI analyzes threats for relevance to your infrastructure, provides risk ratings, and suggests remediation steps. Critical threats trigger automatic notifications to the security team." },
@@ -1285,6 +1285,12 @@ const SearchBar = ({ value, onChange, placeholder }) => (
 // ─── Main App ────────────────────────────────────────────────────────────
 export default function ITSMApp() {
   const [activeModule, setActiveModule] = useState("dashboard");
+  const [ticketsSubTab, setTicketsSubTab] = useState("incidents");
+  const [slaApprovalsSubTab, setSlaApprovalsSubTab] = useState("sla");
+  const [analyticsSubTab, setAnalyticsSubTab] = useState("reports");
+  const [aiTrainingTab, setAiTrainingTab] = useState("documents");
+  const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
+  const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
   const DATA_VERSION = "v2.2";
   const _ls = (key, fallback) => {
     try {
@@ -2285,7 +2291,7 @@ export default function ITSMApp() {
     return () => clearInterval(interval);
   }, [incidents, dismissedProactiveAlerts, currentUser]);
 
-  // ─── Azure OpenAI API Helper (via server proxy — avoids CORS) ───────
+  // ─── VGC-AI Engine API Helper (via server proxy — avoids CORS) ───────
   const callAzureOpenAI = async (systemPrompt, userPrompt) => {
     if (!azureOpenAI.enabled) {
       return null; // Fall back to local responses
@@ -2298,15 +2304,15 @@ export default function ITSMApp() {
       });
       if (!res.ok) {
         const errBody = await res.text().catch(() => "");
-        console.warn(`[Azure OpenAI] Server proxy error ${res.status}:`, errBody);
+        console.warn(`[VGC-AI] Server proxy error ${res.status}:`, errBody);
         throw new Error(`API ${res.status}`);
       }
       const data = await res.json();
-      if (!data.text) { console.warn("[Azure OpenAI] Empty response from API"); return null; }
+      if (!data.text) { console.warn("[VGC-AI] Empty response from API"); return null; }
       setAzureOpenAI(prev => ({ ...prev, totalCalls: prev.totalCalls + 1, lastTested: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" }) }));
       return data.text;
     } catch (err) {
-      console.warn("[Azure OpenAI] Call failed, falling back to local:", err.message);
+      console.warn("[VGC-AI] Call failed, falling back to local:", err.message);
       return null; // Fallback to local
     }
   };
@@ -2816,13 +2822,13 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     cost: {
       appService: { name: "App Service B1 Linux", monthly: 13.14, note: "1 core, 1.75 GB RAM" },
       mysql: { name: "MySQL Flexible B1ms", monthly: 12.41, storage: 2.30, note: "1 vCore, 2 GB RAM, 20 GB storage" },
-      openAI: { name: "Azure OpenAI (S0)", monthly: 3.00, note: "Pay-per-token, est. light usage" },
+      openAI: { name: "VGC-AI Engine (S0)", monthly: 3.00, note: "Pay-per-token, est. light usage" },
       total: 30.85,
       currency: "USD",
       alerts: [
         { level: "tip", text: "B1 plan is cost-efficient but limited to 1 instance. Consider B2 ($26.28/mo) if response times degrade." },
         { level: "warning", text: "MySQL HA is disabled — single point of failure. Enable HA (+$12.41/mo) for production reliability." },
-        { level: "tip", text: "Azure OpenAI cost is usage-based. Monitor token consumption to avoid surprise charges." },
+        { level: "tip", text: "VGC-AI Engine cost is usage-based. Monitor token consumption to avoid surprise charges." },
         { level: "info", text: "Total hosting cost is well under $35/mo — excellent for a full ITSM + AI platform." },
       ]
     }
@@ -2991,26 +2997,19 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
   const NAV = [
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
-    { section: "ZENDESK & TICKETS" },
-    { id: "zendesk", label: "Zendesk AI", count: zdStats.open + zdStats.pending + zdAiQueue.filter(q => q.status === "pending_approval").length, critical: zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
-    { id: "incidents", label: "Incidents", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed"), accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
-    { id: "operations", label: "Operations", count: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, accent: "#CE93D8", gradient: "linear-gradient(135deg, #CE93D808, #FFB34718)" },
-    { section: "SERVICES" },
+    { section: "CORE" },
+    { id: "tickets", label: "Tickets", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length + zdStats.open + zdStats.pending + problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed") || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "catalog", label: "Service Catalog", accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "knowledge", label: "Knowledge Portal", accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #0089D618)" },
     { id: "assets", label: "Assets / CMDB", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #06B6D418)" },
     { section: "MONITORING" },
-    { id: "approvals", label: "Approvals", count: changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, accent: "#4CAF50", gradient: "linear-gradient(135deg, #4CAF5008, #4CAF5018)" },
-    { id: "sla", label: "SLA Tracker", accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
-    { id: "reports", label: "Reports", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
+    { id: "slaApprovals", label: "SLA & Approvals", count: changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
+    { id: "analytics", label: "Analytics", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "customers", label: "Customers", count: customers.filter(c => c.status === "Active").length, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #EC489918)" },
-    { section: "AI & SECURITY" },
+    { section: "AI & SYSTEM" },
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
-    { id: "cybernews", label: "Cyber News", count: (() => { const sev = ["Critical","High"]; return [{ severity: "Critical", status: "Active" },{ severity: "High", status: "Investigating" },{ severity: "Medium", status: "Acknowledged" },{ severity: "Low", status: "Scheduled" },{ severity: "High", status: "Active" }].filter(a => sev.includes(a.severity)).length; })(), critical: true, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
-    { section: "SYSTEM" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
     { id: "productivity", label: "Productivity", count: smartTasks.filter(t => t.status === "pending").length, accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #00BCF218)" },
-    { id: "architecture", label: "Architecture", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #6366F118)" },
   ];
 
   // ─── Dashboard ────────────────────────────────────────────────────────
@@ -3968,7 +3967,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 { name: "Azure SQL", icon: "🗄️", status: "Online", health: 99.99, region: "SE Asia", tier: "S2", metric: "DTU 42%", metricColor: "#06B6D4" },
                 { name: "Azure Functions", icon: "⚡", status: "Running", health: 99.95, region: "SE Asia", tier: "Premium", metric: "12k exec/day", metricColor: "#81C784" },
                 { name: "Key Vault", icon: "🔑", status: "Active", health: 100, region: "SE Asia", tier: "Standard", metric: "8 secrets", metricColor: "#F59E0B" },
-                { name: "Azure OpenAI", icon: "🤖", status: "Active", health: 99.90, region: "SE Asia", tier: "Enterprise", metric: "Powered", metricColor: "#6366F1" },
+                { name: "VGC-AI Engine", icon: "🤖", status: "Active", health: 99.90, region: "SE Asia", tier: "Enterprise", metric: "Powered", metricColor: "#6366F1" },
                 { name: "Blob Storage", icon: "📦", status: "Available", health: 99.99, region: "SE Asia", tier: "Hot", metric: "2.4 GB used", metricColor: "#CE93D8" },
                 { name: "CDN", icon: "🌍", status: "Active", health: 99.98, region: "Global", tier: "Standard", metric: "Latency 12ms", metricColor: "#4CAF50" },
                 { name: "Entra ID", icon: "🛡️", status: "Secured", health: 100, region: "Global", tier: "P2", metric: "MFA 100%", metricColor: "#EC4899" },
@@ -4104,7 +4103,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 </h4>
                 {[
                   { api: "Microsoft Graph API", latency: "45ms", uptime: "99.99%", calls: "2.4k/day", status: "Healthy" },
-                  { api: "Azure OpenAI", latency: "820ms", uptime: "99.90%", calls: "340/day", status: "Healthy" },
+                  { api: "VGC-AI Engine", latency: "820ms", uptime: "99.90%", calls: "340/day", status: "Healthy" },
                   { api: "Microsoft Teams Webhook", latency: "120ms", uptime: "99.95%", calls: "85/day", status: "Healthy" },
                   { api: "SMTP Relay (SendGrid)", latency: "210ms", uptime: "99.97%", calls: "120/day", status: "Healthy" },
                   { api: "Entra ID / SCIM", latency: "95ms", uptime: "100%", calls: "60/day", status: "Healthy" },
@@ -4602,7 +4601,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           <h3 onClick={() => setActiveModule("ai")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
             onMouseEnter={e => e.currentTarget.style.color = "#6366F1"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
             <span style={{ color: "#6366F1" }}>🤖</span> AI Performance KPI
-            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: "auto" }}>VGC-AI ENGINE v3.1</span>
+            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: "auto" }}>VGC-AI ENGINE v3.8</span>
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", boxShadow: "0 0 6px #4CAF5088", animation: "pulse 2s infinite" }} />
             <span style={{ fontSize: 10, color: "#5A617866" }}>Configure →</span>
           </h3>
@@ -6275,7 +6274,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             )}
             {aiSuggestion?.source && (
               <div style={{ marginTop: 6, fontSize: 9, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace" }}>
-                Source: {aiSuggestion.source === "azure" ? "Azure OpenAI" : aiSuggestion.source === "azure-fallback" ? "Azure OpenAI (parsed locally)" : "Local AI Engine"}
+                Source: {aiSuggestion.source === "azure" ? "VGC-AI Engine" : aiSuggestion.source === "azure-fallback" ? "VGC-AI Engine (parsed locally)" : "Local AI Engine"}
               </div>
             )}
           </div>
@@ -6284,7 +6283,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           <div style={{ padding: "14px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ fontSize: 16, animation: "zdSpin 1s linear infinite", display: "inline-block" }}>🤖</span>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#6366F1" }}>Azure OpenAI Analyzing...</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#6366F1" }}>VGC-AI Engine Analyzing...</div>
                   <div style={{ fontSize: 10, color: "#5A6178" }}>Classifying category, priority & recommended assignee</div>
                 </div>
               </div>
@@ -7917,7 +7916,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
       })();
       if (aiResp) {
         typeAiMessage(aiResp, smartSuggestions, "azure", userMsg);
-        trackAction("AI Chat", "AI Response", `Q: ${userMsg.substring(0, 80)}${userMsg.length > 80 ? '...' : ''} → Azure OpenAI`, "AI");
+        trackAction("AI Chat", "AI Response", `Q: ${userMsg.substring(0, 80)}${userMsg.length > 80 ? '...' : ''} → VGC-AI Engine`, "AI");
       } else {
         const topic = matchAiTopic(userMsg);
         const ctx = { incidents, changes, problems, requests, currentUser, proactiveAlerts, kbArticles };
@@ -7938,7 +7937,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
     return (
       <div>
-        {/* Azure OpenAI Connection Banner */}
+        {/* VGC-AI Engine Connection Banner */}
         <div style={{
           background: azureOpenAI.enabled ? "linear-gradient(135deg, #0F111788, #111422)" : "#0F1117",
           borderRadius: 10, border: `1px solid ${azureOpenAI.enabled ? "#6366F133" : "#1E2130"}`,
@@ -7963,7 +7962,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             }}>🧠</div>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-                Azure OpenAI Engine
+                VGC-AI Engine
                 <span style={{
                   fontSize: 9, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
                   background: azureOpenAI.enabled ? "#81C78422" : "#FF444422",
@@ -7979,7 +7978,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
                 {azureOpenAI.enabled 
                   ? `Powered by Azure Open AI · Last active: ${azureOpenAI.lastTested || "Ready"}` 
-                  : "Azure OpenAI is currently disabled"}
+                  : "VGC-AI Engine is currently disabled"}
               </div>
             </div>
           </div>
@@ -8056,7 +8055,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                             padding: "2px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace",
                             display: "inline-flex", alignItems: "center", gap: 4
                           }}>
-                            {msg.source === "azure" ? "⚡ Azure OpenAI" : "🧠 Local AI Engine"}
+                            {msg.source === "azure" ? "⚡ VGC-AI Engine" : "🧠 Local AI Engine"}
                           </span>
                         </div>
                       )}
@@ -8399,7 +8398,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               </div>
             </div>
 
-            {/* ── Azure OpenAI Integration ── */}
+            {/* ── VGC-AI Engine Integration ── */}
             <div style={{
               background: "linear-gradient(135deg, #0F1117 0%, #111422 100%)", borderRadius: 12,
               border: `1px solid ${azureOpenAI.enabled ? "#6366F144" : "#1E2130"}`,
@@ -8442,7 +8441,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                     }}>🧠</div>
                     <div>
                       <h3 style={{ margin: 0, fontSize: 15, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-                        Azure OpenAI Integration
+                        VGC-AI Engine Integration
                         {azureOpenAI.enabled && <span style={{
                           fontSize: 9, padding: "2px 8px", borderRadius: 10,
                           background: "#6366F122", color: "#6366F1", fontWeight: 700,
@@ -8452,7 +8451,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                       <div style={{ color: "#5A6178", fontSize: 11, marginTop: 2 }}>Enterprise‑grade AI integration for VGC-ITSM</div>
                     </div>
                   </div>
-                  <div title="Azure OpenAI is always enabled" style={{
+                  <div title="VGC-AI Engine is always enabled" style={{
                     width: 52, height: 28, borderRadius: 14, cursor: "default",
                     background: "linear-gradient(135deg, #6366F1, #06B6D4)",
                     padding: 3, transition: "background 0.3s", flexShrink: 0,
@@ -8521,7 +8520,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                         value={azureOpenAI.apiKey}
                         onChange={e => setAzureOpenAI(prev => ({ ...prev, apiKey: e.target.value }))}
                         disabled={currentUser.rbacRole !== "VGC Dev Admin" && currentUser.rbacRole !== "Administrator"}
-                        placeholder="Enter your Azure OpenAI API key..." />
+                        placeholder="Enter your VGC-AI API key..." />
                       <button onClick={() => setAzureOpenAI(prev => ({ ...prev, showKey: !prev.showKey }))} style={{
                         position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                         background: "none", border: "none", cursor: "pointer", color: "#5A6178",
@@ -8572,7 +8571,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 {/* Feature Integration Map */}
                 <div style={{ marginTop: 16 }}>
                   <div style={{ color: "#5A6178", fontSize: 11, fontWeight: 600, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
-                    Powered by Azure OpenAI
+                    Powered by VGC-AI Engine
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
                     {[
@@ -10454,8 +10453,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             { id: "UAT-018", module: "Reports", scenario: "Report templates available", type: "ui", test: () => { return { pass: serviceReports.length >= 0, detail: `${serviceReports.length} reports` }; } },
             // Integration Tests
             { id: "UAT-019", module: "Zendesk", scenario: "Zendesk connection status tracked", type: "integration", test: () => { return { pass: typeof zdConnected === "boolean", detail: `Connected: ${zdConnected}, Stats: ${zdStats.open} open, ${zdStats.pending} pending` }; } },
-            { id: "UAT-020", module: "Zendesk", scenario: "AI triage queue operational", type: "integration", test: () => { return { pass: Array.isArray(zdAiQueue), detail: `Queue: ${zdAiQueue.length} items, Auto-mode: ${zdAutoMode}` }; } },
-            { id: "UAT-021", module: "Azure OpenAI", scenario: "Azure OpenAI config present", type: "integration", test: () => { return { pass: typeof azureOpenAI === "object", detail: `Enabled: ${azureOpenAI.enabled}, Model: ${azureOpenAI.model || "N/A"}` }; } },
+            { id: "UAT-020", module: "VGC-AI Engine", scenario: "VGC-AI Engineperational", type: "integration", test: () => { return { pass: Array.isArray(zdAiQueue), detail: `Queue: ${zdAiQueue.length} items, Auto-mode: ${zdAutoMode}` }; } },
+            { id: "UAT-021", module: "VGC-AI Engine", scenario: "VGC-AI Engine config present", type: "integration", test: () => { return { pass: typeof azureOpenAI === "object", detail: `Enabled: ${azureOpenAI.enabled}, Model: ${azureOpenAI.model || "N/A"}` }; } },
             // Compliance & Security Tests
             { id: "UAT-022", module: "Compliance", scenario: "ISO 27001 controls loaded", type: "compliance", test: () => { return { pass: typeof isoControls === "object" || true, detail: "Compliance center accessible" }; } },
             { id: "UAT-023", module: "RBAC", scenario: "Audit log tracks user actions", type: "compliance", test: () => { return { pass: rbacAuditLog.length >= 0, detail: `${rbacAuditLog.length} RBAC audit entries` }; } },
@@ -10766,12 +10765,12 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 ))}
               </div>
 
-              {/* Azure OpenAI */}
+              {/* VGC-AI Engine */}
               <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #AB47BC, #CE93D8)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🤖</div>
                   <div>
-                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Azure OpenAI Service</h4>
+                    <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>VGC-AI Engine Service</h4>
                     <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Active</Badge>
                   </div>
                 </div>
@@ -15955,7 +15954,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         { id: "zendesk", icon: "🎫", label: "Zendesk API", tech: "REST + Webhook", desc: "Bidirectional ticket sync" },
       ]},
       { id: "services", label: "Service Layer", icon: "⚙️", color: "#EC4899", nodes: [
-        { id: "ai", icon: "🧠", label: "AI Engine", tech: "Azure OpenAI", desc: "Triage, drafting, and knowledge extraction" },
+        { id: "ai", icon: "🧠", label: "AI Engine", tech: "VGC-AI Engine", desc: "Triage, drafting, and knowledge extraction" },
         { id: "workflow", icon: "🔄", label: "Workflow Engine", tech: "Rule-based", desc: "Automated escalation and routing" },
         { id: "sla", icon: "⏱️", label: "SLA Monitor", tech: "Real-time", desc: "SLA tracking with breach alerting" },
       ]},
@@ -16231,7 +16230,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     }
   };
 
-  const moduleTitle = NAV.find(n => n.id === activeModule)?.label || "Dashboard";
+  const moduleTitle = NAV.find(n => n.id === activeModule)?.label || ({ incidents: "Tickets", zendesk: "Tickets", operations: "Tickets", problems: "Tickets", changes: "Tickets", requests: "Tickets", sla: "SLA & Approvals", approvals: "SLA & Approvals", reports: "Analytics", cybernews: "Analytics", architecture: "Analytics" })[activeModule] || "Dashboard";
 
   // ─── Login Page ────────────────────────────────────────────────────────
   if (!isLoggedIn || !currentUser) {
@@ -17349,7 +17348,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Auto-Draft Email</div>
                   <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
-                    {azureOpenAI.enabled ? "Powered by Azure Open AI" : "Generated by VGC-AI Engine"} · {threatEmailDraft.id}
+                    {azureOpenAI.enabled ? "Powered by VGC-AI Engine" : "Generated by VGC-AI Engine"} · {threatEmailDraft.id}
                   </div>
                 </div>
               </div>
@@ -17467,7 +17466,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                             padding: "1px 6px", borderRadius: 3, fontFamily: "'JetBrains Mono', monospace",
                             display: "inline-flex", alignItems: "center", gap: 3
                           }}>
-                            {msg.source === "azure" ? "⚡ Azure OpenAI" : "🧠 Local AI"}
+                            {msg.source === "azure" ? "⚡ VGC-AI Engine" : "🧠 Local AI"}
                           </span>
                         </div>
                       )}
@@ -17519,7 +17518,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             </div>
             <div style={{ padding: "10px 14px", borderTop: "1px solid #1E2130", display: "flex", gap: 6, alignItems: "center" }}>
               <input style={{ ...inputStyle, flex: 1, fontSize: 12 }} value={aiInput}
-                onChange={e => setAiInput(e.target.value)} placeholder={azureOpenAI.enabled ? "Ask Azure OpenAI anything..." : "Ask me anything..."}
+                onChange={e => setAiInput(e.target.value)} placeholder={azureOpenAI.enabled ? "Ask VGC-AI anything..." : "Ask me anything..."}
                 disabled={aiLoading}
                 onKeyDown={e => {
                   if (e.key === "Enter" && aiInput.trim() && !aiLoading) {
@@ -17607,7 +17606,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: azureOpenAI.enabled ? "#81C784" : "#FFB347", boxShadow: azureOpenAI.enabled ? "0 0 6px #81C78444" : "0 0 6px #FFB34744", animation: "pulse 2s infinite" }} />
                 <span style={{ color: "#5A617866", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>
-                  {azureOpenAI.enabled ? "Primary: Azure OpenAI ⚡ · Fallback: Local AI 🧠" : "Active: Local AI 🧠 · Azure OpenAI offline"}
+                  {azureOpenAI.enabled ? "Primary: VGC-AI Engine ⚡ · Fallback: Local AI 🧠" : "Active: Local AI 🧠 · VGC-AI Engine offline"}
                 </span>
               </div>
               <span style={{ color: "#6366F144", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>I assist, I don't replace — your expertise leads. 🤝</span>
