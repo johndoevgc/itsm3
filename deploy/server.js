@@ -10,10 +10,10 @@ const USE_MYSQL = !USE_MSSQL && !!(process.env.MYSQL_HOST);
 
 // Extract text from Azure OpenAI response (supports Responses API + Chat Completions API)
 function extractAIText(aiResult) {
-  // Responses API: top-level "text" convenience field (gpt-5.4-pro)
-  if (typeof aiResult?.text === "string" && aiResult.text) return aiResult.text;
-  // Responses API: output_text convenience field
+  // Responses API: top-level "output_text" convenience field (most common)
   if (typeof aiResult?.output_text === "string" && aiResult.output_text) return aiResult.output_text;
+  // Responses API: top-level "text" convenience field
+  if (typeof aiResult?.text === "string" && aiResult.text) return aiResult.text;
   // Responses API: find message-type output item (skip reasoning items)
   if (Array.isArray(aiResult?.output)) {
     const msgItem = aiResult.output.find(o => o.type === "message");
@@ -31,7 +31,7 @@ const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
-// Primary: gpt-5.4-pro (East US 2) — Secondary: previous model as fallback
+// Primary: gpt-5.4-pro (East US 2) — Responses API (supports streaming)
 let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
 let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "BCGYlxp4toZd7q4vflLPIR0Hqa6FZJo1DP4vk0JolcjSmY3TgCvNJQQJ99CDACHYHv6XJ3w3AAAAACOGjzsj";
 let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-pro";
@@ -869,10 +869,7 @@ Created: ${ticket.ticket?.created_at}
 Description: ${ticket.ticket?.description || "No description"}
 ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
-        const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-        const payload = isResponsesAPI
-          ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-          : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 1500, temperature: 0.4 };
+        const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
         const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
         const aiResult = await new Promise((resolve, reject) => {
@@ -2060,10 +2057,7 @@ IMPORTANT: Reference real ticket data and resolutions from the Zendesk history a
 
       const userPrompt = `Generate a complete professional guide on: ${topic}`;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 4000, temperature: 0.7 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 4000 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2144,10 +2138,7 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
 
       const userPrompt = `Generate professional documentation for: ${title || url}`;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 3000, temperature: 0.7 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 3000 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2254,10 +2245,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 2000, temperature: 0.5 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2380,10 +2368,7 @@ IMPORTANT: Reference real ticket data and resolutions from the Zendesk history a
 
       const userPrompt = `Generate a complete professional guide on: ${topic}`;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 4000, temperature: 0.7 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 4000 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2464,10 +2449,7 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
 
       const userPrompt = `Generate professional documentation for: ${title || url}`;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 3000, temperature: 0.7 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 3000 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2574,10 +2556,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 2000, temperature: 0.5 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2643,10 +2622,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const enrichedSystemPrompt = systemPrompt + kbContext;
 
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_completion_tokens: 1200, temperature: 0.7 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 800 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiReqOptions = {
@@ -2680,16 +2656,180 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
+  // ─── Azure OpenAI Streaming Proxy: POST /api/ai/chat/stream ────────
+  if (pathname === "/api/ai/chat/stream" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured on server" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { systemPrompt, userPrompt } = body;
+      if (!systemPrompt || !userPrompt) return json(res, 400, { error: "systemPrompt and userPrompt required" });
+
+      // Search internal knowledge base first (same as non-streaming)
+      let kbContext = "";
+      try {
+        const kbItems = await db.getAll("ai_knowledge");
+        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+        if (kbEntries.length > 0) {
+          const query = userPrompt.toLowerCase();
+          const words = query.split(/\s+/).filter(w => w.length > 2);
+          const matched = kbEntries.map(e => {
+            let score = 0;
+            const haystack = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
+            words.forEach(w => { if (haystack.includes(w)) score += 10; });
+            if (e.title.toLowerCase().includes(query)) score += 50;
+            if (e.tags && e.tags.some(t => query.includes(t))) score += 30;
+            return { ...e, score };
+          }).filter(e => e.score > 0).sort((a, b) => b.score - a.score).slice(0, 3);
+          if (matched.length > 0) {
+            kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE (PRIORITY — use this first) ===\n" +
+              matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
+              "\n=== END INTERNAL KB ===\nIMPORTANT: Always reference internal knowledge base articles first. If the internal KB has relevant info, use it as the primary source and cite it. Only supplement with external knowledge if the internal KB doesn't fully answer the question.";
+          }
+        }
+      } catch (e) { console.warn("[AI KB Search]", e.message); }
+
+      const enrichedSystemPrompt = systemPrompt + kbContext;
+
+      // Build Chat Completions payload with stream: true
+      const payload = {
+        model: AZURE_OPENAI_MODEL,
+        input: [
+          { role: "system", content: enrichedSystemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        max_output_tokens: 800,
+        stream: true
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+
+      // Set SSE headers
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+
+      const aiReq = https.request({
+        hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+        method: "POST",
+        headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+      }, (aiRes) => {
+        if (aiRes.statusCode < 200 || aiRes.statusCode >= 300) {
+          let errData = "";
+          aiRes.on("data", c => errData += c);
+          aiRes.on("end", () => {
+            res.write(`data: ${JSON.stringify({ error: `Azure OpenAI ${aiRes.statusCode}: ${errData.substring(0, 200)}` })}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          });
+          return;
+        }
+
+        let buffer = "";
+        aiRes.on("data", (chunk) => {
+          buffer += chunk.toString();
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // keep incomplete line in buffer
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith("data: ")) continue;
+            const data = trimmed.slice(6);
+            if (data === "[DONE]") {
+              res.write(`data: ${JSON.stringify({ done: true, model: AZURE_OPENAI_MODEL })}\n\n`);
+              res.end();
+              return;
+            }
+            try {
+              const parsed = JSON.parse(data);
+              // Responses API: response.output_text.delta has {delta: "text"} — often arrives as full text
+              // Split into words for ChatGPT-like token-by-token streaming effect
+              const rawToken = parsed.delta || parsed.choices?.[0]?.delta?.content;
+              if (rawToken && rawToken.length > 0) {
+                // If the text is long (full response), split into words for visual streaming
+                if (rawToken.length > 20) {
+                  const words = rawToken.split(/(\s+)/); // preserve whitespace
+                  for (const word of words) {
+                    if (word) res.write(`data: ${JSON.stringify({ token: word })}\n\n`);
+                  }
+                } else {
+                  res.write(`data: ${JSON.stringify({ token: rawToken })}\n\n`);
+                }
+              }
+              // Responses API: response.completed marks the end
+              if (parsed.type === "response.completed") {
+                res.write(`data: ${JSON.stringify({ done: true, model: AZURE_OPENAI_MODEL })}\n\n`);
+                res.end();
+                return;
+              }
+            } catch { /* skip non-JSON lines */ }
+          }
+        });
+
+        aiRes.on("end", () => {
+          // Process remaining buffer
+          if (buffer.trim()) {
+            const trimmed = buffer.trim();
+            if (trimmed.startsWith("data: ") && trimmed.slice(6) !== "[DONE]") {
+              try {
+                const parsed = JSON.parse(trimmed.slice(6));
+                const token = parsed.delta || parsed.choices?.[0]?.delta?.content;
+                if (token) res.write(`data: ${JSON.stringify({ token })}\n\n`);
+              } catch { /* skip */ }
+            }
+          }
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ done: true, model: AZURE_OPENAI_MODEL })}\n\n`);
+            res.end();
+          }
+        });
+      });
+
+      aiReq.on("error", (err) => {
+        console.error("[AI Stream Error]", err.message);
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }
+      });
+      aiReq.setTimeout(45000, () => {
+        aiReq.destroy();
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ error: "Azure OpenAI streaming timeout" })}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }
+      });
+
+      // Handle client disconnect
+      req.on("close", () => { if (!aiReq.destroyed) aiReq.destroy(); });
+
+      aiReq.write(JSON.stringify(payload));
+      aiReq.end();
+      return; // streaming response — don't fall through
+    } catch (err) {
+      console.error("[AI Stream]", err.message);
+      if (!res.headersSent) return json(res, 502, { error: err.message });
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.end();
+      }
+      return;
+    }
+  }
+
   // ─── Azure OpenAI Test Connection: GET /api/ai/test ─────────────────
   if (pathname === "/api/ai/test" && req.method === "GET") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured", configured: false });
     }
     try {
-      const isResponsesAPI = AZURE_OPENAI_ENDPOINT.includes("/responses");
-      const payload = isResponsesAPI
-        ? { model: AZURE_OPENAI_MODEL, input: [{ role: "user", content: "Reply with exactly: OK" }] }
-        : { model: AZURE_OPENAI_MODEL, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_completion_tokens: 10, temperature: 0 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "user", content: "Reply with exactly: OK" }], max_output_tokens: 16 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({
