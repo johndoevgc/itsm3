@@ -1243,6 +1243,7 @@ export default function ITSMApp() {
   });
   const [dragState, setDragState] = useState(null);
   const [cardVisibility, setCardVisibility] = useState({
+    zdSync:          { on: true, important: false, label: "Zendesk Integration",    roles: ["all"] },
     execKpis:        { on: true, important: false, label: "Executive KPIs",        roles: ["management"] },
     caseAnalysis:    { on: true, important: false, label: "Case Analysis",          roles: ["management"] },
     priorityDist:    { on: true, important: false, label: "Priority Distribution",  roles: ["management"] },
@@ -2129,6 +2130,16 @@ export default function ITSMApp() {
   useEffect(() => { _save("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-fetch Zendesk stats on mount (so Dashboard shows live counts)
+  useEffect(() => {
+    fetch("/api/zendesk/stats").then(r => r.ok ? r.json() : null).then(data => {
+      if (data) { setZdStats(data); setZdConnected(true); }
+    }).catch(() => {});
+    fetch("/api/zendesk/me").then(r => r.ok ? r.json() : null).then(data => {
+      if (data?.user) { setZdUser(data.user); setZdConnected(true); }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // SVG Icon Components — Enterprise Cybersecurity Grade
   const NavIcon = ({ type, isActive }) => {
     const c = isActive ? "#E8ECF4" : "#5A6178";
@@ -2158,18 +2169,23 @@ export default function ITSMApp() {
 
   const NAV = [
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
+    { section: "ZENDESK & TICKETS" },
     { id: "zendesk", label: "Zendesk AI", count: zdStats.open + zdStats.pending + zdAiQueue.filter(q => q.status === "pending_approval").length, critical: zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "incidents", label: "Incidents", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed"), accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "operations", label: "Operations", count: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, accent: "#CE93D8", gradient: "linear-gradient(135deg, #CE93D808, #FFB34718)" },
+    { section: "SERVICES" },
     { id: "catalog", label: "Service Catalog", accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "knowledge", label: "Knowledge Portal", accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #0089D618)" },
     { id: "assets", label: "Assets / CMDB", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #06B6D418)" },
+    { section: "MONITORING" },
     { id: "approvals", label: "Approvals", count: changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, accent: "#4CAF50", gradient: "linear-gradient(135deg, #4CAF5008, #4CAF5018)" },
     { id: "sla", label: "SLA Tracker", accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
     { id: "reports", label: "Reports", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "customers", label: "Customers", count: customers.filter(c => c.status === "Active").length, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #EC489918)" },
+    { section: "AI & SECURITY" },
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "cybernews", label: "Cyber News", count: (() => { const sev = ["Critical","High"]; return [{ severity: "Critical", status: "Active" },{ severity: "High", status: "Investigating" },{ severity: "Medium", status: "Acknowledged" },{ severity: "Low", status: "Scheduled" },{ severity: "High", status: "Active" }].filter(a => sev.includes(a.severity)).length; })(), critical: true, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
+    { section: "SYSTEM" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
     { id: "productivity", label: "Productivity", count: smartTasks.filter(t => t.status === "pending").length, accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #00BCF218)" },
     { id: "architecture", label: "Architecture", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #6366F118)" },
@@ -2193,6 +2209,16 @@ export default function ITSMApp() {
     const aiTriagedPct = totalIncidents > 0 ? Math.round((aiTriagedCount / totalIncidents) * 100) : 0;
     const avgConfidence = totalIncidents > 0 ? Math.round(incidents.reduce((s, i) => s + (i.aiConfidence || 0), 0) / totalIncidents) : 0;
     const slaCompliance = totalIncidents > 0 ? Math.round(((totalIncidents - slaBreaches) / totalIncidents) * 100) : 100;
+
+    // Zendesk ↔ ITSM sync metrics
+    const zdLinkedCount = incidents.filter(i => i.zdTicketId).length;
+    const zdTotalLive = zdStats.open + zdStats.pending + zdStats.hold + zdStats.solved;
+    const zdUnlinked = Math.max(0, zdTotalLive - zdLinkedCount);
+
+    // Computed metrics (from real data, not hardcoded)
+    const resolvedIncs = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+    const computedMTTR = resolvedIncs.length > 0 ? (resolvedIncs.reduce((s, i) => s + (i.created || 0), 0) / resolvedIncs.length).toFixed(1) : "0";
+    const computedFCR = totalIncidents > 0 ? Math.round((resolvedIncs.length / totalIncidents) * 100) : 0;
 
     // Engineer-specific
     const myTickets = incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed");
@@ -2497,12 +2523,12 @@ export default function ITSMApp() {
           {/* Executive KPI Row */}
           {cardVisibility.execKpis.on && <div className="vgc-kpi-grid-6" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 20 }}>
             {[
-              { label: "Total Cases", value: totalIncidents, icon: "📊", accent: "#6366F1", trend: "+3 today", link: "incidents" },
+              { label: "Total Cases", value: totalIncidents, icon: "📊", accent: "#6366F1", trend: `${zdLinkedCount} from Zendesk`, link: "incidents" },
               { label: "Open Cases", value: openInc, icon: "📂", accent: "#FF6B6B", trend: critInc > 0 ? `${critInc} critical` : "0 critical", critical: critInc > 0, link: "incidents" },
               { label: "SLA Compliance", value: `${slaCompliance}%`, icon: "⏱️", accent: slaCompliance >= 90 ? "#4CAF50" : slaCompliance >= 75 ? "#FFB347" : "#FF4444", trend: slaCompliance >= 90 ? "On Track" : "At Risk", critical: slaCompliance < 75, link: "sla" },
-              { label: "MTTR (hrs)", value: "3.2", icon: "🔧", accent: "#06B6D4", trend: "↓ 12% vs last week", link: "reports" },
-              { label: "First Call Resolution", value: "78%", icon: "🎯", accent: "#81C784", trend: "Target: 80%", link: "reports" },
-              { label: "Customer Satisfaction", value: "4.6/5", icon: "⭐", accent: "#F59E0B", trend: "↑ 0.2 vs last month", link: "reports" },
+              { label: "MTTR (hrs)", value: computedMTTR, icon: "🔧", accent: "#06B6D4", trend: `${resolvedIncs.length} resolved`, link: "reports" },
+              { label: "Resolution Rate", value: `${computedFCR}%`, icon: "🎯", accent: "#81C784", trend: `${resolvedIncs.length}/${totalIncidents} cases`, link: "reports" },
+              { label: "AI Triaged", value: `${aiTriagedPct}%`, icon: "🤖", accent: "#EC4899", trend: `${aiTriagedCount} of ${totalIncidents}`, link: "zendesk" },
             ].map((kpi, i) => (
               <div key={i} onClick={() => kpi.link && setActiveModule(kpi.link)} style={{ background: kpi.critical ? "#1A080811" : "#0F1117", borderRadius: 8, border: kpi.critical ? "1px solid #FF444444" : "1px solid #1E2130", padding: "14px 16px", position: "relative", overflow: "hidden", animation: kpi.critical ? "criticalGlow 2s ease-in-out infinite" : "none", cursor: kpi.link ? "pointer" : "default", transition: "transform 0.15s, border-color 0.2s" }}
                 onMouseEnter={e => { if (kpi.link) { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = kpi.accent + "55"; } }}
@@ -2520,6 +2546,48 @@ export default function ITSMApp() {
               </div>
             ))}
           </div>}
+
+          {/* ═══ ZENDESK ↔ ITSM SYNC STATUS ═══ */}
+          {cardVisibility.zdSync.on && <DashCard id="zdSync"><div style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${zdConnected ? "#EC489933" : "#FF6B6B33"}`, padding: 20, position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #EC4899, #6366F1, #06B6D4)" }} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>🎫</span> Zendesk ↔ ITSM Sync
+                <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: zdConnected ? "#4CAF5022" : "#FF444422", color: zdConnected ? "#4CAF50" : "#FF4444", fontWeight: 600 }}>
+                  {zdConnected ? "CONNECTED" : "OFFLINE"}
+                </span>
+              </h3>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setActiveModule("zendesk")} style={{ padding: "5px 12px", borderRadius: 6, background: "#EC489918", border: "1px solid #EC489933", color: "#EC4899", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>Open Zendesk AI →</button>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
+              {[
+                { label: "ZD Open", value: zdStats.open, accent: "#64B5F6", icon: "📂", source: "Zendesk" },
+                { label: "ZD Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳", source: "Zendesk" },
+                { label: "ZD On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️", source: "Zendesk" },
+                { label: "ZD Solved", value: zdStats.solved, accent: "#81C784", icon: "✅", source: "Zendesk" },
+                { label: "ITSM Total", value: totalIncidents, accent: "#6366F1", icon: "🎫", source: "ITSM" },
+                { label: "ZD Linked", value: zdLinkedCount, accent: "#06B6D4", icon: "🔗", source: "Synced" },
+                { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖", source: "AI" },
+                { label: "Pending Review", value: zdAiQueue.filter(q => q.status === "pending_approval").length, accent: "#FFB347", icon: "👤", source: "Queue" },
+              ].map((s, i) => (
+                <div key={i} onClick={() => setActiveModule(s.source === "ITSM" ? "incidents" : "zendesk")} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 8, border: `1px solid ${s.accent}22`, cursor: "pointer", transition: "border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = s.accent + "55"} onMouseLeave={e => e.currentTarget.style.borderColor = s.accent + "22"}>
+                  <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3, display: "flex", justifyContent: "space-between" }}>
+                    <span>{s.icon} {s.label}</span>
+                    <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 3, background: s.accent + "18", color: s.accent }}>{s.source}</span>
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: s.accent, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+            {zdUnlinked > 0 && <div style={{ marginTop: 10, padding: "8px 14px", borderRadius: 6, background: "#FFB34708", border: "1px solid #FFB34722", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12 }}>⚠️</span>
+              <span style={{ fontSize: 11, color: "#FFB347" }}>{zdUnlinked} Zendesk ticket(s) not yet imported to ITSM.</span>
+              <button onClick={() => setActiveModule("incidents")} style={{ marginLeft: "auto", padding: "3px 10px", borderRadius: 4, background: "#EC489918", border: "1px solid #EC489933", color: "#EC4899", cursor: "pointer", fontSize: 9, fontWeight: 600 }}>Import →</button>
+            </div>}
+          </div></DashCard>}
 
           {/* Case Analysis & SLA Breakdown */}
           {(cardVisibility.caseAnalysis.on || cardVisibility.priorityDist.on || cardVisibility.slaStatus.on) && <div className="vgc-kpi-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
@@ -2647,10 +2715,10 @@ export default function ITSMApp() {
               </h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
                 {[
-                  { label: "Est. Downtime Cost", value: "$12,400", color: "#FF6B6B", sub: "This month" },
-                  { label: "AI Cost Savings", value: "$8,200", color: "#4CAF50", sub: "Automation ROI" },
-                  { label: "Avg Cost per Ticket", value: "$45", color: "#06B6D4", sub: "↓ 15% vs last Q" },
-                  { label: "Productivity Saved", value: "124 hrs", color: "#CE93D8", sub: "AI auto-resolution" },
+                  { label: "Est. Downtime Cost", value: `$${Math.round(openInc * 180)}`, color: "#FF6B6B", sub: `${openInc} open cases` },
+                  { label: "AI Cost Savings", value: `$${Math.round(aiTriagedCount * 65)}`, color: "#4CAF50", sub: `${aiTriagedCount} AI triaged` },
+                  { label: "Avg Cost per Ticket", value: `$${totalIncidents > 0 ? Math.round(4500 / totalIncidents) : 0}`, color: "#06B6D4", sub: `${totalIncidents} total cases` },
+                  { label: "Productivity Saved", value: `${Math.round(aiTriagedCount * 1.5)} hrs`, color: "#CE93D8", sub: "AI auto-resolution" },
                 ].map((m, i) => (
                   <div key={i} onClick={() => setActiveModule("reports")} style={{ padding: "12px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer", transition: "background 0.15s, border-color 0.2s" }}
                     onMouseEnter={e => { e.currentTarget.style.background = m.color + "08"; e.currentTarget.style.borderColor = m.color + "33"; }}
@@ -3921,6 +3989,23 @@ export default function ITSMApp() {
             });
           }}>🔄 Sync All from Zendesk</button>
         </div>
+        {/* Zendesk ↔ ITSM Quick Summary */}
+        <div style={{ display: "flex", gap: 12, marginBottom: 14, padding: "8px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E213044", alignItems: "center", flexWrap: "wrap" }}>
+          {[
+            { label: "Total ITSM", value: incidents.length, color: "#6366F1" },
+            { label: "Open", value: incidents.filter(i => !["Resolved","Closed"].includes(i.status)).length, color: "#FF6B6B" },
+            { label: "Resolved", value: incidents.filter(i => i.status === "Resolved" || i.status === "Closed").length, color: "#81C784" },
+            { label: "From Zendesk", value: incidents.filter(i => i.zdTicketId).length, color: "#EC4899" },
+            { label: "AI Triaged", value: incidents.filter(i => i.aiTriaged).length, color: "#06B6D4" },
+          ].map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{s.label}:</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</span>
+              {i < 4 && <span style={{ color: "#1E2130", margin: "0 4px" }}>|</span>}
+            </div>
+          ))}
+          {zdStats.open + zdStats.pending > 0 && <div style={{ marginLeft: "auto", fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Zendesk Live: {zdStats.open} open · {zdStats.pending} pending</div>}
+        </div>
         <DataTable
           columns={[
             { label: "ID", key: "id", mono: true, render: r => (
@@ -4076,6 +4161,15 @@ export default function ITSMApp() {
               <div style={{ fontSize: 22, fontWeight: 700, color: s.accent }}>{s.value}</div>
             </div>
           ))}
+        </div>
+        {/* Cross-Reference: Incidents ↔ Operations */}
+        <div style={{ display: "flex", gap: 10, marginBottom: 14, padding: "6px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033", alignItems: "center", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap" }}>
+          <span>📊 ITSM: {incidents.length} incidents</span><span style={{ color: "#1E2130" }}>|</span>
+          <span style={{ color: "#EC4899" }}>🎫 Zendesk linked: {incidents.filter(i => i.zdTicketId).length}</span><span style={{ color: "#1E2130" }}>|</span>
+          <span style={{ color: "#CE93D8" }}>🔍 Problems: {problems.length}</span><span style={{ color: "#1E2130" }}>|</span>
+          <span style={{ color: "#FFB347" }}>🔄 Changes: {changes.length}</span><span style={{ color: "#1E2130" }}>|</span>
+          <span style={{ color: "#81C784" }}>📋 Requests: {requests.length}</span>
+          {incidents.filter(i => i.linkedProblem).length > 0 && <><span style={{ color: "#1E2130" }}>|</span><span style={{ color: "#64B5F6" }}>🔗 Linked to problems: {incidents.filter(i => i.linkedProblem).length}</span></>}
         </div>
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1E2130", marginBottom: 16 }}>
@@ -13647,7 +13741,14 @@ export default function ITSMApp() {
         </div>
 
         <nav style={{ flex: 1, padding: "8px 0", overflowY: "auto" }}>
-          {NAV.map(item => {
+          {NAV.map((item, idx) => {
+            if (item.section) {
+              return !sideCollapsed ? (
+                <div key={`sec-${idx}`} style={{ padding: "10px 16px 4px", fontSize: 9, fontWeight: 700, color: "#3A3F55", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1.5px", textTransform: "uppercase" }}>{item.section}</div>
+              ) : (
+                <div key={`sec-${idx}`} style={{ height: 1, background: "#1E213044", margin: "6px 8px" }} />
+              );
+            }
             const isActive = activeModule === item.id;
             return (
             <button key={item.id} className={`vgc-nav-btn${isActive ? ' vgc-nav-active' : ''}`}
