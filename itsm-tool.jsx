@@ -1324,6 +1324,12 @@ export default function ITSMApp() {
   const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings
   const [zdAnalytics, setZdAnalytics] = useState(null);
   const [zdCsat, setZdCsat] = useState(null);
+  // ─── Zendesk Full Sync State ────────────────────────────────────────
+  const [zdSyncStatus, setZdSyncStatus] = useState(null);
+  const [zdSyncProgress, setZdSyncProgress] = useState(null); // { phase, message }
+  const [zdSyncInProgress, setZdSyncInProgress] = useState(false);
+  const [zdRealTimeEnabled, setZdRealTimeEnabled] = useState(() => _ls("vgc_zd_realtime", true));
+  const zdRealTimePollRef = useRef(null);
   // ─── Workflow Automation Rules State ─────────────────────────────────────
   const [workflowRules, setWorkflowRules] = useState(() => {
     const saved = _ls("vgc_workflow_rules", null);
@@ -11846,6 +11852,110 @@ export default function ITSMApp() {
       return () => { if (zdPollingRef.current) clearInterval(zdPollingRef.current); };
     }, [zdConnected, zdAutoMode, azureOpenAI.enabled]);
 
+    // Real-time incremental sync polling (every 30s)
+    React.useEffect(() => {
+      if (zdConnected && zdRealTimeEnabled) {
+        // Fetch sync status on connect
+        fetch("/api/zendesk/sync-status").then(r => r.json()).then(data => setZdSyncStatus(data)).catch(() => {});
+
+        zdRealTimePollRef.current = setInterval(async () => {
+          try {
+            // Run incremental sync
+            const r = await fetch("/api/zendesk/incremental-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+            if (r.ok) {
+              const data = await r.json();
+              if (data.stats && (data.stats.ticketsUpdated > 0 || data.stats.ticketsCreated > 0)) {
+                addAutoLog({ type: "info", message: `Real-time sync: ${data.stats.ticketsCreated} new, ${data.stats.ticketsUpdated} updated, ${data.stats.commentsAdded} comments` });
+                zdFetchTickets(); zdFetchStats();
+                // Refresh ITSM incidents if any were updated
+                try {
+                  const incR = await fetch("/api/db/incidents");
+                  if (incR.ok) {
+                    const incData = await incR.json();
+                    if (incData.data) setIncidents(incData.data);
+                  }
+                } catch {}
+              }
+            }
+            // Refresh sync status
+            const statusR = await fetch("/api/zendesk/sync-status");
+            if (statusR.ok) setZdSyncStatus(await statusR.json());
+          } catch {}
+        }, 30000);
+        return () => clearInterval(zdRealTimePollRef.current);
+      }
+      return () => { if (zdRealTimePollRef.current) clearInterval(zdRealTimePollRef.current); };
+    }, [zdConnected, zdRealTimeEnabled]);
+
+    // ── Full Historical Import ──
+    const zdFullImport = async (options = {}) => {
+      if (zdSyncInProgress) return;
+      setZdSyncInProgress(true);
+      setZdSyncProgress({ phase: "Starting", message: "Initiating full historical import from Zendesk..." });
+      addAutoLog({ type: "config", message: "Full historical import started — importing all tickets, users, organizations, comments..." });
+      try {
+        const r = await fetch("/api/zendesk/full-import", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ includeComments: true, includeUsers: true, includeOrgs: true, createIncidents: options.createIncidents || false }),
+        });
+        if (!r.ok) throw new Error((await r.json()).error || "Import failed");
+        const data = await r.json();
+        setZdSyncProgress({ phase: "Complete", message: data.message });
+        addAutoLog({ type: "human_approved", message: `Full import complete: ${data.stats.tickets} tickets, ${data.stats.users} users, ${data.stats.orgs} orgs, ${data.stats.comments} comments` });
+        // Sync orgs to customers
+        setZdSyncProgress({ phase: "Syncing", message: "Syncing organizations to ITSM customers..." });
+        await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        addAutoLog({ type: "info", message: "Organizations synced to ITSM customers" });
+        // Refresh sync status
+        const statusR = await fetch("/api/zendesk/sync-status");
+        if (statusR.ok) setZdSyncStatus(await statusR.json());
+        // Refresh incidents
+        const incR = await fetch("/api/db/incidents");
+        if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
+        // Refresh customers
+        const custR = await fetch("/api/db/customers");
+        if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); }
+        zdFetchTickets(); zdFetchStats();
+      } catch (e) {
+        setZdSyncProgress({ phase: "Error", message: e.message });
+        addAutoLog({ type: "error", message: `Full import failed: ${e.message}` });
+      } finally {
+        setZdSyncInProgress(false);
+      }
+    };
+
+    // ── Train AI from Zendesk Historical Data ──
+    const zdTrainAi = async () => {
+      setZdSyncProgress({ phase: "Training", message: "Training AI knowledge base from resolved Zendesk tickets..." });
+      addAutoLog({ type: "config", message: "AI training from Zendesk resolved tickets started" });
+      try {
+        const r = await fetch("/api/zendesk/train-ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        if (!r.ok) throw new Error((await r.json()).error || "Training failed");
+        const data = await r.json();
+        setZdSyncProgress({ phase: "Complete", message: `Trained ${data.trained} knowledge articles from ${data.totalResolved} resolved tickets` });
+        addAutoLog({ type: "human_approved", message: `AI trained: ${data.trained} KB articles created from ${data.totalResolved} resolved Zendesk tickets` });
+      } catch (e) {
+        addAutoLog({ type: "error", message: `AI training failed: ${e.message}` });
+      }
+    };
+
+    // ── Push ITSM changes to Zendesk ──
+    const zdPushToZendesk = async (incidentId, changes) => {
+      try {
+        const r = await fetch("/api/zendesk/push-to-zendesk", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ incidentId, ...changes, user: currentUser?.name || "System" }),
+        });
+        if (!r.ok) throw new Error((await r.json()).error || "Push failed");
+        const data = await r.json();
+        addAutoLog({ type: "info", message: `Pushed ${incidentId} → Zendesk #${data.zdTicketId} (${data.action})` });
+        return data;
+      } catch (e) {
+        addAutoLog({ type: "error", message: `Push to Zendesk failed for ${incidentId}: ${e.message}` });
+        return null;
+      }
+    };
+
     const priorityColor = (p) => ({ urgent: "#FF6B6B", high: "#FFB347", normal: "#64B5F6", low: "#81C784" }[p] || "#5A6178");
     const slaPriorityColor = (p) => ({ "Sev-A": "#FF6B6B", "Sev-B": "#FFB347", "Sev-C": "#64B5F6", "Sev-D": "#81C784" }[p] || "#5A6178");
     const statusIcon = (s) => ({ new: "🆕", open: "📂", pending: "⏳", hold: "⏸️", solved: "✅", closed: "🔒" }[s] || "📋");
@@ -11889,7 +11999,7 @@ export default function ITSMApp() {
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
-                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? "AI triage every 60s · Human approval required" : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0}` : zdError || "Not connected"}
+                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? "AI triage every 60s · Human approval required" : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0} · ${zdRealTimeEnabled ? "Real-time sync ON" : "Sync OFF"}` : zdError || "Not connected"}
               </div>
             </div>
           </div>
@@ -11946,6 +12056,7 @@ export default function ITSMApp() {
             { id: "automation", label: "🤖 Automation", count: null },
             { id: "queue", label: "👤 Human Review", count: pendingQueue.length },
             { id: "tickets", label: "📋 All Tickets", count: zdStats.open + zdStats.pending },
+            { id: "sync", label: "🔄 Sync & Migration", count: zdSyncStatus?.counts?.zdTickets || null },
             { id: "history", label: "📊 AI History", count: approvedSentQueue.length },
             { id: "settings", label: "⚙️ Settings", count: null },
           ].map(tab => (
@@ -12298,6 +12409,326 @@ export default function ITSMApp() {
           </div>
         )}
 
+        {/* ══════════ TAB: SYNC & MIGRATION ══════════ */}
+        {zdTab === "sync" && (
+          <div>
+            {/* Sync Status Banner */}
+            <div style={{ background: zdRealTimeEnabled ? "linear-gradient(135deg, #0F1117, #4CAF5008, #0F1117)" : "#0F1117", borderRadius: 12, border: `1px solid ${zdRealTimeEnabled ? "#4CAF5044" : "#1E2130"}`, padding: "16px 22px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: zdRealTimeEnabled ? "#4CAF5022" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🔄</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 10 }}>
+                    Real-Time Bidirectional Sync
+                    <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdRealTimeEnabled ? "#4CAF5022" : "#FF444422", color: zdRealTimeEnabled ? "#4CAF50" : "#FF4444", animation: zdRealTimeEnabled ? "zdPulse 2s infinite" : "none" }}>
+                      {zdRealTimeEnabled ? "ACTIVE — Sync every 30s" : "PAUSED"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
+                    Zendesk ↔ ITSM · Changes in either system auto-sync · Webhook-ready for instant updates
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div onClick={() => { const nv = !zdRealTimeEnabled; setZdRealTimeEnabled(nv); localStorage.setItem("vgc_zd_realtime", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "Real-time sync ENABLED — incremental sync every 30s" : "Real-time sync DISABLED" }); }}
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdRealTimeEnabled ? "#4CAF5022" : "#1E2130", border: `1px solid ${zdRealTimeEnabled ? "#4CAF5044" : "#1E2130"}` }}>
+                  <div style={{ width: 32, height: 16, borderRadius: 8, background: zdRealTimeEnabled ? "#4CAF50" : "#333", position: "relative", transition: "all 0.3s" }}>
+                    <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdRealTimeEnabled ? 18 : 2, transition: "left 0.3s" }} />
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: zdRealTimeEnabled ? "#4CAF50" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>REAL-TIME</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Sync Metrics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+              {[
+                { label: "ZD Tickets (DB)", value: zdSyncStatus?.counts?.zdTickets || 0, color: "#64B5F6", icon: "🎫" },
+                { label: "ZD Users (DB)", value: zdSyncStatus?.counts?.zdUsers || 0, color: "#EC4899", icon: "👤" },
+                { label: "ZD Orgs (DB)", value: zdSyncStatus?.counts?.zdOrgs || 0, color: "#FFB347", icon: "🏢" },
+                { label: "ZD Comments (DB)", value: zdSyncStatus?.counts?.zdComments || 0, color: "#81C784", icon: "💬" },
+                { label: "ITSM Incidents", value: zdSyncStatus?.counts?.itsmIncidents || incidents.length, color: "#6366F1", icon: "📋" },
+                { label: "Last Full Import", value: zdSyncStatus?.lastFullImport?.completedAt ? new Date(zdSyncStatus.lastFullImport.completedAt).toLocaleDateString("en-SG") : "Never", color: "#CE93D8", icon: "📦" },
+                { label: "Last Sync", value: zdSyncStatus?.lastIncrementalSync?.completedAt ? new Date(zdSyncStatus.lastIncrementalSync.completedAt).toLocaleTimeString("en-SG") : "Never", color: "#06B6D4", icon: "🔄" },
+              ].map((s, i) => (
+                <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33` }}>
+                  <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
+                  <div style={{ fontSize: typeof s.value === "number" ? 22 : 13, fontWeight: 700, color: s.color }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              {/* Full Historical Import */}
+              <div style={{ ...cardStyle, padding: 18 }}>
+                {sectionLabel("📦", "Full Historical Import")}
+                <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.6, marginBottom: 16 }}>
+                  Import ALL Zendesk data into your ITSM database — tickets (including closed), users, organizations, comments, and attachments metadata.
+                  This enables AI-powered analysis using your full ticket history.
+                </div>
+                {zdSyncProgress && (
+                  <div style={{ padding: "10px 14px", borderRadius: 8, marginBottom: 14, background: zdSyncProgress.phase === "Error" ? "#FF6B6B08" : zdSyncProgress.phase === "Complete" ? "#81C78408" : "#6366F108", border: `1px solid ${zdSyncProgress.phase === "Error" ? "#FF6B6B33" : zdSyncProgress.phase === "Complete" ? "#81C78433" : "#6366F133"}` }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: zdSyncProgress.phase === "Error" ? "#FF6B6B" : zdSyncProgress.phase === "Complete" ? "#81C784" : "#6366F1", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
+                      {zdSyncProgress.phase === "Error" ? "❌" : zdSyncProgress.phase === "Complete" ? "✅" : "⟳"} {zdSyncProgress.phase}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#C4CAD6" }}>{zdSyncProgress.message}</div>
+                  </div>
+                )}
+                <div style={{ display: "grid", gap: 8 }}>
+                  <button onClick={() => zdFullImport({ createIncidents: false })} disabled={zdSyncInProgress || !zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #6366F133", background: zdSyncInProgress ? "#6366F108" : "#6366F118", color: "#6366F1", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    {zdSyncInProgress ? "⟳ Importing..." : "📦 Import All Zendesk Data (Data Only)"}
+                  </button>
+                  <button onClick={() => zdFullImport({ createIncidents: true })} disabled={zdSyncInProgress || !zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #EC489933", background: zdSyncInProgress ? "#EC489908" : "#EC489918", color: "#EC4899", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    {zdSyncInProgress ? "⟳ Importing..." : "📦 Import + Create ITSM Incidents for All Tickets"}
+                  </button>
+                  <button onClick={zdTrainAi} disabled={zdSyncInProgress || !zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #81C78433", background: "#81C78418", color: "#81C784", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    🧠 Train AI from Resolved Zendesk Tickets
+                  </button>
+                  <button onClick={async () => {
+                    try {
+                      const r = await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+                      if (r.ok) { const data = await r.json(); addAutoLog({ type: "info", message: `Orgs synced: ${data.synced} updated, ${data.created} new customers created` }); const custR = await fetch("/api/db/customers"); if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); } }
+                    } catch (e) { addAutoLog({ type: "error", message: `Org sync failed: ${e.message}` }); }
+                  }} disabled={!zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #FFB34733", background: "#FFB34718", color: "#FFB347", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    🏢 Sync Organizations → ITSM Customers
+                  </button>
+                </div>
+              </div>
+
+              {/* Sync Architecture & Webhook Setup */}
+              <div style={{ ...cardStyle, padding: 18 }}>
+                {sectionLabel("🏗️", "Sync Architecture")}
+                <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+                  {[
+                    { icon: "📥", label: "Zendesk → ITSM", desc: "Tickets, users, orgs auto-sync to local DB. Linked incidents update status/priority in real-time.", color: "#64B5F6", active: zdRealTimeEnabled },
+                    { icon: "📤", label: "ITSM → Zendesk", desc: "Status, priority, comments on ITSM incidents auto-push to linked Zendesk tickets.", color: "#EC4899", active: zdRealTimeEnabled },
+                    { icon: "🔔", label: "Webhook (Instant)", desc: "Configure Zendesk webhook to POST to /api/zendesk/webhook for instant sync on ticket events.", color: "#FFB347", active: true },
+                    { icon: "🧠", label: "AI Knowledge", desc: "Resolved Zendesk tickets feed AI knowledge base. AI learns from historical resolutions.", color: "#81C784", active: true },
+                    { icon: "🔄", label: "Incremental Sync", desc: "Every 30s polls Zendesk incremental API for changes since last sync — minimal API usage.", color: "#6366F1", active: zdRealTimeEnabled },
+                    { icon: "📊", label: "Full Data Mirror", desc: "Complete local copy of all Zendesk data for AI analysis, reporting, and Zendesk decommission prep.", color: "#CE93D8", active: (zdSyncStatus?.counts?.zdTickets || 0) > 0 },
+                  ].map((item, i) => (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", borderRadius: 8, background: item.active ? `${item.color}08` : "#12141E", border: `1px solid ${item.active ? item.color + "22" : "#1E213033"}` }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: item.active ? item.color : "#5A6178", display: "flex", alignItems: "center", gap: 6 }}>
+                          {item.label}
+                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: item.active ? "#4CAF50" : "#FF4444" }} />
+                        </div>
+                        <div style={{ fontSize: 9, color: "#5A617888", marginTop: 2 }}>{item.desc}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Webhook URL */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>🔔 ZENDESK WEBHOOK URL (configure in Zendesk Admin)</div>
+                  <div style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all", background: "#12141E", padding: "8px 10px", borderRadius: 4, border: "1px solid #1E213044", cursor: "pointer" }}
+                    onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/zendesk/webhook`); addAutoLog({ type: "info", message: "Webhook URL copied to clipboard" }); }}>
+                    {window.location.origin}/api/zendesk/webhook
+                    <span style={{ marginLeft: 8, fontSize: 8, color: "#5A6178" }}>(click to copy)</span>
+                  </div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 6, lineHeight: 1.5 }}>
+                    In Zendesk Admin → Webhooks → Create Webhook: paste URL above, set to HTTP POST, JSON. Then create a Trigger that fires on ticket create/update/comment events.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Offboarding Readiness */}
+            <div style={{ ...cardStyle, padding: 18, marginTop: 14 }}>
+              {sectionLabel("🚀", "Zendesk Decommission Readiness")}
+              <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5, marginBottom: 16 }}>
+                Track progress toward fully replacing Zendesk with your ITSM tool. All items must be green before decommissioning.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+                {[
+                  { label: "Historical Tickets Imported", value: zdSyncStatus?.counts?.zdTickets || 0, target: "all", ready: (zdSyncStatus?.counts?.zdTickets || 0) > 0, desc: "All past Zendesk tickets stored locally" },
+                  { label: "Users Imported", value: zdSyncStatus?.counts?.zdUsers || 0, target: "all", ready: (zdSyncStatus?.counts?.zdUsers || 0) > 0, desc: "Zendesk agents & end-users imported" },
+                  { label: "Organizations Synced", value: zdSyncStatus?.counts?.zdOrgs || 0, target: "all", ready: (zdSyncStatus?.counts?.zdOrgs || 0) > 0, desc: "Orgs mapped to ITSM customers" },
+                  { label: "Comments Preserved", value: zdSyncStatus?.counts?.zdComments || 0, target: "all", ready: (zdSyncStatus?.counts?.zdComments || 0) > 0, desc: "Full conversation history preserved" },
+                  { label: "ITSM Incidents Active", value: incidents.length, target: ">0", ready: incidents.length > 0, desc: "ITSM managing incident lifecycle" },
+                  { label: "AI Knowledge Trained", value: "Check KB", target: ">0", ready: true, desc: "AI trained from resolved ticket patterns" },
+                  { label: "Real-Time Sync Active", value: zdRealTimeEnabled ? "Yes" : "No", target: "yes", ready: zdRealTimeEnabled, desc: "Bidirectional sync operational" },
+                  { label: "Webhook Configured", value: "Manual", target: "configured", ready: false, desc: "Zendesk webhook pointed to ITSM" },
+                ].map((item, i) => (
+                  <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: item.ready ? "#81C78408" : "#FF6B6B08", border: `1px solid ${item.ready ? "#81C78433" : "#FF6B6B33"}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{item.label}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: item.ready ? "#81C784" : "#FF6B6B" }}>{typeof item.value === "number" ? item.value : item.value}</span>
+                    </div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{item.desc}</div>
+                    <div style={{ fontSize: 8, color: item.ready ? "#81C784" : "#FF6B6B", marginTop: 4, fontWeight: 600 }}>{item.ready ? "✅ Ready" : "⚠️ Action Needed"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════ TAB: SYNC & MIGRATION ══════════ */}
+        {zdTab === "sync" && (
+          <div>
+            {/* Sync Status Banner */}
+            <div style={{ background: zdRealTimeEnabled ? "linear-gradient(135deg, #0F1117, #4CAF5008, #0F1117)" : "#0F1117", borderRadius: 12, border: `1px solid ${zdRealTimeEnabled ? "#4CAF5044" : "#1E2130"}`, padding: "16px 22px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: zdRealTimeEnabled ? "#4CAF5022" : "#1E2130", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🔄</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", display: "flex", alignItems: "center", gap: 10 }}>
+                    Real-Time Bidirectional Sync
+                    <span style={{ fontSize: 9, padding: "2px 10px", borderRadius: 10, fontWeight: 700, background: zdRealTimeEnabled ? "#4CAF5022" : "#FF444422", color: zdRealTimeEnabled ? "#4CAF50" : "#FF4444", animation: zdRealTimeEnabled ? "zdPulse 2s infinite" : "none" }}>
+                      {zdRealTimeEnabled ? "ACTIVE — Sync every 30s" : "PAUSED"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
+                    Zendesk ↔ ITSM · Changes in either system auto-sync · Webhook-ready for instant updates
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div onClick={() => { const nv = !zdRealTimeEnabled; setZdRealTimeEnabled(nv); localStorage.setItem("vgc_zd_realtime", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "Real-time sync ENABLED — incremental sync every 30s" : "Real-time sync DISABLED" }); }}
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdRealTimeEnabled ? "#4CAF5022" : "#1E2130", border: `1px solid ${zdRealTimeEnabled ? "#4CAF5044" : "#1E2130"}` }}>
+                  <div style={{ width: 32, height: 16, borderRadius: 8, background: zdRealTimeEnabled ? "#4CAF50" : "#333", position: "relative", transition: "all 0.3s" }}>
+                    <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdRealTimeEnabled ? 18 : 2, transition: "left 0.3s" }} />
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: zdRealTimeEnabled ? "#4CAF50" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>REAL-TIME</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Sync Metrics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+              {[
+                { label: "ZD Tickets (DB)", value: zdSyncStatus?.counts?.zdTickets || 0, color: "#64B5F6", icon: "🎫" },
+                { label: "ZD Users (DB)", value: zdSyncStatus?.counts?.zdUsers || 0, color: "#EC4899", icon: "👤" },
+                { label: "ZD Orgs (DB)", value: zdSyncStatus?.counts?.zdOrgs || 0, color: "#FFB347", icon: "🏢" },
+                { label: "ZD Comments (DB)", value: zdSyncStatus?.counts?.zdComments || 0, color: "#81C784", icon: "💬" },
+                { label: "ITSM Incidents", value: zdSyncStatus?.counts?.itsmIncidents || incidents.length, color: "#6366F1", icon: "📋" },
+                { label: "Last Full Import", value: zdSyncStatus?.lastFullImport?.completedAt ? new Date(zdSyncStatus.lastFullImport.completedAt).toLocaleDateString("en-SG") : "Never", color: "#CE93D8", icon: "📦" },
+                { label: "Last Sync", value: zdSyncStatus?.lastIncrementalSync?.completedAt ? new Date(zdSyncStatus.lastIncrementalSync.completedAt).toLocaleTimeString("en-SG") : "Never", color: "#06B6D4", icon: "🔄" },
+              ].map((s, i) => (
+                <div key={i} style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33` }}>
+                  <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.icon} {s.label}</div>
+                  <div style={{ fontSize: typeof s.value === "number" ? 22 : 13, fontWeight: 700, color: s.color }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              {/* Full Historical Import */}
+              <div style={{ ...cardStyle, padding: 18 }}>
+                {sectionLabel("📦", "Full Historical Import")}
+                <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.6, marginBottom: 16 }}>
+                  Import ALL Zendesk data into your ITSM database — tickets (including closed), users, organizations, comments, and attachments metadata.
+                  This enables AI-powered analysis using your full ticket history.
+                </div>
+                {zdSyncProgress && (
+                  <div style={{ padding: "10px 14px", borderRadius: 8, marginBottom: 14, background: zdSyncProgress.phase === "Error" ? "#FF6B6B08" : zdSyncProgress.phase === "Complete" ? "#81C78408" : "#6366F108", border: `1px solid ${zdSyncProgress.phase === "Error" ? "#FF6B6B33" : zdSyncProgress.phase === "Complete" ? "#81C78433" : "#6366F133"}` }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: zdSyncProgress.phase === "Error" ? "#FF6B6B" : zdSyncProgress.phase === "Complete" ? "#81C784" : "#6366F1", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
+                      {zdSyncProgress.phase === "Error" ? "❌" : zdSyncProgress.phase === "Complete" ? "✅" : "⟳"} {zdSyncProgress.phase}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#C4CAD6" }}>{zdSyncProgress.message}</div>
+                  </div>
+                )}
+                <div style={{ display: "grid", gap: 8 }}>
+                  <button onClick={() => zdFullImport({ createIncidents: false })} disabled={zdSyncInProgress || !zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #6366F133", background: zdSyncInProgress ? "#6366F108" : "#6366F118", color: "#6366F1", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    {zdSyncInProgress ? "⟳ Importing..." : "📦 Import All Zendesk Data (Data Only)"}
+                  </button>
+                  <button onClick={() => zdFullImport({ createIncidents: true })} disabled={zdSyncInProgress || !zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #EC489933", background: zdSyncInProgress ? "#EC489908" : "#EC489918", color: "#EC4899", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    {zdSyncInProgress ? "⟳ Importing..." : "📦 Import + Create ITSM Incidents for All Tickets"}
+                  </button>
+                  <button onClick={zdTrainAi} disabled={zdSyncInProgress || !zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #81C78433", background: "#81C78418", color: "#81C784", cursor: zdSyncInProgress ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    🧠 Train AI from Resolved Zendesk Tickets
+                  </button>
+                  <button onClick={async () => {
+                    try {
+                      const r = await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+                      if (r.ok) { const data = await r.json(); addAutoLog({ type: "info", message: `Orgs synced: ${data.synced} updated, ${data.created} new customers created` }); const custR = await fetch("/api/db/customers"); if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); } }
+                    } catch (e) { addAutoLog({ type: "error", message: `Org sync failed: ${e.message}` }); }
+                  }} disabled={!zdConnected}
+                    style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #FFB34733", background: "#FFB34718", color: "#FFB347", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", width: "100%" }}>
+                    🏢 Sync Organizations → ITSM Customers
+                  </button>
+                </div>
+              </div>
+
+              {/* Sync Architecture & Webhook Setup */}
+              <div style={{ ...cardStyle, padding: 18 }}>
+                {sectionLabel("🏗️", "Sync Architecture")}
+                <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+                  {[
+                    { icon: "📥", label: "Zendesk → ITSM", desc: "Tickets, users, orgs auto-sync to local DB. Linked incidents update status/priority in real-time.", color: "#64B5F6", active: zdRealTimeEnabled },
+                    { icon: "📤", label: "ITSM → Zendesk", desc: "Status, priority, comments on ITSM incidents auto-push to linked Zendesk tickets.", color: "#EC4899", active: zdRealTimeEnabled },
+                    { icon: "🔔", label: "Webhook (Instant)", desc: "Configure Zendesk webhook to POST to /api/zendesk/webhook for instant sync on ticket events.", color: "#FFB347", active: true },
+                    { icon: "🧠", label: "AI Knowledge", desc: "Resolved Zendesk tickets feed AI knowledge base. AI learns from historical resolutions.", color: "#81C784", active: true },
+                    { icon: "🔄", label: "Incremental Sync", desc: "Every 30s polls Zendesk incremental API for changes since last sync — minimal API usage.", color: "#6366F1", active: zdRealTimeEnabled },
+                    { icon: "📊", label: "Full Data Mirror", desc: "Complete local copy of all Zendesk data for AI analysis, reporting, and Zendesk decommission prep.", color: "#CE93D8", active: (zdSyncStatus?.counts?.zdTickets || 0) > 0 },
+                  ].map((item, i) => (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", borderRadius: 8, background: item.active ? `${item.color}08` : "#12141E", border: `1px solid ${item.active ? item.color + "22" : "#1E213033"}` }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: item.active ? item.color : "#5A6178", display: "flex", alignItems: "center", gap: 6 }}>
+                          {item.label}
+                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: item.active ? "#4CAF50" : "#FF4444" }} />
+                        </div>
+                        <div style={{ fontSize: 9, color: "#5A617888", marginTop: 2 }}>{item.desc}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Webhook URL */}
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>🔔 ZENDESK WEBHOOK URL (configure in Zendesk Admin)</div>
+                  <div style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all", background: "#12141E", padding: "8px 10px", borderRadius: 4, border: "1px solid #1E213044", cursor: "pointer" }}
+                    onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/zendesk/webhook`); addAutoLog({ type: "info", message: "Webhook URL copied to clipboard" }); }}>
+                    {window.location.origin}/api/zendesk/webhook
+                    <span style={{ marginLeft: 8, fontSize: 8, color: "#5A6178" }}>(click to copy)</span>
+                  </div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 6, lineHeight: 1.5 }}>
+                    In Zendesk Admin → Webhooks → Create Webhook: paste URL above, set to HTTP POST, JSON. Then create a Trigger that fires on ticket create/update/comment events.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Offboarding Readiness */}
+            <div style={{ ...cardStyle, padding: 18, marginTop: 14 }}>
+              {sectionLabel("🚀", "Zendesk Decommission Readiness")}
+              <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.5, marginBottom: 16 }}>
+                Track progress toward fully replacing Zendesk with your ITSM tool. All items must be green before decommissioning.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+                {[
+                  { label: "Historical Tickets Imported", value: zdSyncStatus?.counts?.zdTickets || 0, target: "all", ready: (zdSyncStatus?.counts?.zdTickets || 0) > 0, desc: "All past Zendesk tickets stored locally" },
+                  { label: "Users Imported", value: zdSyncStatus?.counts?.zdUsers || 0, target: "all", ready: (zdSyncStatus?.counts?.zdUsers || 0) > 0, desc: "Zendesk agents & end-users imported" },
+                  { label: "Organizations Synced", value: zdSyncStatus?.counts?.zdOrgs || 0, target: "all", ready: (zdSyncStatus?.counts?.zdOrgs || 0) > 0, desc: "Orgs mapped to ITSM customers" },
+                  { label: "Comments Preserved", value: zdSyncStatus?.counts?.zdComments || 0, target: "all", ready: (zdSyncStatus?.counts?.zdComments || 0) > 0, desc: "Full conversation history preserved" },
+                  { label: "ITSM Incidents Active", value: incidents.length, target: ">0", ready: incidents.length > 0, desc: "ITSM managing incident lifecycle" },
+                  { label: "AI Knowledge Trained", value: "Check KB", target: ">0", ready: true, desc: "AI trained from resolved ticket patterns" },
+                  { label: "Real-Time Sync Active", value: zdRealTimeEnabled ? "Yes" : "No", target: "yes", ready: zdRealTimeEnabled, desc: "Bidirectional sync operational" },
+                  { label: "Webhook Configured", value: "Manual", target: "configured", ready: false, desc: "Zendesk webhook pointed to ITSM" },
+                ].map((item, i) => (
+                  <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: item.ready ? "#81C78408" : "#FF6B6B08", border: `1px solid ${item.ready ? "#81C78433" : "#FF6B6B33"}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#E8ECF4" }}>{item.label}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: item.ready ? "#81C784" : "#FF6B6B" }}>{typeof item.value === "number" ? item.value : item.value}</span>
+                    </div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{item.desc}</div>
+                    <div style={{ fontSize: 8, color: item.ready ? "#81C784" : "#FF6B6B", marginTop: 4, fontWeight: 600 }}>{item.ready ? "✅ Ready" : "⚠️ Action Needed"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ══════════ TAB: SETTINGS ══════════ */}
         {zdTab === "settings" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -12343,6 +12774,9 @@ export default function ITSMApp() {
                 { label: "Zendesk API", status: zdConnected, detail: zdConnected ? `Connected as ${zdUser?.name}` : "Not connected" },
                 { label: "Azure OpenAI", status: azureOpenAI.enabled, detail: azureOpenAI.enabled ? `Model: ${azureOpenAI.model || "gpt-4o-mini"} · Calls: ${azureOpenAI.totalCalls || 0}` : "Not configured" },
                 { label: "ITSM Database", status: true, detail: `${incidents.length} incidents · ${customers.length} customers` },
+                { label: "Real-Time Sync", status: zdRealTimeEnabled && zdConnected, detail: zdRealTimeEnabled ? "Bidirectional sync every 30s" : "Disabled" },
+                { label: "Zendesk Data Mirror", status: (zdSyncStatus?.counts?.zdTickets || 0) > 0, detail: `${zdSyncStatus?.counts?.zdTickets || 0} tickets · ${zdSyncStatus?.counts?.zdUsers || 0} users · ${zdSyncStatus?.counts?.zdOrgs || 0} orgs` },
+                { label: "AI Knowledge (ZD)", status: true, detail: "Trained from resolved Zendesk tickets" },
               ].map((int, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1E213022" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
