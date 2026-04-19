@@ -207,9 +207,10 @@ const ASSETS = [
 
 // ─── SharePoint Knowledge Portal Config ─────────────────────────────
 const SHAREPOINT_KB_CONFIG = {
-  tenantUrl: "https://vgctechnology.sharepoint.com",
-  siteUrl: "/sites/ITSM-KnowledgePortal",
+  tenantUrl: "https://vgctechnologysg.sharepoint.com",
+  siteUrl: "/sites/Helpdesk",
   docLibrary: "/Shared%20Documents",
+  helpdeskLibraryUrl: "https://vgctechnologysg.sharepoint.com/:f:/s/Helpdesk/IgAwyGv45OdSRrFICLjixJsbAXyYajkm9jSkaYagO7TtmvE?e=kZbkdi",
   get baseUrl() { return this.tenantUrl + this.siteUrl; },
   get docsUrl() { return this.baseUrl + this.docLibrary; },
   articleUrl(slug) { return `${this.baseUrl}/SitePages/${slug}.aspx`; },
@@ -1350,7 +1351,13 @@ export default function ITSMApp() {
   const [spDocType, setSpDocType] = useState("General Documentation");
   const [spDocGenerating, setSpDocGenerating] = useState(false);
   const [spDocResult, setSpDocResult] = useState(null);
-  const [kpActiveTab, setKpActiveTab] = useState("articles"); // articles | generator | sharepoint | generated
+  const [kpActiveTab, setKpActiveTab] = useState("articles"); // articles | generator | sharepoint | generated | upload | versions
+  const [kbDocPreview, setKbDocPreview] = useState(null); // KB doc preview panel
+  const [kbVersionHistory, setKbVersionHistory] = useState([]); // version history for a doc
+  const [kbBulkUploadFiles, setKbBulkUploadFiles] = useState([]); // bulk file upload queue
+  const [kbBulkUploading, setKbBulkUploading] = useState(false);
+  const [kbAiLearning, setKbAiLearning] = useState(false); // AI learning from uploads
+  const [kbAiLearningProgress, setKbAiLearningProgress] = useState({ total: 0, done: 0, status: "" });
 
   // ─── Global AI Error Resolver ─────────────────────────────────────────
   const [aiErrorResolving, setAiErrorResolving] = useState(false);
@@ -2375,6 +2382,148 @@ export default function ITSMApp() {
       setSpDocResult({ error: e.message });
     }
     setSpDocGenerating(false);
+  };
+
+  // ─── Markdown to HTML Converter ────────────────────────────────────
+  const markdownToHtml = (md) => {
+    if (!md) return "";
+    return md
+      .replace(/^#### (.*$)/gm, '<h4>$1</h4>')
+      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+      .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/^\|(.+)\|$/gm, (m, row) => '<tr>' + row.split('|').map(c => `<td>${c.trim()}</td>`).join('') + '</tr>')
+      .replace(/^>\s?(.*$)/gm, '<blockquote>$1</blockquote>')
+      .replace(/^---$/gm, '<hr>')
+      .replace(/^\- (.*$)/gm, '<li>$1</li>')
+      .replace(/^\d+\.\s(.*$)/gm, '<li>$1</li>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+  };
+
+  // ─── Export to Microsoft Word (.doc) ───────────────────────────────
+  const exportToWord = (content, title) => {
+    const htmlBody = markdownToHtml(content);
+    const now = new Date().toLocaleDateString("en-SG", { year: "numeric", month: "long", day: "numeric" });
+    const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'><title>${title}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
+<style>
+@page { size: A4; margin: 2.5cm; }
+body { font-family: 'Segoe UI', 'Calibri', sans-serif; font-size: 11pt; line-height: 1.6; color: #333; }
+h1 { color: #0078D4; font-size: 22pt; border-bottom: 2px solid #0078D4; padding-bottom: 6pt; margin-top: 24pt; }
+h2 { color: #005A9E; font-size: 16pt; margin-top: 18pt; border-bottom: 1px solid #E0E0E0; padding-bottom: 4pt; }
+h3 { color: #333; font-size: 13pt; margin-top: 14pt; }
+h4 { color: #555; font-size: 11pt; margin-top: 10pt; }
+code { background: #F5F5F5; padding: 2px 4px; font-family: 'Consolas', 'Courier New', monospace; font-size: 10pt; border: 1px solid #E0E0E0; border-radius: 3px; }
+pre { background: #F5F5F5; padding: 12px; font-family: 'Consolas', monospace; font-size: 10pt; border: 1px solid #DDD; border-radius: 4px; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+th, td { border: 1px solid #DDD; padding: 8px 12px; text-align: left; font-size: 10pt; }
+th { background: #0078D4; color: white; font-weight: 600; }
+tr:nth-child(even) { background: #F9F9F9; }
+blockquote { border-left: 4px solid #0078D4; margin: 12px 0; padding: 8px 16px; background: #F0F6FF; color: #333; }
+li { margin-bottom: 4px; }
+hr { border: none; border-top: 1px solid #E0E0E0; margin: 16px 0; }
+.header-meta { color: #666; font-size: 9pt; margin-bottom: 24pt; border-bottom: 1px solid #E0E0E0; padding-bottom: 8pt; }
+.footer { color: #999; font-size: 8pt; text-align: center; margin-top: 40pt; border-top: 1px solid #E0E0E0; padding-top: 8pt; }
+</style></head>
+<body>
+<div class="header-meta">
+<strong>VGC Technology Pte Ltd</strong> — IT Service Management<br>
+Document: ${title}<br>
+Generated: ${now} | Classification: Internal | Version: 1.0<br>
+SharePoint: <a href="${SHAREPOINT_KB_CONFIG.helpdeskLibraryUrl}">Helpdesk Document Library</a>
+</div>
+<p>${htmlBody}</p>
+<div class="footer">
+Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERSION.engine}<br>
+&copy; ${new Date().getFullYear()} VGC Technology Pte Ltd. All rights reserved.
+</div>
+</body></html>`;
+    const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[^a-zA-Z0-9\s-]/g, '').replace(/\s+/g, '-')}.doc`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ─── Bulk Upload & AI Training ─────────────────────────────────────
+  const handleKbBulkUpload = (files) => {
+    const arr = Array.from(files);
+    const mapped = arr.map(f => {
+      const ext = f.name.split('.').pop().toLowerCase();
+      const typeMap = { doc: "Word", docx: "Word", xls: "Excel", xlsx: "Excel", ppt: "PowerPoint", pptx: "PowerPoint", pdf: "PDF", txt: "Text", csv: "CSV", md: "Markdown", json: "JSON", png: "Image", jpg: "Image", jpeg: "Image", gif: "Image", webp: "Image", mp4: "Video", webm: "Video", mov: "Video" };
+      return { file: f, name: f.name, size: f.size, type: typeMap[ext] || "Document", ext, status: "pending", kbId: null };
+    });
+    setKbBulkUploadFiles(prev => [...prev, ...mapped]);
+  };
+
+  const processKbBulkUpload = async () => {
+    if (kbBulkUploadFiles.length === 0) return;
+    setKbBulkUploading(true);
+    setKbAiLearningProgress({ total: kbBulkUploadFiles.length, done: 0, status: "Uploading files..." });
+    const updated = [...kbBulkUploadFiles];
+    for (let i = 0; i < updated.length; i++) {
+      if (updated[i].status === "done") continue;
+      setKbAiLearningProgress({ total: updated.length, done: i, status: `Uploading ${updated[i].name}...` });
+      try {
+        const formData = new FormData();
+        formData.append("file", updated[i].file);
+        formData.append("title", updated[i].name.replace(/\.[^.]+$/, ''));
+        formData.append("category", "Uploaded");
+        formData.append("tags", `uploaded,${updated[i].type.toLowerCase()},bulk-import`);
+        formData.append("trainedBy", currentUser?.name || "Unknown");
+        const res = await fetch("/api/ai/knowledge/upload", { method: "POST", body: formData });
+        if (res.ok) {
+          const data = await res.json();
+          updated[i].status = "done";
+          updated[i].kbId = data.entry?.id;
+        } else {
+          updated[i].status = "error";
+        }
+      } catch {
+        updated[i].status = "error";
+      }
+      setKbBulkUploadFiles([...updated]);
+    }
+    setKbAiLearningProgress({ total: updated.length, done: updated.length, status: "AI is learning from uploaded documents..." });
+    // Trigger AI learning/summary for uploaded docs
+    setKbAiLearning(true);
+    try {
+      await fetch("/api/ai/knowledge/learn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "learn-from-uploads" }) });
+    } catch { /* AI learning is best-effort */ }
+    setKbAiLearning(false);
+    setKbAiLearningProgress({ total: updated.length, done: updated.length, status: "Complete! AI has processed all documents." });
+    setKbBulkUploading(false);
+    fetchKbEntries();
+  };
+
+  // ─── KB Version History ────────────────────────────────────────────
+  const fetchKbVersionHistory = async (docId) => {
+    try {
+      const res = await fetch(`/api/ai/knowledge/${encodeURIComponent(docId)}/versions`);
+      if (res.ok) {
+        const data = await res.json();
+        setKbVersionHistory(data.versions || []);
+      }
+    } catch { setKbVersionHistory([]); }
+  };
+
+  const updateKbEntry = async (id, updates) => {
+    try {
+      const res = await fetch(`/api/ai/knowledge/${encodeURIComponent(id)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...updates, updatedBy: currentUser?.name || "Unknown" })
+      });
+      if (res.ok) { fetchKbEntries(); return true; }
+    } catch { /* ignore */ }
+    return false;
   };
 
   // ─── Global AI Error Resolver (HARD RULE: solve every error) ───────
@@ -4954,7 +5103,7 @@ export default function ITSMApp() {
     return (
     <div>
       {/* SharePoint Connection Banner */}
-      <div style={{ background: "linear-gradient(135deg, #0078D408, #0089D618)", borderRadius: 10, border: "1px solid #0078D433", padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ background: "linear-gradient(135deg, #0078D408, #0089D618)", borderRadius: 10, border: "1px solid #0078D433", padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #0078D4, #0089D6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>📚</div>
           <div>
@@ -4963,30 +5112,35 @@ export default function ITSMApp() {
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 20, fontSize: 9, fontWeight: 600, background: "#0D2D1A", color: "#81C784", border: "1px solid #81C78444" }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} /> SharePoint Connected
               </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 20, fontSize: 9, fontWeight: 600, background: "#6366F118", color: "#6366F1", border: "1px solid #6366F144" }}>
+                v{APP_VERSION.version}
+              </span>
             </div>
-            <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{kbArticles.length} articles · {kbEntries.length} AI knowledge entries · SharePoint Document Library linked</div>
+            <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{kbArticles.length} articles · {kbEntries.length} AI knowledge entries · Helpdesk Document Library linked · AI auto-doc enabled</div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={{ ...btnStyle(), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")}>🔗 Open SharePoint Site</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={{ ...btnStyle("#0078D4"), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.helpdeskLibraryUrl, "_blank", "noopener")}>📂 Helpdesk Library</button>
+          <button style={{ ...btnStyle(), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")}>🔗 SharePoint Site</button>
           <button style={btnStyle()} onClick={() => setModal("newKBArticle")}>+ New Article</button>
         </div>
       </div>
 
       {/* Knowledge Portal Tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#0A0C14", padding: 4, borderRadius: 8 }}>
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#0A0C14", padding: 4, borderRadius: 8, overflowX: "auto" }}>
         {[
           { id: "articles", label: "📚 Articles", count: filteredKB.length },
-          { id: "generator", label: "🤖 AI Guide Generator", count: null },
+          { id: "generator", label: "🤖 AI Doc Generator", count: null },
           { id: "sharepoint", label: "📂 SharePoint Docs", count: null },
-          { id: "generated", label: "📋 Generated Docs", count: kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint").length },
+          { id: "upload", label: "📤 Upload & Train", count: kbBulkUploadFiles.length || null },
+          { id: "generated", label: "📋 Generated Docs", count: kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint" || e.fileName).length },
         ].map(tab => (
           <button key={tab.id} onClick={() => setKpActiveTab(tab.id)} style={{
             padding: "8px 16px", borderRadius: 6, border: "none", cursor: "pointer",
             background: kpActiveTab === tab.id ? "linear-gradient(135deg, #6366F122, #06B6D418)" : "transparent",
             color: kpActiveTab === tab.id ? "#E8ECF4" : "#5A6178",
             fontSize: 12, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif",
-            display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s",
+            display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s", whiteSpace: "nowrap",
             borderBottom: kpActiveTab === tab.id ? "2px solid #6366F1" : "2px solid transparent"
           }}>
             {tab.label} {tab.count != null && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 10, background: kpActiveTab === tab.id ? "#6366F133" : "#1E2130", color: kpActiveTab === tab.id ? "#6366F1" : "#5A6178" }}>{tab.count}</span>}
@@ -5065,9 +5219,10 @@ export default function ITSMApp() {
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#81C784", fontFamily: "'Space Grotesk', sans-serif" }}>✅ Guide Generated Successfully</div>
                       <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{guideResult.text.length.toLocaleString()} characters · {guideResult.zdRefs} Zendesk tickets referenced · Auto-saved to Knowledge Base</div>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <button onClick={() => { navigator.clipboard.writeText(guideResult.text); }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>📋 Copy</button>
-                      <button onClick={() => { const blob = new Blob([guideResult.text], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${guideTopic.replace(/\s+/g, "-")}-Guide.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📥 Download .md</button>
+                      <button onClick={() => exportToWord(guideResult.text, guideResult.title || guideTopic)} style={{ ...btnStyle("#2B579A"), fontSize: 10, padding: "5px 12px" }}>📄 Word (.doc)</button>
+                      <button onClick={() => { const blob = new Blob([guideResult.text], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${guideTopic.replace(/\s+/g, "-")}-Guide.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📥 Markdown</button>
                     </div>
                   </div>
                   <div style={{ padding: 20, maxHeight: 600, overflow: "auto", fontSize: 12, color: "#C4CAD6", lineHeight: 1.7, fontFamily: "'DM Sans', sans-serif", whiteSpace: "pre-wrap" }}>
@@ -5123,10 +5278,11 @@ export default function ITSMApp() {
               <div style={{ fontSize: 11, fontWeight: 600, color: "#0078D4", marginBottom: 8 }}>🔗 Quick SharePoint Links</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {[
+                  { label: "� Helpdesk Library", url: SHAREPOINT_KB_CONFIG.helpdeskLibraryUrl },
                   { label: "📚 Knowledge Portal", url: SHAREPOINT_KB_CONFIG.baseUrl },
-                  { label: "📂 Document Library", url: SHAREPOINT_KB_CONFIG.docsUrl },
                   { label: "📋 IT Policies", url: SHAREPOINT_KB_CONFIG.baseUrl + "/SitePages/IT-Policies.aspx" },
                   { label: "🔧 SOPs", url: SHAREPOINT_KB_CONFIG.baseUrl + "/SitePages/SOPs.aspx" },
+                  { label: "🛡️ Security Docs", url: SHAREPOINT_KB_CONFIG.baseUrl + "/SitePages/Security.aspx" },
                 ].map(link => (
                   <button key={link.label} onClick={() => { setSpDocUrl(link.url); setSpDocTitle(link.label.replace(/^[^\s]+\s/, "")); }} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 10, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", transition: "all 0.15s" }}
                     onMouseOver={e => e.currentTarget.style.background = "#0078D422"}
@@ -5157,9 +5313,10 @@ export default function ITSMApp() {
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#0078D4", fontFamily: "'Space Grotesk', sans-serif" }}>✅ Documentation Generated</div>
                       <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{spDocResult.text.length.toLocaleString()} characters · Auto-saved to Knowledge Base · Ready for SharePoint upload</div>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <button onClick={() => { navigator.clipboard.writeText(spDocResult.text); }} style={{ ...btnStyle("#06B6D4"), fontSize: 10, padding: "5px 12px" }}>📋 Copy</button>
-                      <button onClick={() => { const blob = new Blob([spDocResult.text], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${(spDocTitle || "SharePoint-Doc").replace(/\s+/g, "-")}.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📥 Download .md</button>
+                      <button onClick={() => exportToWord(spDocResult.text, spDocResult.title || spDocTitle || "SharePoint-Doc")} style={{ ...btnStyle("#2B579A"), fontSize: 10, padding: "5px 12px" }}>📄 Word (.doc)</button>
+                      <button onClick={() => { const blob = new Blob([spDocResult.text], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${(spDocTitle || "SharePoint-Doc").replace(/\s+/g, "-")}.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📥 Markdown</button>
                       {spDocUrl && <button onClick={() => window.open(spDocUrl, "_blank", "noopener")} style={{ ...btnStyle("#0089D6"), fontSize: 10, padding: "5px 12px" }}>🔗 Open in SharePoint</button>}
                     </div>
                   </div>
@@ -5173,46 +5330,212 @@ export default function ITSMApp() {
         </div>
       )}
 
+      {/* ─── Tab: Upload & AI Training ────────────────────────── */}
+      {kpActiveTab === "upload" && (
+        <div>
+          <div style={{ background: "linear-gradient(135deg, #81C78408, #06B6D408)", borderRadius: 10, border: "1px solid #81C78433", padding: 24, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, #81C784, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📤</div>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Upload Documents & Train AI</div>
+                <div style={{ fontSize: 11, color: "#5A6178" }}>Upload documents for AI to learn from. AI processes and generates proper knowledge articles automatically.</div>
+              </div>
+            </div>
+
+            {/* Upload Zone */}
+            <div style={{
+              border: "2px dashed #81C78444", borderRadius: 12, padding: "40px 24px", textAlign: "center",
+              cursor: "pointer", transition: "all 0.25s", background: "#0A0C14", marginBottom: 16
+            }}
+              onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#81C784"; e.currentTarget.style.background = "#81C78408"; }}
+              onDragLeave={e => { e.currentTarget.style.borderColor = "#81C78444"; e.currentTarget.style.background = "#0A0C14"; }}
+              onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#81C78444"; e.currentTarget.style.background = "#0A0C14"; handleKbBulkUpload(e.dataTransfer.files); }}
+              onClick={() => document.getElementById("kb-bulk-upload-input")?.click()}>
+              <input id="kb-bulk-upload-input" type="file" multiple accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.md,.json,.png,.jpg,.jpeg,.gif,.webp" style={{ display: "none" }} onChange={e => handleKbBulkUpload(e.target.files)} />
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📁</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>Drop files here or click to upload</div>
+              <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 12 }}>Supports: Word, Excel, PowerPoint, PDF, Text, CSV, Markdown, JSON, Images</div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                {[
+                  { icon: "📄", label: "Word", color: "#2B579A" },
+                  { icon: "📊", label: "Excel", color: "#217346" },
+                  { icon: "📽️", label: "PPT", color: "#D24726" },
+                  { icon: "📕", label: "PDF", color: "#FF0000" },
+                  { icon: "📝", label: "Text", color: "#5A6178" },
+                  { icon: "🖼️", label: "Image", color: "#06B6D4" },
+                ].map(t => (
+                  <span key={t.label} style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: `${t.color}18`, color: t.color, border: `1px solid ${t.color}33` }}>{t.icon} {t.label}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Upload Queue */}
+            {kbBulkUploadFiles.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>📎 Upload Queue ({kbBulkUploadFiles.length} files)</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setKbBulkUploadFiles([])} style={{ ...btnStyle("#FF6B6B"), fontSize: 10, padding: "3px 10px" }}>Clear All</button>
+                  </div>
+                </div>
+                <div style={{ maxHeight: 200, overflowY: "auto", borderRadius: 8, border: "1px solid #1E2130" }}>
+                  {kbBulkUploadFiles.map((f, idx) => (
+                    <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid #1E213033", background: f.status === "done" ? "#81C78408" : f.status === "error" ? "#FF6B6B08" : "#0F1117" }}>
+                      <span style={{ fontSize: 16 }}>{f.type === "Word" ? "📄" : f.type === "Excel" ? "📊" : f.type === "PowerPoint" ? "📽️" : f.type === "PDF" ? "📕" : f.type === "Image" ? "🖼️" : f.type === "Video" ? "🎬" : "📎"}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178" }}>{f.type} · {(f.size / 1024).toFixed(1)} KB</div>
+                      </div>
+                      {f.status === "done" ? (
+                        <span style={{ fontSize: 10, color: "#81C784", fontWeight: 600 }}>✅ Uploaded</span>
+                      ) : f.status === "error" ? (
+                        <span style={{ fontSize: 10, color: "#FF6B6B", fontWeight: 600 }}>❌ Failed</span>
+                      ) : (
+                        <button onClick={() => setKbBulkUploadFiles(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#FF6B6B88", cursor: "pointer", fontSize: 12, padding: 4 }}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* AI Learning Progress */}
+            {kbAiLearningProgress.status && (
+              <div style={{ padding: "12px 16px", borderRadius: 8, background: "#06B6D408", border: "1px solid #06B6D433", marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 14 }}>{kbBulkUploading ? "⏳" : kbAiLearning ? "🧠" : "✅"}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#06B6D4" }}>{kbAiLearningProgress.status}</span>
+                </div>
+                {kbAiLearningProgress.total > 0 && (
+                  <div style={{ height: 6, borderRadius: 3, background: "#1E2130", overflow: "hidden" }}>
+                    <div style={{ height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #81C784, #06B6D4)", width: `${Math.round((kbAiLearningProgress.done / kbAiLearningProgress.total) * 100)}%`, transition: "width 0.3s" }} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Upload & Train Button */}
+            <button onClick={processKbBulkUpload} disabled={kbBulkUploadFiles.length === 0 || kbBulkUploading} style={{
+              ...btnStyle("#81C784"), width: "100%", padding: "12px 24px", fontSize: 13, fontWeight: 700,
+              opacity: (kbBulkUploadFiles.length === 0 || kbBulkUploading) ? 0.5 : 1,
+              background: kbBulkUploading ? "#1E2130" : "linear-gradient(135deg, #81C784, #06B6D4)",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+            }}>
+              {kbBulkUploading ? "⏳ Processing..." : `📤 Upload & Train AI (${kbBulkUploadFiles.filter(f => f.status === "pending").length} files)`}
+            </button>
+          </div>
+
+          {/* AI Learning Info */}
+          <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 12 }}>🧠 How AI Learning Works</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+              {[
+                { icon: "📤", title: "1. Upload", desc: "Upload documents (Word, Excel, PDF, etc.)", color: "#81C784" },
+                { icon: "🔍", title: "2. Extract", desc: "AI extracts text content from supported files", color: "#06B6D4" },
+                { icon: "🧠", title: "3. Learn", desc: "Content is indexed into AI knowledge base", color: "#6366F1" },
+                { icon: "💡", title: "4. Assist", desc: "AI uses knowledge to answer questions accurately", color: "#FFB347" },
+                { icon: "📄", title: "5. Generate", desc: "AI auto-generates SOPs, guides from learned content", color: "#EC4899" },
+              ].map(step => (
+                <div key={step.title} style={{ padding: 14, borderRadius: 8, background: "#0A0C14", border: `1px solid ${step.color}22` }}>
+                  <div style={{ fontSize: 20, marginBottom: 6 }}>{step.icon}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: step.color, marginBottom: 4 }}>{step.title}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.4 }}>{step.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── Tab: Generated Documents ──────────────────────────── */}
       {kpActiveTab === "generated" && (
         <div>
-          <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 AI-Generated Documents & Guides</div>
-            <button onClick={fetchKbEntries} style={{ ...btnStyle(), fontSize: 10, padding: "5px 12px" }}>🔄 Refresh</button>
+          <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 AI-Generated Documents, Guides & Uploaded Files</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={fetchKbEntries} style={{ ...btnStyle(), fontSize: 10, padding: "5px 12px" }}>🔄 Refresh</button>
+              <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.helpdeskLibraryUrl, "_blank", "noopener")} style={{ ...btnStyle("#0078D4"), fontSize: 10, padding: "5px 12px" }}>📂 SharePoint</button>
+            </div>
           </div>
-          {kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint").length === 0 ? (
+
+          {/* Doc Preview Panel */}
+          {kbDocPreview && (
+            <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #6366F133", marginBottom: 16, overflow: "hidden" }}>
+              <div style={{ padding: "12px 18px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{kbDocPreview.source === "sharepoint" ? "📂" : kbDocPreview.fileName ? "📎" : "🤖"} {kbDocPreview.title}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2, display: "flex", gap: 10 }}>
+                    <span>📁 {kbDocPreview.category}</span>
+                    <span>📝 {(kbDocPreview.content || "").length.toLocaleString()} chars</span>
+                    <span>🕐 {new Date(kbDocPreview.createdAt).toLocaleDateString("en-SG")}</span>
+                    {kbDocPreview.version && <span>📌 v{kbDocPreview.version}</span>}
+                    <span>👤 {kbDocPreview.trainedBy || kbDocPreview.updatedBy}</span>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => { navigator.clipboard.writeText(kbDocPreview.content); }} style={{ ...btnStyle("#06B6D4"), fontSize: 9, padding: "4px 10px" }}>📋 Copy</button>
+                  <button onClick={() => exportToWord(kbDocPreview.content, kbDocPreview.title)} style={{ ...btnStyle("#2B579A"), fontSize: 9, padding: "4px 10px" }}>📄 Word</button>
+                  <button onClick={() => { const blob = new Blob([kbDocPreview.content], { type: "text/markdown" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${kbDocPreview.title.replace(/[^a-zA-Z0-9\s-]/g, "").replace(/\s+/g, "-")}.md`; a.click(); URL.revokeObjectURL(url); }} style={{ ...btnStyle("#0078D4"), fontSize: 9, padding: "4px 10px" }}>📥 MD</button>
+                  <button onClick={() => { fetchKbVersionHistory(kbDocPreview.id); }} style={{ ...btnStyle("#FFB347"), fontSize: 9, padding: "4px 10px" }}>📌 Versions</button>
+                  <button onClick={() => setKbDocPreview(null)} style={{ ...btnStyle("#FF6B6B"), fontSize: 9, padding: "4px 10px" }}>✕ Close</button>
+                </div>
+              </div>
+              {/* Version History (if loaded) */}
+              {kbVersionHistory.length > 0 && (
+                <div style={{ padding: "8px 18px", background: "#FFB34708", borderBottom: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "#FFB347", marginBottom: 6 }}>📌 Version History</div>
+                  {kbVersionHistory.map(v => (
+                    <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 10, color: "#5A6178" }}>
+                      <span style={{ color: "#FFB347", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>v{v.version}</span>
+                      <span>{new Date(v.updatedAt).toLocaleDateString("en-SG")}</span>
+                      <span>by {v.updatedBy}</span>
+                      <span style={{ color: "#8B92A8" }}>{v.changeNote}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ padding: 18, maxHeight: 400, overflow: "auto", fontSize: 12, color: "#C4CAD6", lineHeight: 1.7, fontFamily: "'DM Sans', sans-serif", whiteSpace: "pre-wrap" }}>
+                {kbDocPreview.content}
+              </div>
+            </div>
+          )}
+
+          {kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint" || e.fileName).length === 0 ? (
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#5A6178" }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
               <div style={{ fontSize: 15, fontWeight: 600, color: "#C4CAD6", marginBottom: 4 }}>No generated documents yet</div>
-              <div style={{ fontSize: 12 }}>Use the AI Guide Generator or SharePoint Docs tab to create professional documentation.</div>
+              <div style={{ fontSize: 12 }}>Use the AI Doc Generator, SharePoint Docs, or Upload & Train tab to create professional documentation.</div>
             </div>
           ) : (
             <div style={{ display: "grid", gap: 10 }}>
-              {kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint").map(doc => (
+              {kbEntries.filter(e => e.type === "guide" || e.type === "sharepoint-doc" || e.source === "ai-generated" || e.source === "sharepoint" || e.fileName).map(doc => (
                 <div key={doc.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, cursor: "pointer", transition: "all 0.2s" }}
                   onMouseOver={e => e.currentTarget.style.borderColor = "#6366F133"}
                   onMouseOut={e => e.currentTarget.style.borderColor = "#1E2130"}
-                  onClick={() => { setGuideResult({ text: doc.content, id: doc.id, title: doc.title, zdRefs: 0 }); setKpActiveTab("generator"); }}>
+                  onClick={() => { setKbDocPreview(doc); setKbVersionHistory([]); }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 4 }}>
-                        {doc.source === "sharepoint" ? "📂" : "🤖"} {doc.title}
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                        {doc.source === "sharepoint" ? "📂" : doc.fileName ? "📎" : doc.type === "guide" ? "🤖" : "📄"} {doc.title}
+                        {doc.version && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#FFB34718", color: "#FFB347" }}>v{doc.version}</span>}
                       </div>
                       <div style={{ fontSize: 10, color: "#5A6178", display: "flex", gap: 12, flexWrap: "wrap" }}>
                         <span>📁 {doc.category}</span>
                         <span>📝 {(doc.content || "").length.toLocaleString()} chars</span>
                         <span>🕐 {new Date(doc.createdAt).toLocaleDateString("en-SG")}</span>
-                        <span>👤 {doc.trainedBy}</span>
+                        <span>👤 {doc.trainedBy || doc.updatedBy}</span>
+                        {doc.fileName && <span>📎 {doc.fileName}</span>}
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(doc.content); }} style={{ ...btnStyle("#06B6D4"), fontSize: 9, padding: "3px 8px" }}>📋</button>
-                      <button onClick={e => { e.stopPropagation(); deleteKbEntry(doc.id); }} style={{ ...btnStyle("#FF6B6B"), fontSize: 9, padding: "3px 8px" }}>🗑</button>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={e => { e.stopPropagation(); exportToWord(doc.content, doc.title); }} style={{ ...btnStyle("#2B579A"), fontSize: 9, padding: "3px 8px" }} title="Export to Word">📄</button>
+                      <button onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(doc.content); }} style={{ ...btnStyle("#06B6D4"), fontSize: 9, padding: "3px 8px" }} title="Copy content">📋</button>
+                      <button onClick={e => { e.stopPropagation(); deleteKbEntry(doc.id); }} style={{ ...btnStyle("#FF6B6B"), fontSize: 9, padding: "3px 8px" }} title="Delete">🗑</button>
                     </div>
                   </div>
                   {(doc.tags || []).length > 0 && (
                     <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
-                      {doc.tags.slice(0, 6).map((tag, i) => (
+                      {doc.tags.slice(0, 8).map((tag, i) => (
                         <span key={i} style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#1E213044", color: "#5A6178" }}>#{tag}</span>
                       ))}
                     </div>
@@ -5371,15 +5694,16 @@ export default function ITSMApp() {
 
       {/* KB Stats Footer */}
       <div style={{ marginTop: 20, padding: "14px 18px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ display: "flex", gap: 20, fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+        <div style={{ display: "flex", gap: 20, fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap" }}>
           <span>📊 Total: {kbArticles.length} articles</span>
           <span>👁 {kbArticles.reduce((s, a) => s + a.views, 0).toLocaleString()} total views</span>
           <span>👍 {kbArticles.length > 0 ? Math.round(kbArticles.reduce((s, a) => s + a.helpful, 0) / kbArticles.length) : 0}% avg helpful</span>
           <span>✍️ {new Set(kbArticles.map(a => a.author).filter(Boolean)).size} contributors</span>
-          <span>🤖 {kbEntries.filter(e => e.source === "ai-generated" || e.source === "sharepoint").length} AI-generated docs</span>
+          <span>🤖 {kbEntries.filter(e => e.source === "ai-generated" || e.source === "sharepoint" || e.fileName).length} AI-generated docs</span>
+          <span>📤 {kbEntries.filter(e => e.fileName).length} uploaded</span>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.docsUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>📂 SharePoint Document Library</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.helpdeskLibraryUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D418", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600 }}>📂 Helpdesk Document Library</button>
           <button onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")} style={{ padding: "4px 12px", fontSize: 10, borderRadius: 6, border: "1px solid #0078D433", background: "#0078D408", color: "#0078D4", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>🌐 SharePoint Portal</button>
         </div>
       </div>

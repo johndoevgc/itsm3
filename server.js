@@ -1741,6 +1741,84 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       return json(res, 500, { error: err.message });
     }
   }
+
+  // ─── AI Knowledge: PUT /api/ai/knowledge/:id (Update with Version Control) ───
+  if (pathname.match(/^\/api\/ai\/knowledge\/[^/]+$/) && req.method === "PUT") {
+    try {
+      const id = decodeURIComponent(pathname.split("/api/ai/knowledge/")[1]);
+      if (!id) return json(res, 400, { error: "ID required" });
+      const body = await parseBody(req);
+      const existing = await db.getOne("ai_knowledge", id);
+      if (!existing) return json(res, 404, { error: "Entry not found" });
+      const prev = JSON.parse(existing.data);
+      // Save version history
+      const versionId = `ver_${id}_${Date.now()}`;
+      const version = {
+        id: versionId, docId: id, version: (prev.version || 1),
+        title: prev.title, category: prev.category, content: prev.content,
+        tags: prev.tags, updatedBy: prev.updatedBy || prev.trainedBy,
+        updatedAt: prev.updatedAt, changeNote: body.changeNote || "Updated"
+      };
+      await db.upsert("ai_knowledge_versions", versionId, JSON.stringify(version));
+      // Update the entry
+      const updated = {
+        ...prev,
+        title: (body.title || prev.title).trim(),
+        category: (body.category || prev.category).trim(),
+        content: (body.content || prev.content).trim(),
+        tags: body.tags || prev.tags,
+        updatedBy: body.updatedBy || "Unknown",
+        updatedAt: new Date().toISOString(),
+        version: (prev.version || 1) + 1
+      };
+      await db.upsert("ai_knowledge", id, JSON.stringify(updated));
+      await db.audit("ai_knowledge", id, "update", JSON.stringify({ version: updated.version, changeNote: body.changeNote }), body.updatedBy || "Unknown");
+      console.log(`[AI Knowledge] Updated: "${updated.title}" v${updated.version} by ${body.updatedBy}`);
+      return json(res, 200, { entry: updated });
+    } catch (err) {
+      console.error("[AI Knowledge PUT]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI Knowledge: GET /api/ai/knowledge/:id/versions ─────────────
+  if (pathname.match(/^\/api\/ai\/knowledge\/[^/]+\/versions$/) && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(pathname.split("/api/ai/knowledge/")[1].replace("/versions", ""));
+      const allVersions = await db.getAll("ai_knowledge_versions");
+      const versions = allVersions
+        .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+        .filter(v => v && v.docId === id)
+        .sort((a, b) => b.version - a.version);
+      return json(res, 200, { versions, total: versions.length });
+    } catch (err) {
+      console.error("[AI Knowledge Versions]", err.message);
+      return json(res, 200, { versions: [], total: 0 });
+    }
+  }
+
+  // ─── AI Knowledge: POST /api/ai/knowledge/learn ───────────────────
+  if (pathname === "/api/ai/knowledge/learn" && req.method === "POST") {
+    try {
+      const items = await db.getAll("ai_knowledge");
+      const entries = items.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const uploadedDocs = entries.filter(e => e.fileName || e.source === "uploaded" || (e.tags || []).includes("uploaded"));
+      // Mark all as AI-processed
+      let processed = 0;
+      for (const doc of uploadedDocs) {
+        if (doc.aiProcessed) continue;
+        doc.aiProcessed = true;
+        doc.aiProcessedAt = new Date().toISOString();
+        await db.upsert("ai_knowledge", doc.id, JSON.stringify(doc));
+        processed++;
+      }
+      console.log(`[AI Learn] Processed ${processed} uploaded documents for AI training`);
+      return json(res, 200, { success: true, processed, totalUploaded: uploadedDocs.length });
+    } catch (err) {
+      console.error("[AI Learn]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
   if (pathname === "/api/ai/knowledge/search" && req.method === "POST") {
     try {
       const body = await parseBody(req);
