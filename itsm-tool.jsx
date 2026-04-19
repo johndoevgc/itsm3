@@ -16046,11 +16046,16 @@ export default function ITSMApp() {
 
         {/* Footer */}
         <div style={{ marginTop: 48, textAlign: "center", position: "relative", zIndex: 2 }}>
-          <div style={{ fontSize: 10, color: "#5A617855", letterSpacing: 1 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 16px", borderRadius: 20, background: "#6366F10A", border: "1px solid #6366F122", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif" }}>v{APP_VERSION.version}</span>
+            <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#81C784" }} />
+            <span style={{ fontSize: 10, color: "#8A8FA8" }}>{APP_VERSION.engine}</span>
+          </div>
+          <div style={{ fontSize: 10, color: "#5A617866", letterSpacing: 1 }}>
             VGC Technology Pte Ltd • Singapore • PDPA Compliant
           </div>
-          <div style={{ fontSize: 9, color: "#5A617833", marginTop: 4 }}>
-            v{APP_VERSION.version} (build {APP_VERSION.build}) • Powered by Azure AI & Microsoft Entra ID
+          <div style={{ fontSize: 9, color: "#5A617855", marginTop: 4 }}>
+            Build {APP_VERSION.build} • {APP_VERSION.platform} • Powered by Azure AI & Microsoft Entra ID
           </div>
         </div>
       </div>
