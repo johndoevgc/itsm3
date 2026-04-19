@@ -34,7 +34,7 @@ async function main() {
   assert("Database connected", health.json.database === "connected");
   assert("DB type is mysql", health.json.dbType === "mysql");
   assert("AI configured", health.json.aiConfigured === true);
-  assert("AI model is gpt-5.4-pro", health.json.aiModel === "gpt-5.4-pro", `Got: ${health.json.aiModel}`);
+  assert("AI model is gpt-5.4-nano", health.json.aiModel === "gpt-5.4-nano", `Got: ${health.json.aiModel}`);
 
   // 2. DB Stats
   console.log("--- DB Stats ---");
@@ -132,7 +132,7 @@ async function main() {
   console.log("--- AI Settings API ---");
   const aiSettings = await getJson("/api/settings/openai");
   assert("AI settings endpoint returns 200", aiSettings.status === 200);
-  assert("AI model is gpt-5.4-pro", aiSettings.json.model === "gpt-5.4-pro", `Got: ${aiSettings.json.model}`);
+  assert("AI model is gpt-5.4-nano", aiSettings.json.model === "gpt-5.4-nano", `Got: ${aiSettings.json.model}`);
   assert("AI endpoint configured", aiSettings.json.configured === true);
 
   // 18. AI Test connection
@@ -141,7 +141,7 @@ async function main() {
   assert("AI test endpoint responds", aiTest.status === 200 || aiTest.status === 502, `Status: ${aiTest.status}`);
   if (aiTest.status === 200) {
     assert("AI test connected", aiTest.json.status === "connected", `Status: ${aiTest.json.status}`);
-    assert("AI test model correct", aiTest.json.model === "gpt-5.4-pro", `Model: ${aiTest.json.model}`);
+    assert("AI test model correct", aiTest.json.model === "gpt-5.4-nano", `Model: ${aiTest.json.model}`);
   }
 
   // Results
