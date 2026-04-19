@@ -1144,6 +1144,10 @@ export default function ITSMApp() {
   const [sideCollapsed, setSideCollapsed] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [showAlertPanel, setShowAlertPanel] = useState(false);
+  const [globalLastSync, setGlobalLastSync] = useState(null);
+  const [globalSyncActive, setGlobalSyncActive] = useState(false);
+  const globalSyncRef = useRef(null);
+  const [showFloatingKbTraining, setShowFloatingKbTraining] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAvatarCustomizer, setShowAvatarCustomizer] = useState(false);
   const [errorAdvisory, setErrorAdvisory] = useState(null); // AI Error Advisory overlay
@@ -1838,6 +1842,13 @@ export default function ITSMApp() {
     return () => { if (aiIdleTimerRef.current) clearTimeout(aiIdleTimerRef.current); };
   }, [aiMessages, aiInput, incidents, changes]);
 
+  // ─── AI Nudge Auto-Dismiss (5 seconds) ──────────────────────────────
+  useEffect(() => {
+    if (!aiIdleNudge) return;
+    const t = setTimeout(() => setAiIdleNudge(null), 5000);
+    return () => clearTimeout(t);
+  }, [aiIdleNudge]);
+
   // ─── Proactive AI Alert Engine ──────────────────────────────────────────
   useEffect(() => {
     if (!currentUser) return;
@@ -2130,14 +2141,35 @@ export default function ITSMApp() {
   useEffect(() => { _save("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-fetch Zendesk stats on mount (so Dashboard shows live counts)
+  // ─── Global Auto-Sync: Zendesk ↔ ITSM (every 60s) ─────────────────
   useEffect(() => {
-    fetch("/api/zendesk/stats").then(r => r.ok ? r.json() : null).then(data => {
-      if (data) { setZdStats(data); setZdConnected(true); }
-    }).catch(() => {});
-    fetch("/api/zendesk/me").then(r => r.ok ? r.json() : null).then(data => {
-      if (data?.user) { setZdUser(data.user); setZdConnected(true); }
-    }).catch(() => {});
+    const doSync = async () => {
+      try {
+        setGlobalSyncActive(true);
+        // 1) Refresh Zendesk stats
+        const statsR = await fetch("/api/zendesk/stats");
+        if (statsR.ok) { const d = await statsR.json(); setZdStats(d); setZdConnected(true); }
+        // 2) Fetch Zendesk user
+        const meR = await fetch("/api/zendesk/me");
+        if (meR.ok) { const d = await meR.json(); if (d?.user) { setZdUser(d.user); setZdConnected(true); } }
+        // 3) Run incremental sync to pull new/updated tickets into ITSM
+        const incSyncR = await fetch("/api/zendesk/incremental-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        if (incSyncR.ok) {
+          const syncData = await incSyncR.json();
+          if (syncData.stats && (syncData.stats.ticketsCreated > 0 || syncData.stats.ticketsUpdated > 0)) {
+            // Refresh ITSM incidents from server
+            try {
+              const incR = await fetch("/api/db/incidents");
+              if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
+            } catch {}
+          }
+        }
+        setGlobalLastSync(new Date());
+      } catch {} finally { setGlobalSyncActive(false); }
+    };
+    doSync(); // immediate on mount
+    globalSyncRef.current = setInterval(doSync, 60000); // every 60s
+    return () => { if (globalSyncRef.current) clearInterval(globalSyncRef.current); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // SVG Icon Components — Enterprise Cybersecurity Grade
@@ -2556,8 +2588,11 @@ export default function ITSMApp() {
                 <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: zdConnected ? "#4CAF5022" : "#FF444422", color: zdConnected ? "#4CAF50" : "#FF4444", fontWeight: 600 }}>
                   {zdConnected ? "CONNECTED" : "OFFLINE"}
                 </span>
+                {globalSyncActive && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: "#06B6D418", color: "#06B6D4", fontWeight: 600, animation: "pulse 1s infinite" }}>⟳ SYNCING</span>}
               </h3>
-              <div style={{ display: "flex", gap: 6 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {globalLastSync && <span style={{ fontSize: 9, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace" }}>Last: {globalLastSync.toLocaleTimeString("en-SG", { hour12: false })}</span>}
+                <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#06B6D411", color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>Auto 60s</span>
                 <button onClick={() => setActiveModule("zendesk")} style={{ padding: "5px 12px", borderRadius: 6, background: "#EC489918", border: "1px solid #EC489933", color: "#EC4899", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>Open Zendesk AI →</button>
               </div>
             </div>
@@ -4004,7 +4039,11 @@ export default function ITSMApp() {
               {i < 4 && <span style={{ color: "#1E2130", margin: "0 4px" }}>|</span>}
             </div>
           ))}
-          {zdStats.open + zdStats.pending > 0 && <div style={{ marginLeft: "auto", fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Zendesk Live: {zdStats.open} open · {zdStats.pending} pending</div>}
+          {zdStats.open + zdStats.pending > 0 && <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Zendesk Live: {zdStats.open} open · {zdStats.pending} pending</span>
+            {globalSyncActive && <span style={{ fontSize: 8, color: "#06B6D4", animation: "pulse 1s infinite" }}>⟳</span>}
+            {globalLastSync && <span style={{ fontSize: 8, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>Synced {globalLastSync.toLocaleTimeString("en-SG", { hour12: false })}</span>}
+          </div>}
         </div>
         <DataTable
           columns={[
@@ -4170,6 +4209,10 @@ export default function ITSMApp() {
           <span style={{ color: "#FFB347" }}>🔄 Changes: {changes.length}</span><span style={{ color: "#1E2130" }}>|</span>
           <span style={{ color: "#81C784" }}>📋 Requests: {requests.length}</span>
           {incidents.filter(i => i.linkedProblem).length > 0 && <><span style={{ color: "#1E2130" }}>|</span><span style={{ color: "#64B5F6" }}>🔗 Linked to problems: {incidents.filter(i => i.linkedProblem).length}</span></>}
+          <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+            {globalSyncActive && <span style={{ color: "#06B6D4", animation: "pulse 1s infinite" }}>⟳</span>}
+            <span style={{ color: "#5A617855" }}>Auto-sync 60s{globalLastSync ? ` · ${globalLastSync.toLocaleTimeString("en-SG", { hour12: false })}` : ""}</span>
+          </span>
         </div>
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1E2130", marginBottom: 16 }}>
@@ -14398,19 +14441,52 @@ export default function ITSMApp() {
                 ...btnStyle("#6366F1"), fontSize: 11, padding: "6px 12px",
                 opacity: aiLoading ? 0.5 : 1, cursor: aiLoading ? "wait" : "pointer"
               }} disabled={aiLoading} onClick={() => handleAiChat()}>{azureOpenAI.enabled ? "⚡" : "↑"}</button>
+              <button onClick={() => { setShowFloatingKbTraining(!showFloatingKbTraining); if (!showFloatingKbTraining) fetchKbEntries(); }} style={{ ...btnStyle(showFloatingKbTraining ? "#FFB347" : "#00BF6F"), fontSize: 10, padding: "6px 8px", whiteSpace: "nowrap" }} title="Train AI with custom knowledge">{showFloatingKbTraining ? "✕" : "🧠"}</button>
             </div>
-            {azureOpenAI.enabled && (
-              <div style={{
-                padding: "4px 14px 6px", borderTop: "1px solid #1E213022",
-                display: "flex", flexDirection: "column", alignItems: "center", gap: 2
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444", animation: "pulse 2s infinite" }} />
-                  <span style={{ color: "#5A617866", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>Powered by Azure Open AI · Enterprise‑grade data security with a Responsible AI model.</span>
+            {/* Inline AI Training Panel */}
+            {showFloatingKbTraining && (
+              <div style={{ padding: "10px 14px", borderTop: "1px solid #00BF6F33", background: "#0A0C14" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#00BF6F", marginBottom: 8, display: "flex", alignItems: "center", gap: 6, fontFamily: "'Space Grotesk', sans-serif" }}>
+                  <span>🧠</span> Train AI — Add Knowledge
+                  <span style={{ marginLeft: "auto", fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{kbEntries.length} entries</span>
                 </div>
-                <span style={{ color: "#6366F144", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>I assist, I don't replace — your expertise leads. 🤝</span>
+                <div style={{ fontSize: 9, color: "#8A8FA8", marginBottom: 8, lineHeight: 1.4 }}>Add internal knowledge so AI references it first. Primary: Azure OpenAI · Fallback: Local AI</div>
+                <input style={{ ...inputStyle, fontSize: 10, width: "100%", marginBottom: 6, boxSizing: "border-box" }} placeholder="Title (e.g. VPN Setup Guide)" value={kbForm.title} onChange={e => setKbForm(p => ({ ...p, title: e.target.value }))} />
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  <select style={{ ...inputStyle, fontSize: 10, flex: 1 }} value={kbForm.category} onChange={e => setKbForm(p => ({ ...p, category: e.target.value }))}>
+                    {["General", "Networking", "Security", "Hardware", "Software", "Email", "VPN", "Firewall", "Printing", "SOP", "Troubleshooting"].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input style={{ ...inputStyle, fontSize: 10, flex: 1 }} placeholder="Tags (comma-sep)" value={kbForm.tags} onChange={e => setKbForm(p => ({ ...p, tags: e.target.value }))} />
+                </div>
+                <textarea style={{ ...inputStyle, fontSize: 10, width: "100%", minHeight: 50, resize: "vertical", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.4, boxSizing: "border-box" }} placeholder="Knowledge content — procedures, solutions, troubleshooting..." value={kbForm.content} onChange={e => setKbForm(p => ({ ...p, content: e.target.value }))} />
+                <button onClick={submitKbEntry} disabled={!kbForm.title.trim() || !kbForm.content.trim()} style={{ ...btnStyle("#00BF6F"), fontSize: 10, width: "100%", opacity: (!kbForm.title.trim() || !kbForm.content.trim()) ? 0.4 : 1 }}>💾 Save Knowledge</button>
+                {kbEntries.length > 0 && (
+                  <div style={{ marginTop: 8, maxHeight: 100, overflowY: "auto" }}>
+                    {kbEntries.slice(0, 5).map(e => (
+                      <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 6px", marginBottom: 3, background: "#0F1117", borderRadius: 4, border: "1px solid #1E213033" }}>
+                        <span style={{ flex: 1, fontSize: 9, color: "#C4CAD6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
+                        <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 3, background: "#6366F118", color: "#6366F1" }}>{e.category}</span>
+                        <button onClick={() => deleteKbEntry(e.id)} style={{ background: "none", border: "none", color: "#FF6B6B88", cursor: "pointer", fontSize: 8, padding: 1 }}>✕</button>
+                      </div>
+                    ))}
+                    {kbEntries.length > 5 && <div style={{ fontSize: 8, color: "#5A6178", textAlign: "center", marginTop: 2 }}>+{kbEntries.length - 5} more — open AI Assist module for full list</div>}
+                  </div>
+                )}
               </div>
             )}
+            {/* AI Engine Status Footer */}
+            <div style={{
+              padding: "4px 14px 6px", borderTop: "1px solid #1E213022",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 2
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: azureOpenAI.enabled ? "#81C784" : "#FFB347", boxShadow: azureOpenAI.enabled ? "0 0 6px #81C78444" : "0 0 6px #FFB34744", animation: "pulse 2s infinite" }} />
+                <span style={{ color: "#5A617866", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {azureOpenAI.enabled ? "Primary: Azure OpenAI ⚡ · Fallback: Local AI 🧠" : "Active: Local AI 🧠 · Azure OpenAI offline"}
+                </span>
+              </div>
+              <span style={{ color: "#6366F144", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>I assist, I don't replace — your expertise leads. 🤝</span>
+            </div>
           </div>
         )}
         {/* AI Idle Nudge Tooltip */}
