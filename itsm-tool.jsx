@@ -1468,7 +1468,7 @@ export default function ITSMApp() {
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
-  const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", false));
+  const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", true));
   const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", [
     { id: "LOG-demo-001", type: "auto_send", message: "AI triaged ticket #48201 — VPN access issue → Network Engineering (88% confidence)", timestamp: "2026-04-15T09:31:00Z" },
     { id: "LOG-demo-002", type: "incident_created", message: "ITSM Incident INC0021 created from Zendesk #48201 (Critical — VPN access)", timestamp: "2026-04-15T09:31:05Z" },
@@ -13027,9 +13027,39 @@ export default function ITSMApp() {
         setZdTriagedIds(prev => new Set(prev).add(ticketId));
         setZdAutoStats(prev => ({ ...prev, totalTriaged: prev.totalTriaged + 1, avgConfidence: Math.round(((prev.avgConfidence * prev.totalTriaged) + (triage.confidence || 75)) / (prev.totalTriaged + 1)) }));
 
-        // HUMAN-IN-THE-LOOP: All responses require engineer review — never auto-send
-        setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
-        addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for engineer review (${triage.confidence}% confidence) — ${queueItem.autoSendable ? "AI recommends approval" : "requires careful review"}` });
+        // ═══ HARD RULE: 90% AI / 10% Human ═══
+        // High-confidence (≥85%) routine items → AI auto-sends (the 90%)
+        // Low-confidence (<85%) or sensitive items → human review queue (the 10%)
+        if (queueItem.autoSendable && (triage.confidence || 0) >= 85) {
+          // AI AUTO-SEND: High confidence, routine issue — send immediately
+          try {
+            const autoR = await fetch("/api/zendesk/auto-respond", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ticketId, response: triage.draft_response, priority: triage.priority, tags: triage.tags || [], internalNote: triage.internal_note, approvedBy: `AI Engine (${triage.confidence}% confidence — auto-approved)` }),
+            });
+            if (autoR.ok) {
+              const autoResult = await autoR.json();
+              queueItem.status = "sent";
+              queueItem.reviewedBy = "AI Auto-Approved";
+              setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
+              const emailNote = autoResult.email?.sent ? ` ✉️ Email sent to ${autoResult.email.to}` : "";
+              addAutoLog({ type: "auto_send", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} AI auto-sent (${triage.confidence}% confidence, ${triage.category})${emailNote}` });
+            } else {
+              // Auto-send failed — fall back to human review
+              queueItem.status = "pending_approval";
+              setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+              addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, message: `#${ticketId} auto-send failed — queued for human review` });
+            }
+          } catch {
+            queueItem.status = "pending_approval";
+            setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+            addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, message: `#${ticketId} auto-send error — queued for human review` });
+          }
+        } else {
+          // HUMAN REVIEW: Low confidence or sensitive — needs engineer approval (the 10%)
+          setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+          addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for engineer review (${triage.confidence}% confidence) — ${(triage.confidence || 0) < 85 ? "low confidence" : "sensitive/complex issue"}` });
+        }
 
         // AUTO-CREATE ITSM INCIDENT for ALL triaged tickets — ensures accurate Zendesk-ITSM tracking
         const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
@@ -13135,7 +13165,12 @@ export default function ITSMApp() {
     React.useEffect(() => {
       if (!zdFetchedRef.current) {
         zdFetchedRef.current = true;
-        zdConnect();
+        zdConnect().then(() => {
+          // Auto-start first triage pass on connect
+          if (!isLocalDemoUser && azureOpenAI.enabled) {
+            setTimeout(() => zdAutoTriageBatch(), 3000);
+          }
+        });
       }
     }, []);
 
@@ -13147,11 +13182,13 @@ export default function ITSMApp() {
     React.useEffect(() => { try { localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch {} }, [zdStats]);
     React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch {} }, [zdTickets]);
 
-    // Auto-polling for new tickets (every 60s when automation is on)
+    // Auto-polling for new tickets (every 45s when automation is on — aggressive for 90% AI coverage)
     React.useEffect(() => {
       if (isLocalDemoUser) return; // Data Isolation
       if (zdConnected && zdAutoMode && azureOpenAI.enabled) {
-        zdPollingRef.current = setInterval(() => { zdAutoTriageBatch(); }, 60000);
+        // Run immediately on enable
+        zdAutoTriageBatch();
+        zdPollingRef.current = setInterval(() => { zdAutoTriageBatch(); }, 45000);
         return () => clearInterval(zdPollingRef.current);
       }
       return () => { if (zdPollingRef.current) clearInterval(zdPollingRef.current); };
@@ -13173,7 +13210,7 @@ export default function ITSMApp() {
               if (data.stats && (data.stats.ticketsUpdated > 0 || data.stats.ticketsCreated > 0)) {
                 addAutoLog({ type: "info", message: `Real-time sync: ${data.stats.ticketsCreated} new, ${data.stats.ticketsUpdated} updated, ${data.stats.commentsAdded} comments` });
                 zdFetchTickets(); zdFetchStats();
-                // Refresh ITSM incidents if any were updated
+                // Refresh ITSM incidents — sync may have updated status/priority in DB
                 try {
                   const incR = await fetch("/api/db/incidents");
                   if (incR.ok) {
@@ -13181,9 +13218,14 @@ export default function ITSMApp() {
                     if (incData.data) setIncidents(incData.data);
                   }
                 } catch {}
+                // Auto-triage newly discovered tickets (90% AI rule)
+                if (data.stats.ticketsCreated > 0 && zdAutoMode && azureOpenAI.enabled) {
+                  addAutoLog({ type: "info", message: `${data.stats.ticketsCreated} new ticket(s) found — triggering AI auto-triage...` });
+                  setTimeout(() => zdAutoTriageBatch(), 2000);
+                }
               }
             }
-            // Refresh sync status
+            // Always refresh sync status & incidents
             const statusR = await fetch("/api/zendesk/sync-status");
             if (statusR.ok) setZdSyncStatus(await statusR.json());
           } catch {}
@@ -13463,27 +13505,31 @@ export default function ITSMApp() {
         </div>
 
         {/* ── AI 90% / Human 10% Work Split Indicator ── */}
-        {zdAutoStats.totalTriaged > 0 && (
+        {zdAutoStats.totalTriaged > 0 && (() => {
+          const aiPct = zdAutoStats.totalTriaged > 0 ? Math.round((zdAutoStats.autoSent / zdAutoStats.totalTriaged) * 100) : 0;
+          const humanPct = 100 - aiPct;
+          return (
           <div style={{ ...cardStyle, padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4", whiteSpace: "nowrap" }}>🤖 AI / 👤 Human Split</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4", whiteSpace: "nowrap" }}>🤖 AI {aiPct}% / 👤 Human {humanPct}%</div>
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden", background: "#1E2130" }}>
-                <div style={{ width: "90%", background: "linear-gradient(90deg, #6366F1, #818CF8)", borderRadius: "6px 0 0 6px", transition: "width 0.5s" }} />
-                <div style={{ width: "10%", background: "linear-gradient(90deg, #FFB347, #FFCC80)", borderRadius: "0 6px 6px 0", transition: "width 0.5s" }} />
+                <div style={{ width: `${Math.max(aiPct, 5)}%`, background: "linear-gradient(90deg, #6366F1, #818CF8)", borderRadius: "6px 0 0 6px", transition: "width 0.5s" }} />
+                <div style={{ width: `${Math.max(humanPct, 5)}%`, background: "linear-gradient(90deg, #FFB347, #FFCC80)", borderRadius: "0 6px 6px 0", transition: "width 0.5s" }} />
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-                <span onClick={() => setZdTab("automation")} style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>AI: Triage · Categorize · Draft · Route · SLA ({zdAutoStats.totalTriaged} processed)</span>
-                <span onClick={() => setZdTab("queue")} style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>Human: Review · Approve ({zdAutoStats.autoSent} sent)</span>
+                <span onClick={() => setZdTab("automation")} style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>AI: Triage · Categorize · Draft · Auto-Send ({zdAutoStats.autoSent} auto-sent)</span>
+                <span onClick={() => setZdTab("queue")} style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>Human: Review low-confidence ({zdAutoStats.humanReview} reviewed)</span>
               </div>
             </div>
             <div onClick={() => setZdTab("analytics")} style={{ textAlign: "center", minWidth: 60, cursor: "pointer", transition: "transform 0.15s" }}
               onMouseEnter={e => e.currentTarget.style.transform = "scale(1.08)"}
               onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "#81C784" }}>{zdAutoStats.totalTriaged > 0 ? Math.round((zdAutoStats.autoSent / zdAutoStats.totalTriaged) * 100) : 0}%</div>
-              <div style={{ fontSize: 8, color: "#5A6178" }}>Approval Rate</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: aiPct >= 80 ? "#81C784" : "#FFB347" }}>{aiPct}%</div>
+              <div style={{ fontSize: 8, color: "#5A6178" }}>AI Auto-Rate</div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ── Tab Navigation ── */}
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", borderRadius: 10, padding: 4 }}>
@@ -13512,9 +13558,9 @@ export default function ITSMApp() {
               {sectionLabel("⚡", "AI Automation Pipeline")}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
                 {[
-                  { label: "Ingest", desc: "Zendesk tickets pulled every 60s", icon: "📥", color: "#64B5F6", active: zdConnected, tab: "tickets" },
-                  { label: "AI Triage", desc: "Category, priority, draft response", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled, tab: "history" },
-                  { label: "Engineer Queue", desc: "All responses → human approval", icon: "👤", color: "#81C784", active: zdAutoMode, tab: "queue" },
+                  { label: "Ingest", desc: "Zendesk tickets pulled every 45s", icon: "📥", color: "#64B5F6", active: zdConnected, tab: "tickets" },
+                  { label: "AI Triage", desc: "Auto-categorize, draft & route (90%)", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled, tab: "history" },
+                  { label: "Auto-Send / Review", desc: "≥85% auto-sends, <85% human review", icon: "⚡", color: "#81C784", active: zdAutoMode, tab: "queue" },
                 ].map((step, i) => (
                   <div key={i} onClick={() => setZdTab(step.tab)} style={{ padding: "12px 10px", borderRadius: 8, background: step.active ? `${step.color}08` : "#12141E", border: `1px solid ${step.active ? step.color + "33" : "#1E213033"}`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
                     onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${step.color}22`; }}
@@ -13530,8 +13576,8 @@ export default function ITSMApp() {
               {/* Routing Rules — Clickable & Expandable */}
               <div style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>📋 Auto-Routing Rules</div>
               {[
-                { id: "rule1", condition: "All AI-drafted responses", action: "→ Queue for engineer approval", color: "#81C784", detail: "Every AI-generated response is routed to the Human Review queue. No response is ever sent automatically without engineer sign-off. High-confidence (≥85%) items are highlighted for batch approval.", tab: "queue" },
-                { id: "rule2", condition: "Confidence < 85% or Complex/Sensitive", action: "→ Flagged for careful review", color: "#FFB347", detail: "Low-confidence AI triage results are flagged with a warning badge. Engineers should manually review the draft, edit if necessary, and verify the category/priority before approving.", tab: "queue" },
+                { id: "rule1", condition: "Confidence ≥85% + routine issue", action: "→ AI auto-sends response", color: "#81C784", detail: "High-confidence AI responses for routine issues (password resets, basic how-to, status inquiries) are automatically sent to the customer. This is the 90% AI automation rule — saving time and effort.", tab: "history" },
+                { id: "rule2", condition: "Confidence <85% or complex/sensitive", action: "→ Human review queue", color: "#FFB347", detail: "Low-confidence or sensitive items go to the engineer review queue for manual approval. This is the 10% human oversight rule. Engineers review, edit if needed, then approve.", tab: "queue" },
                 { id: "rule3", condition: "Priority = Urgent/High", action: "→ Auto-create ITSM Incident", color: "#FF6B6B", detail: "Tickets classified as Urgent or High priority automatically generate an ITSM Incident (INC####). This ensures SLA tracking begins immediately and escalation rules apply.", tab: "history" },
                 { id: "rule4", condition: "Category = Network/Security", action: "→ Route to Network Engineering", color: "#6366F1", detail: "Network infrastructure and security-related tickets (VPN, firewall, phishing, MFA issues) are assigned to the Network Engineering team for specialized handling.", tab: "tickets" },
                 { id: "rule5", condition: "Category = Hardware", action: "→ Route to L2 Support", color: "#06B6D4", detail: "Hardware issues (laptop, printer, monitor, peripheral) are escalated to L2 Support who manage physical assets and on-site visits.", tab: "tickets" },
@@ -14283,8 +14329,8 @@ export default function ITSMApp() {
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E213044" }}>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>AI Auto-Triage Mode</div>
-                    <div style={{ fontSize: 9, color: "#5A6178" }}>Automatically draft AI responses for new tickets</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>AI Auto-Triage Mode (90% AI / 10% Human)</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>≥85% confidence auto-sends, &lt;85% goes to human review</div>
                   </div>
                   <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "AI auto-triage ENABLED" : "AI auto-triage DISABLED" }); }}
                     style={{ width: 36, height: 18, borderRadius: 9, background: zdAutoMode ? "#4CAF50" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
