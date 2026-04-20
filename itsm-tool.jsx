@@ -1490,6 +1490,13 @@ export default function ITSMApp() {
   const [dismissedProactiveAlerts, setDismissedProactiveAlerts] = useState(() => {
     try { const saved = localStorage.getItem("vgc_dismissed_alerts"); return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
+  // ─── AI Actions Engine State ────────────────────────────────────────
+  const [aiActions, setAiActions] = useState(() => _ls("vgc_ai_actions", []));
+  const [aiActionsLoading, setAiActionsLoading] = useState(false);
+  const [showAiActionsPanel, setShowAiActionsPanel] = useState(false);
+  const [aiMonitorEnabled, setAiMonitorEnabled] = useState(() => _ls("vgc_ai_monitor", true));
+  const [aiMonitorLastRun, setAiMonitorLastRun] = useState(null);
+  const aiMonitorRef = useRef(null);
   const [aiMessages, setAiMessages] = useState([
     { role: "ai", text: `👋 AI Co-Pilot ready — triage, SLA alerts, KB search, drafts & security monitoring. Try "Good morning" for your briefing.`, suggestions: [
       { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
@@ -1529,6 +1536,7 @@ export default function ITSMApp() {
         if (showCommandPalette) { setShowCommandPalette(false); setCmdSearch(""); return; }
         if (showRecycleBin) { setShowRecycleBin(false); return; }
         if (showAlertPanel) { setShowAlertPanel(false); return; }
+        if (showAiActionsPanel) { setShowAiActionsPanel(false); return; }
         if (showAiPanel) { setShowAiPanel(false); return; }
         if (modal) { setModal(null); setDetailItem(null); return; }
       }
@@ -1536,10 +1544,12 @@ export default function ITSMApp() {
       if (e.ctrlKey && e.key === "k") { e.preventDefault(); setShowCommandPalette(p => !p); setCmdSearch(""); }
       // Ctrl+/ : toggle AI assistant
       if (e.ctrlKey && e.key === "/") { e.preventDefault(); setShowAiPanel(p => !p); }
+      // Ctrl+Shift+A : toggle AI Actions panel
+      if (e.ctrlKey && e.shiftKey && (e.key === "A" || e.key === "a")) { e.preventDefault(); setShowAiActionsPanel(p => !p); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showRecycleBin, showAlertPanel, showAiPanel, modal, showCommandPalette]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showRecycleBin, showAlertPanel, showAiPanel, showAiActionsPanel, modal, showCommandPalette]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Onboarding Guided Tour ──────────────────────────────────────────
   const [tourStep, setTourStep] = useState(() => {
@@ -2410,6 +2420,138 @@ export default function ITSMApp() {
     const interval = setInterval(checkProactiveAlerts, 30000);
     return () => clearInterval(interval);
   }, [incidents, dismissedProactiveAlerts, currentUser]);
+
+  // ─── AI Actions Engine: Monitor + Approval Workflow ──────────────────
+  // Fetch AI actions from server
+  const fetchAiActions = useCallback(async (statusFilter) => {
+    try {
+      const qs = statusFilter ? `?status=${statusFilter}` : "";
+      const r = await fetch(`/api/ai/actions${qs}`);
+      if (r.ok) {
+        const data = await r.json();
+        setAiActions(data.actions || []);
+        _save("vgc_ai_actions", data.actions || []);
+        return data.actions;
+      }
+    } catch (e) { console.warn("[AI Actions] Fetch error:", e.message); }
+    return [];
+  }, []);
+
+  // Run AI monitor scan
+  const runAiMonitor = useCallback(async () => {
+    if (aiActionsLoading || !isLoggedIn) return;
+    setAiActionsLoading(true);
+    try {
+      const openIncidents = incidents.filter(i => i.status === "Open" || i.status === "In Progress");
+      const openChanges = changes.filter(c => c.status === "Awaiting Approval" || c.status === "Implementing");
+      if (openIncidents.length === 0 && openChanges.length === 0) {
+        setAiActionsLoading(false);
+        setAiMonitorLastRun(new Date().toISOString());
+        return;
+      }
+      const r = await fetch("/api/ai/actions/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          incidents: openIncidents,
+          changes: openChanges,
+          requestedBy: currentUser.name
+        })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const newActions = data.actions || [];
+        if (newActions.length > 0) {
+          setAiActions(prev => {
+            const existingIds = new Set(prev.map(a => a.id));
+            const merged = [...prev, ...newActions.filter(a => !existingIds.has(a.id))];
+            _save("vgc_ai_actions", merged);
+            return merged;
+          });
+          // Auto-show panel for critical actions
+          if (newActions.some(a => a.severity === "critical")) {
+            setShowAiActionsPanel(true);
+          }
+        }
+        setAiMonitorLastRun(new Date().toISOString());
+      }
+    } catch (e) { console.warn("[AI Monitor] Scan error:", e.message); }
+    setAiActionsLoading(false);
+  }, [aiActionsLoading, isLoggedIn, incidents, changes, currentUser]);
+
+  // Approve AI action
+  const approveAiAction = useCallback(async (actionId) => {
+    try {
+      const r = await fetch(`/api/ai/actions/${encodeURIComponent(actionId)}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approvedBy: currentUser.name, approverEmail: currentUser.email })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        setAiActions(prev => {
+          const updated = prev.map(a => a.id === actionId ? data.action : a);
+          _save("vgc_ai_actions", updated);
+          return updated;
+        });
+        trackAction("AI Actions", "Action Approved", `${actionId}: ${data.action?.title}`, currentUser.name);
+        return data;
+      }
+    } catch (e) { console.warn("[AI Actions] Approve error:", e.message); }
+    return null;
+  }, [currentUser, trackAction]);
+
+  // Reject AI action
+  const rejectAiAction = useCallback(async (actionId, reason) => {
+    try {
+      const r = await fetch(`/api/ai/actions/${encodeURIComponent(actionId)}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rejectedBy: currentUser.name, reason })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        setAiActions(prev => {
+          const updated = prev.map(a => a.id === actionId ? data.action : a);
+          _save("vgc_ai_actions", updated);
+          return updated;
+        });
+        trackAction("AI Actions", "Action Rejected", `${actionId}: ${reason}`, currentUser.name);
+        return data;
+      }
+    } catch (e) { console.warn("[AI Actions] Reject error:", e.message); }
+    return null;
+  }, [currentUser, trackAction]);
+
+  // Send approval email for an action
+  const sendAiApprovalEmail = useCallback(async (actionId) => {
+    try {
+      const r = await fetch("/api/ai/actions/send-approval-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actionId,
+          approverEmails: [currentUser.email, "help@vgctechnology.com"],
+          appUrl: window.location.origin
+        })
+      });
+      if (r.ok) {
+        trackAction("AI Actions", "Approval Email Sent", actionId, currentUser.name);
+        return await r.json();
+      }
+    } catch (e) { console.warn("[AI Actions] Email error:", e.message); }
+    return null;
+  }, [currentUser, trackAction]);
+
+  // Auto-monitor: run every 5 minutes when enabled
+  useEffect(() => {
+    if (!aiMonitorEnabled || !isLoggedIn) return;
+    // Initial scan after 15s
+    const initialTimeout = setTimeout(() => { runAiMonitor(); }, 15000);
+    // Then every 5 minutes
+    aiMonitorRef.current = setInterval(() => { runAiMonitor(); }, 5 * 60 * 1000);
+    return () => { clearTimeout(initialTimeout); if (aiMonitorRef.current) clearInterval(aiMonitorRef.current); };
+  }, [aiMonitorEnabled, isLoggedIn, runAiMonitor]);
 
   // ─── VGC-AI Engine API Helper (via server proxy — avoids CORS) ───────
   const callAzureOpenAI = async (systemPrompt, userPrompt) => {
@@ -17556,6 +17698,32 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               )}
             </div>
 
+            {/* ═══ AI Actions Button — Global Access ═══ */}
+            <div style={{ position: "relative" }}>
+              <div onClick={() => setShowAiActionsPanel(!showAiActionsPanel)} style={{
+                position: "relative", width: 38, height: 38, borderRadius: 8,
+                background: aiActions.filter(a => a.status === "pending_approval").length > 0 ? "linear-gradient(135deg, #EC489912, #6366F108)" : "#0F1117",
+                border: `1px solid ${aiActions.filter(a => a.status === "pending_approval").length > 0 ? "#EC489933" : "#1E2130"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", transition: "all 0.2s", fontSize: 16
+              }}
+                title="AI Actions & Approvals"
+                onMouseOver={e => e.currentTarget.style.background = "#EC489918"}
+                onMouseOut={e => e.currentTarget.style.background = aiActions.filter(a => a.status === "pending_approval").length > 0 ? "linear-gradient(135deg, #EC489912, #6366F108)" : "#0F1117"}>
+                🛡️
+                {aiActions.filter(a => a.status === "pending_approval").length > 0 && (
+                  <span style={{
+                    position: "absolute", top: -4, right: -4, minWidth: 18, height: 18,
+                    borderRadius: 9, background: "#EC4899", color: "#fff",
+                    fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    border: "2px solid #0A0C14", padding: "0 3px",
+                    animation: "pulse 2s infinite"
+                  }}>{aiActions.filter(a => a.status === "pending_approval").length}</span>
+                )}
+              </div>
+            </div>
+
             {/* ═══ Bell Icon — AI Alert Panel ═══ */}
             {(() => {
               const critIncidents = incidents.filter(i => (i.priority === "Sev-A" || i.priority === "Sev-B") && i.status !== "Resolved" && i.status !== "Closed");
@@ -17838,6 +18006,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           { icon: "📚", label: "Go to Knowledge Base", action: () => setActiveModule("knowledge") },
           { icon: "⚙️", label: "Go to Settings", action: () => setActiveModule("settings") },
           { icon: "🤖", label: "Open AI Assistant", action: () => setShowAiPanel(true) },
+          { icon: "🛡️", label: "AI Actions & Approvals", action: () => setShowAiActionsPanel(true) },
           { icon: "🔗", label: "Go to Zendesk", action: () => setActiveModule("zendesk") },
           { icon: "📈", label: "Go to Service Reports", action: () => setActiveModule("reports") },
           { icon: "🗑️", label: "Open Recycle Bin", action: () => setShowRecycleBin(true) },
@@ -18031,6 +18200,150 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 )}
                 <button onClick={() => { setThreatEmailDraft(null); }} style={{ padding: "8px 20px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>✉️ Send via M365</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ AI Actions Panel — Global Overlay (accessible from all tabs) ═══ */}
+      {showAiActionsPanel && (
+        <div style={{ position: "fixed", inset: 0, background: "#00000088", zIndex: 1100, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: 60 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowAiActionsPanel(false); }}>
+          <div style={{ width: 720, maxHeight: "80vh", background: "#12141E", borderRadius: 14, border: "1px solid #6366F133", boxShadow: "0 24px 48px #00000088", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            {/* Header */}
+            <div style={{ padding: "16px 20px", background: "linear-gradient(135deg, #EC4899, #6366F1)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 20 }}>🤖</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 16, color: "#fff", fontFamily: "'Space Grotesk', sans-serif" }}>AI Assist Actions</div>
+                  <div style={{ fontSize: 11, color: "#ffffffaa" }}>Proactive monitoring with human-in-the-loop approval</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button onClick={() => runAiMonitor()} disabled={aiActionsLoading} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ffffff33", background: aiActionsLoading ? "#ffffff11" : "#ffffff22", color: "#fff", cursor: aiActionsLoading ? "wait" : "pointer", fontSize: 11, fontWeight: 600 }}>
+                  {aiActionsLoading ? "Scanning..." : "Scan Now"}
+                </button>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="checkbox" checked={aiMonitorEnabled} onChange={e => { setAiMonitorEnabled(e.target.checked); _save("vgc_ai_monitor", e.target.checked); }} style={{ accentColor: "#EC4899" }} />
+                  <span style={{ fontSize: 11, color: "#ffffffaa" }}>Auto-Monitor</span>
+                </label>
+                <button onClick={() => setShowAiActionsPanel(false)} style={{ background: "none", border: "none", color: "#ffffff88", cursor: "pointer", fontSize: 18 }}>✕</button>
+              </div>
+            </div>
+            {/* Stats Bar */}
+            <div style={{ padding: "10px 20px", background: "#0F1117", display: "flex", gap: 16, borderBottom: "1px solid #1E2130" }}>
+              {[
+                { label: "Pending", count: aiActions.filter(a => a.status === "pending_approval").length, color: "#FFB347" },
+                { label: "Approved", count: aiActions.filter(a => a.status === "approved" || a.status === "executed").length, color: "#4CAF50" },
+                { label: "Rejected", count: aiActions.filter(a => a.status === "rejected").length, color: "#FF5252" },
+                { label: "Total", count: aiActions.length, color: "#6366F1" },
+              ].map(s => (
+                <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: s.color, fontFamily: "'JetBrains Mono', monospace" }}>{s.count}</span>
+                  <span style={{ fontSize: 10, color: "#5A6178" }}>{s.label}</span>
+                </div>
+              ))}
+              {aiMonitorLastRun && <span style={{ fontSize: 10, color: "#5A6178", marginLeft: "auto" }}>Last scan: {new Date(aiMonitorLastRun).toLocaleTimeString("en-SG")}</span>}
+            </div>
+            {/* Action List */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+              {aiActions.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>🛡️</div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>All Clear</div>
+                  <div style={{ fontSize: 12, marginTop: 6 }}>AI is actively monitoring. No action items detected.</div>
+                  <button onClick={() => runAiMonitor()} style={{ marginTop: 16, padding: "8px 20px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                    Run Manual Scan
+                  </button>
+                </div>
+              ) : (
+                aiActions.sort((a, b) => {
+                  const statusOrder = { pending_approval: 0, approved: 1, executed: 2, rejected: 3 };
+                  const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+                  if ((statusOrder[a.status] || 0) !== (statusOrder[b.status] || 0)) return (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0);
+                  return (sevOrder[a.severity] || 3) - (sevOrder[b.severity] || 3);
+                }).map(action => {
+                  const sevColors = { critical: "#FF4444", high: "#FF8800", medium: "#FFB347", low: "#4CAF50" };
+                  const sevColor = sevColors[action.severity] || "#666";
+                  const statusIcons = { pending_approval: "⏳", approved: "✅", executed: "🚀", rejected: "❌", failed: "⚠️" };
+                  const statusLabels = { pending_approval: "Pending Approval", approved: "Approved", executed: "Executed", rejected: "Rejected", failed: "Failed" };
+                  return (
+                    <div key={action.id} style={{
+                      padding: "14px 16px", marginBottom: 10, borderRadius: 10,
+                      background: action.status === "pending_approval" ? "#1E213044" : "#0F111788",
+                      border: `1px solid ${action.status === "pending_approval" ? sevColor + "44" : "#1E213033"}`,
+                      transition: "all 0.2s"
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                            <span style={{ fontSize: 14 }}>{statusIcons[action.status] || "⏳"}</span>
+                            <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: sevColor + "22", color: sevColor, fontWeight: 700, textTransform: "uppercase" }}>{action.severity}</span>
+                            <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{action.type}</span>
+                            {action.incidentId && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#EC489922", color: "#EC4899", fontWeight: 600 }}>🎫 {action.incidentId}</span>}
+                            <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#0F1117", color: "#5A6178" }}>{statusLabels[action.status]}</span>
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.title}</div>
+                          <div style={{ fontSize: 11, color: "#8B8FA3", lineHeight: 1.5 }}>{action.description}</div>
+                        </div>
+                        {action.confidence && (
+                          <div style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600, whiteSpace: "nowrap" }}>🎯 {action.confidence}%</div>
+                        )}
+                      </div>
+                      {action.suggestedAction && (
+                        <div style={{ padding: "8px 12px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 700, marginBottom: 2 }}>💡 AI Suggested Action</div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4 }}>{action.suggestedAction}</div>
+                        </div>
+                      )}
+                      {action.internalNote && (
+                        <div style={{ padding: "8px 12px", background: "#FFB34708", borderRadius: 6, border: "1px solid #FFB34722", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 700, marginBottom: 2 }}>📋 Internal Note</div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4 }}>{action.internalNote}</div>
+                        </div>
+                      )}
+                      {action.emailDraft && (
+                        <div style={{ padding: "8px 12px", background: "#06B6D408", borderRadius: 6, border: "1px solid #06B6D422", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#06B6D4", fontWeight: 700, marginBottom: 2 }}>📧 Email Draft</div>
+                          <div style={{ fontSize: 10, color: "#8B8FA3" }}>To: {action.emailDraft.to}</div>
+                          <div style={{ fontSize: 10, color: "#8B8FA3" }}>Subject: {action.emailDraft.subject}</div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4, marginTop: 4 }}>{(action.emailDraft.body || "").substring(0, 200)}...</div>
+                        </div>
+                      )}
+                      {action.executionResult && (
+                        <div style={{ padding: "6px 12px", background: "#4CAF5008", borderRadius: 6, border: "1px solid #4CAF5022", marginBottom: 8, fontSize: 10, color: "#4CAF50" }}>
+                          🚀 Result: {JSON.stringify(action.executionResult)}
+                        </div>
+                      )}
+                      {/* Action Buttons — Only for pending items */}
+                      {action.status === "pending_approval" && (
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <button onClick={() => approveAiAction(action.id)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #45a049)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                            ✅ Approve & Execute
+                          </button>
+                          <button onClick={() => rejectAiAction(action.id, "Not needed")} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "1px solid #FF525244", background: "#FF525211", color: "#FF5252", cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                            ❌ Reject
+                          </button>
+                          <button onClick={() => sendAiApprovalEmail(action.id)} title="Send approval request via Outlook email" style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #06B6D444", background: "#06B6D411", color: "#06B6D4", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
+                            📧
+                          </button>
+                        </div>
+                      )}
+                      {(action.approvedBy || action.rejectedBy) && (
+                        <div style={{ fontSize: 10, color: "#5A6178", marginTop: 6 }}>
+                          {action.approvedBy && `Approved by ${action.approvedBy} at ${new Date(action.approvedAt).toLocaleString("en-SG")}`}
+                          {action.rejectedBy && `Rejected by ${action.rejectedBy} at ${new Date(action.rejectedAt).toLocaleString("en-SG")}${action.rejectionReason ? ` — "${action.rejectionReason}"` : ""}`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            {/* Footer */}
+            <div style={{ padding: "10px 20px", background: "#0A0C14", borderTop: "1px solid #1E2130", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontSize: 10, color: "#5A6178" }}>All AI actions require human approval before execution. Results are internal only.</div>
+              <button onClick={() => { setAiActions([]); _save("vgc_ai_actions", []); }} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #1E2130", background: "none", color: "#5A6178", cursor: "pointer", fontSize: 10 }}>Clear History</button>
             </div>
           </div>
         </div>

@@ -14,9 +14,7 @@ const REGISTERED_REDIRECT_URIS = [
 if (window.__ITSM_CONFIG__?.redirectUris) {
   REGISTERED_REDIRECT_URIS.push(...window.__ITSM_CONFIG__.redirectUris);
 }
-const redirectUri = REGISTERED_REDIRECT_URIS.includes(window.location.origin)
-  ? window.location.origin
-  : window.location.origin; // fallback to current origin
+const redirectUri = window.location.origin;
 
 // Entra ID configuration — set via build-time or runtime injection
 const ENTRA_CLIENT_ID = window.__ITSM_CONFIG__?.clientId || "7c2be528-9424-4530-9c50-cc97fc6bc793";

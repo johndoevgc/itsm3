@@ -59,7 +59,7 @@ function buildClientAssertion() {
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
 // Primary: gpt-5.4-pro (East US 2) — Responses API (supports streaming)
 let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
-let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "BCGYlxp4toZd7q4vflLPIR0Hqa6FZJo1DP4vk0JolcjSmY3TgCvNJQQJ99CDACHYHv6XJ3w3AAAAACOGjzsj";
+let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
 let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-nano";
 
 // Zendesk API config (server-side only — protects API token)
@@ -449,6 +449,7 @@ const VALID_COLLECTIONS = new Set([
   "customers", "service_reports",
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
+  "ai_actions",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -575,47 +576,45 @@ function graphAppCallBinary(endpoint) {
 }
 
 // Send email via Microsoft Graph API using Managed Identity
-function graphSendMail({ to, subject, body, from }) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const token = await getManagedIdentityToken();
-      const sender = from || MAIL_FROM;
-      const mailPayload = JSON.stringify({
-        message: {
-          subject,
-          body: { contentType: "HTML", content: body },
-          toRecipients: (Array.isArray(to) ? to : [to]).map(addr => ({ emailAddress: { address: addr } })),
-          from: { emailAddress: { address: sender } },
-        },
-        saveToSentItems: true,
+async function graphSendMail({ to, subject, body, from }) {
+  const token = await getManagedIdentityToken();
+  const sender = from || MAIL_FROM;
+  const mailPayload = JSON.stringify({
+    message: {
+      subject,
+      body: { contentType: "HTML", content: body },
+      toRecipients: (Array.isArray(to) ? to : [to]).map(addr => ({ emailAddress: { address: addr } })),
+      from: { emailAddress: { address: sender } },
+    },
+    saveToSentItems: true,
+  });
+  return new Promise((resolve, reject) => {
+    const graphReq = https.request({
+      hostname: "graph.microsoft.com",
+      path: `/v1.0/users/${encodeURIComponent(sender)}/sendMail`,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(mailPayload),
+      },
+    }, (resp) => {
+      let data = "";
+      resp.on("data", c => data += c);
+      resp.on("end", () => {
+        if (resp.statusCode === 202 || resp.statusCode === 200) {
+          console.log(`[M365 Mail] Sent to ${to} subject="${subject}"`);
+          resolve({ success: true, statusCode: resp.statusCode });
+        } else {
+          console.error(`[M365 Mail] Failed ${resp.statusCode}: ${data.substring(0, 500)}`);
+          reject(new Error(`Graph sendMail ${resp.statusCode}: ${data.substring(0, 300)}`));
+        }
       });
-      const graphReq = https.request({
-        hostname: "graph.microsoft.com",
-        path: `/v1.0/users/${encodeURIComponent(sender)}/sendMail`,
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(mailPayload),
-        },
-      }, (resp) => {
-        let data = "";
-        resp.on("data", c => data += c);
-        resp.on("end", () => {
-          if (resp.statusCode === 202 || resp.statusCode === 200) {
-            console.log(`[M365 Mail] Sent to ${to} subject="${subject}"`);
-            resolve({ success: true, statusCode: resp.statusCode });
-          } else {
-            console.error(`[M365 Mail] Failed ${resp.statusCode}: ${data.substring(0, 500)}`);
-            reject(new Error(`Graph sendMail ${resp.statusCode}: ${data.substring(0, 300)}`));
-          }
-        });
-      });
-      graphReq.on("error", reject);
-      graphReq.setTimeout(20000, () => { graphReq.destroy(); reject(new Error("Graph sendMail timeout")); });
-      graphReq.write(mailPayload);
-      graphReq.end();
-    } catch (err) { reject(err); }
+    });
+    graphReq.on("error", reject);
+    graphReq.setTimeout(20000, () => { graphReq.destroy(); reject(new Error("Graph sendMail timeout")); });
+    graphReq.write(mailPayload);
+    graphReq.end();
   });
 }
 
@@ -1370,7 +1369,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   followerIds: t.follower_ids || [], forumTopicId: t.forum_topic_id,
                   problemId: t.problem_id, hasIncidents: t.has_incidents,
                   isPublic: t.is_public, satisfaction: t.satisfaction_rating,
-                  channel: t.via?.channel || "unknown", source: t.via?.source || {},
+                  channel: t.via?.channel || "unknown", viaSource: t.via?.source || {},
                   createdAt: t.created_at, updatedAt: t.updated_at,
                   dueAt: t.due_at, importedAt: new Date().toISOString(),
                   source: "zendesk_full_import",
@@ -2476,317 +2475,6 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── AI Generate Professional Guide from Zendesk History ───────────
-  if (pathname === "/api/ai/generate-guide" && req.method === "POST") {
-    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
-      return json(res, 503, { error: "Azure OpenAI not configured" });
-    }
-    try {
-      const body = await parseBody(req);
-      const { topic, category, includeScreenshots } = body || {};
-      if (!topic) return json(res, 400, { error: "topic is required" });
-
-      // Gather all Zendesk ticket history related to this topic
-      let zdContext = "";
-      try {
-        const ticketRows = await db.getAll("zendesk_tickets");
-        const tickets = ticketRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-        const topicLower = topic.toLowerCase();
-        const topicWords = topicLower.split(/\s+/).filter(w => w.length > 2);
-
-        const relevant = tickets.filter(t => {
-          const searchable = `${t.subject || ""} ${t.description || ""} ${(t.tags || []).join(" ")}`.toLowerCase();
-          return topicWords.some(w => searchable.includes(w));
-        }).slice(0, 30);
-
-        if (relevant.length > 0) {
-          // Get comments for relevant tickets
-          const commentRows = await db.getAll("zendesk_comments");
-          const allComments = commentRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-
-          zdContext = "\n\n=== ZENDESK TICKET HISTORY (Use this as primary reference) ===\n";
-          for (const t of relevant.slice(0, 15)) {
-            const tComments = allComments.filter(c => c.ticketId === t.id && c.public);
-            const resolution = tComments.length > 0 ? tComments[tComments.length - 1].body : "";
-            zdContext += `\n--- Ticket #${t.id}: ${t.subject || "No subject"} ---\n`;
-            zdContext += `Status: ${t.status} | Priority: ${t.priority || "Normal"} | Tags: ${(t.tags || []).join(", ")}\n`;
-            zdContext += `Description: ${(t.description || "").substring(0, 400)}\n`;
-            if (resolution) zdContext += `Resolution: ${resolution.substring(0, 600)}\n`;
-          }
-          zdContext += "\n=== END ZENDESK HISTORY ===\n";
-        }
-      } catch (e) { console.warn("[AI Guide] Zendesk data fetch:", e.message); }
-
-      // Also gather internal KB entries
-      let kbContext = "";
-      try {
-        const kbItems = await db.getAll("ai_knowledge");
-        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-        const topicLower = topic.toLowerCase();
-        const matched = kbEntries.filter(e => {
-          const searchable = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
-          return topicLower.split(/\s+/).some(w => w.length > 2 && searchable.includes(w));
-        }).slice(0, 10);
-        if (matched.length > 0) {
-          kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE ===\n" +
-            matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
-            "\n=== END INTERNAL KB ===\n";
-        }
-      } catch (e) { console.warn("[AI Guide] KB fetch:", e.message); }
-
-      const systemPrompt = `You are a professional IT documentation writer for VGC Technology Pte Ltd, Singapore. You create comprehensive, user-friendly technical guides and documentation.
-
-TASK: Generate a COMPLETE, professional-grade technical guide/documentation on the topic: "${topic}"
-Category: ${category || "General"}
-
-REQUIREMENTS — MUST follow ALL:
-1. TITLE: Clear, professional title with document metadata (version, date, author, category)
-2. TABLE OF CONTENTS: Numbered sections
-3. OVERVIEW/INTRODUCTION: What this guide covers, who it's for, prerequisites
-4. STEP-BY-STEP INSTRUCTIONS: Every step numbered, with clear actions. Each step MUST include:
-   - 📸 [Screenshot: <description of what to capture>] — placeholder for where screenshots should be taken
-   - 💡 Tip or Note callouts for important information
-   - ⚠️ Warning callouts for critical steps
-5. TROUBLESHOOTING SECTION: Common issues and fixes (based on Zendesk history if available)
-6. FAQ SECTION: At least 5 frequently asked questions with answers
-7. REFERENCE LINKS: Official vendor documentation, Microsoft Learn links, etc.
-8. APPENDIX: Glossary of terms, related articles, version history
-
-FORMATTING RULES:
-- Use Markdown formatting throughout
-- Include screenshot placeholders: 📸 [Screenshot: description]
-- Use tables for structured data (settings, configurations, comparison)
-- Use code blocks for commands, scripts, paths
-- Use callout boxes: 💡 **Tip:** | ⚠️ **Warning:** | ℹ️ **Note:** | ✅ **Best Practice:**
-- Include estimated time for each major section
-- Professional tone but user-friendly and easy to follow
-- Minimum 2000 words — be thorough and comprehensive
-
-${zdContext}
-${kbContext}
-
-IMPORTANT: Reference real ticket data and resolutions from the Zendesk history above. Cite specific ticket numbers when referencing past issues and solutions. If no Zendesk data is available, generate based on industry best practices and common enterprise IT patterns.`;
-
-      const userPrompt = `Generate a complete professional guide on: ${topic}`;
-
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 4000 };
-
-      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({
-          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
-          method: "POST",
-          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
-        }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => {
-            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
-            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
-          });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(120000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (120s)")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
-      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
-
-      // Auto-save as KB entry
-      const guideId = `kb_guide_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const entry = {
-        id: guideId, title: `Guide: ${topic}`, category: category || "General",
-        content: text, tags: ["ai-generated", "guide", ...topic.toLowerCase().split(/\s+/).filter(w => w.length > 2).slice(0, 5)],
-        trainedBy: "AI Guide Generator", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        source: "ai-generated", type: "guide"
-      };
-      await db.upsert("ai_knowledge", guideId, JSON.stringify(entry));
-      await db.audit("ai_knowledge", guideId, "create", JSON.stringify({ title: entry.title, category: entry.category, type: "ai-generated-guide" }), "AI Guide Generator");
-
-      console.log(`[AI Guide] Generated guide: "${topic}" (${text.length} chars)`);
-      return json(res, 200, { guide: text, id: guideId, title: entry.title, zdTicketsReferenced: zdContext ? zdContext.split("--- Ticket #").length - 1 : 0 });
-    } catch (err) {
-      console.error("[AI Guide Generator]", err.message);
-      return json(res, 502, { error: err.message });
-    }
-  }
-
-  // ─── AI Generate Doc from SharePoint Link ─────────────────────────
-  if (pathname === "/api/ai/generate-doc" && req.method === "POST") {
-    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
-      return json(res, 503, { error: "Azure OpenAI not configured" });
-    }
-    try {
-      const body = await parseBody(req);
-      const { url, title, docType } = body || {};
-      if (!url && !title) return json(res, 400, { error: "url or title is required" });
-
-      const systemPrompt = `You are a professional IT documentation writer for VGC Technology Pte Ltd, Singapore.
-
-TASK: Generate a professional documentation article based on the SharePoint document library resource.
-
-SharePoint URL: ${url || "N/A"}
-Document Title: ${title || "Untitled"}
-Document Type: ${docType || "General Documentation"}
-
-Create a COMPLETE professional documentation that includes:
-1. **Document Header**: Title, version, date, classification, author
-2. **Executive Summary**: 2-3 paragraph overview
-3. **Scope & Purpose**: What this document covers
-4. **Detailed Content**: Comprehensive step-by-step content with:
-   - 📸 [Screenshot: <description>] placeholders for visual references
-   - Numbered procedures with clear actions
-   - Tables for configuration settings or comparisons
-   - Code blocks for any commands or scripts
-5. **Security & Compliance Notes**: PDPA, ISO 27001 considerations
-6. **Related Documents**: Links to related SharePoint documents
-7. **Revision History**: Version tracking table
-8. **Approval Section**: Sign-off template
-
-FORMATTING: Use professional Markdown. Include screenshot placeholders. Be thorough (1500+ words).
-TONE: Professional, clear, suitable for enterprise IT documentation.
-LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Shared Documents"}`;
-
-      const userPrompt = `Generate professional documentation for: ${title || url}`;
-
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 3000 };
-
-      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({
-          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
-          method: "POST",
-          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
-        }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => {
-            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
-            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
-          });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(90000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (90s)")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
-      if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
-
-      // Auto-save as KB entry
-      const docId = `kb_sp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const entry = {
-        id: docId, title: title || `SharePoint Doc: ${url}`, category: docType || "General",
-        content: text, tags: ["sharepoint", "ai-generated", "documentation"],
-        trainedBy: "SharePoint Doc Generator", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        source: "sharepoint", spUrl: url, type: "sharepoint-doc"
-      };
-      await db.upsert("ai_knowledge", docId, JSON.stringify(entry));
-      await db.audit("ai_knowledge", docId, "create", JSON.stringify({ title: entry.title, url, type: "sharepoint-doc" }), "SharePoint Doc Generator");
-
-      console.log(`[AI Doc] Generated from SharePoint: "${title || url}" (${text.length} chars)`);
-      return json(res, 200, { document: text, id: docId, title: entry.title });
-    } catch (err) {
-      console.error("[AI Doc Generator]", err.message);
-      return json(res, 502, { error: err.message });
-    }
-  }
-
-  // ─── AI Error Resolver ─────────────────────────────────────────────
-  if (pathname === "/api/ai/resolve-error" && req.method === "POST") {
-    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
-      return json(res, 503, { error: "Azure OpenAI not configured" });
-    }
-    try {
-      const body = await parseBody(req);
-      const { errorType, errorCode, errorMessage, errorDetails, errorStack, context } = body || {};
-      if (!errorMessage) return json(res, 400, { error: "errorMessage is required" });
-
-      // Check internal KB for similar past errors
-      let pastResolutions = "";
-      try {
-        const kbItems = await db.getAll("ai_knowledge");
-        const kbEntries = kbItems.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-        const errorLower = `${errorType} ${errorCode} ${errorMessage}`.toLowerCase();
-        const matched = kbEntries.filter(e => {
-          const searchable = `${e.title} ${e.content} ${(e.tags || []).join(" ")}`.toLowerCase();
-          return errorLower.split(/\s+/).filter(w => w.length > 3).some(w => searchable.includes(w));
-        }).slice(0, 5);
-        if (matched.length > 0) {
-          pastResolutions = "\n\nPAST RESOLUTIONS FROM KNOWLEDGE BASE:\n" +
-            matched.map(m => `- ${m.title}: ${m.content.substring(0, 300)}`).join("\n");
-        }
-      } catch (e) { /* ignore */ }
-
-      const systemPrompt = `You are an expert IT troubleshooter and error resolver for VGC Technology Pte Ltd. You MUST solve every error presented to you.
-
-ERROR DETAILS:
-- Type: ${errorType || "Unknown"}
-- Code: ${errorCode || "N/A"}
-- Message: ${errorMessage}
-- Details: ${errorDetails || "N/A"}
-- Stack: ${(errorStack || "").substring(0, 500)}
-- Context: ${context || "VGC-ITSM application"}
-${pastResolutions}
-
-HARD RULES:
-1. ALWAYS provide a solution — never say "I can't help" or "contact support"
-2. Give IMMEDIATE actionable steps the user can try RIGHT NOW
-3. Provide MULTIPLE resolution paths (primary fix + alternatives)
-4. Explain WHY the error occurred in simple terms
-5. Include prevention tips so it doesn't happen again
-
-RESPONSE FORMAT:
-## 🔍 Error Analysis
-Brief explanation of what went wrong and why.
-
-## ⚡ Immediate Fix (Try This First)
-Step-by-step primary solution.
-
-## 🔄 Alternative Solutions
-2-3 alternative approaches if the primary fix doesn't work.
-
-## 🛡️ Prevention
-How to prevent this error in the future.
-
-## 📚 References
-Links to relevant documentation.
-
-Keep it conversational, actionable, and human-friendly. Be a helpful colleague, not a bot.`;
-
-      const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
-
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
-
-      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({
-          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
-          method: "POST",
-          headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
-        }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => {
-            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
-            else reject(new Error(`Azure OpenAI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
-          });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("Timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
-      if (!text) return json(res, 502, { error: "Empty response from AI" });
-      return json(res, 200, { resolution: text, model: AZURE_OPENAI_MODEL });
-    } catch (err) {
-      console.error("[AI Error Resolver]", err.message);
-      return json(res, 502, { error: err.message });
-    }
-  }
-
   // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
@@ -3457,6 +3145,473 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     } catch (err) {
       console.error("[CYBER NEWS] Fetch error:", err.message);
       return json(res, 502, { error: "Failed to fetch cyber news feeds", detail: err.message });
+    }
+  }
+
+  // ─── AI Actions Engine: Proactive Monitor + Approval Workflow ────────
+  // POST /api/ai/actions/scan — AI scans all open incidents/tickets for critical cases, generates action items
+  if (pathname === "/api/ai/actions/scan" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 100000);
+      const { incidents: clientIncidents, changes: clientChanges, requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy (Entra user) required" });
+      const allIncidents = clientIncidents || [];
+      const allChanges = clientChanges || [];
+
+      // Filter critical/high priority open incidents
+      const critical = allIncidents.filter(i =>
+        (i.status === "Open" || i.status === "In Progress") &&
+        (i.priority === "Sev-A" || i.priority === "Sev-B")
+      );
+      // SLA at-risk items
+      const slaAtRisk = allIncidents.filter(i =>
+        (i.status === "Open" || i.status === "In Progress") &&
+        i.created && i.slaTarget && (i.created / i.slaTarget) >= 0.8
+      );
+      // Pending changes needing attention
+      const pendingChanges = allChanges.filter(c => c.status === "Awaiting Approval" || c.status === "Implementing");
+
+      if (critical.length === 0 && slaAtRisk.length === 0 && pendingChanges.length === 0) {
+        return json(res, 200, { actions: [], message: "No critical items requiring AI action" });
+      }
+
+      const contextSummary = [
+        critical.length > 0 ? `CRITICAL INCIDENTS (${critical.length}):\n${critical.map(i => `- ${i.id}: ${i.title} [${i.priority}] assigned:${i.assignee||'Unassigned'} SLA:${i.slaTarget}h status:${i.status} category:${i.category}`).join("\n")}` : "",
+        slaAtRisk.length > 0 ? `SLA AT-RISK (${slaAtRisk.length}):\n${slaAtRisk.map(i => `- ${i.id}: ${i.title} [${i.priority}] SLA ${Math.round((i.created/i.slaTarget)*100)}% elapsed`).join("\n")}` : "",
+        pendingChanges.length > 0 ? `PENDING CHANGES (${pendingChanges.length}):\n${pendingChanges.map(c => `- ${c.id}: ${c.title} [${c.status}] risk:${c.risk}`).join("\n")}` : "",
+      ].filter(Boolean).join("\n\n");
+
+      const systemPrompt = `You are VGC-ITSM AI Assist Engine for VGC Technology Pte Ltd. Analyze the following ITSM data and generate a JSON array of action items that need human approval.
+
+For each action, provide:
+- id: unique action ID (format: AIA-<timestamp>-<seq>)
+- type: one of "escalation", "notification", "assignment", "sla_warning", "follow_up", "change_review", "internal_note"
+- severity: "critical", "high", "medium", "low"
+- title: short action title (max 80 chars)
+- description: detailed description of what needs to happen
+- incidentId: related incident/change ID
+- suggestedAction: exactly what AI recommends doing
+- emailDraft: if type involves notification, include a draft email { to, subject, body }
+- internalNote: note for the internal team only (never shown to customers)
+- confidence: 0-100
+- autoExecutable: true only for low-risk, routine actions (SLA warnings, internal notes, routine follow-ups). false for escalations, customer-facing, financial, or irreversible actions.
+- reasoning: brief explanation of why this action is recommended
+
+RULES:
+- NEVER auto-execute customer-facing actions. All customer emails require human approval.
+- Mark escalation actions as critical severity.
+- For SLA at-risk items, suggest proactive customer notification.
+- For unassigned critical tickets, suggest immediate assignment.
+- Generate internal notes with clear action items for the team.
+- All actions must be approvable/rejectable by any Entra-authenticated user.
+
+Respond ONLY with a valid JSON array. No markdown wrapping.`;
+
+      const payload = {
+        model: AZURE_OPENAI_MODEL,
+        input: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Current time: ${new Date().toISOString()}\nRequested by: ${requestedBy}\n\n${contextSummary}` }
+        ],
+        max_output_tokens: 3000
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let actions;
+      try {
+        actions = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+        if (!Array.isArray(actions)) actions = [actions];
+      } catch {
+        actions = [];
+      }
+
+      // Stamp each action with metadata and save to DB
+      const now = new Date().toISOString();
+      const savedActions = [];
+      for (const action of actions) {
+        const actionId = action.id || `AIA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2,6)}`;
+        const record = {
+          ...action,
+          id: actionId,
+          status: "pending_approval", // pending_approval | approved | rejected | executed | failed
+          createdAt: now,
+          createdBy: "AI Assist Engine",
+          requestedBy,
+          approvedBy: null,
+          approvedAt: null,
+          executedAt: null,
+          executionResult: null,
+        };
+        await db.upsert("ai_actions", actionId, JSON.stringify(record));
+        savedActions.push(record);
+      }
+
+      console.log(`[AI Actions] Scan generated ${savedActions.length} action items for ${requestedBy}`);
+      return json(res, 200, { actions: savedActions, scannedAt: now, criticalCount: critical.length, slaAtRiskCount: slaAtRisk.length });
+    } catch (err) {
+      console.error("[AI Actions Scan]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/actions — list all AI action items (with optional status filter)
+  if (pathname === "/api/ai/actions" && req.method === "GET") {
+    try {
+      const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+      const statusFilter = qs.get("status"); // pending_approval, approved, rejected, executed
+      const allRaw = await db.getAll("ai_actions");
+      let actions = allRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      if (statusFilter) actions = actions.filter(a => a.status === statusFilter);
+      actions.sort((a, b) => {
+        const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+        return (sevOrder[a.severity] || 3) - (sevOrder[b.severity] || 3);
+      });
+      return json(res, 200, { actions, total: actions.length });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/actions/:id/approve — approve an AI action (requires Entra user)
+  if (pathname.match(/^\/api\/ai\/actions\/([^/]+)\/approve$/) && req.method === "POST") {
+    const actionId = pathname.match(/^\/api\/ai\/actions\/([^/]+)\/approve$/)[1];
+    try {
+      const body = await parseBody(req);
+      const { approvedBy, approverEmail } = body;
+      if (!approvedBy) return json(res, 400, { error: "approvedBy (Entra user name) required" });
+
+      const existing = await db.getById("ai_actions", actionId);
+      if (!existing) return json(res, 404, { error: "Action not found" });
+      const action = JSON.parse(existing.data);
+      if (action.status !== "pending_approval") {
+        return json(res, 409, { error: `Action already ${action.status}` });
+      }
+
+      action.status = "approved";
+      action.approvedBy = approvedBy;
+      action.approverEmail = approverEmail || "";
+      action.approvedAt = new Date().toISOString();
+      await db.upsert("ai_actions", actionId, JSON.stringify(action));
+
+      console.log(`[AI Actions] Action ${actionId} APPROVED by ${approvedBy}`);
+
+      // Auto-execute if the action is a notification/internal_note type
+      let executionResult = null;
+      if (action.type === "notification" && action.emailDraft) {
+        try {
+          const draft = action.emailDraft;
+          if (draft.to && draft.subject && draft.body) {
+            await graphSendMail({
+              to: draft.to,
+              subject: draft.subject,
+              body: `<div style="font-family:Arial,sans-serif;max-width:650px;">
+                ${draft.body.replace(/\n/g, "<br/>")}
+                <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
+                <p style="color:#888;font-size:11px;">This notification was generated by VGC AI Assist and approved by ${approvedBy}.<br/>
+                Action ID: ${actionId} | ${new Date().toISOString()}<br/>
+                VGC Technology Pte Ltd — IT Service Management</p>
+              </div>`
+            });
+            executionResult = { emailSent: true, to: draft.to };
+          }
+        } catch (emailErr) {
+          executionResult = { emailSent: false, error: emailErr.message };
+        }
+      }
+      if (action.type === "internal_note" && action.incidentId) {
+        executionResult = { noteAdded: true, incidentId: action.incidentId, note: action.suggestedAction };
+      }
+
+      if (executionResult) {
+        action.status = "executed";
+        action.executedAt = new Date().toISOString();
+        action.executionResult = executionResult;
+        await db.upsert("ai_actions", actionId, JSON.stringify(action));
+      }
+
+      // Send confirmation email to approver
+      if (approverEmail) {
+        try {
+          await graphSendMail({
+            to: approverEmail,
+            subject: `[VGC AI Assist] Action Approved: ${action.title}`,
+            body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+              <div style="background:linear-gradient(135deg,#4CAF50,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
+                <h2 style="margin:0;color:#fff;font-size:18px;">✅ AI Action Approved</h2>
+              </div>
+              <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+                <p style="margin:0 0 12px;color:#333;"><strong>Action:</strong> ${action.title}</p>
+                <p style="margin:0 0 12px;color:#333;"><strong>Type:</strong> ${action.type} | <strong>Severity:</strong> ${action.severity}</p>
+                <p style="margin:0 0 12px;color:#333;"><strong>Approved by:</strong> ${approvedBy}</p>
+                <p style="margin:0 0 12px;color:#333;"><strong>Status:</strong> ${action.status === "executed" ? "Executed Successfully" : "Approved — Awaiting Execution"}</p>
+                ${executionResult ? `<p style="margin:0 0 12px;color:#333;"><strong>Result:</strong> ${JSON.stringify(executionResult)}</p>` : ""}
+                <p style="margin:0 0 12px;color:#666;"><strong>Description:</strong> ${action.description}</p>
+                <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+                <p style="color:#888;font-size:11px;">VGC AI Assist — All actions are logged and auditable.<br/>Action ID: ${actionId}</p>
+              </div>
+            </div>`
+          });
+        } catch (e) { console.warn("[AI Actions] Confirmation email failed:", e.message); }
+      }
+
+      return json(res, 200, { success: true, action, executionResult });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/actions/:id/reject — reject an AI action
+  if (pathname.match(/^\/api\/ai\/actions\/([^/]+)\/reject$/) && req.method === "POST") {
+    const actionId = pathname.match(/^\/api\/ai\/actions\/([^/]+)\/reject$/)[1];
+    try {
+      const body = await parseBody(req);
+      const { rejectedBy, reason } = body;
+      if (!rejectedBy) return json(res, 400, { error: "rejectedBy required" });
+
+      const existing = await db.getById("ai_actions", actionId);
+      if (!existing) return json(res, 404, { error: "Action not found" });
+      const action = JSON.parse(existing.data);
+      if (action.status !== "pending_approval") {
+        return json(res, 409, { error: `Action already ${action.status}` });
+      }
+
+      action.status = "rejected";
+      action.rejectedBy = rejectedBy;
+      action.rejectedAt = new Date().toISOString();
+      action.rejectionReason = reason || "";
+      await db.upsert("ai_actions", actionId, JSON.stringify(action));
+
+      console.log(`[AI Actions] Action ${actionId} REJECTED by ${rejectedBy}: ${reason || "No reason"}`);
+      return json(res, 200, { success: true, action });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/actions/:id/execute — execute an approved action
+  if (pathname.match(/^\/api\/ai\/actions\/([^/]+)\/execute$/) && req.method === "POST") {
+    const actionId = pathname.match(/^\/api\/ai\/actions\/([^/]+)\/execute$/)[1];
+    try {
+      const body = await parseBody(req);
+      const { executedBy } = body;
+      if (!executedBy) return json(res, 400, { error: "executedBy required" });
+
+      const existing = await db.getById("ai_actions", actionId);
+      if (!existing) return json(res, 404, { error: "Action not found" });
+      const action = JSON.parse(existing.data);
+      if (action.status !== "approved") {
+        return json(res, 409, { error: `Action must be approved first (current: ${action.status})` });
+      }
+
+      let executionResult = { success: true };
+
+      // Execute based on action type
+      if (action.type === "notification" && action.emailDraft) {
+        const draft = action.emailDraft;
+        if (draft.to && draft.subject && draft.body) {
+          try {
+            await graphSendMail({
+              to: draft.to,
+              subject: draft.subject,
+              body: `<div style="font-family:Arial,sans-serif;max-width:650px;">
+                ${draft.body.replace(/\n/g, "<br/>")}
+                <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
+                <p style="color:#888;font-size:11px;">Sent by VGC AI Assist, approved by ${action.approvedBy}.<br/>
+                Action ID: ${actionId}<br/>VGC Technology — IT Service Management</p>
+              </div>`
+            });
+            executionResult = { emailSent: true, to: draft.to };
+          } catch (emailErr) {
+            executionResult = { emailSent: false, error: emailErr.message };
+          }
+        }
+      } else if (action.type === "follow_up") {
+        executionResult = { followUpScheduled: true, incidentId: action.incidentId, note: action.suggestedAction };
+      } else if (action.type === "internal_note") {
+        executionResult = { noteAdded: true, incidentId: action.incidentId, note: action.suggestedAction };
+      }
+
+      action.status = "executed";
+      action.executedBy = executedBy;
+      action.executedAt = new Date().toISOString();
+      action.executionResult = executionResult;
+      await db.upsert("ai_actions", actionId, JSON.stringify(action));
+
+      console.log(`[AI Actions] Action ${actionId} EXECUTED by ${executedBy}:`, executionResult);
+      return json(res, 200, { success: true, action, executionResult });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/actions/send-approval-email — send approval request via Outlook
+  if (pathname === "/api/ai/actions/send-approval-email" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { actionId, approverEmails, appUrl } = body;
+      if (!actionId || !approverEmails) return json(res, 400, { error: "actionId and approverEmails required" });
+
+      const existing = await db.getById("ai_actions", actionId);
+      if (!existing) return json(res, 404, { error: "Action not found" });
+      const action = JSON.parse(existing.data);
+      const baseUrl = appUrl || "https://vgc-itsm1-app.azurewebsites.net";
+
+      const severityColor = { critical: "#FF4444", high: "#FF8800", medium: "#FFB347", low: "#4CAF50" };
+      const sevColor = severityColor[action.severity] || "#666";
+
+      const emailBody = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:650px;margin:0 auto;">
+        <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;border-radius:10px 10px 0 0;">
+          <h2 style="margin:0;color:#fff;font-size:20px;">🤖 VGC AI Assist — Action Requires Your Approval</h2>
+          <p style="margin:6px 0 0;color:#8B8FA3;font-size:13px;">AI has identified an action that needs human review</p>
+        </div>
+        <div style="background:#ffffff;padding:24px;border:1px solid #e0e0e0;border-top:none;">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+            <span style="display:inline-block;padding:4px 12px;border-radius:20px;background:${sevColor}22;color:${sevColor};font-weight:700;font-size:12px;text-transform:uppercase;">${action.severity}</span>
+            <span style="display:inline-block;padding:4px 12px;border-radius:20px;background:#6366F122;color:#6366F1;font-weight:600;font-size:12px;">${action.type}</span>
+            ${action.incidentId ? `<span style="display:inline-block;padding:4px 12px;border-radius:20px;background:#EC489922;color:#EC4899;font-weight:600;font-size:12px;">🎫 ${action.incidentId}</span>` : ""}
+          </div>
+          <h3 style="margin:0 0 12px;color:#1a1a2e;font-size:17px;">${action.title}</h3>
+          <p style="margin:0 0 16px;color:#444;font-size:14px;line-height:1.6;">${action.description}</p>
+          <div style="background:#f0f4ff;padding:14px 16px;border-radius:8px;border-left:4px solid #6366F1;margin:16px 0;">
+            <p style="margin:0 0 4px;color:#6366F1;font-weight:700;font-size:13px;">💡 AI Suggested Action:</p>
+            <p style="margin:0;color:#333;font-size:13px;line-height:1.5;">${action.suggestedAction || action.description}</p>
+          </div>
+          ${action.internalNote ? `<div style="background:#FFF8E1;padding:14px 16px;border-radius:8px;border-left:4px solid #FFB347;margin:16px 0;">
+            <p style="margin:0 0 4px;color:#F57C00;font-weight:700;font-size:13px;">📋 Internal Note:</p>
+            <p style="margin:0;color:#555;font-size:13px;line-height:1.5;">${action.internalNote}</p>
+          </div>` : ""}
+          <p style="margin:16px 0 8px;color:#333;font-size:13px;"><strong>AI Confidence:</strong> ${action.confidence || "N/A"}%</p>
+          <p style="margin:0 0 20px;color:#333;font-size:13px;"><strong>Reasoning:</strong> ${action.reasoning || "Based on severity and SLA analysis"}</p>
+          <div style="text-align:center;margin:24px 0 16px;">
+            <p style="color:#666;font-size:13px;margin:0 0 12px;">Please review and take action in VGC ITSM:</p>
+            <a href="${baseUrl}/#ai-actions" style="display:inline-block;padding:12px 32px;background:linear-gradient(135deg,#4CAF50,#45a049);color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:0 8px;">✅ Review & Approve</a>
+            <a href="${baseUrl}/#ai-actions" style="display:inline-block;padding:12px 32px;background:linear-gradient(135deg,#FF5252,#f44336);color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:0 8px;">❌ Review & Reject</a>
+          </div>
+          <p style="text-align:center;color:#999;font-size:11px;margin-top:8px;">Click either button to open VGC ITSM and review the full action details</p>
+        </div>
+        <div style="background:#f8f9fa;padding:14px 24px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+          <p style="margin:0;color:#999;font-size:11px;">VGC AI Assist — All actions require human approval before execution.<br/>
+          Action ID: ${actionId} | Generated: ${action.createdAt}<br/>
+          VGC Technology Pte Ltd — IT Service Management</p>
+        </div>
+      </div>`;
+
+      const recipients = Array.isArray(approverEmails) ? approverEmails : [approverEmails];
+      await graphSendMail({
+        to: recipients,
+        subject: `[Action Required] 🤖 AI Assist: ${action.severity.toUpperCase()} — ${action.title}`,
+        body: emailBody
+      });
+
+      console.log(`[AI Actions] Approval email sent to ${recipients.join(", ")} for action ${actionId}`);
+      return json(res, 200, { success: true, sentTo: recipients, actionId });
+    } catch (err) {
+      console.error("[AI Actions Email]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/actions/monitor — background AI monitor: scan + auto-email approvers for critical items
+  if (pathname === "/api/ai/actions/monitor" && req.method === "POST") {
+    try {
+      const body = await parseBody(req, 200000);
+      const { incidents: clientIncidents, changes: clientChanges, requestedBy, approverEmails, appUrl } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      // Step 1: Run AI scan
+      const allIncidents = clientIncidents || [];
+      const allChanges = clientChanges || [];
+      const critical = allIncidents.filter(i =>
+        (i.status === "Open" || i.status === "In Progress") &&
+        (i.priority === "Sev-A" || i.priority === "Sev-B")
+      );
+      const slaAtRisk = allIncidents.filter(i =>
+        (i.status === "Open" || i.status === "In Progress") &&
+        i.created && i.slaTarget && (i.created / i.slaTarget) >= 0.8
+      );
+
+      if (critical.length === 0 && slaAtRisk.length === 0) {
+        return json(res, 200, { actions: [], message: "All clear — no critical items detected", monitoredAt: new Date().toISOString() });
+      }
+
+      // Step 2: Generate actions via AI (reuse scan logic internally)
+      const scanPayload = JSON.stringify({ incidents: clientIncidents, changes: clientChanges, requestedBy });
+      const scanResult = await new Promise((resolve, reject) => {
+        const scanReq = require("http").request({
+          hostname: "localhost", port: PORT,
+          path: "/api/ai/actions/scan", method: "POST",
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(scanPayload) }
+        }, (r) => {
+          let data = ""; r.on("data", c => data += c);
+          r.on("end", () => { try { resolve(JSON.parse(data)); } catch { resolve({ actions: [] }); } });
+        });
+        scanReq.on("error", reject);
+        scanReq.setTimeout(50000, () => { scanReq.destroy(); reject(new Error("Monitor scan timeout")); });
+        scanReq.write(scanPayload);
+        scanReq.end();
+      });
+
+      const actions = scanResult.actions || [];
+
+      // Step 3: Email approvers for critical/high actions
+      let emailsSent = 0;
+      if (approverEmails && actions.length > 0) {
+        const criticalActions = actions.filter(a => a.severity === "critical" || a.severity === "high");
+        for (const action of criticalActions.slice(0, 5)) { // max 5 emails per scan
+          try {
+            const emailPayload = JSON.stringify({ actionId: action.id, approverEmails, appUrl });
+            await new Promise((resolve, reject) => {
+              const eReq = require("http").request({
+                hostname: "localhost", port: PORT,
+                path: "/api/ai/actions/send-approval-email", method: "POST",
+                headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(emailPayload) }
+              }, (r) => {
+                let data = ""; r.on("data", c => data += c);
+                r.on("end", () => resolve(data));
+              });
+              eReq.on("error", reject);
+              eReq.setTimeout(20000, () => { eReq.destroy(); reject(new Error("Email timeout")); });
+              eReq.write(emailPayload);
+              eReq.end();
+            });
+            emailsSent++;
+          } catch (e) { console.warn("[AI Monitor] Email failed for action", action.id, e.message); }
+        }
+      }
+
+      console.log(`[AI Monitor] Scan complete: ${actions.length} actions, ${emailsSent} approval emails sent`);
+      return json(res, 200, {
+        actions,
+        totalActions: actions.length,
+        emailsSent,
+        monitoredAt: new Date().toISOString(),
+        criticalIncidents: critical.length,
+        slaAtRisk: slaAtRisk.length
+      });
+    } catch (err) {
+      console.error("[AI Monitor]", err.message);
+      return json(res, 502, { error: err.message });
     }
   }
 
