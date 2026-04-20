@@ -44,7 +44,7 @@ const assert = (name, cond) => { total++; if (cond) { pass++; console.log("  PAS
   assert("Frontend returns 200", fe.status === 200);
   const html = await fe.text();
   assert("Frontend has React root", html.includes('id="root"'));
-  assert("Frontend loads new bundle", html.includes("index-C6kA6pro.js"));
+  assert("Frontend loads new bundle", html.includes("index-Cfq2zjUj.js"));
 
   // 6. AI endpoint
   const ai = await fetch(BASE + "/api/settings/openai").then(r => r.json());

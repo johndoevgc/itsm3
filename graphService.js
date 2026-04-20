@@ -31,7 +31,13 @@ export async function getMyPhoto(accessToken) {
     });
     if (!res.ok) return null;
     const blob = await res.blob();
-    return URL.createObjectURL(blob);
+    // Convert to base64 data URL so it persists in localStorage across page reloads
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
   } catch {
     return null;
   }

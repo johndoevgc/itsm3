@@ -183,11 +183,11 @@ const AI_FEATURE_EXPLAINERS = {
 };
 
 const ASSETS = [
-  { id: "AST-001", name: "FortiGate 200F Primary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000123", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.1", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: ["INC0001"], customer: "VGC Technology", notes: "Primary VPN gateway — linked to INC0001 VPN outage" },
+  { id: "AST-001", name: "FortiGate 200F Primary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000123", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.1", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "Primary VPN gateway" },
   { id: "AST-002", name: "FortiGate 200F Secondary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000124", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.2", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "HA failover node" },
-  { id: "AST-003", name: "Core Switch Cisco C9300", type: "Switch", status: "In Use", serialNumber: "FOC2645Y0AB", manufacturer: "Cisco", model: "Catalyst 9300-48P", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.0.1", location: "SG-DC1", warranty: "2027-03-10", purchaseDate: "2024-03-10", purchaseCost: 18200, category: "Network", linkedIncidents: ["INC0001"], customer: "VGC Technology", notes: "SW-CORE-01 — referenced in INC0001 affected assets" },
+  { id: "AST-003", name: "Core Switch Cisco C9300", type: "Switch", status: "In Use", serialNumber: "FOC2645Y0AB", manufacturer: "Cisco", model: "Catalyst 9300-48P", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.0.1", location: "SG-DC1", warranty: "2027-03-10", purchaseDate: "2024-03-10", purchaseCost: 18200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "SW-CORE-01 — core network switch" },
   { id: "AST-004", name: "Exchange Server 2019", type: "Server", status: "In Use", serialNumber: "MXF03926HV", manufacturer: "Dell", model: "PowerEdge R740", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.1.50", location: "SG-DC1", warranty: "2026-09-20", purchaseDate: "2023-09-20", purchaseCost: 22000, category: "Server", linkedIncidents: [], customer: "VGC Technology", notes: "On-prem Exchange — patching required per GTHR-001 CVE-2026-21413" },
-  { id: "AST-005", name: "Dell Latitude 5540 — Daniel Lim", type: "Laptop", status: "In Use", serialNumber: "DL5540SG001", manufacturer: "Dell", model: "Latitude 5540", assignee: "Daniel Lim", department: "Executive", ipAddress: "DHCP", location: "SG-HQ-Floor4", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "Kellington Group Pte Ltd", notes: "CTO laptop — VPN user affected by INC0001" },
+  { id: "AST-005", name: "Dell Latitude 5540 — Daniel Lim", type: "Laptop", status: "In Use", serialNumber: "DL5540SG001", manufacturer: "Dell", model: "Latitude 5540", assignee: "Daniel Lim", department: "Executive", ipAddress: "DHCP", location: "SG-HQ-Floor4", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "Kellington Group Pte Ltd", notes: "CTO laptop" },
   { id: "AST-006", name: "Dell Latitude 5540 — Marcus Chen", type: "Laptop", status: "In Use", serialNumber: "DL5540SG002", manufacturer: "Dell", model: "Latitude 5540", assignee: "Marcus Chen", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor2", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "L1 Support Engineer workstation" },
   { id: "AST-007", name: "Azure VM — ITSM Production", type: "Virtual Machine", status: "Running", serialNumber: "N/A", manufacturer: "Microsoft", model: "Azure B2s", assignee: "Cloud Engineering", department: "IT Infrastructure", ipAddress: "10.20.0.10", location: "Azure-SEA", warranty: "N/A", purchaseDate: "2025-11-01", purchaseCost: 0, category: "Cloud", linkedIncidents: [], customer: "VGC Technology", notes: "Hosts vgc-itsm1-app — Node.js 20 runtime" },
   { id: "AST-008", name: "Cisco Meraki MR46 — Floor 1", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1001", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.11", location: "SG-HQ-Floor1", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "WiFi 6 access point" },
@@ -990,23 +990,14 @@ const INTEGRATION_CATALOG = [
   { id: "INT15", name: "Sophos Central", category: "Security", icon: "🛡️", status: "connected", description: "Firewall management — groups, firewalls, alerts & threat intelligence" },
 ];
 
-const INITIAL_INCIDENTS = [
-  { id: "INC0001", title: "Production VPN gateway down — all remote users disconnected", description: "All 120+ remote staff unable to establish VPN tunnel. Gateway reports high memory and connection pool exhaustion. FortiGate HA failover did not trigger. Business-critical ERP and CRM systems unreachable for remote workforce.", category: "Network", subcategory: "VPN / Remote Access", priority: "Sev-A", urgency: "Critical", status: "In Progress", assignee: "Support Engineer", assignmentGroup: "Network Engineering", reporter: "VGC Admin", reporterName: "Daniel Lim", reporterEmail: "daniel.lim@kellington.com", reporterRole: "CTO — Kellington Group", customer: "Kellington Group Pte Ltd", customerContact: "Daniel Lim", customerPhone: "+65 6321 8800", customerAddress: "1 Harbourfront Place, Singapore", contactMethod: "Phone Call", impact: "Enterprise", affectedService: "VPN Access", affectedAsset: "FW-VPN-GW-01", location: "Singapore DC-1", created: 1.5, createdAt: new Date(Date.now() - 1.5 * 3600000).toISOString(), slaTarget: 4, firstResponseTime: 0.1, aiTriaged: true, aiConfidence: 94, workaround: "Staff can use backup SSL VPN portal at vpn-backup.kellington.com (capacity limited to 30 concurrent users)", linkedProblem: "", linkedChange: "", affectedAssets: ["FW-VPN-GW-01", "SW-CORE-01"], activityLog: [
-    { id: "AL0001", type: "status", user: "VGC Admin", time: "16/04/2026, 08:14:00", detail: "Incident created — Sev-A escalation triggered automatically" },
-    { id: "AL0002", type: "email", user: "Support Engineer", time: "16/04/2026, 08:20:00", detail: "Acknowledgement email sent to daniel.lim@kellington.com", to: "daniel.lim@kellington.com", from: "engineer@vgctechnology.com", subject: "INC0001 — VPN Gateway Down — Acknowledged", body: "Hi Daniel,<br/><br/>We have received your critical report regarding the VPN gateway outage. Our Network Engineering team is actively investigating. SLA target: 4 hours.<br/><br/>Backup SSL VPN portal: vpn-backup.kellington.com<br/><br/>We will update you every 30 minutes.<br/><br/>— VGC Technology Service Desk" },
-    { id: "AL0003", type: "note", user: "Support Engineer", time: "16/04/2026, 08:35:00", detail: "Internal note added", isInternal: true, body: "FortiGate dashboard shows memory at 97%. Connection table has 4,200 stale sessions. Initiating controlled flush and failover to secondary node." },
-    { id: "AL0004", type: "status", user: "Support Engineer", time: "16/04/2026, 08:36:00", detail: "Status changed: New → In Progress" },
-  ]},
-];
+const INITIAL_INCIDENTS = [];
 const INITIAL_PROBLEMS = [
-  { id: "PRB0001", title: "Recurring VPN gateway memory exhaustion under load", status: "Under Investigation", priority: "Sev-A", category: "Network", assignee: "Network Engineering", reporter: "Support Engineer", created: 48, linkedIncidents: ["INC0001"], rootCause: "FortiGate connection table not clearing stale sessions — firmware regression in v7.4.3", workaround: "Scheduled nightly connection flush via automation", description: "VPN gateway hits 97% memory every 3-5 days when concurrent sessions exceed 200. HA failover does not trigger properly.", affectedAssets: ["FW-VPN-GW-01", "FW-VPN-GW-02"], customer: "VGC Technology", zdTicketId: null },
   { id: "PRB0002", title: "Exchange 2019 CU15 causing Outlook profile corruption", status: "Root Cause Identified", priority: "Sev-B", category: "Email", assignee: "Server Team", reporter: "Marcus Chen", created: 120, linkedIncidents: [], rootCause: "Microsoft KB5035250 patch conflicts with custom transport rules — corrupts cached mode profiles", workaround: "Delete and recreate Outlook profile, disable cached mode temporarily", description: "Multiple users reporting Outlook crashes and profile corruption after March patch cycle. Affects on-prem Exchange 2019 with CU15.", affectedAssets: ["AST-004"], customer: "VGC Technology", zdTicketId: null },
   { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", zdTicketId: null },
   { id: "PRB0004", title: "Printer spooler crashes on shared print server", status: "Known Error", priority: "Sev-D", category: "Hardware", assignee: "Server Team", reporter: "Facilities", created: 240, linkedIncidents: [], rootCause: "HP Universal Print Driver v7.1 incompatible with Windows Server 2022 spooler service", workaround: "Restart Print Spooler service — automated via Task Scheduler every 6 hours", description: "Print spooler crashes 2-3 times daily affecting Floor 2 shared printer. HP driver update pending.", affectedAssets: ["AST-010"], customer: "VGC Technology", zdTicketId: null },
 ];
 const INITIAL_CHANGES = [
   { id: "CHG0001", title: "Emergency patch Exchange Server — CVE-2026-21413 (Critical RCE)", type: "Emergency", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Security", description: "Apply Microsoft emergency security patch for Exchange Server 2019 to mitigate CVE-2026-21413 remote code execution vulnerability. CVSS 9.8. Active exploitation detected in the wild. Requires 30-minute maintenance window.", assignee: "Server Team", requester: "Security Team", scheduledStart: "2026-04-19 22:00", scheduledEnd: "2026-04-19 23:00", backoutPlan: "Restore from pre-patch snapshot if patch causes service disruption", linkedIncident: "", linkedProblem: "PRB0002", affectedAssets: ["AST-004"], customer: "VGC Technology", approvers: [{ name: "Daniel Lim", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 2 },
-  { id: "CHG0002", title: "Upgrade FortiGate firmware to v7.4.5 — fix VPN memory leak", type: "Normal", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Network", description: "Upgrade both FortiGate 200F units (primary + secondary) from v7.4.3 to v7.4.5. Fixes connection table memory leak causing VPN gateway crashes (PRB0001). Requires HA failover procedure.", assignee: "Network Engineering", requester: "Network Engineering", scheduledStart: "2026-04-20 23:00", scheduledEnd: "2026-04-21 01:00", backoutPlan: "Rollback to v7.4.3 firmware backup if failover doesn't complete cleanly", linkedIncident: "INC0001", linkedProblem: "PRB0001", affectedAssets: ["AST-001", "AST-002"], customer: "VGC Technology", approvers: [{ name: "Change Manager", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 24 },
   { id: "CHG0003", title: "Deploy phishing-resistant MFA (FIDO2 keys) for admin accounts", type: "Normal", status: "Awaiting Approval", risk: "Medium", impact: "Department", category: "Security", description: "Replace SMS-based MFA with FIDO2 security keys for all administrator and privileged accounts (15 users). Part of Cybertrust Mark CSA compliance roadmap.", assignee: "Security Team", requester: "CISO", scheduledStart: "2026-04-22 14:00", scheduledEnd: "2026-04-22 17:00", backoutPlan: "Revert to SMS MFA if FIDO2 enrollment fails — conditional access policy rollback", linkedIncident: "", linkedProblem: "", affectedAssets: [], customer: "VGC Technology", approvers: [{ name: "IT Manager", status: "Pending" }, { name: "CISO", status: "Approved" }], zdTicketId: null, created: 48 },
   { id: "CHG0004", title: "Meraki AP firmware update — WiFi 6E optimization", type: "Standard", status: "Approved", risk: "Low", impact: "Department", category: "Network", description: "Update Meraki MR46 APs on Floor 1-2 to latest firmware. Addresses DNS resolution intermittent failures during peak hours (PRB0003).", assignee: "Network Engineering", requester: "L1 Support", scheduledStart: "2026-04-21 20:00", scheduledEnd: "2026-04-21 21:00", backoutPlan: "Rollback via Meraki dashboard — automatic", linkedIncident: "", linkedProblem: "PRB0003", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", approvers: [{ name: "Change Manager", status: "Approved" }], zdTicketId: null, created: 72 },
   { id: "CHG0005", title: "Migrate ITSM database to Azure SQL Managed Instance", type: "Normal", status: "Implementing", risk: "Medium", impact: "Enterprise", category: "Cloud", description: "Migrate ITSM MSSQL database from on-prem PowerEdge R750 to Azure SQL Managed Instance for improved HA, auto-patching, and geo-redundancy. Includes data migration, connection string updates, and validation.", assignee: "Cloud Engineering", requester: "Cloud Engineering", scheduledStart: "2026-04-18 22:00", scheduledEnd: "2026-04-19 04:00", backoutPlan: "Revert connection strings to on-prem server — data sync back if needed", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-007", "AST-013"], customer: "VGC Technology", approvers: [{ name: "IT Manager", status: "Approved" }, { name: "DBA Lead", status: "Approved" }], zdTicketId: null, created: 18 },
@@ -1338,9 +1329,21 @@ export default function ITSMApp() {
   const [graphError, setGraphError] = useState(null);
   const graphFetchedRef = useRef(false);
 
-  const [incidents, setIncidents] = useState(() => _ls("vgc_incidents", INITIAL_INCIDENTS));
-  const [problems, setProblems] = useState(() => _ls("vgc_problems", INITIAL_PROBLEMS));
-  const [changes, setChanges] = useState(() => _ls("vgc_changes", INITIAL_CHANGES));
+  const [incidents, setIncidents] = useState(() => {
+    const stored = _ls("vgc_incidents", INITIAL_INCIDENTS);
+    // Clean up seed INC0001 and any linked records from prior versions
+    return stored.filter(i => i.id !== "INC0001");
+  });
+  const [problems, setProblems] = useState(() => {
+    const stored = _ls("vgc_problems", INITIAL_PROBLEMS);
+    // Clean up seed PRB0001 and any auto-generated "Problem from INC0001" records
+    return stored.filter(p => p.id !== "PRB0001" && !p.title?.includes("Problem from INC0001"));
+  });
+  const [changes, setChanges] = useState(() => {
+    const stored = _ls("vgc_changes", INITIAL_CHANGES);
+    // Clean up CHG0002 (linked to INC0001/PRB0001 seed data)
+    return stored.filter(c => c.id !== "CHG0002");
+  });
   const [requests, setRequests] = useState(() => _ls("vgc_requests", INITIAL_REQUESTS));
   const [assets, setAssets] = useState(() => _ls("vgc_assets", ASSETS));
   const [kbArticles, setKbArticles] = useState(() => _ls("vgc_kb", KB_ARTICLES));
@@ -5118,9 +5121,9 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           </button>
         </div>
         {/* Tab Content */}
-        {opsTab === "problems" && <ProblemsModule />}
-        {opsTab === "changes" && <ChangesModule />}
-        {opsTab === "requests" && <RequestsModule />}
+        {opsTab === "problems" && ProblemsModule()}
+        {opsTab === "changes" && ChangesModule()}
+        {opsTab === "requests" && RequestsModule()}
       </div>
     );
   };
@@ -16257,9 +16260,9 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
-        {ticketsSubTab === "incidents" && <IncidentsModule />}
-        {ticketsSubTab === "zendesk" && <ZendeskModule />}
-        {ticketsSubTab === "operations" && <OperationsModule />}
+        {ticketsSubTab === "incidents" && IncidentsModule()}
+        {ticketsSubTab === "zendesk" && ZendeskModule()}
+        {ticketsSubTab === "operations" && OperationsModule()}
       </div>
     );
   };
@@ -16282,8 +16285,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             ✅ Approvals <span style={{ background: "#4CAF5022", color: "#4CAF50", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length}</span>
           </button>
         </div>
-        {slaApprovalsSubTab === "sla" && <SLAModule />}
-        {slaApprovalsSubTab === "approvals" && <ApprovalsModule />}
+        {slaApprovalsSubTab === "sla" && SLAModule()}
+        {slaApprovalsSubTab === "approvals" && ApprovalsModule()}
       </div>
     );
   };
@@ -16309,38 +16312,38 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             🏗️ Architecture
           </button>
         </div>
-        {analyticsSubTab === "reports" && <ReportingModule />}
-        {analyticsSubTab === "cybernews" && <CyberNewsModule />}
-        {analyticsSubTab === "architecture" && <ArchitectureDiagram />}
+        {analyticsSubTab === "reports" && ReportingModule()}
+        {analyticsSubTab === "cybernews" && CyberNewsModule()}
+        {analyticsSubTab === "architecture" && ArchitectureDiagram()}
       </div>
     );
   };
 
   const renderModule = () => {
     switch (activeModule) {
-      case "dashboard": return <Dashboard />;
-      case "tickets": return <TicketsModule />;
-      case "incidents": return <TicketsModule />;
-      case "zendesk": return <TicketsModule />;
-      case "operations": return <OperationsModule />;
-      case "problems": return <OperationsModule />;
-      case "changes": return <OperationsModule />;
-      case "requests": return <OperationsModule />;
-      case "slaApprovals": return <SLAApprovalsModule />;
-      case "sla": return <SLAApprovalsModule />;
-      case "approvals": return <SLAApprovalsModule />;
-      case "catalog": return <CatalogModule />;
-      case "knowledge": return <KnowledgeModule />;
-      case "assets": return <AssetsModule />;
-      case "customers": return <CustomersModule />;
-      case "ai": return <AIAssistModule />;
-      case "analytics": return <AnalyticsModule />;
-      case "reports": return <AnalyticsModule />;
-      case "cybernews": return <AnalyticsModule />;
-      case "architecture": return <AnalyticsModule />;
-      case "admin": return <AdminSettingsModule />;
-      case "productivity": return <ProductivityDashboard />;
-      default: return <Dashboard />;
+      case "dashboard": return Dashboard();
+      case "tickets": return TicketsModule();
+      case "incidents": return TicketsModule();
+      case "zendesk": return TicketsModule();
+      case "operations": return OperationsModule();
+      case "problems": return OperationsModule();
+      case "changes": return OperationsModule();
+      case "requests": return OperationsModule();
+      case "slaApprovals": return SLAApprovalsModule();
+      case "sla": return SLAApprovalsModule();
+      case "approvals": return SLAApprovalsModule();
+      case "catalog": return CatalogModule();
+      case "knowledge": return KnowledgeModule();
+      case "assets": return AssetsModule();
+      case "customers": return CustomersModule();
+      case "ai": return AIAssistModule();
+      case "analytics": return AnalyticsModule();
+      case "reports": return AnalyticsModule();
+      case "cybernews": return AnalyticsModule();
+      case "architecture": return AnalyticsModule();
+      case "admin": return AdminSettingsModule();
+      case "productivity": return ProductivityDashboard();
+      default: return Dashboard();
     }
   };
 
@@ -17029,7 +17032,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             {/* Sign Out */}
             <button onClick={() => {
               setIsLoggedIn(false); setCurrentUser(null); _save("vgc_current_user", null);
-              setMsalUser(null); setMsalPhoto(null); setGraphEmails(null); setGraphCalendar(null);
+              setMsalUser(null); setMsalPhoto(null); setProfilePhoto(null); setGraphEmails(null); setGraphCalendar(null);
               setGraphChats(null); setGraphTeams(null); setGraphPresence(null); setGraphUnread(0);
               graphFetchedRef.current = false;
               if (accounts && accounts.length > 0) {
