@@ -651,6 +651,30 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ─── Seed Data Cleanup (for Entra production users) ──────────────────
+  if (pathname === "/api/db-clean-seed" && req.method === "POST") {
+    try {
+      const seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
+      const collections = ["incidents", "problems", "changes", "requests"];
+      let totalDeleted = 0;
+      for (const coll of collections) {
+        const rows = await db.getAll(coll);
+        for (const row of rows) {
+          const item = typeof row.data === "string" ? JSON.parse(row.data) : (row.data || row);
+          const isSeed = seedPattern.test(row.id || item.id);
+          const isSeedLinked = item.title?.includes("Problem from INC000") || (Array.isArray(item.linkedIncidents) && item.linkedIncidents.some(id => /^INC000\d$/.test(id)));
+          if (isSeed || isSeedLinked) {
+            await db.deleteOne(coll, row.id || item.id);
+            totalDeleted++;
+          }
+        }
+      }
+      return json(res, 200, { ok: true, cleaned: totalDeleted, timestamp: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // Graph API proxy: /api/graph?endpoint=/users
   if (pathname.startsWith("/api/graph")) {
     const endpoint = urlObj.searchParams.get("endpoint");
