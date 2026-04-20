@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
 import { allLoginScopes, graphScopes } from "./msalConfig.js";
