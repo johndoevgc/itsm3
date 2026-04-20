@@ -2560,7 +2560,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const enrichedSystemPrompt = systemPrompt + kbContext;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 800 };
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiReqOptions = {
@@ -2637,7 +2637,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
           { role: "system", content: enrichedSystemPrompt },
           { role: "user", content: userPrompt }
         ],
-        max_output_tokens: 800,
+        max_output_tokens: 1500,
         stream: true
       };
 
