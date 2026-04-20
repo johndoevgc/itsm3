@@ -2479,9 +2479,6 @@ export default function ITSMApp() {
         }
         setAiMonitorLastRun(new Date().toISOString());
       }
-      // Also run SLA predictions and pattern detection during monitor scan
-      try { await runSlaPrediction(); } catch (e2) { console.warn("[AI Monitor] SLA predict error:", e2.message); }
-      try { await runPatternDetection(); } catch (e3) { console.warn("[AI Monitor] Pattern detect error:", e3.message); }
     } catch (e) { console.warn("[AI Monitor] Scan error:", e.message); }
     setAiActionsLoading(false);
   }, [aiActionsLoading, isLoggedIn, incidents, changes, currentUser]);
@@ -2563,16 +2560,6 @@ export default function ITSMApp() {
     } catch (e) { console.warn("[AI Actions] Email error:", e.message); }
     return null;
   }, [currentUser, trackAction]);
-
-  // Auto-monitor: run every 5 minutes when enabled
-  useEffect(() => {
-    if (!aiMonitorEnabled || !isLoggedIn) return;
-    // Initial scan after 15s
-    const initialTimeout = setTimeout(() => { runAiMonitor(); }, 15000);
-    // Then every 5 minutes
-    aiMonitorRef.current = setInterval(() => { runAiMonitor(); }, 5 * 60 * 1000);
-    return () => { clearTimeout(initialTimeout); if (aiMonitorRef.current) clearInterval(aiMonitorRef.current); };
-  }, [aiMonitorEnabled, isLoggedIn, runAiMonitor]);
 
   // ─── AI Auto-Triage Engine (Phase 1) ─────────────────────────────────
   const autoTriageTicket = useCallback(async (ticket) => {
@@ -2759,6 +2746,22 @@ export default function ITSMApp() {
       }
     } catch (err) { showToast("Failed: " + err.message, "error"); }
   }, [currentUser?.name]);
+
+  // Auto-monitor: run every 5 minutes when enabled
+  // Placed after all Phase 1-5 function definitions to avoid forward references
+  useEffect(() => {
+    if (!aiMonitorEnabled || !isLoggedIn) return;
+    const runFullMonitor = async () => {
+      await runAiMonitor();
+      try { await runSlaPrediction(); } catch (e) { console.warn("[AI Monitor] SLA predict error:", e.message); }
+      try { await runPatternDetection(); } catch (e) { console.warn("[AI Monitor] Pattern detect error:", e.message); }
+    };
+    // Initial scan after 15s
+    const initialTimeout = setTimeout(runFullMonitor, 15000);
+    // Then every 5 minutes
+    aiMonitorRef.current = setInterval(runFullMonitor, 5 * 60 * 1000);
+    return () => { clearTimeout(initialTimeout); if (aiMonitorRef.current) clearInterval(aiMonitorRef.current); };
+  }, [aiMonitorEnabled, isLoggedIn, runAiMonitor, runSlaPrediction, runPatternDetection]);
 
   // ─── VGC-AI Engine API Helper (via server proxy — avoids CORS) ───────
   const callAzureOpenAI = async (systemPrompt, userPrompt) => {
