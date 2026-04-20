@@ -759,7 +759,7 @@ const server = http.createServer(async (req, res) => {
     const zdBase = `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`;
     const zdAuth = "Basic " + Buffer.from(`${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}`).toString("base64");
 
-    const zdRequest = (method, zdPath, body) => new Promise((resolve, reject) => {
+    const zdRequestOnce = (method, zdPath, body) => new Promise((resolve, reject) => {
       const url = new URL(zdBase + zdPath);
       const opts = {
         hostname: url.hostname, port: 443, path: url.pathname + url.search,
@@ -768,7 +768,10 @@ const server = http.createServer(async (req, res) => {
       const r = https.request(opts, (resp) => {
         let data = ""; resp.on("data", c => data += c);
         resp.on("end", () => {
-          if (resp.statusCode >= 200 && resp.statusCode < 300) {
+          if (resp.statusCode === 429) {
+            const retryAfter = parseInt(resp.headers["retry-after"] || "10", 10);
+            reject({ status: 429, retryAfter });
+          } else if (resp.statusCode >= 200 && resp.statusCode < 300) {
             resolve(data ? JSON.parse(data) : {});
           } else {
             reject(new Error(`Zendesk ${resp.statusCode}: ${data.substring(0, 500)}`));
@@ -776,10 +779,29 @@ const server = http.createServer(async (req, res) => {
         });
       });
       r.on("error", reject);
-      r.setTimeout(20000, () => { r.destroy(); reject(new Error("Zendesk API timeout")); });
+      r.setTimeout(30000, () => { r.destroy(); reject(new Error("Zendesk API timeout")); });
       if (body) r.write(JSON.stringify(body));
       r.end();
     });
+
+    const zdRequest = async (method, zdPath, body) => {
+      const maxRetries = 3;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          return await zdRequestOnce(method, zdPath, body);
+        } catch (err) {
+          if (err.status === 429 && attempt < maxRetries) {
+            const wait = Math.min((err.retryAfter || 10) * 1000, 60000);
+            console.log(`[ZD] Rate limited, retrying in ${wait / 1000}s (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise(r => setTimeout(r, wait));
+          } else if (err.status === 429) {
+            throw new Error(`Zendesk rate limited after ${maxRetries} retries`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    };
 
     try {
       // GET /api/zendesk/me — verify connection
@@ -998,14 +1020,22 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/historical-tickets?page=1 — paginated fetch of ALL tickets for ITSM import
+      // GET /api/zendesk/historical-tickets — cursor-based paginated fetch of ALL tickets for ITSM import
       if (pathname === "/api/zendesk/historical-tickets" && req.method === "GET") {
         const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
-        const page = parseInt(qs.get("page") || "1");
-        const statuses = qs.get("statuses") || "new,open,pending,hold,solved,closed";
-        const query = `type:ticket ${statuses.split(",").map(s => `status:${s.trim()}`).join(" ")}`;
-        const result = await zdRequest("GET", `/search.json?query=${encodeURIComponent(query)}&page=${page}&per_page=100&sort_by=created_at&sort_order=desc`);
-        const tickets = result.results || result.tickets || [];
+        const cursor = qs.get("cursor") || "";
+        const page = parseInt(qs.get("page") || "1"); // display-only counter
+        // Use cursor-based pagination (CBP) on /tickets.json — no 1000-result cap
+        let zdUrl;
+        if (cursor) {
+          zdUrl = `/tickets.json?page[size]=100&page[after]=${encodeURIComponent(cursor)}`;
+        } else {
+          zdUrl = `/tickets.json?page[size]=100&sort_by=created_at&sort_order=desc`;
+        }
+        const result = await zdRequest("GET", zdUrl);
+        const tickets = result.tickets || [];
+        const hasMore = result.meta?.has_more || false;
+        const nextCursor = result.meta?.after_cursor || null;
         // Batch-fetch unique requester IDs
         const requesterIds = [...new Set(tickets.map(t => t.requester_id).filter(Boolean))];
         const requesters = {};
@@ -1019,7 +1049,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
         // Attach requester to each ticket
         const enriched = tickets.map(t => ({ ...t, requester: requesters[t.requester_id] || null }));
-        return json(res, 200, { tickets: enriched, count: result.count || tickets.length, next_page: result.next_page || null, page });
+        return json(res, 200, { tickets: enriched, count: result.count || tickets.length, has_more: hasMore, next_cursor: nextCursor, page });
       }
 
       // GET /api/zendesk/agents — fetch Zendesk agents with groups
