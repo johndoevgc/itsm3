@@ -449,7 +449,7 @@ const VALID_COLLECTIONS = new Set([
   "customers", "service_reports",
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
-  "ai_actions",
+  "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -1647,6 +1647,21 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   };
                   await db.upsert("incidents", newInc.id, JSON.stringify(newInc));
                   console.log(`[ZD Webhook] Auto-created ITSM ${newInc.id} from new Zendesk ticket #${t.id}`);
+
+                  // AI Auto-Triage: automatically categorize, prioritize, and assign the new ticket
+                  if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
+                    try {
+                      const triagePayload = JSON.stringify({ ticket: newInc, requestedBy: "Zendesk Webhook Auto-Triage" });
+                      const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) } }, (triageRes) => {
+                        let d = ""; triageRes.on("data", c => d += c);
+                        triageRes.on("end", () => { console.log(`[ZD Webhook] AI auto-triage for ${newInc.id}: ${d.substring(0, 200)}`); });
+                      });
+                      triageReq.on("error", e => console.warn(`[ZD Webhook] AI triage failed for ${newInc.id}:`, e.message));
+                      triageReq.setTimeout(35000, () => { triageReq.destroy(); });
+                      triageReq.write(triagePayload);
+                      triageReq.end();
+                    } catch (triageErr) { console.warn("[ZD Webhook] AI triage error:", triageErr.message); }
+                  }
                 }
               }
 
@@ -3182,6 +3197,771 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
+  // ─── AI Auto-Triage + Auto-Assignment Engine (Phase 1) ────────────────
+  // POST /api/ai/auto-triage-assign — AI categorizes, prioritizes, and assigns a ticket
+  if (pathname === "/api/ai/auto-triage-assign" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 50000);
+      const { ticket, requestedBy } = body;
+      if (!ticket || !requestedBy) return json(res, 400, { error: "ticket and requestedBy required" });
+
+      // Gather context for AI
+      const allUsersRaw = await db.getAll("users");
+      const teamMembers = allUsersRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      const allIncRaw = await db.getAll("incidents");
+      const allIncidents = allIncRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      // Calculate workload per assignee
+      const openStatuses = new Set(["New", "Open", "In Progress", "Pending"]);
+      const workload = {};
+      for (const inc of allIncidents) {
+        if (openStatuses.has(inc.status) && inc.assignee && inc.assignee !== "Unassigned") {
+          workload[inc.assignee] = (workload[inc.assignee] || 0) + 1;
+        }
+      }
+
+      // Get KB articles for category matching
+      const kbRaw = await db.getAll("kb");
+      const kbArticles = kbRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const kbCategories = [...new Set(kbArticles.map(a => a.category).filter(Boolean))];
+
+      // Historical resolution stats (category → avg resolve time, best assignee)
+      const resolvedInc = allIncidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+      const categoryStats = {};
+      for (const inc of resolvedInc) {
+        const cat = inc.category || "General";
+        if (!categoryStats[cat]) categoryStats[cat] = { count: 0, totalHours: 0, assignees: {} };
+        categoryStats[cat].count++;
+        categoryStats[cat].totalHours += inc.created || 0;
+        if (inc.assignee) categoryStats[cat].assignees[inc.assignee] = (categoryStats[cat].assignees[inc.assignee] || 0) + 1;
+      }
+
+      const teamSummary = teamMembers.slice(0, 20).map(u => `${u.displayName || u.name || u.id} (${u.jobTitle || u.role || "Agent"}) workload:${workload[u.displayName || u.name] || 0}`).join("\n");
+      const catStatsSummary = Object.entries(categoryStats).slice(0, 15).map(([cat, s]) => {
+        const avgHrs = s.count > 0 ? (s.totalHours / s.count).toFixed(1) : "N/A";
+        const bestAssignee = Object.entries(s.assignees).sort((a, b) => b[1] - a[1])[0];
+        return `${cat}: ${s.count} resolved, avg ${avgHrs}h, top resolver: ${bestAssignee ? bestAssignee[0] : "N/A"}`;
+      }).join("\n");
+
+      const systemPrompt = `You are the VGC-ITSM AI Auto-Triage Engine for VGC Technology Pte Ltd.
+Analyze the incoming ticket and determine the best category, priority, assignee, and assignment group.
+
+AVAILABLE CATEGORIES: ${kbCategories.join(", ")}, Network, Hardware, Software, Security, Email, Access Management, General, VPN, Printing, Telephony, Cloud Services, Database, Backup, Monitoring
+
+PRIORITY LEVELS (VGC SLA Policy):
+- Sev-A (CRITICAL): Complete service outage, business-critical systems unavailable. SLA: 0.5h first response, 4h resolution.
+- Sev-B (HIGH): Major impact, VIP issues, >50% users affected. SLA: 1h first response, 4h resolution.
+- Sev-C (MEDIUM/DEFAULT): Standard IT issues. SLA: 4h first response, 9h resolution.
+- Sev-D (LOW): Non-actionable questions, informational. SLA: 9h first response, 27h resolution.
+
+ASSIGNMENT GROUPS: Service Desk, Network Team, Security Team, Cloud Team, Desktop Support, Application Support, Infrastructure
+
+TEAM MEMBERS & WORKLOAD:
+${teamSummary || "No team members data available — assign to Service Desk"}
+
+HISTORICAL RESOLUTION STATS:
+${catStatsSummary || "No historical data yet"}
+
+RULES:
+1. Default priority is Sev-C unless clear evidence of higher severity.
+2. Assign to the team member with lowest workload in the matching skill area.
+3. If unsure about category, use the closest match from KB categories.
+4. Never assign Sev-A or Sev-B unless the ticket clearly describes a major outage or VIP impact.
+5. Consider historical resolution data to pick the best assignee for the category.
+
+Respond with ONLY valid JSON (no markdown):
+{
+  "category": "string",
+  "subcategory": "string",
+  "priority": "Sev-A|Sev-B|Sev-C|Sev-D",
+  "assignee": "person name or Unassigned",
+  "assignmentGroup": "group name",
+  "confidence": 0-100,
+  "reasoning": "brief explanation",
+  "suggestedSlaTarget": number_in_hours,
+  "tags": ["tag1","tag2"]
+}`;
+
+      const userPrompt = `TICKET TO TRIAGE:
+ID: ${ticket.id || "NEW"}
+Title: ${ticket.title || "Untitled"}
+Description: ${ticket.description || "No description"}
+Reporter: ${ticket.reporter || ticket.reporterEmail || "Unknown"}
+Customer: ${ticket.customer || "Unknown"}
+Contact Method: ${ticket.contactMethod || "Portal"}
+Current Priority: ${ticket.priority || "Not set"}
+Current Category: ${ticket.category || "Not set"}
+Current Assignee: ${ticket.assignee || "Unassigned"}
+Zendesk Ticket: ${ticket.zdTicketId ? "#" + ticket.zdTicketId : "N/A"}
+Created: ${ticket.createdAt || new Date().toISOString()}`;
+
+      const payload = {
+        model: AZURE_OPENAI_MODEL,
+        input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+        max_output_tokens: 800
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let triage;
+      try {
+        triage = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        return json(res, 502, { error: "AI returned invalid triage JSON", raw: text.substring(0, 500) });
+      }
+
+      const now = new Date().toISOString();
+      const confidence = triage.confidence || 50;
+      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+
+      // High confidence (>=85): auto-apply triage directly
+      const autoApply = confidence >= 85;
+      const triageRecord = {
+        id: `AIT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+        type: "auto_triage",
+        severity: triage.priority === "Sev-A" ? "critical" : triage.priority === "Sev-B" ? "high" : triage.priority === "Sev-D" ? "low" : "medium",
+        title: `Auto-Triage: ${ticket.id || "New Ticket"} → ${triage.category} [${triage.priority}] → ${triage.assignee}`,
+        description: triage.reasoning || "AI auto-triage recommendation",
+        incidentId: ticket.id || null,
+        suggestedAction: `Set category=${triage.category}, priority=${triage.priority}, assignee=${triage.assignee}, group=${triage.assignmentGroup}`,
+        triage: {
+          category: triage.category,
+          subcategory: triage.subcategory || "",
+          priority: triage.priority,
+          assignee: triage.assignee || "Unassigned",
+          assignmentGroup: triage.assignmentGroup || "Service Desk",
+          suggestedSlaTarget: triage.suggestedSlaTarget || slaMap[triage.priority] || 9,
+          tags: triage.tags || [],
+        },
+        confidence,
+        autoExecutable: autoApply,
+        reasoning: triage.reasoning || "",
+        status: autoApply ? "auto_applied" : "pending_approval",
+        createdAt: now,
+        createdBy: "AI Auto-Triage Engine",
+        requestedBy,
+        approvedBy: autoApply ? "AI Auto-Triage (high confidence)" : null,
+        approvedAt: autoApply ? now : null,
+        executedAt: null,
+        executionResult: null,
+      };
+
+      // Save triage action
+      await db.upsert("ai_actions", triageRecord.id, JSON.stringify(triageRecord));
+
+      // Save triage history
+      await db.upsert("ai_triage_history", triageRecord.id, JSON.stringify({
+        id: triageRecord.id, ticketId: ticket.id, triage: triageRecord.triage,
+        confidence, autoApplied: autoApply, timestamp: now, requestedBy,
+      }));
+
+      // If auto-apply, update the actual incident
+      if (autoApply && ticket.id) {
+        const incRow = await db.getOne("incidents", ticket.id);
+        if (incRow) {
+          const inc = JSON.parse(incRow.data);
+          inc.category = triage.category;
+          inc.subcategory = triage.subcategory || inc.subcategory;
+          inc.priority = triage.priority;
+          inc.assignee = triage.assignee || inc.assignee;
+          inc.assignmentGroup = triage.assignmentGroup || inc.assignmentGroup;
+          inc.slaTarget = triage.suggestedSlaTarget || slaMap[triage.priority] || inc.slaTarget;
+          inc.aiTriaged = true;
+          inc.aiConfidence = confidence;
+          inc.activityLog = inc.activityLog || [];
+          inc.activityLog.push({
+            id: `AL-AIT-${Date.now().toString(36)}`, type: "ai_triage", user: "AI Auto-Triage",
+            time: now, detail: `AI auto-triaged (${confidence}% confidence): ${triage.category} [${triage.priority}] → ${triage.assignee}. ${triage.reasoning}`,
+          });
+          await db.upsert("incidents", inc.id, JSON.stringify(inc));
+        }
+      }
+
+      console.log(`[AI Triage] ${ticket.id || "NEW"} → ${triage.category} [${triage.priority}] → ${triage.assignee} (${confidence}% confidence, ${autoApply ? "auto-applied" : "pending approval"})`);
+      return json(res, 200, {
+        triage: triageRecord.triage, confidence, autoApplied: autoApply,
+        actionId: triageRecord.id, status: triageRecord.status,
+        reasoning: triage.reasoning,
+      });
+    } catch (err) {
+      console.error("[AI Triage]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/auto-triage-assign/apply — apply a pending triage to the actual ticket
+  if (pathname === "/api/ai/auto-triage-assign/apply" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { actionId, appliedBy } = body;
+      if (!actionId || !appliedBy) return json(res, 400, { error: "actionId and appliedBy required" });
+
+      const existing = await db.getOne("ai_actions", actionId);
+      if (!existing) return json(res, 404, { error: "Triage action not found" });
+      const action = JSON.parse(existing.data);
+      if (action.type !== "auto_triage") return json(res, 400, { error: "Action is not an auto-triage" });
+      if (action.status !== "pending_approval") return json(res, 409, { error: `Action already ${action.status}` });
+
+      const now = new Date().toISOString();
+      const triage = action.triage;
+      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+
+      // Update the incident
+      if (action.incidentId) {
+        const incRow = await db.getOne("incidents", action.incidentId);
+        if (incRow) {
+          const inc = JSON.parse(incRow.data);
+          inc.category = triage.category;
+          inc.subcategory = triage.subcategory || inc.subcategory;
+          inc.priority = triage.priority;
+          inc.assignee = triage.assignee || inc.assignee;
+          inc.assignmentGroup = triage.assignmentGroup || inc.assignmentGroup;
+          inc.slaTarget = triage.suggestedSlaTarget || slaMap[triage.priority] || inc.slaTarget;
+          inc.aiTriaged = true;
+          inc.aiConfidence = action.confidence;
+          inc.activityLog = inc.activityLog || [];
+          inc.activityLog.push({
+            id: `AL-AIT-${Date.now().toString(36)}`, type: "ai_triage", user: appliedBy,
+            time: now, detail: `AI triage approved by ${appliedBy}: ${triage.category} [${triage.priority}] → ${triage.assignee}`,
+          });
+          await db.upsert("incidents", inc.id, JSON.stringify(inc));
+        }
+      }
+
+      // Update action status
+      action.status = "applied";
+      action.approvedBy = appliedBy;
+      action.approvedAt = now;
+      action.executedAt = now;
+      action.executionResult = "Triage applied to ticket";
+      await db.upsert("ai_actions", actionId, JSON.stringify(action));
+      await db.audit("ai_actions", actionId, "triage_applied", JSON.stringify({ appliedBy, triage }), appliedBy);
+
+      console.log(`[AI Triage] Applied ${actionId} to ${action.incidentId} by ${appliedBy}`);
+      return json(res, 200, { success: true, actionId, ticketId: action.incidentId, triage });
+    } catch (err) {
+      console.error("[AI Triage Apply]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Phase 2: AI Predictive SLA Breach Prevention ───────────────────
+  // POST /api/ai/sla-predict — AI predicts SLA breaches and suggests preventive actions
+  if (pathname === "/api/ai/sla-predict" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 200000);
+      const { incidents: clientIncidents, requests: clientRequests, requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const openIncidents = (clientIncidents || []).filter(i => !["Resolved", "Closed"].includes(i.status));
+      if (openIncidents.length === 0) return json(res, 200, { predictions: [], message: "No open tickets" });
+
+      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+
+      // Calculate SLA metrics for each open ticket
+      const ticketSummaries = openIncidents.map(inc => {
+        const slaTarget = inc.slaTarget || slaMap[inc.priority] || 9;
+        const hoursElapsed = inc.created || 0;
+        const pctUsed = Math.round((hoursElapsed / slaTarget) * 100);
+        const hrsLeft = Math.max(0, slaTarget - hoursElapsed);
+        const activityCount = (inc.activityLog || []).length;
+        return `ID:${inc.id} Title:"${(inc.title||"").substring(0,60)}" Priority:${inc.priority} Status:${inc.status} Category:${inc.category||"?"} Assignee:${inc.assignee||"Unassigned"} Group:${inc.assignmentGroup||"?"} SLA:${pctUsed}% used (${hrsLeft.toFixed(1)}h left of ${slaTarget}h) Activities:${activityCount}`;
+      }).join("\n");
+
+      // Historical MTTR by category
+      const allInc = clientIncidents || [];
+      const resolved = allInc.filter(i => i.status === "Resolved" || i.status === "Closed");
+      const mttrByCategory = {};
+      resolved.forEach(i => {
+        if (!mttrByCategory[i.category]) mttrByCategory[i.category] = [];
+        mttrByCategory[i.category].push(i.created || 0);
+      });
+      const mttrSummary = Object.entries(mttrByCategory).map(([cat, times]) => {
+        const avg = (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1);
+        return `${cat}: avg ${avg}h (${times.length} resolved)`;
+      }).join(", ");
+
+      const systemPrompt = `You are VGC Technology's SLA prediction engine. Analyze open tickets and predict which ones will breach their SLA targets. VGC SLA Policy: Sev-A=4h response/4h worst-case, Sev-B=1h/4h, Sev-C=4h/9h, Sev-D=9h/27h. Business hours: Mon-Fri 9AM-6PM SGT. Consider: time elapsed vs SLA target, ticket velocity (activity count), historical MTTR for category, assignee workload, priority severity. Return JSON array ONLY (no markdown): [{ "ticketId": "INC-XXX", "breachProbability": 0-100, "predictedBreachIn": "Xh Ym", "suggestedAction": "reassign|escalate|add_resources|notify_manager", "escalationTarget": "name or role", "reasoning": "brief explanation", "emailDraft": "escalation email body if needed" }]. Only include tickets with breachProbability >= 50. Sort by breach probability descending.`;
+
+      const userPrompt = `Open tickets:\n${ticketSummaries}\n\nHistorical MTTR: ${mttrSummary || "No historical data yet"}\n\nPredict SLA breaches and suggest preventive actions.`;
+
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let predictions;
+      try {
+        predictions = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+        if (!Array.isArray(predictions)) predictions = [predictions];
+      } catch { predictions = []; }
+
+      const now = new Date().toISOString();
+      const actions = [];
+      for (const pred of predictions) {
+        if ((pred.breachProbability || 0) >= 70) {
+          const actionRecord = {
+            id: `SLA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+            type: "sla_prevention",
+            severity: pred.breachProbability >= 90 ? "critical" : "high",
+            title: `SLA Breach Risk: ${pred.ticketId} (${pred.breachProbability}% likely)`,
+            description: pred.reasoning || "Predicted SLA breach",
+            incidentId: pred.ticketId,
+            suggestedAction: pred.suggestedAction || "escalate",
+            escalationTarget: pred.escalationTarget || "",
+            emailDraft: pred.emailDraft || "",
+            predictedBreachIn: pred.predictedBreachIn || "unknown",
+            breachProbability: pred.breachProbability,
+            confidence: pred.breachProbability,
+            autoExecutable: false,
+            status: "pending_approval",
+            createdAt: now,
+            createdBy: "AI SLA Prediction Engine",
+            requestedBy,
+          };
+          await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+          actions.push(actionRecord);
+        }
+      }
+
+      console.log(`[AI SLA] Predicted ${predictions.length} risks, created ${actions.length} actions`);
+      return json(res, 200, { predictions, actions, count: predictions.length });
+    } catch (err) {
+      console.error("[AI SLA Predict]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Phase 3: AI Knowledge Base Auto-Generation ─────────────────────
+  // POST /api/ai/kb-auto-generate — generate KB article from resolved ticket
+  if (pathname === "/api/ai/kb-auto-generate" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 100000);
+      const { ticket, requestedBy } = body;
+      if (!ticket || !requestedBy) return json(res, 400, { error: "ticket and requestedBy required" });
+
+      // Get existing KB for dedup check
+      const existingKB = await db.getAll("kb");
+      const kbTitles = existingKB.map(k => { try { const d = JSON.parse(k.data); return d.title || ""; } catch { return ""; } }).filter(Boolean).join(", ");
+
+      const activitySummary = (ticket.activityLog || []).map(a => `[${a.time}] ${a.user}: ${a.detail}`).join("\n");
+
+      const systemPrompt = `You are VGC Technology's knowledge management AI. Generate a professional KB article from a resolved ITSM incident. The article should help future engineers resolve similar issues quickly. Existing KB titles for deduplication: [${kbTitles.substring(0, 1000)}]. If this resolution is too similar to an existing article, set isDuplicate=true. Return JSON ONLY: { "title": "clear article title", "category": "matching incident category", "content": "full structured article with Problem, Cause, Solution, Prevention sections", "tags": ["tag1","tag2"], "whenToUse": "one-line description of when to use this article", "bestFor": "role or scenario", "confidence": 0-100, "isDuplicate": false, "duplicateOf": "existing title if duplicate" }`;
+
+      const userPrompt = `Resolved Incident:\nID: ${ticket.id}\nTitle: ${ticket.title}\nCategory: ${ticket.category || "General"}\nPriority: ${ticket.priority}\nDescription: ${(ticket.description || "").substring(0, 500)}\nResolution/Workaround: ${(ticket.workaround || ticket.resolution || "").substring(0, 500)}\n\nActivity Log:\n${activitySummary.substring(0, 2000)}\n\nGenerate a KB article from this resolution.`;
+
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let kbDraft;
+      try {
+        kbDraft = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        return json(res, 502, { error: "AI returned invalid KB JSON", raw: text.substring(0, 500) });
+      }
+
+      if (kbDraft.isDuplicate) {
+        return json(res, 200, { isDuplicate: true, duplicateOf: kbDraft.duplicateOf, message: "Similar KB article already exists" });
+      }
+
+      const now = new Date().toISOString();
+      const draftId = `KBD-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+
+      // Save KB draft to ai_actions for approval
+      const actionRecord = {
+        id: draftId,
+        type: "kb_draft",
+        severity: "low",
+        title: `KB Draft: ${kbDraft.title}`,
+        description: `Auto-generated from resolved ticket ${ticket.id}`,
+        incidentId: ticket.id,
+        suggestedAction: `Publish KB article: "${kbDraft.title}"`,
+        kbDraft: {
+          title: kbDraft.title,
+          category: kbDraft.category || ticket.category || "General",
+          content: kbDraft.content,
+          tags: kbDraft.tags || [],
+          whenToUse: kbDraft.whenToUse || "",
+          bestFor: kbDraft.bestFor || "",
+          sourceTicketId: ticket.id,
+        },
+        confidence: kbDraft.confidence || 75,
+        autoExecutable: false,
+        status: "pending_approval",
+        createdAt: now,
+        createdBy: "AI KB Generation Engine",
+        requestedBy,
+      };
+
+      await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+      console.log(`[AI KB] Generated draft "${kbDraft.title}" from ${ticket.id}`);
+      return json(res, 200, { success: true, draftId, kbDraft: actionRecord.kbDraft, confidence: kbDraft.confidence });
+    } catch (err) {
+      console.error("[AI KB Generate]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/kb-auto-generate/approve — approve and publish a KB draft
+  if (pathname === "/api/ai/kb-auto-generate/approve" && req.method === "POST") {
+    try {
+      const body = await parseBody(req, 50000);
+      const { actionId, approvedBy, editedContent } = body;
+      if (!actionId || !approvedBy) return json(res, 400, { error: "actionId and approvedBy required" });
+
+      const row = await db.getOne("ai_actions", actionId);
+      if (!row) return json(res, 404, { error: "KB draft action not found" });
+      const action = JSON.parse(row.data);
+      if (action.type !== "kb_draft") return json(res, 400, { error: "Not a KB draft action" });
+
+      const draft = action.kbDraft;
+      const now = new Date().toISOString();
+      const kbId = `KB-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+
+      // Create published KB article
+      const kbArticle = {
+        id: kbId,
+        title: draft.title,
+        category: draft.category,
+        content: editedContent || draft.content,
+        tags: draft.tags,
+        whenToUse: draft.whenToUse,
+        bestFor: draft.bestFor,
+        sourceTicketId: draft.sourceTicketId,
+        status: "Published",
+        author: approvedBy,
+        createdAt: now,
+        updatedAt: now,
+        aiGenerated: true,
+        views: 0, helpful: 0, notHelpful: 0,
+      };
+
+      await db.upsert("kb", kbId, JSON.stringify(kbArticle));
+
+      // Update action status
+      action.status = "applied";
+      action.approvedBy = approvedBy;
+      action.approvedAt = now;
+      action.executedAt = now;
+      action.executionResult = `Published as ${kbId}`;
+      await db.upsert("ai_actions", actionId, JSON.stringify(action));
+
+      console.log(`[AI KB] Published ${kbId} from draft ${actionId} by ${approvedBy}`);
+      return json(res, 200, { success: true, kbId, article: kbArticle });
+    } catch (err) {
+      console.error("[AI KB Approve]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Phase 4: AI Daily Briefing + Shift Handover ────────────────────
+  // POST /api/ai/daily-briefing — generate AI daily briefing report
+  if (pathname === "/api/ai/daily-briefing" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 50000);
+      const { requestedBy, shift, recipients, incidents: clientIncidents, changes: clientChanges, requests: clientRequests } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const allInc = clientIncidents || [];
+      const allChanges = clientChanges || [];
+      const allReqs = clientRequests || [];
+
+      const now = new Date();
+      const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+
+      // Gather AI actions stats
+      const aiActionsRows = await db.getAll("ai_actions");
+      const recentActions = aiActionsRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const pendingActions = recentActions.filter(a => a.status === "pending_approval").length;
+      const autoApplied = recentActions.filter(a => a.status === "auto_applied").length;
+
+      const openInc = allInc.filter(i => !["Resolved", "Closed"].includes(i.status));
+      const criticalOpen = openInc.filter(i => i.priority === "Sev-A" || i.priority === "Sev-B");
+      const resolvedRecent = allInc.filter(i => (i.status === "Resolved" || i.status === "Closed"));
+      const totalSLABreaches = openInc.filter(i => {
+        const target = i.slaTarget || 9;
+        return (i.created || 0) >= target;
+      }).length;
+
+      const dataSummary = `ITSM Overview (${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}):\n- Total Incidents: ${allInc.length}\n- Open: ${openInc.length} (${criticalOpen.length} critical/high)\n- Resolved: ${resolvedRecent.length}\n- SLA Breaches: ${totalSLABreaches}\n- Open Requests: ${allReqs.filter(r => r.status !== "Completed" && r.status !== "Closed").length}\n- Scheduled Changes: ${allChanges.filter(c => c.status === "Scheduled" || c.status === "Approved").length}\n- AI Actions Pending: ${pendingActions}\n- AI Auto-Applied: ${autoApplied}\n\nCritical Items:\n${criticalOpen.map(i => `- ${i.id}: "${i.title}" [${i.priority}] assigned to ${i.assignee || "Unassigned"}, SLA ${Math.round((i.created / (i.slaTarget || 9)) * 100)}%`).join("\n") || "None"}`;
+
+      const systemPrompt = `You are VGC Technology's ITSM briefing AI. Generate a concise, actionable ${shift || "daily"} briefing for the IT operations team. Format with clear sections. Be direct — highlight risks, blockers, and actions needed. Return JSON ONLY: { "executiveSummary": "2-3 sentence overview", "criticalItems": [{ "id": "ticket ID", "issue": "brief", "action": "needed action" }], "slaStatus": "overall SLA health description", "handoverNotes": "key things for next shift", "actionItems": ["action 1", "action 2"], "upcomingChanges": "scheduled changes summary", "aiInsights": "any AI-detected patterns or recommendations", "riskLevel": "low|medium|high|critical" }`;
+
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataSummary }], max_output_tokens: 2000 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let briefing;
+      try {
+        briefing = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        briefing = { executiveSummary: text.substring(0, 500), criticalItems: [], slaStatus: "Unknown", handoverNotes: "", actionItems: [], riskLevel: "medium" };
+      }
+
+      const briefingId = `BRF-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+      const briefingRecord = {
+        id: briefingId,
+        ...briefing,
+        generatedAt: now.toISOString(),
+        generatedBy: requestedBy,
+        shift: shift || "daily",
+        recipients: recipients || [],
+        stats: { totalIncidents: allInc.length, openIncidents: openInc.length, criticalOpen: criticalOpen.length, slaBreaches: totalSLABreaches, pendingAiActions: pendingActions },
+      };
+
+      await db.upsert("ai_briefings", briefingId, JSON.stringify(briefingRecord));
+
+      // Send email if recipients provided and graphSendMail available
+      if (recipients && recipients.length > 0) {
+        const riskColors = { critical: "#FF4444", high: "#FF6B6B", medium: "#FFB347", low: "#81C784" };
+        const emailBody = `<div style="font-family:Segoe UI,sans-serif;max-width:600px;margin:0 auto"><h2 style="color:#6366F1">🤖 VGC ITSM Daily Briefing</h2><div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:16px;border-left:4px solid ${riskColors[briefing.riskLevel] || "#6366F1"}"><strong>Risk Level:</strong> <span style="color:${riskColors[briefing.riskLevel] || "#333"};font-weight:700;text-transform:uppercase">${briefing.riskLevel || "medium"}</span><br><br>${briefing.executiveSummary || ""}</div><h3>📊 SLA Status</h3><p>${briefing.slaStatus || "N/A"}</p><h3>⚡ Action Items</h3><ul>${(briefing.actionItems || []).map(a => `<li>${a}</li>`).join("")}</ul><h3>📋 Handover Notes</h3><p>${briefing.handoverNotes || "None"}</p><h3>🤖 AI Insights</h3><p>${briefing.aiInsights || "No patterns detected"}</p><hr><p style="font-size:11px;color:#888">Generated by VGC AI Engine · ${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}</p></div>`;
+        try {
+          await graphSendMail({ to: recipients, subject: `[VGC ITSM] ${shift || "Daily"} Briefing — Risk: ${(briefing.riskLevel || "medium").toUpperCase()}`, body: emailBody });
+        } catch (emailErr) {
+          console.error("[AI Briefing] Email send failed:", emailErr.message);
+        }
+      }
+
+      console.log(`[AI Briefing] Generated ${briefingId} (${briefing.riskLevel}) by ${requestedBy}`);
+      return json(res, 200, { success: true, briefingId, briefing: briefingRecord });
+    } catch (err) {
+      console.error("[AI Briefing]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/briefings — list past briefings
+  if (pathname === "/api/ai/briefings" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_briefings");
+      const briefings = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      briefings.sort((a, b) => (b.generatedAt || "").localeCompare(a.generatedAt || ""));
+      return json(res, 200, { briefings });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Phase 5: AI Pattern Detection + Proactive Prevention ──────────
+  // POST /api/ai/pattern-detect — analyze historical data for recurring patterns
+  if (pathname === "/api/ai/pattern-detect" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 200000);
+      const { incidents: clientIncidents, problems: clientProblems, changes: clientChanges, requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const allInc = clientIncidents || [];
+      const allProblems = clientProblems || [];
+
+      // Group incidents by category, subcategory, asset, customer
+      const byCategory = {};
+      const byAsset = {};
+      const byCustomer = {};
+      allInc.forEach(inc => {
+        const cat = inc.category || "Other";
+        if (!byCategory[cat]) byCategory[cat] = [];
+        byCategory[cat].push(inc);
+        if (inc.affectedAsset) {
+          if (!byAsset[inc.affectedAsset]) byAsset[inc.affectedAsset] = [];
+          byAsset[inc.affectedAsset].push(inc);
+        }
+        if (inc.customer) {
+          if (!byCustomer[inc.customer]) byCustomer[inc.customer] = [];
+          byCustomer[inc.customer].push(inc);
+        }
+      });
+
+      const categorySummary = Object.entries(byCategory).map(([cat, incs]) => `${cat}: ${incs.length} incidents (${incs.filter(i => i.priority === "Sev-A" || i.priority === "Sev-B").length} critical/high)`).join("\n");
+      const assetSummary = Object.entries(byAsset).filter(([, incs]) => incs.length >= 2).map(([asset, incs]) => `${asset}: ${incs.length} incidents`).join("\n");
+      const customerSummary = Object.entries(byCustomer).filter(([, incs]) => incs.length >= 2).map(([cust, incs]) => `${cust}: ${incs.length} incidents`).join("\n");
+      const problemSummary = allProblems.map(p => `${p.id}: "${p.title}" [${p.status}] Category:${p.category} LinkedIncidents:${(p.linkedIncidents || []).length}`).join("\n");
+
+      const systemPrompt = `You are VGC Technology's pattern detection AI. Analyze historical ITSM data to find recurring patterns, correlations, seasonal trends, and predict future incidents. Focus on: (1) Recurring issues (same category/asset/customer), (2) Correlated incidents (related failures), (3) Trending issues (increasing frequency), (4) Seasonal patterns (time-based), (5) Asset health concerns. Return JSON array ONLY: [{ "patternId": "PAT-XXX", "type": "recurring|correlated|trending|seasonal|asset_health", "title": "pattern title", "description": "detailed explanation", "frequency": "how often", "affectedAssets": [], "affectedCustomers": [], "confidence": 0-100, "suggestedPrevention": "what to do", "estimatedImpact": "impact description", "nextPredictedOccurrence": "when likely next", "relatedIncidents": ["INC-XXX"] }]. Return max 10 patterns, sorted by confidence.`;
+
+      const userPrompt = `Historical Data (${allInc.length} incidents, ${allProblems.length} problems):\n\nBy Category:\n${categorySummary}\n\nRepeat Assets:\n${assetSummary || "None"}\n\nRepeat Customers:\n${customerSummary || "None"}\n\nExisting Problems:\n${problemSummary || "None"}\n\nDetect patterns and predict future incidents.`;
+
+      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 3000 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let patterns;
+      try {
+        patterns = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+        if (!Array.isArray(patterns)) patterns = [patterns];
+      } catch { patterns = []; }
+
+      const now = new Date().toISOString();
+      const actions = [];
+      for (const pat of patterns) {
+        const patId = pat.patternId || `PAT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+        pat.id = patId;
+        pat.detectedAt = now;
+        pat.detectedBy = requestedBy;
+        pat.status = "active";
+        await db.upsert("ai_patterns", patId, JSON.stringify(pat));
+
+        if ((pat.confidence || 0) >= 70) {
+          const actionRecord = {
+            id: `PRA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+            type: "preventive_action",
+            severity: pat.confidence >= 90 ? "critical" : "high",
+            title: `Pattern: ${pat.title}`,
+            description: pat.description,
+            patternId: patId,
+            suggestedAction: pat.suggestedPrevention || "Investigate pattern",
+            estimatedImpact: pat.estimatedImpact || "",
+            confidence: pat.confidence,
+            autoExecutable: false,
+            status: "pending_approval",
+            createdAt: now,
+            createdBy: "AI Pattern Detection Engine",
+            requestedBy,
+          };
+          await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+          actions.push(actionRecord);
+        }
+      }
+
+      console.log(`[AI Patterns] Detected ${patterns.length} patterns, created ${actions.length} actions`);
+      return json(res, 200, { patterns, actions, count: patterns.length });
+    } catch (err) {
+      console.error("[AI Pattern Detect]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/patterns — list detected patterns
+  if (pathname === "/api/ai/patterns" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_patterns");
+      const patterns = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      patterns.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+      return json(res, 200, { patterns });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/patterns/:id/create-problem — convert pattern to Problem record
+  if (pathname.match(/^\/api\/ai\/patterns\/[^/]+\/create-problem$/) && req.method === "POST") {
+    try {
+      const patternId = pathname.split("/")[4];
+      const body = await parseBody(req, 10000);
+      const { requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const row = await db.getOne("ai_patterns", patternId);
+      if (!row) return json(res, 404, { error: "Pattern not found" });
+      const pattern = JSON.parse(row.data);
+
+      const now = new Date().toISOString();
+      const actionRecord = {
+        id: `PPC-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+        type: "create_problem",
+        severity: pattern.confidence >= 90 ? "critical" : "high",
+        title: `Create Problem: ${pattern.title}`,
+        description: `Based on detected pattern: ${pattern.description}`,
+        patternId,
+        suggestedAction: `Create Problem record from pattern "${pattern.title}"`,
+        problemDraft: {
+          title: `[AI Pattern] ${pattern.title}`,
+          category: pattern.type || "Recurring",
+          priority: pattern.confidence >= 90 ? "Sev-A" : "Sev-B",
+          description: `AI-detected pattern: ${pattern.description}\n\nSuggested Prevention: ${pattern.suggestedPrevention || "N/A"}\n\nEstimated Impact: ${pattern.estimatedImpact || "N/A"}\n\nFrequency: ${pattern.frequency || "Unknown"}`,
+          linkedIncidents: pattern.relatedIncidents || [],
+          rootCause: pattern.suggestedPrevention || "",
+          affectedAssets: pattern.affectedAssets || [],
+        },
+        confidence: pattern.confidence,
+        autoExecutable: false,
+        status: "pending_approval",
+        createdAt: now,
+        createdBy: "AI Pattern Detection Engine",
+        requestedBy,
+      };
+
+      await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+      console.log(`[AI Patterns] Created problem action for pattern ${patternId}`);
+      return json(res, 200, { success: true, actionId: actionRecord.id, problemDraft: actionRecord.problemDraft });
+    } catch (err) {
+      console.error("[AI Pattern Create Problem]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── AI Actions Engine: Proactive Monitor + Approval Workflow ────────
   // POST /api/ai/actions/scan — AI scans all open incidents/tickets for critical cases, generates action items
   if (pathname === "/api/ai/actions/scan" && req.method === "POST") {
@@ -3335,7 +4115,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const { approvedBy, approverEmail } = body;
       if (!approvedBy) return json(res, 400, { error: "approvedBy (Entra user name) required" });
 
-      const existing = await db.getById("ai_actions", actionId);
+      const existing = await db.getOne("ai_actions", actionId);
       if (!existing) return json(res, 404, { error: "Action not found" });
       const action = JSON.parse(existing.data);
       if (action.status !== "pending_approval") {
@@ -3423,7 +4203,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const { rejectedBy, reason } = body;
       if (!rejectedBy) return json(res, 400, { error: "rejectedBy required" });
 
-      const existing = await db.getById("ai_actions", actionId);
+      const existing = await db.getOne("ai_actions", actionId);
       if (!existing) return json(res, 404, { error: "Action not found" });
       const action = JSON.parse(existing.data);
       if (action.status !== "pending_approval") {
@@ -3451,7 +4231,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const { executedBy } = body;
       if (!executedBy) return json(res, 400, { error: "executedBy required" });
 
-      const existing = await db.getById("ai_actions", actionId);
+      const existing = await db.getOne("ai_actions", actionId);
       if (!existing) return json(res, 404, { error: "Action not found" });
       const action = JSON.parse(existing.data);
       if (action.status !== "approved") {
@@ -3506,7 +4286,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const { actionId, approverEmails, appUrl } = body;
       if (!actionId || !approverEmails) return json(res, 400, { error: "actionId and approverEmails required" });
 
-      const existing = await db.getById("ai_actions", actionId);
+      const existing = await db.getOne("ai_actions", actionId);
       if (!existing) return json(res, 404, { error: "Action not found" });
       const action = JSON.parse(existing.data);
       const baseUrl = appUrl || "https://vgc-itsm1-app.azurewebsites.net";

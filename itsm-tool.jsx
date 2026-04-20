@@ -2479,6 +2479,9 @@ export default function ITSMApp() {
         }
         setAiMonitorLastRun(new Date().toISOString());
       }
+      // Also run SLA predictions and pattern detection during monitor scan
+      try { await runSlaPrediction(); } catch (e2) { console.warn("[AI Monitor] SLA predict error:", e2.message); }
+      try { await runPatternDetection(); } catch (e3) { console.warn("[AI Monitor] Pattern detect error:", e3.message); }
     } catch (e) { console.warn("[AI Monitor] Scan error:", e.message); }
     setAiActionsLoading(false);
   }, [aiActionsLoading, isLoggedIn, incidents, changes, currentUser]);
@@ -2556,6 +2559,192 @@ export default function ITSMApp() {
     aiMonitorRef.current = setInterval(() => { runAiMonitor(); }, 5 * 60 * 1000);
     return () => { clearTimeout(initialTimeout); if (aiMonitorRef.current) clearInterval(aiMonitorRef.current); };
   }, [aiMonitorEnabled, isLoggedIn, runAiMonitor]);
+
+  // ─── AI Auto-Triage Engine (Phase 1) ─────────────────────────────────
+  const autoTriageTicket = useCallback(async (ticket) => {
+    if (!azureOpenAI.enabled || !ticket) return null;
+    try {
+      const res = await fetch("/api/ai/auto-triage-assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket, requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) { console.warn("[AI Triage] Error:", res.status); return null; }
+      const data = await res.json();
+      console.log(`[AI Triage] ${ticket.id}: confidence=${data.confidence}%, autoApplied=${data.autoApplied}`);
+
+      if (data.autoApplied && data.triage) {
+        // Auto-applied: update local state
+        setIncidents(prev => prev.map(i => i.id === ticket.id ? {
+          ...i,
+          category: data.triage.category,
+          subcategory: data.triage.subcategory || i.subcategory,
+          priority: data.triage.priority,
+          assignee: data.triage.assignee || i.assignee,
+          assignmentGroup: data.triage.assignmentGroup || i.assignmentGroup,
+          slaTarget: data.triage.suggestedSlaTarget || i.slaTarget,
+          aiTriaged: true, aiConfidence: data.confidence,
+        } : i));
+        showToast(`🤖 AI auto-triaged ${ticket.id}: ${data.triage.category} [${data.triage.priority}] → ${data.triage.assignee} (${data.confidence}% confidence)`, "success");
+      } else if (data.actionId) {
+        // Pending approval: refresh AI actions
+        showToast(`🤖 AI triage for ${ticket.id} needs approval (${data.confidence}% confidence)`, "info");
+        fetchAiActions();
+        setShowAiActionsPanel(true);
+      }
+      return data;
+    } catch (err) {
+      console.warn("[AI Triage]", err.message);
+      return null;
+    }
+  }, [azureOpenAI.enabled, currentUser?.name]);
+
+  const applyAiTriage = useCallback(async (actionId) => {
+    try {
+      const res = await fetch("/api/ai/auto-triage-assign/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionId, appliedBy: currentUser?.name || "Unknown" })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Failed to apply triage", "error"); return; }
+      const data = await res.json();
+      if (data.success && data.triage && data.ticketId) {
+        setIncidents(prev => prev.map(i => i.id === data.ticketId ? {
+          ...i,
+          category: data.triage.category,
+          subcategory: data.triage.subcategory || i.subcategory,
+          priority: data.triage.priority,
+          assignee: data.triage.assignee || i.assignee,
+          assignmentGroup: data.triage.assignmentGroup || i.assignmentGroup,
+          slaTarget: data.triage.suggestedSlaTarget || i.slaTarget,
+          aiTriaged: true, aiConfidence: 100,
+        } : i));
+        // Update action status in local state
+        setAiActions(prev => prev.map(a => a.id === actionId ? { ...a, status: "applied" } : a));
+        showToast(`✅ AI triage applied to ${data.ticketId}`, "success");
+      }
+    } catch (err) {
+      showToast("Failed to apply triage: " + err.message, "error");
+    }
+  }, [currentUser?.name]);
+
+  // ─── Phase 2: AI SLA Breach Prediction ────────────────────────────
+  const [slaPredictions, setSlaPredictions] = useState([]);
+  const runSlaPrediction = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ai/sla-predict", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incidents, requests, requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setSlaPredictions(data.predictions || []);
+      if (data.actions?.length > 0) {
+        fetchAiActions();
+        showToast(`🔮 AI predicted ${data.predictions.length} SLA risks, ${data.actions.length} actions created`, "warning");
+      }
+    } catch (err) { console.error("[SLA Predict]", err.message); }
+  }, [incidents, requests, currentUser?.name]);
+
+  // ─── Phase 3: AI KB Auto-Generation ───────────────────────────────
+  const generateKBFromTicket = useCallback(async (ticket) => {
+    try {
+      showToast("🤖 AI generating KB article from resolution...", "info");
+      const res = await fetch("/api/ai/kb-auto-generate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket, requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.isDuplicate) {
+        showToast(`📚 Similar KB already exists: "${data.duplicateOf}"`, "info");
+      } else if (data.success) {
+        fetchAiActions();
+        showToast(`📝 KB draft created: "${data.kbDraft.title}" — review in AI Actions`, "success");
+      }
+    } catch (err) { console.error("[KB Generate]", err.message); }
+  }, [currentUser?.name]);
+
+  const approveKBDraft = useCallback(async (actionId, editedContent) => {
+    try {
+      const res = await fetch("/api/ai/kb-auto-generate/approve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionId, approvedBy: currentUser?.name || "System", editedContent })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Failed", "error"); return; }
+      const data = await res.json();
+      if (data.success) {
+        setAiActions(prev => prev.map(a => a.id === actionId ? { ...a, status: "applied" } : a));
+        showToast(`📚 KB article published: ${data.kbId}`, "success");
+      }
+    } catch (err) { showToast("KB approve failed: " + err.message, "error"); }
+  }, [currentUser?.name]);
+
+  // ─── Phase 4: AI Daily Briefing ───────────────────────────────────
+  const [aiBriefings, setAiBriefings] = useState([]);
+  const [currentBriefing, setCurrentBriefing] = useState(null);
+  const generateBriefing = useCallback(async (shift, recipients) => {
+    try {
+      showToast("🤖 Generating AI briefing...", "info");
+      const res = await fetch("/api/ai/daily-briefing", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedBy: currentUser?.name || "System", shift: shift || "daily", recipients: recipients || [], incidents, changes, requests })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        setCurrentBriefing(data.briefing);
+        setAiBriefings(prev => [data.briefing, ...prev]);
+        showToast(`📋 ${shift || "Daily"} briefing generated (Risk: ${data.briefing.riskLevel})`, "success");
+      }
+    } catch (err) { showToast("Briefing failed: " + err.message, "error"); }
+  }, [currentUser?.name, incidents, changes, requests]);
+
+  const fetchBriefings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ai/briefings");
+      if (res.ok) { const data = await res.json(); setAiBriefings(data.briefings || []); }
+    } catch {}
+  }, []);
+
+  // ─── Phase 5: AI Pattern Detection ────────────────────────────────
+  const [aiPatterns, setAiPatterns] = useState([]);
+  const runPatternDetection = useCallback(async () => {
+    try {
+      showToast("🔍 AI analyzing patterns...", "info");
+      const res = await fetch("/api/ai/pattern-detect", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incidents, problems, changes, requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setAiPatterns(data.patterns || []);
+      if (data.actions?.length > 0) fetchAiActions();
+      showToast(`🔮 Detected ${data.count} patterns, ${data.actions?.length || 0} actions created`, "success");
+    } catch (err) { showToast("Pattern detection failed: " + err.message, "error"); }
+  }, [incidents, problems, changes, currentUser?.name]);
+
+  const fetchPatterns = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ai/patterns");
+      if (res.ok) { const data = await res.json(); setAiPatterns(data.patterns || []); }
+    } catch {}
+  }, []);
+
+  const createProblemFromPattern = useCallback(async (patternId) => {
+    try {
+      const res = await fetch(`/api/ai/patterns/${patternId}/create-problem`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        fetchAiActions();
+        showToast(`🎫 Problem creation action queued for approval`, "success");
+      }
+    } catch (err) { showToast("Failed: " + err.message, "error"); }
+  }, [currentUser?.name]);
 
   // ─── VGC-AI Engine API Helper (via server proxy — avoids CORS) ───────
   const callAzureOpenAI = async (systemPrompt, userPrompt) => {
@@ -6541,6 +6730,41 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             </div>
           )}
         </div>
+
+        {/* AI SLA Predictions */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+              🔮 AI SLA Breach Predictions
+            </h3>
+            <button onClick={runSlaPrediction} style={{ ...btnStyle("#EC4899"), fontSize: 10, padding: "5px 12px" }}>⚡ Run Prediction</button>
+          </div>
+          {slaPredictions.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 20, color: "#5A6178", fontSize: 11 }}>No SLA predictions yet — click "Run Prediction" to analyze open tickets</div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {slaPredictions.map((pred, idx) => (
+                <div key={idx} style={{ background: "#0A0C14", borderRadius: 8, border: `1px solid ${pred.breachProbability >= 90 ? "#FF444444" : pred.breachProbability >= 70 ? "#FFB34744" : "#6366F133"}`, padding: "12px 16px", display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ fontSize: 22, width: 44, height: 44, borderRadius: 10, background: pred.breachProbability >= 90 ? "#FF444422" : pred.breachProbability >= 70 ? "#FFB34722" : "#FFD70022", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {pred.breachProbability >= 90 ? "🔴" : pred.breachProbability >= 70 ? "🟠" : "🟡"}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{pred.ticketId} — {pred.breachProbability}% breach risk</div>
+                    <div style={{ fontSize: 10, color: "#8B92A8", marginTop: 2 }}>{pred.reasoning}</div>
+                    <div style={{ display: "flex", gap: 10, marginTop: 4, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>
+                      <span style={{ color: "#FF6B6B" }}>⏱ Breach in: {pred.predictedBreachIn}</span>
+                      <span style={{ color: "#06B6D4" }}>📋 Action: {pred.suggestedAction}</span>
+                      {pred.escalationTarget && <span style={{ color: "#FFB347" }}>👤 Escalate to: {pred.escalationTarget}</span>}
+                    </div>
+                  </div>
+                  <div style={{ width: 50, height: 50, borderRadius: "50%", background: `conic-gradient(${pred.breachProbability >= 90 ? "#FF4444" : pred.breachProbability >= 70 ? "#FFB347" : "#FFD700"} ${pred.breachProbability * 3.6}deg, #1E2130 0deg)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>{pred.breachProbability}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -6810,6 +7034,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             try {
               await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
             } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
+            // AI Auto-Triage: if no AI suggestion was applied during creation, trigger server-side auto-triage
+            if (!aiSuggestion) {
+              autoTriageTicket(newInc).catch(() => {});
+            }
             // Push to Zendesk if enabled
             if (createInZendesk) {
               try {
@@ -6895,6 +7123,11 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           ].join("\n");
           const draft = { id: genId("SURV"), ticketId: inc.id, templateName: tpl.name, preview, status: "Pending Approval", createdAt: new Date().toISOString() };
           setSurveyDrafts(prev => [...prev, draft]);
+        }
+
+        // AI KB Auto-Generation — trigger on Resolved
+        if (newStatus === "Resolved" && azureOpenAI.enabled) {
+          generateKBFromTicket(updated);
         }
       }
     };
@@ -8296,7 +8529,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     (async () => {
       const dataMode = isLocalDemoUser ? "DEMO" : "PRODUCTION";
       const systemPrompt = [
-        `You are VGC-ITSM AI Co-Pilot for VGC Technology Pte Ltd, Singapore. You work alongside ${currentUser.name} as a helpful, friendly colleague — not a bot.`,
+        `You are VGC AI — the intelligent assistant for VGC Technology Pte Ltd, Singapore. You work alongside ${currentUser.name} (${currentUser.rbacRole || "ITSM User"}) as a helpful, friendly colleague — not a bot. Always answer directly in your FIRST sentence — no preamble, no "let me check", no clarifying questions. Jump straight to the solution.`,
         `CURRENT DATA MODE: ${dataMode}. ${isLocalDemoUser ? "You are in DEMO MODE — all data shown is sample/seed data only. NEVER attempt to fetch, display, or reference production Zendesk data. If the user asks about production tickets or real customer data, ALERT them: 'You are in Demo Mode — production data is not available. Please sign in with your Entra ID account to access production data.'" : "You are in PRODUCTION MODE — all data comes from live Zendesk and ITSM APIs. NEVER show demo/hardcoded data. If any response contains placeholder ticket IDs (like INC0001 or #48201-48208 from seed data), flag it immediately and refresh from live sources."}`,
         `DATA ISOLATION GUARD (HARD RULE): If you detect a human mistake that could mix demo data into production or vice versa — IMMEDIATELY alert the user with a clear warning. Examples: trying to use demo ticket IDs in production, attempting to connect Zendesk in demo mode, referencing hardcoded data in production mode. Say: "⚠️ Data Isolation Alert: [explain the issue]. This could compromise data integrity."`,
         `TONE & STYLE: Be warm, conversational, and human. Write like a brilliant senior engineer who always has the answer. NEVER ask the user clarifying questions — ALWAYS give a direct, confident answer immediately. If the question is ambiguous, cover ALL likely scenarios in your response instead of asking which one they mean. Use natural language, contractions, and a friendly tone. Break responses into short conversational chunks — never dump a wall of text. Use casual phrasing like "Here's exactly what you need to do...", "Got it — the fix is...", "I've seen this before — here's the solution...". Think like a real expert: anticipate what they need and deliver it upfront. Never say "Could you clarify?", "What do you mean by?", "Can you provide more details?" — instead, give the answer directly and cover edge cases.`,
@@ -8405,12 +8638,13 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
       });
 
       if (streamResult) {
-        // Streaming succeeded — finalize message (remove _typing, set final text)
+        // Streaming succeeded — finalize message with action cards if applicable
+        const actionCards = detectAiActionCards(userMsg);
         setAiMessages(prev => {
           const updated = [...prev];
           const last = updated.length - 1;
           if (updated[last]?._typing) {
-            updated[last] = { role: "ai", text: streamResult, source: "azure", suggestions: smartSuggestions, prompt: userMsg };
+            updated[last] = { role: "ai", text: streamResult, source: "azure", suggestions: smartSuggestions, prompt: userMsg, actionCards };
           }
           return updated;
         });
@@ -8440,7 +8674,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     })();
   };
 
-  // --- AI Chat Action Card Detection ---
+  // ─── AI Chat Action Card Detection ───
   const detectAiActionCards = useCallback((userMsg) => {
     const lc = (userMsg || "").toLowerCase();
     const cards = [];
@@ -8463,7 +8697,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     return cards;
   }, []);
 
-  // --- AI Assist Module ---
+  // ─── AI Assist Module ───
   const AIAssistModule = () => {
     const aiTriaged = incidents.filter(i => i.aiTriaged).length;
     const totalTickets = incidents.length + requests.length + problems.length + changes.length;
@@ -8530,6 +8764,71 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           <StatCard label="Avg Confidence" value="92%" icon="🎯" accent="#81C784" />
           <StatCard label="Time Saved (hrs)" value="142" icon="⏰" accent="#FFB347" />
         </div>
+
+        {/* AI Quick Actions Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
+          <button onClick={runSlaPrediction} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #EC489933", background: "#EC489911", color: "#EC4899", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+            <div style={{ fontSize: 18, marginBottom: 6 }}>🔮</div>
+            <div>Predict SLA Breaches</div>
+            <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>Analyze {incidents.filter(i => !["Resolved","Closed"].includes(i.status)).length} open tickets</div>
+          </button>
+          <button onClick={() => generateBriefing("daily", [])} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #06B6D433", background: "#06B6D411", color: "#06B6D4", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+            <div style={{ fontSize: 18, marginBottom: 6 }}>📋</div>
+            <div>Generate Daily Briefing</div>
+            <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{aiBriefings.length} briefings generated</div>
+          </button>
+          <button onClick={runPatternDetection} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #FFB34733", background: "#FFB34711", color: "#FFB347", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+            <div style={{ fontSize: 18, marginBottom: 6 }}>🔍</div>
+            <div>Detect Patterns</div>
+            <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{aiPatterns.length} patterns found</div>
+          </button>
+          <button onClick={() => setShowAiActionsPanel(true)} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+            <div style={{ fontSize: 18, marginBottom: 6 }}>🛡️</div>
+            <div>AI Actions Queue</div>
+            <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{aiActions.filter(a => a.status === "pending_approval").length} pending approval</div>
+          </button>
+        </div>
+
+        {/* AI Briefing Preview */}
+        {currentBriefing && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #06B6D433", padding: 20, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>📋 Latest Briefing</h3>
+              <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, fontWeight: 700, background: currentBriefing.riskLevel === "critical" ? "#FF444422" : currentBriefing.riskLevel === "high" ? "#FF6B6B22" : currentBriefing.riskLevel === "medium" ? "#FFB34722" : "#81C78422", color: currentBriefing.riskLevel === "critical" ? "#FF4444" : currentBriefing.riskLevel === "high" ? "#FF6B6B" : currentBriefing.riskLevel === "medium" ? "#FFB347" : "#81C784", textTransform: "uppercase" }}>{currentBriefing.riskLevel} risk</span>
+            </div>
+            <div style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.6, marginBottom: 12 }}>{currentBriefing.executiveSummary}</div>
+            {(currentBriefing.actionItems || []).length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#FFB347", marginBottom: 6 }}>⚡ Action Items:</div>
+                {currentBriefing.actionItems.map((item, idx) => (
+                  <div key={idx} style={{ fontSize: 11, color: "#8B92A8", padding: "4px 0 4px 12px", borderLeft: "2px solid #FFB34744" }}>{item}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* AI Patterns Preview */}
+        {aiPatterns.length > 0 && (
+          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FFB34733", padding: 20, marginBottom: 20 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>🔍 Detected Patterns <span style={{ fontSize: 10, color: "#FFB347", fontWeight: 400 }}>({aiPatterns.length})</span></h3>
+            <div style={{ display: "grid", gap: 8 }}>
+              {aiPatterns.slice(0, 5).map((pat, idx) => (
+                <div key={idx} style={{ background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", padding: "10px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 16 }}>{pat.type === "recurring" ? "🔄" : pat.type === "trending" ? "📈" : pat.type === "correlated" ? "🔗" : pat.type === "seasonal" ? "📅" : "⚠️"}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{pat.title}</div>
+                    <div style={{ fontSize: 10, color: "#8B92A8", marginTop: 2 }}>{pat.description?.substring(0, 100)}{pat.description?.length > 100 ? "..." : ""}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: pat.confidence >= 90 ? "#81C784" : pat.confidence >= 70 ? "#FFB347" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{pat.confidence}%</span>
+                    <button onClick={() => createProblemFromPattern(pat.id)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", cursor: "pointer", fontSize: 9, fontWeight: 600 }}>Create Problem</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
           {/* AI Activity Feed */}
@@ -18273,8 +18572,9 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             <div style={{ padding: "10px 20px", background: "#0F1117", display: "flex", gap: 16, borderBottom: "1px solid #1E2130" }}>
               {[
                 { label: "Pending", count: aiActions.filter(a => a.status === "pending_approval").length, color: "#FFB347" },
-                { label: "Approved", count: aiActions.filter(a => a.status === "approved" || a.status === "executed").length, color: "#4CAF50" },
+                { label: "Approved", count: aiActions.filter(a => a.status === "approved" || a.status === "executed" || a.status === "applied" || a.status === "auto_applied").length, color: "#4CAF50" },
                 { label: "Rejected", count: aiActions.filter(a => a.status === "rejected").length, color: "#FF5252" },
+                { label: "Auto-Triaged", count: aiActions.filter(a => a.type === "auto_triage").length, color: "#06B6D4" },
                 { label: "Total", count: aiActions.length, color: "#6366F1" },
               ].map(s => (
                 <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -18335,6 +18635,89 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                           <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4 }}>{action.suggestedAction}</div>
                         </div>
                       )}
+                      {/* AI Auto-Triage Card (Phase 1) */}
+                      {action.type === "auto_triage" && action.triage && (
+                        <div style={{ padding: "10px 14px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#06B6D4", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>🤖 AI TRIAGE RECOMMENDATION</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>Category</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#64B5F6" }}>{action.triage.category}</div>
+                            </div>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>Priority</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: action.triage.priority === "Sev-A" ? "#FF4444" : action.triage.priority === "Sev-B" ? "#FF8800" : action.triage.priority === "Sev-D" ? "#4CAF50" : "#FFB347" }}>{action.triage.priority}</div>
+                            </div>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>Assignee</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#CE93D8" }}>{action.triage.assignee}</div>
+                            </div>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>SLA Target</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#81C784" }}>{action.triage.suggestedSlaTarget}h</div>
+                            </div>
+                          </div>
+                          {action.reasoning && (
+                            <div style={{ padding: "6px 10px", background: "#0A0C14", borderRadius: 4, border: "1px solid #6366F111" }}>
+                              <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, marginBottom: 2 }}>🧠 Reasoning</div>
+                              <div style={{ fontSize: 10, color: "#A0AEC0", lineHeight: 1.4 }}>{action.reasoning}</div>
+                            </div>
+                          )}
+                          {action.confidence && (
+                            <div style={{ marginTop: 8, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                              <div style={{ width: `${action.confidence}%`, height: "100%", borderRadius: 2, background: action.confidence >= 85 ? "#4CAF50" : action.confidence >= 60 ? "#FFB347" : "#FF5252" }} />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {/* SLA Prevention Card */}
+                      {action.type === "sla_prevention" && action.prediction && (
+                        <div style={{ padding: "10px 14px", background: "linear-gradient(135deg, #EC489908, #FF444408)", borderRadius: 8, border: "1px solid #EC489933", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#EC4899", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>🔮 SLA BREACH PREDICTION</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>Breach Risk</div>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: action.prediction.breachProbability >= 90 ? "#FF4444" : "#FFB347" }}>{action.prediction.breachProbability}%</div>
+                            </div>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>ETA to Breach</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#FF6B6B" }}>{action.prediction.predictedBreachIn}</div>
+                            </div>
+                            <div style={{ padding: "6px 8px", background: "#0A0C14", borderRadius: 6, textAlign: "center" }}>
+                              <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", marginBottom: 3 }}>Action</div>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "#06B6D4" }}>{action.prediction.suggestedAction}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {/* KB Draft Card */}
+                      {action.type === "kb_draft" && action.kbDraft && (
+                        <div style={{ padding: "10px 14px", background: "linear-gradient(135deg, #81C78408, #06B6D408)", borderRadius: 8, border: "1px solid #81C78433", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#81C784", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>📚 AI-GENERATED KB ARTICLE</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.kbDraft.title}</div>
+                          <div style={{ fontSize: 10, color: "#8B92A8", marginBottom: 4 }}>Category: {action.kbDraft.category} · Tags: {(action.kbDraft.tags || []).join(", ")}</div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4, maxHeight: 80, overflow: "hidden", padding: "6px 10px", background: "#0A0C14", borderRadius: 4 }}>{(action.kbDraft.content || "").substring(0, 300)}...</div>
+                        </div>
+                      )}
+                      {/* Preventive Action Card */}
+                      {action.type === "preventive_action" && action.pattern && (
+                        <div style={{ padding: "10px 14px", background: "linear-gradient(135deg, #FFB34708, #FF8C0008)", borderRadius: 8, border: "1px solid #FFB34733", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>🔍 PATTERN-BASED PREVENTION</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.pattern.title || action.title}</div>
+                          <div style={{ fontSize: 10, color: "#8B92A8", marginBottom: 4 }}>Type: {action.pattern.type} · Confidence: {action.pattern.confidence}%</div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4 }}>{action.pattern.suggestedPrevention}</div>
+                        </div>
+                      )}
+                      {/* Create Problem Card */}
+                      {action.type === "create_problem" && action.problemDraft && (
+                        <div style={{ padding: "10px 14px", background: "linear-gradient(135deg, #CE93D808, #6366F108)", borderRadius: 8, border: "1px solid #CE93D833", marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, color: "#CE93D8", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>🎯 PROBLEM RECORD DRAFT</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.problemDraft.title}</div>
+                          <div style={{ fontSize: 10, color: "#8B92A8", marginBottom: 4 }}>Priority: {action.problemDraft.priority} · Category: {action.problemDraft.category}</div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.4, marginBottom: 4 }}>{(action.problemDraft.description || "").substring(0, 200)}</div>
+                          {action.problemDraft.linkedIncidents && <div style={{ fontSize: 9, color: "#6366F1" }}>Linked: {action.problemDraft.linkedIncidents.join(", ")}</div>}
+                        </div>
+                      )}
                       {action.internalNote && (
                         <div style={{ padding: "8px 12px", background: "#FFB34708", borderRadius: 6, border: "1px solid #FFB34722", marginBottom: 8 }}>
                           <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 700, marginBottom: 2 }}>📋 Internal Note</div>
@@ -18357,15 +18740,38 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                       {/* Action Buttons — Only for pending items */}
                       {action.status === "pending_approval" && (
                         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                          <button onClick={() => approveAiAction(action.id)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #45a049)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
-                            ✅ Approve & Execute
-                          </button>
-                          <button onClick={() => rejectAiAction(action.id, "Not needed")} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "1px solid #FF525244", background: "#FF525211", color: "#FF5252", cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
-                            ❌ Reject
-                          </button>
-                          <button onClick={() => sendAiApprovalEmail(action.id)} title="Send approval request via Outlook email" style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #06B6D444", background: "#06B6D411", color: "#06B6D4", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
-                            📧
-                          </button>
+                          {action.type === "auto_triage" ? (
+                            <>
+                              <button onClick={() => applyAiTriage(action.id)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                                🤖 Apply Triage
+                              </button>
+                              <button onClick={() => rejectAiAction(action.id, "Triage not applicable")} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "1px solid #FF525244", background: "#FF525211", color: "#FF5252", cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                                ❌ Reject
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button onClick={() => approveAiAction(action.id)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #45a049)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                                ✅ Approve & Execute
+                              </button>
+                              <button onClick={() => rejectAiAction(action.id, "Not needed")} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "1px solid #FF525244", background: "#FF525211", color: "#FF5252", cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                                ❌ Reject
+                              </button>
+                              <button onClick={() => sendAiApprovalEmail(action.id)} title="Send approval request via Outlook email" style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #06B6D444", background: "#06B6D411", color: "#06B6D4", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
+                                📧
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {action.status === "auto_applied" && (
+                        <div style={{ padding: "6px 12px", background: "#4CAF5008", borderRadius: 6, border: "1px solid #4CAF5022", marginTop: 6, fontSize: 10, color: "#4CAF50", display: "flex", alignItems: "center", gap: 6 }}>
+                          ✅ Auto-applied (high confidence: {action.confidence}%)
+                        </div>
+                      )}
+                      {action.status === "applied" && (
+                        <div style={{ padding: "6px 12px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122", marginTop: 6, fontSize: 10, color: "#6366F1", display: "flex", alignItems: "center", gap: 6 }}>
+                          ✅ Triage applied by {action.approvedBy} at {action.approvedAt ? new Date(action.approvedAt).toLocaleString("en-SG") : ""}
                         </div>
                       )}
                       {(action.approvedBy || action.rejectedBy) && (
@@ -18414,8 +18820,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 <div style={{ width: 28, height: 28, borderRadius: 8, overflow: "hidden", background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #1E2130, #0F1117)", display: "flex", alignItems: "center", justifyContent: "center", border: "1.5px solid #ffffff33" }}>
                   {!profilePhoto && <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4" }}>{currentUser.avatar}</span>}
                 </div>
-                <span style={{ fontWeight: 700, fontSize: aiChatExpanded ? 15 : 14, color: "#fff", fontFamily: "'Space Grotesk', sans-serif" }}>VGC AI</span>
-                {currentUser.rbacRole && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "#ffffff22", color: "#ffffffcc", fontFamily: "'JetBrains Mono', monospace", marginLeft: 4 }}>{currentUser.rbacRole}</span>}
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>{currentUser.name}</span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <button onClick={() => { setAiMessages(prev => [prev[0]]); setAiEditingIdx(null); }} style={{ background: "none", border: "none", color: "#ffffff55", cursor: "pointer", fontSize: 12, padding: "2px 4px", borderRadius: 4, transition: "background 0.2s" }} title="Clear chat"
@@ -18490,13 +18895,39 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                             setAiEditSaving(false);
                           }} style={{ padding: "4px 12px", fontSize: 9, background: aiEditSaving ? "#FFB34744" : "linear-gradient(135deg, #FFB347, #FF9800)", border: "none", borderRadius: 4, color: "#fff", cursor: aiEditSaving ? "wait" : "pointer", fontWeight: 700 }}>
                             {aiEditSaving ? "Saving..." : "💾 Save & Train"}
-                          </button>
+                      
+                    {/* AI Action Cards — click-through actions */}
+                    {msg.role === "ai" && !msg._typing && msg.actionCards && msg.actionCards.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
+                        {msg.actionCards.map((card, ci) => (
+                          <div key={ci} onClick={card.action} style={{
+                            padding: "8px 12px", borderRadius: 8, background: "#6366F108", border: "1px solid #6366F122",
+                            cursor: "pointer", display: "flex", alignItems: "center", gap: 8, transition: "all 0.2s"
+                          }}
+                          onMouseOver={e => { e.currentTarget.style.background = "#6366F118"; e.currentTarget.style.borderColor = "#6366F144"; }}
+                          onMouseOut={e => { e.currentTarget.style.background = "#6366F108"; e.currentTarget.style.borderColor = "#6366F122"; }}>
+                            <span style={{ fontSize: 16, flexShrink: 0 }}>{card.icon}</span>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4" }}>{card.title}</div>
+                              <div style={{ fontSize: 9, color: "#8B8FA3", marginTop: 1 }}>{card.description}</div>
+                            </div>
+                            <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, whiteSpace: "nowrap" }}>{card.btnLabel}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Corrected badge */}
+                    {msg.corrected && (
+                      <div style={{ fontSize: 8, color: "#81C784", display: "flex", alignItems: "center", gap: 3, marginTop: 2 }}>
+                        <span>✅</span> Corrected by {currentUser.name} — VGC AI will use this in future
+                      </div>
+                    )}    </button>
                         </div>
                       </div>
                     )}
                     {/* Suggested Reply Cards */}
                     {msg.role === "ai" && !msg._typing && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}> 
                         {msg.suggestions.slice(0, 3).map((s, si) => (
                           <button key={si} onClick={() => handleAiChat(s.action)} style={{
                             padding: "4px 8px", fontSize: 9, background: "#6366F108",
@@ -18587,7 +19018,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 </div>
                 <textarea style={{ ...inputStyle, fontSize: 10, width: "100%", minHeight: 50, resize: "vertical", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.4, boxSizing: "border-box" }} placeholder="Knowledge content — procedures, solutions, troubleshooting..." value={kbForm.content} onChange={e => setKbForm(p => ({ ...p, content: e.target.value }))} />
                 {/* File Upload */}
-                <div style={{ marginBottom: 6, border: "1px dashed #1E213066", borderRadius: 6, padding: 8, textAlign: "center", cursor: "pointer", transition: "border-color 0.2s" }}
+                <div style={{ marginBottom: 6, border: "1px dashed #1E213066", borderRadius: 6, padding: 8, cursor: "pointer", transition: "border-color 0.2s" }}
                   onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#6366F1"; }}
                   onDragLeave={e => { e.currentTarget.style.borderColor = "#1E213066"; }}
                   onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#1E213066"; handleKbFileUpload(e.dataTransfer.files); }}
