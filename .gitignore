@@ -18,3 +18,8 @@ applog.zip
 docker*.log
 dist/
 .env
+*.pfx
+*.cer
+*.pem
+fix-entra.cjs
+tmp_*.json

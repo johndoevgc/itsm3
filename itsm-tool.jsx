@@ -38,6 +38,12 @@ const SECURITY_ALERTS = [];
 
 // ─── Users ───────────────────────────────────────────────────────────
 // Admin users are configured here — they get full admin access on first login
+// Dev admins get VGC Dev Admin (full platform super-admin) role
+const DEV_ADMIN_EMAILS = [
+  "hlaing@vgctechnology.com",
+  "qing@vgctechnology.com",
+];
+// Tenant admins get Tenant Admin (full tenant management) role
 const ADMIN_EMAILS = [
   "hlaing@vgctechnology.com",
   "qing@vgctechnology.com",
@@ -47,7 +53,7 @@ const ADMIN_EMAILS = [
 
 const USERS = [
   { id: "DEMO-001", name: "Dev Admin", role: "Platform Super Admin", avatar: "DA", team: "VGC Engineering", gender: "unspecified", rbacRole: "VGC Dev Admin", email: "devadmin@vgctechnology.com", phone: "+65 9000 0001", location: "Singapore", department: "Engineering", pcName: "VGC-DEV-01", employeeId: "VGC001" },
-  { id: "DEMO-002", name: "VGC Admin", role: "Tenant Administrator", avatar: "VA", team: "IT Operations", gender: "unspecified", rbacRole: "Administrator", email: "admin@vgctechnology.com", phone: "+65 9000 0002", location: "Singapore", department: "IT", pcName: "VGC-ADM-01", employeeId: "VGC002" },
+  { id: "DEMO-002", name: "VGC Helpdesk", role: "Tenant Administrator", avatar: "VH", team: "IT Operations", gender: "unspecified", rbacRole: "Administrator", email: "helpdesk@vgctechnology.com", phone: "+65 9000 0002", location: "Singapore", department: "IT", pcName: "VGC-ADM-01", employeeId: "VGC002" },
   { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@vgctechnology.com", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
 ];
 
@@ -2024,7 +2030,7 @@ export default function ITSMApp() {
         if (stored) { fallbackUser = JSON.parse(stored); sessionStorage.removeItem("itsm_sso_fallback"); }
       } catch {}
 
-      // Enrich with live Entra ID data, then set user
+      // Enrich with live Entra ID data, load DB-stored role, then set user
       (async () => {
         let entraProfile = null;
         try {
@@ -2035,37 +2041,64 @@ export default function ITSMApp() {
           }
         } catch {}
 
+        // Load DB-stored role (persisted from GUI edits)
+        let dbStoredRole = null;
+        try {
+          const dbResp = await fetch("/api/db/users");
+          if (dbResp.ok) {
+            const dbUsers = await dbResp.json();
+            const dbUser = (Array.isArray(dbUsers) ? dbUsers : []).find(u => {
+              const d = typeof u.data === "string" ? JSON.parse(u.data) : (u.data || u);
+              return d.email?.toLowerCase() === email;
+            });
+            if (dbUser) {
+              const d = typeof dbUser.data === "string" ? JSON.parse(dbUser.data) : (dbUser.data || dbUser);
+              dbStoredRole = d.rbacRole || null;
+            }
+          }
+        } catch {}
+
+        // Determine role: DB-stored > DEV_ADMIN check > ADMIN check > default L1 Support
+        const determineRole = (baseRole) => {
+          if (dbStoredRole) return dbStoredRole;
+          const isDevAdmin = DEV_ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
+          if (isDevAdmin) return "VGC Dev Admin";
+          const isAdmin = ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
+          if (isAdmin) return "Tenant Admin";
+          return baseRole || "L1 Support Engineer";
+        };
+
         if (matched) {
           setCurrentUser({
             ...matched,
+            rbacRole: determineRole(matched.rbacRole),
             authType: "entra",
             entraEmail: email,
             ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, entraObjectId: entraProfile.entraObjectId } : {}),
           });
         } else if (fallbackUser) {
-          const isAdmin = ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
-          const defaultRole = isAdmin ? "Administrator" : (fallbackUser.rbacRole || "End User");
+          const role = determineRole(fallbackUser.rbacRole);
           setCurrentUser({
             ...fallbackUser,
             id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
             name: acct.name || fallbackUser.name,
             email: acct.username || fallbackUser.email,
             avatar: (acct.name || fallbackUser.name).substring(0, 2).toUpperCase(),
-            rbacRole: defaultRole,
+            rbacRole: role,
             authType: "entra",
             entraEmail: email,
             ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, role: entraProfile.role, entraObjectId: entraProfile.entraObjectId } : {}),
           });
         } else {
-          const isAdmin = ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
+          const role = determineRole(null);
           setCurrentUser({
             id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
             name: acct.name || acct.username,
-            role: "IT Staff",
+            role: entraProfile?.role || "IT Staff",
             avatar: (acct.name || "U").substring(0, 2).toUpperCase(),
             team: "IT Operations",
             gender: "unspecified",
-            rbacRole: isAdmin ? "Administrator" : "End User",
+            rbacRole: role,
             email: acct.username,
             phone: "",
             location: "Singapore",
@@ -2077,6 +2110,34 @@ export default function ITSMApp() {
             ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, role: entraProfile.role, entraObjectId: entraProfile.entraObjectId } : {}),
           });
         }
+
+        // Auto-add to managedUsers if first-time login (enables GUI role editing & DB persistence)
+        setManagedUsers(prev => {
+          const exists = prev.some(u => u.email?.toLowerCase() === email);
+          if (exists) return prev;
+          const newUser = {
+            id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
+            name: acct.name || acct.username,
+            role: entraProfile?.role || "IT Staff",
+            avatar: (acct.name || "U").substring(0, 2).toUpperCase(),
+            team: entraProfile?.department || "IT Operations",
+            gender: "unspecified",
+            rbacRole: determineRole(null),
+            email: acct.username?.toLowerCase(),
+            phone: entraProfile?.phone || "",
+            location: entraProfile?.location || "Singapore",
+            department: entraProfile?.department || "IT",
+            pcName: "",
+            employeeId: "",
+            authType: "entra",
+            entraObjectId: entraProfile?.entraObjectId || "",
+            ssoProvider: "Entra ID",
+            firstLoginAt: new Date().toISOString(),
+          };
+          console.log("[VGC-ITSM] Auto-added Entra user to managedUsers:", newUser.email, "role:", newUser.rbacRole);
+          return [...prev, newUser];
+        });
+
         setIsLoggedIn(true);
       })();
     }
@@ -9583,16 +9644,14 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
                   {/* ═══ Entra ID Import Panel ═══ */}
                   {showEntraImport && canEditRBAC && (() => {
-                    const graphToken = accounts?.[0] ? msalInstance.acquireTokenSilent({ scopes: ["User.Read.All", "Group.Read.All", "Directory.Read.All"], account: accounts[0] }).then(r => r.accessToken).catch(() => null) : null;
+                    // All Entra lookups use server-side proxy (client credentials, no delegated scopes needed)
 
                     const entraSearchUsers = async () => {
                       if (!entraSearchQuery.trim()) return;
                       setEntraSearching(true);
                       try {
-                        const token = await graphToken;
-                        if (!token) { setEntraSearchResults([{ id: "demo-1", displayName: "Alice Wong", mail: "alice.wong@vgctechnology.com", jobTitle: "IT Support Specialist", department: "IT Operations", userPrincipalName: "alice.wong@vgctechnology.com" }, { id: "demo-2", displayName: "Benjamin Teo", mail: "ben.teo@vgctechnology.com", jobTitle: "Network Administrator", department: "Network Engineering", userPrincipalName: "ben.teo@vgctechnology.com" }, { id: "demo-3", displayName: "Catherine Lim", mail: "catherine.lim@vgctechnology.com", jobTitle: "Service Desk Lead", department: "IT Service Management", userPrincipalName: "catherine.lim@vgctechnology.com" }, { id: "demo-4", displayName: "Daniel Ng", mail: "daniel.ng@vgctechnology.com", jobTitle: "Change Manager", department: "IT Governance", userPrincipalName: "daniel.ng@vgctechnology.com" }, { id: "demo-5", displayName: "Emily Tan", mail: "emily.tan@vgctechnology.com", jobTitle: "Security Analyst", department: "Information Security", userPrincipalName: "emily.tan@vgctechnology.com" }].filter(u => u.displayName.toLowerCase().includes(entraSearchQuery.toLowerCase()) || u.mail?.toLowerCase().includes(entraSearchQuery.toLowerCase()) || u.department?.toLowerCase().includes(entraSearchQuery.toLowerCase()))); setEntraSearching(false); return; }
-                        const r = await fetch(`https://graph.microsoft.com/v1.0/users?$search="displayName:${encodeURIComponent(entraSearchQuery)}" OR "mail:${encodeURIComponent(entraSearchQuery)}"&$select=id,displayName,mail,jobTitle,department,userPrincipalName&$top=20&$count=true`, { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } });
-                        if (r.ok) { const data = await r.json(); setEntraSearchResults(data.value || []); }
+                        const r = await fetch("/api/entra/users/search?q=" + encodeURIComponent(entraSearchQuery));
+                        if (r.ok) { const data = await r.json(); setEntraSearchResults(data.users || []); }
                         else setEntraSearchResults([]);
                       } catch (e) { console.error("Entra search error:", e); setEntraSearchResults([]); }
                       finally { setEntraSearching(false); }
@@ -9601,10 +9660,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                     const entraFetchGroups = async () => {
                       setEntraSearching(true);
                       try {
-                        const token = await graphToken;
-                        if (!token) { setEntraGroups([{ id: "grp-1", displayName: "SG-ITSM-Admins", description: "ITSM Administrators", memberCount: 3 }, { id: "grp-2", displayName: "SG-ITSM-ServiceDesk", description: "Service Desk agents", memberCount: 8 }, { id: "grp-3", displayName: "SG-ITSM-Engineers", description: "Infrastructure engineers", memberCount: 5 }, { id: "grp-4", displayName: "SG-ITSM-ChangeBoard", description: "Change Advisory Board members", memberCount: 4 }, { id: "grp-5", displayName: "SG-ITSM-AllUsers", description: "All ITSM end users", memberCount: 42 }, { id: "grp-6", displayName: "SG-IT-Security", description: "Information security team", memberCount: 3 }]); setEntraSearching(false); return; }
-                        const r = await fetch(`https://graph.microsoft.com/v1.0/groups?$filter=securityEnabled eq true&$select=id,displayName,description&$top=50`, { headers: { Authorization: `Bearer ${token}` } });
-                        if (r.ok) { const data = await r.json(); setEntraGroups(data.value || []); }
+                        const r = await fetch("/api/entra/groups");
+                        if (r.ok) { const data = await r.json(); setEntraGroups(data.groups || []); }
                       } catch (e) { console.error("Entra groups error:", e); }
                       finally { setEntraSearching(false); }
                     };
@@ -9612,10 +9669,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                     const entraFetchGroupMembers = async (groupId, groupName) => {
                       setEntraSearching(true); setEntraSelectedGroup({ id: groupId, name: groupName });
                       try {
-                        const token = await graphToken;
-                        if (!token) { const demoMembers = [{ id: `gm-${groupId}-1`, displayName: "Alice Wong", mail: "alice.wong@vgctechnology.com", jobTitle: "IT Support Specialist", department: "IT Operations", userPrincipalName: "alice.wong@vgctechnology.com" }, { id: `gm-${groupId}-2`, displayName: "Benjamin Teo", mail: "ben.teo@vgctechnology.com", jobTitle: "Network Admin", department: "Network Engineering", userPrincipalName: "ben.teo@vgctechnology.com" }, { id: `gm-${groupId}-3`, displayName: "Catherine Lim", mail: "catherine.lim@vgctechnology.com", jobTitle: "Service Desk Lead", department: "IT Service Management", userPrincipalName: "catherine.lim@vgctechnology.com" }]; setEntraGroupMembers(demoMembers); setEntraSearching(false); return; }
-                        const r = await fetch(`https://graph.microsoft.com/v1.0/groups/${encodeURIComponent(groupId)}/members?$select=id,displayName,mail,jobTitle,department,userPrincipalName&$top=100`, { headers: { Authorization: `Bearer ${token}` } });
-                        if (r.ok) { const data = await r.json(); setEntraGroupMembers((data.value || []).filter(m => m["@odata.type"] === "#microsoft.graph.user" || m.mail)); }
+                        const r = await fetch("/api/entra/groups/" + encodeURIComponent(groupId) + "/members");
+                        if (r.ok) { const data = await r.json(); setEntraGroupMembers(data.members || []); }
                       } catch (e) { console.error("Group members error:", e); }
                       finally { setEntraSearching(false); }
                     };

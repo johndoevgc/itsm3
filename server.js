@@ -29,6 +29,32 @@ function extractAIText(aiResult) {
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || "";
 const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
+const ENTRA_CERT_THUMBPRINT = process.env.ENTRA_CERT_THUMBPRINT || "";
+
+// Helper: Build client assertion JWT for certificate-based auth
+function buildClientAssertion() {
+  if (!ENTRA_CERT_THUMBPRINT) return null;
+  try {
+    // On Azure Linux App Service, certs are at /var/ssl/private/<thumbprint>.p12
+    const pfxPath = `/var/ssl/private/${ENTRA_CERT_THUMBPRINT}.p12`;
+    if (!fs.existsSync(pfxPath)) { console.error("[Entra] PFX not found at", pfxPath); return null; }
+    // Extract private key using openssl (available on Azure Linux)
+    const { execSync } = require("child_process");
+    const pem = execSync(`openssl pkcs12 -in "${pfxPath}" -nocerts -nodes -passin pass:`, { encoding: "utf8" });
+    const privateKey = crypto.createPrivateKey(pem);
+    // Build JWT header with x5t (base64url SHA-1 thumbprint)
+    const x5t = Buffer.from(ENTRA_CERT_THUMBPRINT, "hex").toString("base64url");
+    const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT", x5t })).toString("base64url");
+    const now = Math.floor(Date.now() / 1000);
+    const payload = Buffer.from(JSON.stringify({
+      aud: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`,
+      iss: ENTRA_CLIENT_ID, sub: ENTRA_CLIENT_ID,
+      jti: crypto.randomUUID(), nbf: now, exp: now + 300,
+    })).toString("base64url");
+    const sig = crypto.sign("SHA256", Buffer.from(`${header}.${payload}`), privateKey).toString("base64url");
+    return `${header}.${payload}.${sig}`;
+  } catch (err) { console.error("[Entra] Client assertion build failed:", err.message); return null; }
+}
 
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
 // Primary: gpt-5.4-pro (East US 2) — Responses API (supports streaming)
@@ -458,11 +484,62 @@ function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
   });
 }
 
-// Server-side Graph API call using client credentials (app-only) — fallback
-function graphAppCall(endpoint) {
+// Server-side Graph API call using client credentials (app-only) — supports cert or secret
+function graphAppCall(endpoint, extraHeaders) {
   return new Promise((resolve, reject) => {
-    if (!ENTRA_CLIENT_SECRET) return reject(new Error("No client secret configured"));
-    const tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_secret=${encodeURIComponent(ENTRA_CLIENT_SECRET)}&grant_type=client_credentials`;
+    // Build token request body — prefer cert, fall back to client secret
+    let tokenBody;
+    const assertion = buildClientAssertion();
+    if (assertion) {
+      tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_assertion_type=${encodeURIComponent("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")}&client_assertion=${encodeURIComponent(assertion)}&grant_type=client_credentials`;
+    } else if (ENTRA_CLIENT_SECRET) {
+      tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_secret=${encodeURIComponent(ENTRA_CLIENT_SECRET)}&grant_type=client_credentials`;
+    } else {
+      return reject(new Error("No client secret or certificate configured"));
+    }
+    const tokenReq = https.request({
+      hostname: "login.microsoftonline.com", path: `/${ENTRA_TENANT_ID}/oauth2/v2.0/token`,
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(tokenBody) },
+    }, tokenRes => {
+      let data = "";
+      tokenRes.on("data", c => data += c);
+      tokenRes.on("end", () => {
+        try {
+          const token = JSON.parse(data);
+          if (!token.access_token) return reject(new Error(token.error_description || "Token failed"));
+          const graphReq = https.request({
+            hostname: "graph.microsoft.com", path: `/v1.0${endpoint}`,
+            method: "GET", headers: { Authorization: `Bearer ${token.access_token}`, ...(extraHeaders || {}) },
+          }, graphRes => {
+            let gData = "";
+            graphRes.on("data", c => gData += c);
+            graphRes.on("end", () => {
+              try { resolve(JSON.parse(gData)); } catch { reject(new Error("Invalid JSON")); }
+            });
+          });
+          graphReq.on("error", reject);
+          graphReq.end();
+        } catch { reject(new Error("Token parse failed")); }
+      });
+    });
+    tokenReq.on("error", reject);
+    tokenReq.write(tokenBody);
+    tokenReq.end();
+  });
+}
+
+// Graph API binary call (for photos) — returns base64 data URL or null
+function graphAppCallBinary(endpoint) {
+  return new Promise((resolve, reject) => {
+    let tokenBody;
+    const assertion = buildClientAssertion();
+    if (assertion) {
+      tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_assertion_type=${encodeURIComponent("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")}&client_assertion=${encodeURIComponent(assertion)}&grant_type=client_credentials`;
+    } else if (ENTRA_CLIENT_SECRET) {
+      tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_secret=${encodeURIComponent(ENTRA_CLIENT_SECRET)}&grant_type=client_credentials`;
+    } else {
+      return reject(new Error("No client secret or certificate configured"));
+    }
     const tokenReq = https.request({
       hostname: "login.microsoftonline.com", path: `/${ENTRA_TENANT_ID}/oauth2/v2.0/token`,
       method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(tokenBody) },
@@ -477,10 +554,13 @@ function graphAppCall(endpoint) {
             hostname: "graph.microsoft.com", path: `/v1.0${endpoint}`,
             method: "GET", headers: { Authorization: `Bearer ${token.access_token}` },
           }, graphRes => {
-            let gData = "";
-            graphRes.on("data", c => gData += c);
+            if (graphRes.statusCode === 404) return resolve(null);
+            const chunks = [];
+            graphRes.on("data", c => chunks.push(c));
             graphRes.on("end", () => {
-              try { resolve(JSON.parse(gData)); } catch { reject(new Error("Invalid JSON")); }
+              const buf = Buffer.concat(chunks);
+              const contentType = graphRes.headers["content-type"] || "image/jpeg";
+              resolve(`data:${contentType};base64,${buf.toString("base64")}`);
             });
           });
           graphReq.on("error", reject);
@@ -730,6 +810,61 @@ const server = http.createServer(async (req, res) => {
           syncedAt: new Date().toISOString(),
         }));
       return json(res, 200, { ok: true, count: users.length, users, tenant: ENTRA_TENANT_ID });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Entra ID User Search: GET /api/entra/users/search?q=<query> ───────
+  if (pathname === "/api/entra/users/search" && req.method === "GET") {
+    const q = urlObj.searchParams.get("q") || "";
+    if (!q.trim()) return json(res, 400, { error: "Missing search query parameter 'q'" });
+    try {
+      const safeQ = q.replace(/"/g, "").trim();
+      const searchExpr = encodeURIComponent(`"displayName:${safeQ}" OR "mail:${safeQ}"`);
+      const data = await graphAppCall(
+        `/users?$search=${searchExpr}&$select=id,displayName,mail,jobTitle,department,userPrincipalName,accountEnabled&$top=20&$count=true`,
+        { ConsistencyLevel: "eventual" }
+      );
+      const users = (data.value || []).filter(u => u.accountEnabled !== false);
+      return json(res, 200, { ok: true, count: users.length, users });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Entra ID Groups: GET /api/entra/groups ────────────────────────────
+  if (pathname === "/api/entra/groups" && req.method === "GET") {
+    try {
+      const data = await graphAppCall("/groups?$select=id,displayName,description,securityEnabled&$top=100");
+      const groups = (data.value || []).filter(g => g.securityEnabled).map(g => ({ id: g.id, displayName: g.displayName, description: g.description }));
+      return json(res, 200, { ok: true, groups });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Entra ID Group Members: GET /api/entra/groups/:id/members ─────────
+  if (pathname.startsWith("/api/entra/groups/") && pathname.endsWith("/members") && req.method === "GET") {
+    const groupId = pathname.replace("/api/entra/groups/", "").replace("/members", "");
+    if (!groupId || groupId.length < 10) return json(res, 400, { error: "Invalid group ID" });
+    try {
+      const data = await graphAppCall(`/groups/${encodeURIComponent(groupId)}/members?$select=id,displayName,mail,jobTitle,department,userPrincipalName&$top=100`);
+      const members = (data.value || []).filter(m => m["@odata.type"] === "#microsoft.graph.user" || m.mail);
+      return json(res, 200, { ok: true, count: members.length, members });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Entra ID User Photo: GET /api/entra/users/:id/photo ───────────────
+  if (pathname.startsWith("/api/entra/users/") && pathname.endsWith("/photo") && req.method === "GET") {
+    const userId = pathname.replace("/api/entra/users/", "").replace("/photo", "");
+    if (!userId || userId.length < 5) return json(res, 400, { error: "Invalid user ID" });
+    try {
+      const dataUrl = await graphAppCallBinary(`/users/${encodeURIComponent(userId)}/photo/$value`);
+      if (!dataUrl) return json(res, 404, { error: "No photo found" });
+      return json(res, 200, { ok: true, photo: dataUrl });
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
@@ -3334,7 +3469,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       database: dbOk ? "connected" : "error",
       dbType: db.type,
       dbLabel: db.label,
-      entraConfigured: !!ENTRA_CLIENT_SECRET,
+      entraConfigured: !!(ENTRA_CLIENT_SECRET || ENTRA_CERT_THUMBPRINT),
       zendeskConfigured: !!(ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN),
       aiConfigured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
       aiModel: AZURE_OPENAI_MODEL,
