@@ -2524,6 +2524,125 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
+  // ─── AI Chat File Upload: POST /api/ai/chat/upload ──────────────────
+  // Accepts file attachments, extracts text content, returns it for AI context
+  if (pathname === "/api/ai/chat/upload" && req.method === "POST") {
+    try {
+      const contentType = req.headers["content-type"] || "";
+      if (!contentType.includes("multipart/form-data")) {
+        return json(res, 400, { error: "multipart/form-data required" });
+      }
+      const boundary = contentType.split("boundary=")[1];
+      if (!boundary) return json(res, 400, { error: "Missing boundary" });
+
+      // Size limit: 10MB
+      const MAX_SIZE = 10 * 1024 * 1024;
+      const chunks = [];
+      let totalSize = 0;
+      await new Promise((resolve, reject) => {
+        req.on("data", c => {
+          totalSize += c.length;
+          if (totalSize > MAX_SIZE) { req.destroy(); reject(new Error("File too large (max 10MB)")); return; }
+          chunks.push(c);
+        });
+        req.on("end", resolve);
+        req.on("error", reject);
+      });
+
+      const buf = Buffer.concat(chunks);
+      const parts = buf.toString("binary").split("--" + boundary).filter(p => p.trim() && p.trim() !== "--");
+
+      // Dangerous file extensions to block
+      const BLOCKED_EXTENSIONS = new Set([
+        "exe", "bat", "cmd", "com", "msi", "scr", "pif", "vbs", "vbe", "js", "jse",
+        "ws", "wsf", "wsc", "wsh", "ps1", "ps2", "psc1", "psc2", "msh", "msh1", "msh2",
+        "inf", "reg", "rgs", "sct", "shb", "shs", "lnk", "dll", "sys", "drv", "ocx",
+        "cpl", "hta", "jar", "class", "php", "asp", "aspx", "jsp", "cgi", "pl", "py",
+        "rb", "sh", "bash", "zsh", "ksh", "csh", "app", "action", "command", "workflow",
+        "iso", "img", "dmg", "vhd", "vmdk", "ova", "ovf"
+      ]);
+
+      const results = [];
+      for (const part of parts) {
+        const [headerSection, ...bodySections] = part.split("\r\n\r\n");
+        const body = bodySections.join("\r\n\r\n").replace(/\r\n$/, "");
+        const filenameMatch = headerSection.match(/filename="([^"]+)"/);
+        if (!filenameMatch) continue;
+
+        const fileName = filenameMatch[1];
+        const ext = fileName.split(".").pop().toLowerCase();
+        const fileSize = Buffer.byteLength(body, "binary");
+
+        // Block dangerous file types
+        if (BLOCKED_EXTENSIONS.has(ext)) {
+          results.push({ fileName, error: `Blocked: .${ext} files are not allowed for security reasons`, blocked: true });
+          continue;
+        }
+
+        // Extract text content based on file type
+        let textContent = "";
+        const textExts = ["txt", "csv", "md", "json", "xml", "html", "htm", "yaml", "yml", "toml", "ini", "cfg", "conf", "log", "sql", "tsv", "rtf"];
+        const codeExts = ["ts", "tsx", "jsx", "css", "scss", "less", "sass", "c", "cpp", "h", "hpp", "java", "kt", "swift", "go", "rs", "r", "lua", "dart", "tf", "bicep"];
+
+        if (textExts.includes(ext) || codeExts.includes(ext)) {
+          textContent = Buffer.from(body, "binary").toString("utf8").substring(0, 15000);
+        } else if (["doc", "docx", "xls", "xlsx", "ppt", "pptx"].includes(ext)) {
+          // Office files: extract readable text from binary (simplified — gets embedded strings)
+          const raw = Buffer.from(body, "binary");
+          // For docx/xlsx/pptx (ZIP-based XML), try to extract XML text
+          if (ext.endsWith("x")) {
+            const str = raw.toString("utf8", 0, Math.min(raw.length, 200000));
+            // Extract text between XML tags
+            const xmlText = str.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+            textContent = xmlText.substring(0, 15000);
+          } else {
+            // Legacy formats: extract printable ASCII sequences
+            const str = raw.toString("binary");
+            const printable = str.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s{3,}/g, " ").trim();
+            textContent = printable.substring(0, 10000);
+          }
+        } else if (["pdf"].includes(ext)) {
+          // PDF: extract readable text strings
+          const raw = Buffer.from(body, "binary").toString("binary");
+          // Extract text between BT/ET markers and parentheses
+          const textParts = [];
+          const parenRegex = /\(([^)]{2,})\)/g;
+          let m;
+          while ((m = parenRegex.exec(raw)) !== null) {
+            const t = m[1].replace(/[^\x20-\x7E]/g, "").trim();
+            if (t.length > 1) textParts.push(t);
+          }
+          textContent = textParts.join(" ").substring(0, 15000) || `[PDF file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB — binary content, text extraction limited]`;
+        } else if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif"].includes(ext)) {
+          textContent = `[Image file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}] — Image content cannot be read as text. User may be asking you to discuss, analyze, or reference this image.`;
+        } else if (["mp3", "wav", "ogg", "flac", "aac", "wma", "m4a"].includes(ext)) {
+          textContent = `[Audio file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}]`;
+        } else if (["mp4", "avi", "mkv", "mov", "wmv", "flv", "webm"].includes(ext)) {
+          textContent = `[Video file: ${fileName}, ${(fileSize / 1024 / 1024).toFixed(1)} MB, format: ${ext.toUpperCase()}]`;
+        } else if (["zip", "rar", "7z", "tar", "gz", "bz2", "xz"].includes(ext)) {
+          textContent = `[Archive file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}] — Archive contents cannot be extracted in chat.`;
+        } else {
+          textContent = `[File: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, type: .${ext}] — Binary content, text extraction not supported for this format.`;
+        }
+
+        results.push({
+          fileName,
+          fileSize,
+          fileType: ext.toUpperCase(),
+          textContent: textContent.trim(),
+          blocked: false
+        });
+      }
+
+      if (results.length === 0) return json(res, 400, { error: "No files found in upload" });
+      console.log(`[AI Chat Upload] ${results.length} file(s): ${results.map(r => r.fileName).join(", ")}`);
+      return json(res, 200, { files: results });
+    } catch (err) {
+      console.error("[AI Chat Upload]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
