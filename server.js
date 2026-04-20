@@ -72,7 +72,7 @@ const MERAKI_API_KEYS = (process.env.MERAKI_API_KEYS || "").split(",").map(k => 
 
 // SolarWinds RMM / N-able API (server-side only)
 let SOLARWINDS_API_KEY = process.env.SOLARWINDS_API_KEY || "";
-let SOLARWINDS_API_HOST = process.env.SOLARWINDS_API_HOST || "www.systemmonitor.us";
+let SOLARWINDS_API_HOST = process.env.SOLARWINDS_API_HOST || "wwwasia.system-monitor.com";
 
 // Sophos Central Firewall API (server-side only)
 const SOPHOS_CLIENT_ID = process.env.SOPHOS_CLIENT_ID || "";
@@ -3008,9 +3008,8 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     const body = await parseBody(req);
     const { apiKey, apiHost } = body || {};
     if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
-    const host = (apiHost || "www.systemmonitor.us").replace(/^(https?:\/\/)/, "");
-    const hostFull = host.startsWith("www.") ? host : `www.${host}`;
-    const testUrl = `https://${hostFull}/api/?apikey=${encodeURIComponent(apiKey)}&service=list_clients`;
+    const host = (apiHost || "wwwasia.system-monitor.com").replace(/^(https?:\/\/)/, "").replace(/\/+$/, "");
+    const testUrl = `https://${host}/api/?apikey=${encodeURIComponent(apiKey)}&service=list_clients`;
     try {
       const xml = await new Promise((resolve, reject) => {
         const doGet = (url) => {
@@ -3063,7 +3062,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     const { apiKey, apiHost } = body || {};
     if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
     SOLARWINDS_API_KEY = apiKey;
-    SOLARWINDS_API_HOST = (apiHost || "www.systemmonitor.us").replace(/^(https?:\/\/)/, "");
+    SOLARWINDS_API_HOST = (apiHost || "wwwasia.system-monitor.com").replace(/^(https?:\/\/)/, "").replace(/\/+$/, "");
     if (global._solarwindsCache) global._solarwindsCache = { data: null, ts: 0 };
     console.log(`[SOLARWINDS] API settings updated. Host=${SOLARWINDS_API_HOST}`);
     return json(res, 200, { ok: true, message: "SolarWinds RMM settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
@@ -3080,7 +3079,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       return json(res, 200, { ...swc.data, cached: true, lastSync: new Date(swc.ts).toISOString() });
     }
     const swFetch = (service) => new Promise((resolve, reject) => {
-      const host = SOLARWINDS_API_HOST.startsWith("www.") ? SOLARWINDS_API_HOST : `www.${SOLARWINDS_API_HOST}`;
+      const host = SOLARWINDS_API_HOST.replace(/\/+$/, "");
       const u = `https://${host}/api/?apikey=${encodeURIComponent(SOLARWINDS_API_KEY)}&service=${service}`;
       const doGet = (url) => {
         https.get(url, { headers: { "User-Agent": "VGC-ITSM/1.0" } }, resp => {
