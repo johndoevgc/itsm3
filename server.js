@@ -1994,6 +1994,40 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
+  // ─── AI Knowledge: POST /api/ai/knowledge/correction — user corrects AI answer ─
+  if (pathname === "/api/ai/knowledge/correction" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { originalQuestion, originalAnswer, correctedAnswer, correctedBy } = body || {};
+      if (!originalQuestion || !correctedAnswer || !correctedBy) {
+        return json(res, 400, { error: "originalQuestion, correctedAnswer, and correctedBy are required" });
+      }
+      const correctionId = `corr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const entry = {
+        id: correctionId,
+        title: `AI Correction: ${originalQuestion.substring(0, 80)}`,
+        category: "AI Correction",
+        content: `QUESTION: ${originalQuestion}\n\nCORRECT ANSWER: ${correctedAnswer}\n\nORIGINAL AI ANSWER (incorrect/incomplete): ${(originalAnswer || "").substring(0, 500)}`,
+        tags: ["ai-correction", "human-verified", "training"],
+        trainedBy: correctedBy,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        source: "user-correction",
+        type: "correction",
+        originalQuestion,
+        originalAnswer: (originalAnswer || "").substring(0, 1000),
+        correctedAnswer,
+      };
+      await db.upsert("ai_knowledge", correctionId, JSON.stringify(entry));
+      await db.audit("ai_knowledge", correctionId, "create", JSON.stringify({ type: "ai-correction", correctedBy, question: originalQuestion.substring(0, 100) }), correctedBy);
+      console.log(`[AI Correction] Saved by ${correctedBy}: "${originalQuestion.substring(0, 60)}"`);
+      return json(res, 200, { success: true, id: correctionId, message: "Correction saved — VGC AI will use this in future responses" });
+    } catch (err) {
+      console.error("[AI Correction]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── AI Knowledge: POST /api/ai/knowledge/learn ───────────────────
   if (pathname === "/api/ai/knowledge/learn" && req.method === "POST") {
     try {
