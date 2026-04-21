@@ -127,14 +127,16 @@ class AnalyticsEngine {
       const dayStr = date.toISOString().split("T")[0];
 
       const created = incidents.filter(inc => {
-        const d = (inc.createdAt || inc.created_at || inc.created || "").substring(0, 10);
+        const raw = inc.createdAt || inc.created_at || inc.created;
+        const d = this._toDateStr(raw);
         return d === dayStr;
       }).length;
 
       const resolved = incidents.filter(inc => {
         const s = (inc.status || "").toLowerCase();
         if (s !== "resolved" && s !== "closed") return false;
-        const d = (inc.resolvedAt || inc.closedAt || inc.lastModified || "").substring(0, 10);
+        const rawR = inc.resolvedAt || inc.closedAt || inc.lastModified;
+        const d = this._toDateStr(rawR);
         return d === dayStr;
       }).length;
 
@@ -342,6 +344,12 @@ class AnalyticsEngine {
     const d = new Date(date);
     d.setDate(d.getDate() - d.getDay());
     return d.toISOString().split("T")[0];
+  }
+
+  _toDateStr(val) {
+    if (!val) return "";
+    if (typeof val === "string") return val.substring(0, 10);
+    try { return new Date(val).toISOString().substring(0, 10); } catch { return ""; }
   }
 }
 
