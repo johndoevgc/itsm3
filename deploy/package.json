@@ -1,0 +1,30 @@
+{
+  "name": "kellington-itsm1",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 4173",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@azure/msal-browser": "^5.6.1",
+    "@azure/msal-react": "^5.1.0",
+    "mssql": "^11.0.1",
+    "mysql2": "^3.20.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "source-map": "^0.7.6"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.8.0"
+  },
+  "devDependencies": {
+    "vite": "^8.0.2"
+  }
+}

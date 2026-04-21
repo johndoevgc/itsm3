@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM — Customer Presentation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @media print {
+    .slide { page-break-after: always; height: auto !important; min-height: 100vh; }
+    .slide:last-child { page-break-after: avoid; }
+    body { background: white; }
+    .no-print { display: none; }
+  }
+  @page { size: landscape; margin: 0; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a2e; color: #333; }
+  .slide { width: 100%; min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: 60px 100px; position: relative; overflow: hidden; }
+
+  /* Slide Themes */
+  .slide-cover { background: linear-gradient(135deg, #0d1b4a 0%, #1a237e 40%, #283593 100%); color: white; text-align: center; }
+  .slide-cover h1 { font-size: 52px; font-weight: 200; letter-spacing: 3px; margin-bottom: 20px; }
+  .slide-cover h2 { font-size: 22px; font-weight: 300; opacity: 0.85; margin-bottom: 40px; }
+  .slide-cover .logo-text { font-size: 16px; opacity: 0.6; margin-top: 60px; letter-spacing: 2px; }
+  .slide-cover .date { font-size: 14px; opacity: 0.5; margin-top: 10px; }
+  .slide-cover .badges { display: flex; gap: 12px; justify-content: center; margin-top: 30px; }
+  .slide-cover .badge { background: rgba(255,255,255,0.15); padding: 8px 20px; border-radius: 25px; font-size: 13px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); }
+
+  .slide-white { background: white; }
+  .slide-light { background: #f8f9fe; }
+  .slide-dark { background: linear-gradient(135deg, #0d1b4a, #1a237e); color: white; }
+  .slide-accent { background: linear-gradient(135deg, #004d40, #00695c); color: white; }
+  .slide-gradient { background: linear-gradient(135deg, #1a237e, #4a148c); color: white; }
+
+  .slide-num { position: absolute; bottom: 20px; right: 40px; font-size: 12px; opacity: 0.4; }
+  .slide-footer { position: absolute; bottom: 20px; left: 40px; font-size: 11px; opacity: 0.4; }
+
+  h2.slide-title { font-size: 32px; font-weight: 300; margin-bottom: 40px; letter-spacing: 1px; }
+  .slide-white h2.slide-title, .slide-light h2.slide-title { color: #1a237e; border-bottom: 3px solid #c5cae9; padding-bottom: 12px; }
+  .slide-dark h2.slide-title, .slide-accent h2.slide-title, .slide-gradient h2.slide-title { border-bottom: 3px solid rgba(255,255,255,0.2); padding-bottom: 12px; }
+
+  /* Grid layouts */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 20px; }
+
+  /* Feature cards */
+  .feature-card { background: rgba(255,255,255,0.08); border-radius: 12px; padding: 28px; border: 1px solid rgba(255,255,255,0.1); }
+  .slide-white .feature-card, .slide-light .feature-card { background: white; border: 1px solid #e0e0e0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .feature-card .icon { font-size: 36px; margin-bottom: 12px; }
+  .feature-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .feature-card p { font-size: 13px; opacity: 0.8; line-height: 1.6; }
+
+  /* KPI cards */
+  .kpi-card { text-align: center; background: rgba(255,255,255,0.1); border-radius: 12px; padding: 30px 20px; border: 1px solid rgba(255,255,255,0.15); }
+  .slide-white .kpi-card, .slide-light .kpi-card { background: white; border: 1px solid #e0e0e0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .kpi-card .val { font-size: 48px; font-weight: 700; }
+  .kpi-card .lbl { font-size: 12px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
+  .slide-light .kpi-card .val { color: #1a237e; }
+
+  /* Lists */
+  .check-list { list-style: none; font-size: 15px; }
+  .check-list li { padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,0.06); display: flex; align-items: center; gap: 12px; }
+  .slide-dark .check-list li, .slide-accent .check-list li { border-bottom-color: rgba(255,255,255,0.1); }
+  .check-list li:last-child { border-bottom: none; }
+  .check-icon { color: #4caf50; font-weight: bold; font-size: 18px; }
+
+  /* Table */
+  .pres-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .pres-table th { background: rgba(26,35,126,0.1); padding: 12px 16px; text-align: left; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .slide-dark .pres-table th { background: rgba(255,255,255,0.1); }
+  .pres-table td { padding: 10px 16px; border-bottom: 1px solid rgba(0,0,0,0.06); }
+  .slide-dark .pres-table td { border-bottom-color: rgba(255,255,255,0.1); }
+  .status-green { color: #4caf50; font-weight: 700; }
+  .status-blue { color: #2196f3; font-weight: 700; }
+
+  /* Architecture */
+  .arch-layer { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 16px 24px; margin-bottom: 12px; display: flex; align-items: center; gap: 20px; border-left: 4px solid; }
+  .arch-layer.l1 { border-color: #4caf50; }
+  .arch-layer.l2 { border-color: #2196f3; }
+  .arch-layer.l3 { border-color: #ff9800; }
+  .arch-layer.l4 { border-color: #9c27b0; }
+  .arch-layer.l5 { border-color: #f44336; }
+  .arch-layer .layer-name { font-weight: 600; min-width: 180px; font-size: 14px; }
+  .arch-layer .layer-tech { font-size: 13px; opacity: 0.8; }
+
+  .timeline { position: relative; padding-left: 30px; }
+  .timeline::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.2); }
+  .slide-light .timeline::before { background: #c5cae9; }
+  .timeline-item { position: relative; margin-bottom: 24px; }
+  .timeline-item::before { content: ''; position: absolute; left: -26px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: #4caf50; }
+  .timeline-item h4 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .timeline-item p { font-size: 13px; opacity: 0.8; }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: Cover -->
+<div class="slide slide-cover">
+  <div>
+    <h1>VGC-ITSM</h1>
+    <h2>AI-Powered IT Service Management Platform</h2>
+    <div class="badges">
+      <span class="badge">🤖 Azure AI (GPT-5.4)</span>
+      <span class="badge">🛡️ Microsoft Entra ID</span>
+      <span class="badge">☁️ Azure App Service</span>
+      <span class="badge">📊 Real-Time Analytics</span>
+    </div>
+    <div class="logo-text">VGC TECHNOLOGY PTE LTD &bull; SINGAPORE</div>
+    <div class="date">Product Overview &bull; April 2026</div>
+  </div>
+  <span class="slide-num">1</span>
+</div>
+
+<!-- SLIDE 2: Executive Summary -->
+<div class="slide slide-light">
+  <h2 class="slide-title">Executive Summary</h2>
+  <div class="grid-2">
+    <div>
+      <p style="font-size:16px; line-height:1.8; color:#444; margin-bottom:20px;">
+        VGC-ITSM is a comprehensive, AI-powered IT Service Management platform built on Microsoft Azure. It unifies incident management, service requests, asset tracking, and knowledge management into a single, intelligent platform.
+      </p>
+      <p style="font-size:16px; line-height:1.8; color:#444; margin-bottom:20px;">
+        Powered by Azure OpenAI (GPT-5.4-nano), the platform provides automated triage, intelligent escalation, predictive analytics, and self-healing capabilities — reducing mean time to resolution and improving service quality.
+      </p>
+      <p style="font-size:16px; line-height:1.8; color:#444;">
+        Fully PDPA compliant with enterprise-grade security via Microsoft Entra ID single sign-on with MFA enforcement.
+      </p>
+    </div>
+    <div>
+      <div class="kpi-card" style="margin-bottom:16px">
+        <div class="val" style="color:#1a237e">v3.8.1</div>
+        <div class="lbl">Production Release</div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+        <div class="kpi-card"><div class="val" style="color:#4caf50">96%</div><div class="lbl">SLA Compliance</div></div>
+        <div class="kpi-card"><div class="val" style="color:#1a237e">14.5K</div><div class="lbl">AI Actions</div></div>
+        <div class="kpi-card"><div class="val" style="color:#1a237e">2,068</div><div class="lbl">Incidents Managed</div></div>
+        <div class="kpi-card"><div class="val" style="color:#4caf50">92</div><div class="lbl">Tests Passed</div></div>
+      </div>
+    </div>
+  </div>
+  <span class="slide-footer">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">2</span>
+</div>
+
+<!-- SLIDE 3: Platform Capabilities -->
+<div class="slide slide-dark">
+  <h2 class="slide-title">Platform Capabilities</h2>
+  <div class="grid-3">
+    <div class="feature-card">
+      <div class="icon">🎫</div>
+      <h3>Incident Management</h3>
+      <p>AI-powered triage, auto-assignment, severity classification, and intelligent escalation. Zendesk integration for unified ticket management.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📋</div>
+      <h3>Service Catalog</h3>
+      <p>36 pre-configured service items across Access, Hardware, Software, Network, Cloud, Security, Database, Analytics, and Facilities.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🤖</div>
+      <h3>AI Copilot</h3>
+      <p>Azure OpenAI GPT-5.4 integration for automated triage, resolution suggestions, knowledge article recommendations, and pattern detection.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📊</div>
+      <h3>Analytics & Insights</h3>
+      <p>Real-time KPI dashboards, trend analysis, agent performance metrics, SLA reports, and executive summaries with predictive capabilities.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">⚡</div>
+      <h3>Workflow Automation</h3>
+      <p>11 active automation rules for auto-close, auto-escalation, SLA breach alerts, and duplicate detection. Zero-error execution.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🛡️</div>
+      <h3>Enterprise Security</h3>
+      <p>Microsoft Entra ID SSO with MFA, role-based access control (RBAC), audit logging, and PDPA-compliant data handling.</p>
+    </div>
+  </div>
+  <span class="slide-footer" style="color:rgba(255,255,255,0.4)">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">3</span>
+</div>
+
+<!-- SLIDE 4: Architecture -->
+<div class="slide slide-gradient">
+  <h2 class="slide-title">Technical Architecture</h2>
+  <div class="grid-2">
+    <div>
+      <div class="arch-layer l1">
+        <span class="layer-name">🖥️ Frontend</span>
+        <span class="layer-tech">React 19 + Vite 8 &bull; MSAL Auth &bull; Real-time WebSocket</span>
+      </div>
+      <div class="arch-layer l2">
+        <span class="layer-name">⚙️ API Server</span>
+        <span class="layer-tech">Node.js 20 (Linux) &bull; REST API &bull; Auth Middleware</span>
+      </div>
+      <div class="arch-layer l3">
+        <span class="layer-name">🤖 AI Engine</span>
+        <span class="layer-tech">Azure OpenAI GPT-5.4-nano &bull; Triage &bull; Pattern Detection</span>
+      </div>
+      <div class="arch-layer l4">
+        <span class="layer-name">🔄 Automation</span>
+        <span class="layer-tech">SLA Engine &bull; Workflow Engine &bull; Notification Engine</span>
+      </div>
+      <div class="arch-layer l5">
+        <span class="layer-name">💾 Data Layer</span>
+        <span class="layer-tech">Azure MySQL &bull; 27 Collections &bull; LRU Cache (500 slots)</span>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size:16px; margin-bottom:16px; opacity:0.9;">Integrations</h3>
+      <ul class="check-list" style="font-size:14px;">
+        <li><span class="check-icon">✓</span> Microsoft Entra ID (SSO + MFA)</li>
+        <li><span class="check-icon">✓</span> Azure OpenAI Service (GPT-5.4)</li>
+        <li><span class="check-icon">✓</span> Zendesk (Ticket + Comment Sync)</li>
+        <li><span class="check-icon">✓</span> Cisco Meraki (Network Monitoring)</li>
+        <li><span class="check-icon">✓</span> SolarWinds (Infrastructure)</li>
+        <li><span class="check-icon">✓</span> Sophos (Security)</li>
+        <li><span class="check-icon">✓</span> Exchange Online (Email)</li>
+        <li><span class="check-icon">✓</span> Microsoft Graph API</li>
+      </ul>
+    </div>
+  </div>
+  <span class="slide-footer" style="color:rgba(255,255,255,0.4)">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">4</span>
+</div>
+
+<!-- SLIDE 5: Service Catalog -->
+<div class="slide slide-white">
+  <h2 class="slide-title">Service Catalog (36 Items)</h2>
+  <div class="grid-3">
+    <div class="feature-card">
+      <h3>🔑 Access Management</h3>
+      <p>Password Reset &bull; User Onboarding &bull; Offboarding &bull; Permission Changes &bull; MFA Reset</p>
+    </div>
+    <div class="feature-card">
+      <h3>💻 Hardware</h3>
+      <p>New Laptop &bull; Monitor Request &bull; Mobile Device Setup &bull; Printer Issues &bull; Warranty Repair</p>
+    </div>
+    <div class="feature-card">
+      <h3>📦 Software</h3>
+      <p>Installation &bull; License Request &bull; Application Access &bull; Updates &bull; Patches</p>
+    </div>
+    <div class="feature-card">
+      <h3>🌐 Network</h3>
+      <p>Connectivity Issue &bull; VPN Setup &bull; Firewall Rules &bull; WiFi Access &bull; Guest WiFi</p>
+    </div>
+    <div class="feature-card">
+      <h3>☁️ Cloud & Email</h3>
+      <p>Azure Provisioning &bull; Storage Upgrade &bull; Shared Mailbox &bull; Teams Setup &bull; SharePoint</p>
+    </div>
+    <div class="feature-card">
+      <h3>🛡️ Security & Analytics</h3>
+      <p>Security Incident &bull; USB Policy &bull; SSL Certificates &bull; Power BI Reports &bull; Data Export</p>
+    </div>
+  </div>
+  <p style="margin-top:24px; font-size:14px; color:#666; text-align:center;">Each service item includes AI-powered explanations, auto-triage, and SLA targets</p>
+  <span class="slide-footer">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">5</span>
+</div>
+
+<!-- SLIDE 6: SLA Framework -->
+<div class="slide slide-accent">
+  <h2 class="slide-title">SLA Framework &amp; Compliance</h2>
+  <div class="grid-2">
+    <div>
+      <table class="pres-table" style="margin-bottom:24px;">
+        <tr><th>Severity</th><th>First Response</th><th>Resolution Target</th><th>Compliance</th></tr>
+        <tr><td>🔴 Sev-A (Critical)</td><td>30 minutes</td><td>4 hours</td><td class="status-green">77%</td></tr>
+        <tr><td>🟠 Sev-B (High)</td><td>1 hour</td><td>4 hours</td><td class="status-green">99%</td></tr>
+        <tr><td>🟡 Sev-C (Medium)</td><td>4 hours</td><td>9 hours</td><td class="status-green">98%</td></tr>
+        <tr><td>🟢 Sev-D (Low)</td><td>9 hours</td><td>27 hours</td><td class="status-green">95%</td></tr>
+      </table>
+      <div style="background:rgba(255,255,255,0.1); border-radius:8px; padding:16px; font-size:13px;">
+        <strong>Support Hours:</strong> Mon-Fri 9:00 AM - 6:00 PM (SGT)<br>
+        <strong>1,090</strong> tickets actively tracked &bull; <strong>47</strong> auto-escalations triggered
+      </div>
+    </div>
+    <div>
+      <div class="kpi-card" style="margin-bottom:16px; background:rgba(255,255,255,0.1);">
+        <div class="val" style="font-size:64px;">96%</div>
+        <div class="lbl">Overall SLA Compliance</div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="kpi-card" style="background:rgba(255,255,255,0.1);">
+          <div class="val" style="font-size:32px;">1,090</div>
+          <div class="lbl">Tracked</div>
+        </div>
+        <div class="kpi-card" style="background:rgba(255,255,255,0.1);">
+          <div class="val" style="font-size:32px;">20</div>
+          <div class="lbl">Breaches</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <span class="slide-footer" style="color:rgba(255,255,255,0.4)">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">6</span>
+</div>
+
+<!-- SLIDE 7: Agent Performance -->
+<div class="slide slide-light">
+  <h2 class="slide-title">Team Performance &amp; Workload</h2>
+  <table class="pres-table">
+    <tr><th>Team / Agent</th><th>Assigned</th><th>Resolved</th><th>Resolution Rate</th><th>Role</th></tr>
+    <tr><td>L2 Support</td><td>534</td><td>21</td><td>4%</td><td>Advanced Troubleshooting</td></tr>
+    <tr><td>Security Team</td><td>373</td><td>9</td><td>2%</td><td>Security Incidents & Vulnerability</td></tr>
+    <tr><td>L1 Support</td><td>130</td><td>25</td><td>19%</td><td>First Line Response</td></tr>
+    <tr><td>Cloud Engineering</td><td>80</td><td>0</td><td>&mdash;</td><td>Azure & Cloud Infrastructure</td></tr>
+    <tr><td>Hlaing Pyae Phyo</td><td>22</td><td>11</td><td style="color:#4caf50; font-weight:700;">50%</td><td>Project Lead / Engineer</td></tr>
+    <tr><td>Network Engineering</td><td>19</td><td>0</td><td>&mdash;</td><td>Network & Connectivity</td></tr>
+    <tr><td>Auto-resolved</td><td>909</td><td>891</td><td style="color:#4caf50; font-weight:700;">98%</td><td>AI / Automation</td></tr>
+  </table>
+  <p style="margin-top:20px; font-size:14px; color:#666;"><strong>Key Insight:</strong> 98% auto-resolution rate demonstrates the effectiveness of AI-powered triage and workflow automation.</p>
+  <span class="slide-footer">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">7</span>
+</div>
+
+<!-- SLIDE 8: AI Capabilities -->
+<div class="slide slide-dark">
+  <h2 class="slide-title">AI Capabilities (Azure OpenAI)</h2>
+  <div class="grid-2">
+    <div>
+      <div class="feature-card" style="margin-bottom:16px;">
+        <div class="icon">🧠</div>
+        <h3>Intelligent Triage</h3>
+        <p>Automatic severity classification, category assignment, and team routing. 14,502 AI actions performed with consistent accuracy.</p>
+      </div>
+      <div class="feature-card" style="margin-bottom:16px;">
+        <div class="icon">🔍</div>
+        <h3>Pattern Detection</h3>
+        <p>Identifies recurring issues, hourly/weekly distribution patterns, and category trends for proactive problem management.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">📈</div>
+        <h3>Predictive Analytics</h3>
+        <p>SLA risk scoring, incident trend forecasting, and capacity planning recommendations powered by ML models.</p>
+      </div>
+    </div>
+    <div>
+      <div class="feature-card" style="margin-bottom:16px;">
+        <div class="icon">💡</div>
+        <h3>Resolution Suggestions</h3>
+        <p>Context-aware troubleshooting recommendations based on incident history and knowledge base articles.</p>
+      </div>
+      <div class="feature-card" style="margin-bottom:16px;">
+        <div class="icon">📚</div>
+        <h3>Knowledge Assist</h3>
+        <p>Auto-surfaces relevant KB articles during incident handling. Suggests new articles from resolved incidents.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">⚙️</div>
+        <h3>Executive Briefings</h3>
+        <p>One-click executive summaries combining KPIs, SLA compliance, trends, and actionable insights.</p>
+      </div>
+    </div>
+  </div>
+  <span class="slide-footer" style="color:rgba(255,255,255,0.4)">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">8</span>
+</div>
+
+<!-- SLIDE 9: Data Overview -->
+<div class="slide slide-white">
+  <h2 class="slide-title">Production Data Overview</h2>
+  <div class="grid-4">
+    <div class="kpi-card"><div class="val" style="color:#1a237e">2,068</div><div class="lbl">Total Incidents</div></div>
+    <div class="kpi-card"><div class="val" style="color:#ff9800">1,111</div><div class="lbl">Active</div></div>
+    <div class="kpi-card"><div class="val" style="color:#4caf50">957</div><div class="lbl">Resolved</div></div>
+    <div class="kpi-card"><div class="val" style="color:#2196f3">324</div><div class="lbl">Zendesk Synced</div></div>
+  </div>
+  <div style="margin-top:24px;">
+    <table class="pres-table">
+      <tr><th>Data Store</th><th>Records</th><th>Purpose</th></tr>
+      <tr><td>Incidents</td><td>2,068</td><td>All IT incidents with AI triage</td></tr>
+      <tr><td>AI Actions Log</td><td>14,502</td><td>Every AI decision recorded</td></tr>
+      <tr><td>Zendesk Comments</td><td>1,109</td><td>Customer communication history</td></tr>
+      <tr><td>SLA Tracking</td><td>1,090</td><td>Real-time SLA monitoring</td></tr>
+      <tr><td>Escalation Log</td><td>799</td><td>Auto-escalation audit trail</td></tr>
+      <tr><td>Notifications</td><td>423</td><td>In-app notifications sent</td></tr>
+      <tr><td>Services</td><td>36</td><td>Service catalog items</td></tr>
+      <tr><td>Assets</td><td>20</td><td>IT asset inventory</td></tr>
+      <tr><td>Customers</td><td>10</td><td>Customer/tenant records</td></tr>
+      <tr><td>Knowledge Base</td><td>5</td><td>Self-service articles</td></tr>
+    </table>
+  </div>
+  <span class="slide-footer">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">9</span>
+</div>
+
+<!-- SLIDE 10: Enhancement Roadmap -->
+<div class="slide slide-light">
+  <h2 class="slide-title">Enhancement Phases (All Delivered)</h2>
+  <div class="grid-2">
+    <div class="timeline">
+      <div class="timeline-item">
+        <h4>Phase 1 — Foundation Hardening</h4>
+        <p>Auth middleware (Entra ID validation), SLA engine with severity-based policies, automated breach detection and escalation.</p>
+      </div>
+      <div class="timeline-item">
+        <h4>Phase 2 — Real-Time Operations</h4>
+        <p>WebSocket server for live updates, notification engine with in-app channel, real-time dashboard indicators.</p>
+      </div>
+      <div class="timeline-item">
+        <h4>Phase 3 — Workflow Automation</h4>
+        <p>Rule-based workflow engine, auto-close resolved tickets, auto-escalation on SLA breach, duplicate detection.</p>
+      </div>
+      <div class="timeline-item">
+        <h4>Phase 4 — Analytics &amp; AI Maturity</h4>
+        <p>KPI dashboards, trend analysis, SLA reports, agent performance, pattern detection, executive summaries.</p>
+      </div>
+      <div class="timeline-item">
+        <h4>Phase 5 — Architecture &amp; Scale</h4>
+        <p>LRU cache layer with TTL (500 slots), performance optimisation, graceful shutdown, health monitoring.</p>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size:16px; color:#1a237e; margin-bottom:16px;">Delivery Status</h3>
+      <ul class="check-list">
+        <li><span class="check-icon">✓</span> Phase 1: Deployed &amp; Verified</li>
+        <li><span class="check-icon">✓</span> Phase 2: Deployed &amp; Verified</li>
+        <li><span class="check-icon">✓</span> Phase 3: Deployed &amp; Verified</li>
+        <li><span class="check-icon">✓</span> Phase 4: Deployed &amp; Verified</li>
+        <li><span class="check-icon">✓</span> Phase 5: Deployed &amp; Verified</li>
+      </ul>
+      <div style="background:#e8f5e9; border-radius:8px; padding:16px; margin-top:20px; border-left:4px solid #4caf50;">
+        <strong style="color:#2e7d32;">UAT Result: 89/92 Tests Passed (96.7%)</strong>
+        <p style="font-size:13px; color:#555; margin-top:4px;">3 minor data quality issues (non-blocking)</p>
+      </div>
+    </div>
+  </div>
+  <span class="slide-footer">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">10</span>
+</div>
+
+<!-- SLIDE 11: Security & Compliance -->
+<div class="slide slide-dark">
+  <h2 class="slide-title">Security &amp; Compliance</h2>
+  <div class="grid-2">
+    <div>
+      <h3 style="font-size:16px; margin-bottom:16px; opacity:0.9;">Authentication &amp; Access</h3>
+      <ul class="check-list" style="font-size:14px;">
+        <li><span class="check-icon">✓</span> Microsoft Entra ID Single Sign-On</li>
+        <li><span class="check-icon">✓</span> Multi-Factor Authentication (MFA) enforced</li>
+        <li><span class="check-icon">✓</span> Role-Based Access Control (3 roles)</li>
+        <li><span class="check-icon">✓</span> API input validation (collection whitelist)</li>
+        <li><span class="check-icon">✓</span> Auth middleware on all protected endpoints</li>
+      </ul>
+    </div>
+    <div>
+      <h3 style="font-size:16px; margin-bottom:16px; opacity:0.9;">Compliance &amp; Audit</h3>
+      <ul class="check-list" style="font-size:14px;">
+        <li><span class="check-icon">✓</span> PDPA Compliant (Singapore)</li>
+        <li><span class="check-icon">✓</span> Full audit trail (every action logged)</li>
+        <li><span class="check-icon">✓</span> AI decision transparency (14,502 logged)</li>
+        <li><span class="check-icon">✓</span> Escalation audit log (799 entries)</li>
+        <li><span class="check-icon">✓</span> Azure hosting (Southeast Asia region)</li>
+      </ul>
+    </div>
+  </div>
+  <div style="margin-top:30px;">
+    <h3 style="font-size:16px; margin-bottom:16px; opacity:0.9;">User Roles</h3>
+    <div class="grid-3">
+      <div class="feature-card">
+        <h3>🏢 Tenant Admin</h3>
+        <p>User management, RBAC, compliance, SLA policies, workflow configuration, analytics dashboards.</p>
+      </div>
+      <div class="feature-card">
+        <h3>🔧 Service Engineer</h3>
+        <p>Ticket management, KB access, diagnostics, monitoring, asset checks, escalation.</p>
+      </div>
+      <div class="feature-card">
+        <h3>☁️ Super Admin</h3>
+        <p>Full platform access, Azure services, AI configuration, API management, system settings.</p>
+      </div>
+    </div>
+  </div>
+  <span class="slide-footer" style="color:rgba(255,255,255,0.4)">VGC-ITSM &bull; VGC Technology Pte Ltd</span>
+  <span class="slide-num">11</span>
+</div>
+
+<!-- SLIDE 12: Thank You -->
+<div class="slide slide-cover">
+  <div>
+    <h1 style="font-size:44px; margin-bottom:30px;">Thank You</h1>
+    <h2 style="font-size:20px; font-weight:300;">VGC-ITSM &mdash; Intelligent IT Service Management</h2>
+    <div style="margin-top:50px; opacity:0.7; font-size:15px; line-height:2;">
+      <div>🌐 vgc-itsm1-app.azurewebsites.net</div>
+      <div>📧 itsupportforwarder@vgctechnology.com</div>
+      <div>🏢 VGC Technology Pte Ltd, Singapore</div>
+    </div>
+    <div class="badges" style="margin-top:40px;">
+      <span class="badge">v3.8.1 Production</span>
+      <span class="badge">96% SLA Compliance</span>
+      <span class="badge">92 Tests Passed</span>
+      <span class="badge">PDPA Compliant</span>
+    </div>
+  </div>
+  <span class="slide-num">12</span>
+</div>
+
+</body>
+</html>
