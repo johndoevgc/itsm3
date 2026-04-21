@@ -4599,6 +4599,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       solarwindsConfigured: !!SOLARWINDS_API_KEY,
       sophosConfigured: !!(SOPHOS_CLIENT_ID && SOPHOS_CLIENT_SECRET),
       mailConfigured: !!(process.env.IDENTITY_ENDPOINT),
+      slaEngineRunning: slaEngine ? !!slaEngine.timer : false,
+      slaLastRun: slaEngine ? slaEngine.lastRun : null,
       mailFrom: MAIL_FROM,
       timestamp: new Date().toISOString(),
     });
@@ -4641,6 +4643,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
 // ─── Start Server ───────────────────────────────────────────────────────
 async function start() {
   await initDatabase();
+  // Start SLA Engine (after DB is initialized)
+  slaEngine = new SlaEngine(db, { interval: 5 * 60 * 1000 });
   server.listen(PORT, async () => {
     const stats = {};
     for (const c of VALID_COLLECTIONS) stats[c] = await db.count(c);
@@ -4676,13 +4680,13 @@ async function start() {
         syncReq.write("{}"); syncReq.end();
       } catch (e) { console.warn("[Daily Sync] Failed:", e.message); }
     };
-    // Run initial sync 30s after startup, then every 24 hours
-    setTimeout(runDailySync, 30000);
-    setInterval(runDailySync, 24 * 60 * 60 * 1000);
+
+    // Start SLA Engine
+    slaEngine.start().catch(err => console.error("[SLA Engine] Start failed:", err.message));
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
 
 // Graceful shutdown
-process.on("SIGINT", () => { db.close(); process.exit(0); });
-process.on("SIGTERM", () => { db.close(); process.exit(0); });
+process.on("SIGINT", () => { if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGTERM", () => { if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
