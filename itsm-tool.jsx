@@ -1756,6 +1756,7 @@ export default function ITSMApp() {
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
   const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", true));
+  const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(() => _ls("vgc_zd_require_human_approval", true));
   const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", [
     { id: "LOG-demo-001", type: "auto_send", message: "AI triaged ticket #48201 — VPN access issue → Network Engineering (88% confidence)", timestamp: "2026-04-15T09:31:00Z" },
     { id: "LOG-demo-002", type: "incident_created", message: "ITSM Incident INC0021 created from Zendesk #48201 (Critical — VPN access)", timestamp: "2026-04-15T09:31:05Z" },
@@ -15621,10 +15622,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       setZdTriagedIds(prev => new Set(prev).add(ticketId));
       setZdAutoStats(prev => ({ ...prev, totalTriaged: prev.totalTriaged + 1, avgConfidence: Math.round(((prev.avgConfidence * prev.totalTriaged) + (triage.confidence || 75)) / (prev.totalTriaged + 1)) }));
 
-      // ═══ HARD RULE: 90% AI / 10% Human ═══
-      // High-confidence (≥85%) routine items → AI auto-sends (the 90%)
-      // Low-confidence (<85%) or sensitive items → human review queue (the 10%)
-      if (queueItem.autoSendable && (triage.confidence || 0) >= 85) {
+      // ═══ CONFIGURABLE: Require Human Approval toggle ═══
+      // When zdRequireHumanApproval=true → ALL responses go to human review queue (no auto-send)
+      // When zdRequireHumanApproval=false → High-confidence (≥85%) routine items auto-send
+      if (!zdRequireHumanApproval && queueItem.autoSendable && (triage.confidence || 0) >= 85) {
         // AI AUTO-SEND: High confidence, routine issue — send immediately
         try {
           const autoR = await fetch("/api/zendesk/auto-respond", {
@@ -16104,7 +16105,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
-                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? "AI triage every 2min · Human approval required" : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0} · ${zdRealTimeEnabled ? "Real-time sync ON" : "Sync OFF"}` : zdError || "Not connected"}
+                {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? `AI triage every 2min · ${zdRequireHumanApproval ? "🛡️ Human approval required" : "⚡ Auto-send ON"}` : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0} · ${zdRealTimeEnabled ? "Real-time sync ON" : "Sync OFF"}` : zdError || "Not connected"}
               </div>
             </div>
           </div>
@@ -16116,6 +16117,15 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdAutoMode ? 18 : 2, transition: "left 0.3s" }} />
                 </div>
                 <span style={{ fontSize: 9, fontWeight: 600, color: zdAutoMode ? "#4CAF50" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>AI TRIAGE</span>
+              </div>
+            )}
+            {zdConnected && (
+              <div onClick={() => { const nv = !zdRequireHumanApproval; setZdRequireHumanApproval(nv); localStorage.setItem("vgc_zd_require_human_approval", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "HUMAN APPROVAL REQUIRED — all AI responses must be reviewed by engineer before sending" : "⚠️ AUTO-SEND ENABLED — high-confidence AI responses will be sent without engineer review" }); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: zdRequireHumanApproval ? "#FF634722" : "#4CAF5022", border: `1px solid ${zdRequireHumanApproval ? "#FF634744" : "#4CAF5044"}` }}>
+                <div style={{ width: 32, height: 16, borderRadius: 8, background: zdRequireHumanApproval ? "#FF6347" : "#333", position: "relative", transition: "all 0.3s" }}>
+                  <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdRequireHumanApproval ? 18 : 2, transition: "left 0.3s" }} />
+                </div>
+                <span style={{ fontSize: 9, fontWeight: 600, color: zdRequireHumanApproval ? "#FF6347" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>🛡️ APPROVAL</span>
               </div>
             )}
             {zdConnected && azureOpenAI.enabled && (
@@ -16983,12 +16993,22 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E213044" }}>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>AI Auto-Triage Mode (90% AI / 10% Human)</div>
-                    <div style={{ fontSize: 9, color: "#5A6178" }}>≥85% confidence auto-sends, &lt;85% goes to human review</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>AI Auto-Triage Mode</div>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>Auto-categorize, prioritize &amp; draft responses for incoming tickets</div>
                   </div>
                   <div onClick={() => { const nv = !zdAutoMode; setZdAutoMode(nv); localStorage.setItem("vgc_zd_auto_mode", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "AI auto-triage ENABLED" : "AI auto-triage DISABLED" }); }}
                     style={{ width: 36, height: 18, borderRadius: 9, background: zdAutoMode ? "#4CAF50" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
                     <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdAutoMode ? 20 : 2, transition: "left 0.3s" }} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: zdRequireHumanApproval ? "#FF634708" : "#0F1117", borderRadius: 8, border: `1px solid ${zdRequireHumanApproval ? "#FF634733" : "#1E213044"}` }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>🛡️ Require Human Approval Before Sending</div>
+                    <div style={{ fontSize: 9, color: zdRequireHumanApproval ? "#FF6347" : "#5A6178" }}>{zdRequireHumanApproval ? "ON — All AI responses require engineer review before sending to customer" : "OFF — ≥85% confidence responses auto-send without review"}</div>
+                  </div>
+                  <div onClick={() => { const nv = !zdRequireHumanApproval; setZdRequireHumanApproval(nv); localStorage.setItem("vgc_zd_require_human_approval", JSON.stringify(nv)); addAutoLog({ type: "config", message: nv ? "Human approval REQUIRED for all responses" : "Auto-send ENABLED for high-confidence responses" }); }}
+                    style={{ width: 36, height: 18, borderRadius: 9, background: zdRequireHumanApproval ? "#FF6347" : "#333", position: "relative", cursor: "pointer", transition: "all 0.3s" }}>
+                    <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: zdRequireHumanApproval ? 20 : 2, transition: "left 0.3s" }} />
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E213044" }}>
