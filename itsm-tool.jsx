@@ -1357,7 +1357,7 @@ export default function ITSMApp() {
   const [aiTrainingTab, setAiTrainingTab] = useState("documents");
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
-  const DATA_VERSION = "v2.3";
+  const DATA_VERSION = "v2.4";
   const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests"];
   const _ls = (key, fallback) => {
     try {
@@ -1380,7 +1380,7 @@ export default function ITSMApp() {
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
         // Clear stale data on version bump so new seed data takes effect
-        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services"].forEach(k => localStorage.removeItem(k));
+        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services","vgc_zd_ai_queue","vgc_zd_tickets","vgc_zd_stats","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
         localStorage.setItem("vgc_data_version", DATA_VERSION);
         return fallback;
       }
@@ -1746,11 +1746,11 @@ export default function ITSMApp() {
   const [zdFilter, setZdFilter] = useState("open");
   const [zdPage, setZdPage] = useState(1);
   const [zdAiQueue, setZdAiQueue] = useState(() => _ls("vgc_zd_ai_queue", [
-    { id: "ZDAI-1001", ticketId: 48201, ticketSubject: "Cannot access VPN from home network", ticketStatus: "open", requesterName: "Sarah Tan", requesterEmail: "sarah.tan@vgctechnology.com", category: "Network", suggestedPriority: "High", suggestedTags: ["vpn","remote-access","network"], draftResponse: "Hi Sarah,\n\nThank you for reporting this. I understand VPN connectivity from your home network is not working. Here are a few steps:\n\n1. Please restart your VPN client (GlobalProtect/FortiClient)\n2. Check if your home router is blocking UDP ports 500/4500\n3. Try connecting via a mobile hotspot to isolate the issue\n\nIf the issue persists, we'll schedule a remote session to diagnose further.\n\nBest regards,\nIT Support", internalNote: "Likely home router firewall blocking VPN ports. May need to whitelist or use SSL VPN fallback.", confidence: 88, suggestedAssignee: "Network Engineering", autoSendable: true, itsmCategory: "Network", slaPriority: "Sev-B", status: "pending", createdAt: "2026-04-15T09:30:00Z", itsmIncidentId: "INC0021" },
-    { id: "ZDAI-1002", ticketId: 48202, ticketSubject: "Outlook keeps crashing on startup", ticketStatus: "open", requesterName: "James Lim", requesterEmail: "james.lim@vgctechnology.com", category: "Software", suggestedPriority: "Medium", suggestedTags: ["outlook","crash","email"], draftResponse: "Hi James,\n\nSorry to hear about the Outlook crashes. Let's try these steps:\n\n1. Open Outlook in Safe Mode: Press Win+R, type 'outlook.exe /safe'\n2. If it works in Safe Mode, disable add-ins one by one\n3. Run the Office repair tool from Control Panel\n\nPlease let me know if any of these resolve the issue.\n\nBest regards,\nIT Support", internalNote: "Common issue — usually caused by a faulty add-in or corrupted profile. Safe mode test will confirm.", confidence: 92, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Software", slaPriority: "Sev-C", status: "pending", createdAt: "2026-04-15T10:15:00Z", itsmIncidentId: "INC0022" },
-    { id: "ZDAI-1003", ticketId: 48203, ticketSubject: "Suspicious phishing email received", ticketStatus: "open", requesterName: "Wei Ming Ng", requesterEmail: "weiming.ng@vgctechnology.com", category: "Security", suggestedPriority: "Critical", suggestedTags: ["phishing","security","email-threat"], draftResponse: "Hi Wei Ming,\n\nThank you for reporting this immediately — you did the right thing. Our security team will investigate this phishing attempt.\n\n⚠️ Please do NOT:\n- Click any links in the email\n- Download any attachments\n- Reply to the sender\n\nWe will block the sender domain and scan all mailboxes for similar messages. You'll receive an update within 30 minutes.\n\nBest regards,\nIT Security Team", internalNote: "URGENT: Potential phishing campaign. Need to check if other users received similar emails. Block sender domain immediately.", confidence: 95, suggestedAssignee: "Network Engineering", autoSendable: false, itsmCategory: "Security", slaPriority: "Sev-A", status: "pending", createdAt: "2026-04-15T11:00:00Z", itsmIncidentId: "INC0023" },
+    { id: "ZDAI-1001", ticketId: 48201, ticketSubject: "Cannot access VPN from home network", ticketStatus: "open", requesterName: "Sarah Tan", requesterEmail: "sarah.tan@vgctechnology.com", category: "Network", suggestedPriority: "High", suggestedTags: ["vpn","remote-access","network"], draftResponse: "Hi Sarah,\n\nThank you for reporting this. I understand VPN connectivity from your home network is not working. Here are a few steps:\n\n1. Please restart your VPN client (GlobalProtect/FortiClient)\n2. Check if your home router is blocking UDP ports 500/4500\n3. Try connecting via a mobile hotspot to isolate the issue\n\nIf the issue persists, we'll schedule a remote session to diagnose further.\n\nBest regards,\nIT Support", internalNote: "Likely home router firewall blocking VPN ports. May need to whitelist or use SSL VPN fallback.", confidence: 88, suggestedAssignee: "Network Engineering", autoSendable: true, itsmCategory: "Network", slaPriority: "Sev-B", status: "pending_approval", createdAt: "2026-04-15T09:30:00Z", itsmIncidentId: "INC0021" },
+    { id: "ZDAI-1002", ticketId: 48202, ticketSubject: "Outlook keeps crashing on startup", ticketStatus: "open", requesterName: "James Lim", requesterEmail: "james.lim@vgctechnology.com", category: "Software", suggestedPriority: "Medium", suggestedTags: ["outlook","crash","email"], draftResponse: "Hi James,\n\nSorry to hear about the Outlook crashes. Let's try these steps:\n\n1. Open Outlook in Safe Mode: Press Win+R, type 'outlook.exe /safe'\n2. If it works in Safe Mode, disable add-ins one by one\n3. Run the Office repair tool from Control Panel\n\nPlease let me know if any of these resolve the issue.\n\nBest regards,\nIT Support", internalNote: "Common issue — usually caused by a faulty add-in or corrupted profile. Safe mode test will confirm.", confidence: 92, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Software", slaPriority: "Sev-C", status: "pending_approval", createdAt: "2026-04-15T10:15:00Z", itsmIncidentId: "INC0022" },
+    { id: "ZDAI-1003", ticketId: 48203, ticketSubject: "Suspicious phishing email received", ticketStatus: "open", requesterName: "Wei Ming Ng", requesterEmail: "weiming.ng@vgctechnology.com", category: "Security", suggestedPriority: "Critical", suggestedTags: ["phishing","security","email-threat"], draftResponse: "Hi Wei Ming,\n\nThank you for reporting this immediately — you did the right thing. Our security team will investigate this phishing attempt.\n\n⚠️ Please do NOT:\n- Click any links in the email\n- Download any attachments\n- Reply to the sender\n\nWe will block the sender domain and scan all mailboxes for similar messages. You'll receive an update within 30 minutes.\n\nBest regards,\nIT Security Team", internalNote: "URGENT: Potential phishing campaign. Need to check if other users received similar emails. Block sender domain immediately.", confidence: 95, suggestedAssignee: "Network Engineering", autoSendable: false, itsmCategory: "Security", slaPriority: "Sev-A", status: "pending_approval", createdAt: "2026-04-15T11:00:00Z", itsmIncidentId: "INC0023" },
     { id: "ZDAI-1004", ticketId: 48195, ticketSubject: "New laptop setup request", ticketStatus: "solved", requesterName: "Amy Chen", requesterEmail: "amy.chen@vgctechnology.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["hardware","laptop","onboarding"], draftResponse: "Hi Amy,\n\nYour new laptop has been configured and is ready for collection at the IT office (Level 3). Please bring your employee ID.\n\nSetup includes: Windows 11, Office 365, VPN, Sophos AV, and all standard applications.\n\nBest regards,\nIT Support", internalNote: "Standard onboarding. Laptop pre-configured with standard image.", confidence: 97, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-14T15:00:00Z", createdAt: "2026-04-14T14:30:00Z", itsmIncidentId: "INC0020" },
-    { id: "ZDAI-1005", ticketId: 48198, ticketSubject: "Printer not printing — HP LaserJet 5th floor", ticketStatus: "solved", requesterName: "David Koh", requesterEmail: "david.koh@vgctechnology.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["printer","hardware","5th-floor"], draftResponse: "Hi David,\n\nThe HP LaserJet on the 5th floor has been fixed. The issue was a paper jam in tray 2. I've cleared the jam and run a test print.\n\nPlease try printing again and let me know if it works.\n\nBest regards,\nIT Support", internalNote: "Simple paper jam. Cleared and tested.", confidence: 96, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-13T11:00:00Z", createdAt: "2026-04-13T10:30:00Z" },
+    { id: "ZDAI-1005", ticketId: 48198, ticketSubject: "Printer not printing — HP LaserJet 5th floor", ticketStatus: "solved", requesterName: "David Koh", requesterEmail: "david.koh@vgctechnology.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["printer","hardware","5th-floor"], draftResponse: "Hi David,\n\nThe HP LaserJet on the 5th floor has been fixed. The issue was a paper jam in tray 2. I've cleared the jam and run a test print.\n\nPlease try printing again and let me know if it works.\n\nBest regards,\nIT Support", internalNote: "Simple paper jam. Cleared and tested.", confidence: 96, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-13T11:00:00Z", createdAt: "2026-04-13T10:30:00Z", itsmIncidentId: "INC0019" },
   ]));
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
@@ -3619,7 +3619,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   const NAV = [
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
     { section: "CORE" },
-    { id: "tickets", label: "Tickets", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length + zdStats.open + zdStats.pending + problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed") || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
+    { id: "tickets", label: "Tickets", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length + zdStats.open + zdStats.pending + problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed") || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "catalog", label: "Service Catalog", accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "knowledge", label: "Knowledge Portal", accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #0089D618)" },
     { id: "assets", label: "Assets / CMDB", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #06B6D418)" },
@@ -5593,7 +5593,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           {[
             { label: "Open Problems", value: problems.filter(p => !["Resolved","Closed"].includes(p.status)).length, accent: "#CE93D8", icon: "🔍" },
             { label: "Known Errors", value: problems.filter(p => p.status === "Known Error").length, accent: "#FF6B6B", icon: "⚠️" },
-            { label: "Pending Changes", value: changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length, accent: "#FFB347", icon: "🔄" },
+            { label: "Pending Changes", value: changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length, accent: "#FFB347", icon: "🔄" },
             { label: "Emergency Changes", value: changes.filter(c => c.type === "Emergency").length, accent: "#FF4444", icon: "🚨" },
             { label: "Active Requests", value: requests.filter(r => ["Open","In Progress"].includes(r.status)).length, accent: "#81C784", icon: "📋" },
             { label: "Pending Approval", value: requests.filter(r => r.status === "Pending Approval").length, accent: "#6366F1", icon: "⏳" },
@@ -15727,6 +15727,23 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     }
   }, []);
 
+  // ── Migrate cached zdAiQueue: fix status "pending" → "pending_approval" (one-time) ──
+  React.useEffect(() => {
+    if (localStorage.getItem("vgc_zd_queue_v2")) return;
+    const raw = localStorage.getItem("vgc_zd_ai_queue");
+    if (raw) {
+      try {
+        const q = JSON.parse(raw);
+        if (Array.isArray(q) && q.some(i => i.status === "pending")) {
+          const fixed = q.map(i => i.status === "pending" ? { ...i, status: "pending_approval" } : i);
+          localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(fixed));
+          setZdAiQueue(fixed);
+        }
+      } catch {}
+    }
+    localStorage.setItem("vgc_zd_queue_v2", "1");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Persist AI queue, triaged IDs, stats, and logs to localStorage ──
   React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch {} }, [zdAiQueue]);
   React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch {} }, [zdTriagedIds]);
@@ -17305,7 +17322,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             🎫 Zendesk AI <span style={{ background: "#EC489922", color: "#EC4899", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{zdStats.open + zdStats.pending}</span>
           </button>
           <button onClick={() => setTicketsSubTab("operations")} style={tabStyle("operations")}>
-            ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Pending Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
+            ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
         {ticketsSubTab === "incidents" && <IncidentsModule />}
