@@ -16649,7 +16649,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                     {zdComments.map((comment, i) => (
                       <div key={comment.id || i} style={{ marginBottom: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                          <span style={{ fontSize: 11, fontWeight: 600, color: comment.public ? "#64B5F6" : "#FFB347" }}>{comment.public ? "📧" : "🔒"} {comment.author_id}</span>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: comment.public ? "#64B5F6" : "#FFB347" }}>{comment.public ? "📧" : "🔒"} {comment.author_name || comment.author_id}</span>
                           <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(comment.created_at).toLocaleString("en-SG")}</span>
                         </div>
                         <div style={{ background: comment.public ? "#0A0C14" : "#FFB34708", borderRadius: 6, padding: "8px 10px", border: `1px solid ${comment.public ? "#1E213044" : "#FFB34722"}`, fontSize: 11, color: "#C4CAD6", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
