@@ -7,6 +7,9 @@ const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware
 const { SlaEngine, computeSlaStatus } = require("./slaEngine");
 const { WebSocketServer } = require("./wsServer");
 const { NotificationEngine } = require("./notificationEngine");
+const { WorkflowEngine } = require("./workflowEngine");
+const { AnalyticsEngine } = require("./analyticsEngine");
+const { CacheLayer } = require("./cacheLayer");
 
 const PORT = process.env.PORT || 8080;
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
@@ -124,6 +127,9 @@ let db; // set during init()
 let slaEngine = null; // set after DB init
 let wsServer = null;
 let notifyEngine = null;
+let workflowEngine = null;
+let analyticsEngine = null;
+let cacheLayer = null;
 
 async function initDatabase() {
   if (USE_MSSQL) {
@@ -459,6 +465,7 @@ const VALID_COLLECTIONS = new Set([
   "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
   "sla_tracking", "sla_config",
   "notifications",
+  "workflow_executions",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -674,6 +681,64 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, stats: slaEngine ? slaEngine.getStats() : null });
   }
 
+  // ─── Analytics Engine API ─────────────────────────────────────────────────
+  if (pathname === "/api/analytics/kpis" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    try { return json(res, 200, await analyticsEngine.getDashboardKPIs()); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/analytics/trends" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    const days = parseInt(urlObj.searchParams.get("days") || "30", 10);
+    try { return json(res, 200, await analyticsEngine.getIncidentTrends(Math.min(days, 365))); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/analytics/sla" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    try { return json(res, 200, await analyticsEngine.getSLAReport()); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/analytics/agents" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    try { return json(res, 200, await analyticsEngine.getAgentPerformance()); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/analytics/patterns" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    try { return json(res, 200, await analyticsEngine.getPatterns()); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/analytics/executive" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    try { return json(res, 200, await analyticsEngine.getExecutiveSummary()); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Workflow Engine API ──────────────────────────────────────────────────
+  if (pathname === "/api/workflow/stats" && req.method === "GET") {
+    return json(res, 200, workflowEngine ? workflowEngine.getStats() : { error: "Not initialized" });
+  }
+  if (pathname === "/api/workflow/log" && req.method === "GET") {
+    if (!workflowEngine) return json(res, 503, { error: "Workflow engine not initialized" });
+    const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "50", 10), 200);
+    return json(res, 200, { log: workflowEngine.getLog(limit) });
+  }
+  if (pathname === "/api/workflow/run" && req.method === "POST") {
+    if (!workflowEngine) return json(res, 503, { error: "Workflow engine not initialized" });
+    try { await workflowEngine.runCycle(); return json(res, 200, { ok: true, stats: workflowEngine.getStats() }); }
+    catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Cache Stats API ─────────────────────────────────────────────────────
+  if (pathname === "/api/cache/stats" && req.method === "GET") {
+    return json(res, 200, cacheLayer ? cacheLayer.getStats() : { error: "Not initialized" });
+  }
+  if (pathname === "/api/cache/clear" && req.method === "POST") {
+    if (cacheLayer) cacheLayer.clear();
+    if (analyticsEngine) analyticsEngine.invalidateCache();
+    return json(res, 200, { ok: true, message: "Cache cleared" });
+  }
+
   // ─── Notification Engine API ───────────────────────────────────────────────
   if (pathname === "/api/notifications/send" && req.method === "POST") {
     if (!notifyEngine) return json(res, 503, { error: "Notification engine not initialized" });
@@ -745,6 +810,8 @@ const server = http.createServer(async (req, res) => {
           await db.upsert(collection, id, JSON.stringify(body));
           await db.audit(collection, id, "upsert", JSON.stringify(body), authResult.user?.email || body._user || "system");
           if (wsServer) wsServer.broadcast(collection, { action: "upsert", collection, id, summary: body.title || body.name || id });
+          if (workflowEngine) workflowEngine.onEvent("upsert", collection, body).catch(() => {});
+          if (cacheLayer) cacheLayer.invalidatePrefix(collection);
           return json(res, 200, { ok: true, id });
         }
       }
@@ -756,6 +823,8 @@ const server = http.createServer(async (req, res) => {
         await db.upsert(collection, recordId, JSON.stringify(body));
         await db.audit(collection, recordId, "update", JSON.stringify(body), authResult.user?.email || body._user || "system");
         if (wsServer) wsServer.broadcast(collection, { action: "update", collection, id: recordId, summary: body.title || body.name || recordId });
+        if (workflowEngine) workflowEngine.onEvent("update", collection, body).catch(() => {});
+        if (cacheLayer) cacheLayer.invalidatePrefix(collection);
         return json(res, 200, { ok: true, id: recordId });
       }
 
