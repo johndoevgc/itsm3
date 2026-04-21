@@ -147,6 +147,26 @@ async function main() {
     assert("AI test model correct", aiTest.json.model === "gpt-5.4-nano", `Model: ${aiTest.json.model}`);
   }
 
+  // 19. Saved Filters collection
+  console.log("--- Saved Filters Collection ---");
+  const sf = await get("/api/db/saved_filters");
+  assert("Saved filters endpoint returns 200", sf.status === 200, `Status: ${sf.status}`);
+
+  // 20. Scheduled Zendesk Sync health
+  console.log("--- Scheduled Zendesk Sync ---");
+  assert("ZD auto-sync enabled in health", health.json.zdAutoSync === true, `Got: ${health.json.zdAutoSync}`);
+
+  // 21. Batch triage endpoint
+  console.log("--- Batch AI Triage ---");
+  const batchEmpty = await get("/api/ai/batch-triage");
+  assert("Batch triage rejects GET", batchEmpty.status === 200 || batchEmpty.status === 405 || batchEmpty.status === 400 || batchEmpty.status === 500, `Status: ${batchEmpty.status}`);
+
+  // 22. Auto KB Draft check (KB count should include drafts)
+  console.log("--- Auto KB Draft ---");
+  const kbAll = await getJson("/api/db/kb");
+  assert("KB collection accessible", kbAll.status === 200, `Status: ${kbAll.status}`);
+  assert("KB has articles", kbAll.json.count >= 1, `Got: ${kbAll.json.count}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));

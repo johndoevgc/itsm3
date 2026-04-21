@@ -1,4 +1,4 @@
-const http = require("http");
+﻿const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
@@ -466,12 +466,14 @@ const VALID_COLLECTIONS = new Set([
   "sla_tracking", "sla_config",
   "notifications",
   "workflow_executions",
+  "saved_filters",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
 let zdSyncInProgress = false;
 let zdLastSyncTime = null;
 let zdSyncStats = { tickets: 0, users: 0, orgs: 0, comments: 0, errors: 0 };
+let zdAutoSyncInterval = null;
 
 // Get access token via Managed Identity (no secrets needed on Azure App Service)
 function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
@@ -825,6 +827,12 @@ const server = http.createServer(async (req, res) => {
         if (wsServer) wsServer.broadcast(collection, { action: "update", collection, id: recordId, summary: body.title || body.name || recordId });
         if (workflowEngine) workflowEngine.onEvent("update", collection, body).catch(() => {});
         if (cacheLayer) cacheLayer.invalidatePrefix(collection);
+
+        // Auto KB Draft: generate KB article when incident is Resolved/Closed
+        if (collection === "incidents" && (body.status === "Resolved" || body.status === "Closed")) {
+          generateKBDraft(body).catch(e => console.warn("[Auto KB Draft]", e.message));
+        }
+
         return json(res, 200, { ok: true, id: recordId });
       }
 
@@ -3734,6 +3742,89 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
+
+  // ─── Bulk AI Triage — batch-process multiple tickets ────────────────
+  // POST /api/ai/batch-triage — triage up to 20 tickets in one call
+  if (pathname === "/api/ai/batch-triage" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 200000);
+      const { ticketIds, requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+      if (!Array.isArray(ticketIds) || ticketIds.length === 0) return json(res, 400, { error: "ticketIds array required" });
+      if (ticketIds.length > 20) return json(res, 400, { error: "Maximum 20 tickets per batch" });
+
+      const results = [];
+      const CONCURRENCY = 3;
+
+      // Process tickets in batches of CONCURRENCY
+      for (let i = 0; i < ticketIds.length; i += CONCURRENCY) {
+        const batch = ticketIds.slice(i, i + CONCURRENCY);
+        const batchPromises = batch.map(async (ticketId) => {
+          try {
+            const incRow = await db.getOne("incidents", ticketId);
+            if (!incRow) return { ticketId, status: "not_found", error: "Ticket not found" };
+            const ticket = JSON.parse(incRow.data);
+            if (ticket.status === "Resolved" || ticket.status === "Closed") {
+              return { ticketId, status: "skipped", reason: "Already resolved/closed" };
+            }
+            if (ticket.aiTriaged) {
+              return { ticketId, status: "skipped", reason: "Already triaged by AI" };
+            }
+
+            // Call the single-triage endpoint internally via HTTP
+            const http = require("http");
+            const triageResult = await new Promise((resolve, reject) => {
+              const triagePayload = JSON.stringify({ ticket, requestedBy });
+              const triageReq = http.request({
+                hostname: "localhost", port: PORT, path: "/api/ai/auto-triage-assign",
+                method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) },
+              }, (r) => {
+                let data = ""; r.on("data", c => data += c);
+                r.on("end", () => {
+                  try { resolve({ statusCode: r.statusCode, ...JSON.parse(data) }); }
+                  catch { resolve({ statusCode: r.statusCode, raw: data.substring(0, 200) }); }
+                });
+              });
+              triageReq.on("error", reject);
+              triageReq.setTimeout(45000, () => { triageReq.destroy(); reject(new Error("Triage timeout")); });
+              triageReq.write(triagePayload);
+              triageReq.end();
+            });
+
+            return {
+              ticketId,
+              status: triageResult.statusCode === 200 ? "triaged" : "error",
+              triage: triageResult.triage || null,
+              confidence: triageResult.confidence || null,
+              autoApplied: triageResult.autoApplied || false,
+              actionId: triageResult.actionId || null,
+            };
+          } catch (err) {
+            return { ticketId, status: "error", error: err.message };
+          }
+        });
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults);
+      }
+
+      const summary = {
+        total: results.length,
+        triaged: results.filter(r => r.status === "triaged").length,
+        skipped: results.filter(r => r.status === "skipped").length,
+        errors: results.filter(r => r.status === "error").length,
+        notFound: results.filter(r => r.status === "not_found").length,
+      };
+      console.log(`[AI Batch Triage] ${summary.triaged}/${summary.total} triaged, ${summary.skipped} skipped, ${summary.errors} errors`);
+      return json(res, 200, { results, summary });
+    } catch (err) {
+      console.error("[AI Batch Triage]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Phase 2: AI Predictive SLA Breach Prevention ───────────────────
   // POST /api/ai/sla-predict — AI predicts SLA breaches and suggests preventive actions
   if (pathname === "/api/ai/sla-predict" && req.method === "POST") {
@@ -4721,6 +4812,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       workflowStats: workflowEngine ? workflowEngine.getStats() : null,
       analyticsAvailable: !!analyticsEngine,
       cacheStats: cacheLayer ? cacheLayer.getStats() : null,
+      zdAutoSync: !!zdAutoSyncInterval,
+      zdLastSyncTime,
       mailFrom: MAIL_FROM,
       timestamp: new Date().toISOString(),
     });
@@ -4761,6 +4854,71 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
 });
 
 // ─── Start Server ───────────────────────────────────────────────────────
+// --- Auto KB Draft Generator ---
+async function generateKBDraft(incident) {
+  if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return;
+  if (!incident.title) return;
+
+  const systemPrompt = `You are a technical writer for VGC Technology's ITSM knowledge base.
+Given a resolved IT incident, create a concise KB article that will help agents resolve similar issues faster.
+
+Respond with ONLY valid JSON (no markdown):
+{
+  "title": "How to: <clear action title>",
+  "category": "one of: Network, Hardware, Software, Security, Email, Access Management, Cloud Services, General, End User Computing, Application Support",
+  "content": "Step-by-step resolution (numbered list, max 6 steps)",
+  "tags": ["tag1","tag2"]
+}`;
+
+  const userPrompt = `RESOLVED INCIDENT:
+Title: ${incident.title}
+Category: ${incident.category || "General"}
+Description: ${(incident.description || "").substring(0, 500)}
+Resolution: ${(incident.resolution || incident.resolutionNotes || "").substring(0, 500)}
+Priority: ${incident.priority || "N/A"}
+Assignee: ${incident.assignee || "N/A"}`;
+
+  const payload = {
+    model: AZURE_OPENAI_MODEL,
+    input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+    max_output_tokens: 600,
+  };
+
+  const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+  const aiResult = await new Promise((resolve, reject) => {
+    const aiReq = https.request({
+      hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+      method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+    }, (aiRes) => {
+      let data = ""; aiRes.on("data", c => data += c);
+      aiRes.on("end", () => {
+        if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+        else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 300)}`));
+      });
+    });
+    aiReq.on("error", reject);
+    aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+    aiReq.write(JSON.stringify(payload));
+    aiReq.end();
+  });
+
+  const text = extractAIText(aiResult);
+  const kb = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+  const kbId = `KB-DRAFT-${Date.now().toString(36)}`;
+  const kbArticle = {
+    id: kbId,
+    title: kb.title || `KB Draft: ${incident.title}`,
+    category: kb.category || incident.category || "General",
+    content: kb.content || "",
+    tags: kb.tags || [],
+    status: "Draft",
+    author: "AI Auto-KB",
+    sourceIncident: incident.id,
+    created: new Date().toISOString(),
+  };
+  await db.upsert("kb", kbId, JSON.stringify(kbArticle));
+  console.log(`[Auto KB Draft] Created ${kbId} from incident ${incident.id}: "${kbArticle.title}"`);
+}
 async function start() {
   await initDatabase();
   // Start SLA Engine (after DB is initialized)
@@ -4839,10 +4997,28 @@ async function start() {
 
     // Start Workflow Engine
     workflowEngine.start().catch(err => console.error("[WorkflowEngine] Start failed:", err.message));
+
+    // ─── Scheduled Zendesk Incremental Sync (every 5 min) ───────────
+    if (ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN) {
+      zdAutoSyncInterval = setInterval(async () => {
+        if (zdSyncInProgress) { console.log("[ZD AutoSync] Skipped — sync already in progress"); return; }
+        try {
+          console.log("[ZD AutoSync] Starting scheduled incremental sync...");
+          const http = require("http");
+          const syncReq = http.request({ hostname: "localhost", port: PORT, path: "/api/zendesk/incremental-sync", method: "POST", headers: { "Content-Type": "application/json" } }, (r) => {
+            let data = ""; r.on("data", c => data += c);
+            r.on("end", () => console.log("[ZD AutoSync] Result:", data.substring(0, 300)));
+          });
+          syncReq.on("error", e => console.warn("[ZD AutoSync] Error:", e.message));
+          syncReq.write("{}"); syncReq.end();
+        } catch (e) { console.warn("[ZD AutoSync] Failed:", e.message); }
+      }, 5 * 60 * 1000);
+      console.log("[ZD AutoSync] Scheduled Zendesk incremental sync every 5 minutes");
+    }
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
 
 // Graceful shutdown
-process.on("SIGINT", () => { if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
-process.on("SIGTERM", () => { if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGINT", () => { if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval); if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGTERM", () => { if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval); if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
