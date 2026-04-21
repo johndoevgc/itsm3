@@ -1110,6 +1110,15 @@ const server = http.createServer(async (req, res) => {
       if (pathname.match(/^\/api\/zendesk\/tickets\/\d+\/comments$/) && req.method === "GET") {
         const ticketId = pathname.split("/")[4];
         const result = await zdRequest("GET", `/tickets/${ticketId}/comments.json`);
+        // Resolve author_id numbers to display names (read-only, graceful fallback)
+        const authorIds = [...new Set((result.comments || []).map(c => c.author_id).filter(Boolean))];
+        if (authorIds.length > 0) {
+          try {
+            const u = await zdRequest("GET", `/users/show_many.json?ids=${authorIds.join(",")}`);
+            const m = {}; (u.users || []).forEach(x => { m[x.id] = x.name; });
+            (result.comments || []).forEach(c => { c.author_name = m[c.author_id] || null; });
+          } catch (e) { /* silent fallback */ }
+        }
         return json(res, 200, result);
       }
 
