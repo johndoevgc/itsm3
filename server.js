@@ -29,7 +29,7 @@ function extractAIText(aiResult) {
   return "";
 }
 
-// Microsoft Entra ID config (client secret via env var only — NEVER in frontend)
+// Microsoft Entra ID config (client secret via env var only â€” NEVER in frontend)
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || "";
 const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
@@ -60,13 +60,13 @@ function buildClientAssertion() {
   } catch (err) { console.error("[Entra] Client assertion build failed:", err.message); return null; }
 }
 
-// Azure OpenAI config (server-side only — avoids CORS and protects API key)
-// Primary: gpt-5.4-pro (East US 2) — Responses API (supports streaming)
+// Azure OpenAI config (server-side only â€” avoids CORS and protects API key)
+// Primary: gpt-5.4-pro (East US 2) â€” Responses API (supports streaming)
 let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
 let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
 let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-nano";
 
-// Zendesk API config (server-side only — protects API token)
+// Zendesk API config (server-side only â€” protects API token)
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL || "";
 const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN || "";
@@ -85,7 +85,7 @@ const SOPHOS_CLIENT_SECRET = process.env.SOPHOS_CLIENT_SECRET || "";
 // M365 Mail sending via Managed Identity
 const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 
-// ─── Local Auth: Dev Admin ──────────────────────────────────────────────
+// â”€â”€â”€ Local Auth: Dev Admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Password is stored as SHA-256 hash (never plain text)
 // Local admin users are configured via environment variables
 // Format: LOCAL_ADMIN_PASSWORD_HASH = SHA-256 hash of the password
@@ -119,11 +119,11 @@ const MIME = {
   ".webp": "image/webp",
 };
 
-// ─── Database Abstraction Layer ─────────────────────────────────────────
+// â”€â”€â”€ Database Abstraction Layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let db; // set during init()
 let slaEngine = null; // set after DB init
-let wsServer = null; // WebSocket server
-let notifyEngine = null; // Notification engine
+let wsServer = null;
+let notifyEngine = null;
 
 async function initDatabase() {
   if (USE_MSSQL) {
@@ -416,7 +416,7 @@ async function initDatabase() {
   }
 }
 
-// ─── Helper: read JSON body from request ────────────────────────────────
+// â”€â”€â”€ Helper: read JSON body from request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -456,12 +456,12 @@ const VALID_COLLECTIONS = new Set([
   "customers", "service_reports",
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
-  "notifications",
   "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
   "sla_tracking", "sla_config",
+  "notifications",
 ]);
 
-// ─── Zendesk Sync State ──────────────────────────────────────────────
+// â”€â”€â”€ Zendesk Sync State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let zdSyncInProgress = false;
 let zdLastSyncTime = null;
 let zdSyncStats = { tickets: 0, users: 0, orgs: 0, comments: 0, errors: 0 };
@@ -472,7 +472,7 @@ function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
     const identityEndpoint = process.env.IDENTITY_ENDPOINT;
     const identityHeader = process.env.IDENTITY_HEADER;
     if (!identityEndpoint || !identityHeader) {
-      return reject(new Error("Managed Identity not available — IDENTITY_ENDPOINT or IDENTITY_HEADER missing"));
+      return reject(new Error("Managed Identity not available â€” IDENTITY_ENDPOINT or IDENTITY_HEADER missing"));
     }
     const url = new URL(identityEndpoint);
     url.searchParams.set("resource", resource);
@@ -494,10 +494,10 @@ function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
   });
 }
 
-// Server-side Graph API call using client credentials (app-only) — supports cert or secret
+// Server-side Graph API call using client credentials (app-only) â€” supports cert or secret
 function graphAppCall(endpoint, extraHeaders) {
   return new Promise((resolve, reject) => {
-    // Build token request body — prefer cert, fall back to client secret
+    // Build token request body â€” prefer cert, fall back to client secret
     let tokenBody;
     const assertion = buildClientAssertion();
     if (assertion) {
@@ -538,7 +538,7 @@ function graphAppCall(endpoint, extraHeaders) {
   });
 }
 
-// Graph API binary call (for photos) — returns base64 data URL or null
+// Graph API binary call (for photos) â€” returns base64 data URL or null
 function graphAppCallBinary(endpoint) {
   return new Promise((resolve, reject) => {
     let tokenBody;
@@ -648,14 +648,14 @@ const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = urlObj.pathname;
 
-  // ─── Auth & Rate Limiting (API routes only) ────────────────────────
+  // â”€â”€â”€ Auth & Rate Limiting (API routes only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let authResult = { authenticated: false, user: null, role: "anonymous", skipped: true };
   if (pathname.startsWith("/api/")) {
     authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID);
     if (authResult.blocked) return; // 429 already sent
   }
 
-  // ─── SLA Engine API ────────────────────────────────────────────────
+  // â”€â”€â”€ SLA Engine API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/sla/status" && req.method === "GET") {
     try {
       const rows = await db.getAll("sla_tracking");
@@ -674,7 +674,32 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, stats: slaEngine ? slaEngine.getStats() : null });
   }
 
-  // ─── REST API: /api/db/:collection ─────────────────────────────────
+  // --- Notification Engine API -------------------------------------------
+  if (pathname === "/api/notifications/send" && req.method === "POST") {
+    if (!notifyEngine) return json(res, 503, { error: "Notification engine not initialized" });
+    try {
+      const body = await readBody(req);
+      const result = await notifyEngine.send(body);
+      return json(res, 200, result);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/notifications/stats" && req.method === "GET") {
+    return json(res, 200, notifyEngine ? notifyEngine.getStats() : { error: "Not initialized" });
+  }
+  if (pathname === "/api/notifications/history" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("notifications");
+      const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "50", 10), 500);
+      return json(res, 200, { count: items.length, data: items.slice(-limit) });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // --- WebSocket Stats API -----------------------------------------------
+  if (pathname === "/api/ws/stats" && req.method === "GET") {
+    return json(res, 200, wsServer ? wsServer.getStats() : { error: "WebSocket server not initialized" });
+  }
+
   const dbMatch = pathname.match(/^\/api\/db\/([a-z_]+)(?:\/([^/]+))?$/);
   if (dbMatch) {
     const collection = dbMatch[1];
@@ -690,49 +715,53 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // GET /api/db/:collection — list all
+      // GET /api/db/:collection â€” list all
       if (req.method === "GET" && !recordId) {
         const rows = await db.getAll(collection);
         const items = rows.map(r => JSON.parse(r.data));
         return json(res, 200, { collection, count: items.length, data: items });
       }
 
-      // GET /api/db/:collection/:id — get one
+      // GET /api/db/:collection/:id â€” get one
       if (req.method === "GET" && recordId) {
         const row = await db.getOne(collection, recordId);
         if (!row) return json(res, 404, { error: "Not found" });
         return json(res, 200, JSON.parse(row.data));
       }
 
-      // POST /api/db/:collection — create or bulk upsert
+      // POST /api/db/:collection â€” create or bulk upsert
       if (req.method === "POST") {
         const body = await readBody(req);
         if (Array.isArray(body)) {
           await db.bulkUpsert(collection, body);
           await db.audit(collection, "*", "bulk_upsert", JSON.stringify({ count: body.length }), authResult.user?.email || body[0]?._user || "system");
+          if (wsServer) wsServer.broadcast(collection, { action: "bulk_upsert", collection, count: body.length });
           return json(res, 200, { ok: true, collection, upserted: body.length });
         } else {
           const id = body.id || recordId || String(Date.now());
           body.id = id;
           await db.upsert(collection, id, JSON.stringify(body));
           await db.audit(collection, id, "upsert", JSON.stringify(body), authResult.user?.email || body._user || "system");
+          if (wsServer) wsServer.broadcast(collection, { action: "upsert", collection, id, summary: body.title || body.name || id });
           return json(res, 200, { ok: true, id });
         }
       }
 
-      // PUT /api/db/:collection/:id — update one
+      // PUT /api/db/:collection/:id â€” update one
       if (req.method === "PUT" && recordId) {
         const body = await readBody(req);
         body.id = recordId;
         await db.upsert(collection, recordId, JSON.stringify(body));
         await db.audit(collection, recordId, "update", JSON.stringify(body), authResult.user?.email || body._user || "system");
+        if (wsServer) wsServer.broadcast(collection, { action: "update", collection, id: recordId, summary: body.title || body.name || recordId });
         return json(res, 200, { ok: true, id: recordId });
       }
 
-      // DELETE /api/db/:collection/:id — delete one
+      // DELETE /api/db/:collection/:id â€” delete one
       if (req.method === "DELETE" && recordId) {
         await db.deleteOne(collection, recordId);
         await db.audit(collection, recordId, "delete", null, authResult.user?.email || "system");
+        if (wsServer) wsServer.broadcast(collection, { action: "delete", collection, id: recordId });
         return json(res, 200, { ok: true, deleted: recordId });
       }
 
@@ -743,7 +772,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Audit Log API ────────────────────────────────────────────────────
+  // â”€â”€â”€ Audit Log API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/audit" && req.method === "GET") {
     try {
       const collection = urlObj.searchParams.get("collection");
@@ -757,7 +786,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── DB Stats ─────────────────────────────────────────────────────────
+  // â”€â”€â”€ DB Stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/db-stats" && req.method === "GET") {
     try {
       const stats = {};
@@ -770,7 +799,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Seed Data Cleanup (for Entra production users) ──────────────────
+  // â”€â”€â”€ Seed Data Cleanup (for Entra production users) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/db-clean-seed" && req.method === "POST") {
     try {
       const seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
@@ -808,7 +837,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Local Auth: POST /api/auth/local ─────────────────────────────────
+  // â”€â”€â”€ Local Auth: POST /api/auth/local â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/auth/local" && req.method === "POST") {
     try {
       const body = await readBody(req);
@@ -827,7 +856,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Entra ID User Sync: GET /api/entra/users ─────────────────────────
+  // â”€â”€â”€ Entra ID User Sync: GET /api/entra/users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Fetches live user list from vgcsg.com tenant via Graph API (app-only)
   if (pathname === "/api/entra/users" && req.method === "GET") {
     try {
@@ -854,7 +883,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Entra ID User Search: GET /api/entra/users/search?q=<query> ───────
+  // â”€â”€â”€ Entra ID User Search: GET /api/entra/users/search?q=<query> â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/entra/users/search" && req.method === "GET") {
     const q = urlObj.searchParams.get("q") || "";
     if (!q.trim()) return json(res, 400, { error: "Missing search query parameter 'q'" });
@@ -872,7 +901,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Entra ID Groups: GET /api/entra/groups ────────────────────────────
+  // â”€â”€â”€ Entra ID Groups: GET /api/entra/groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/entra/groups" && req.method === "GET") {
     try {
       const data = await graphAppCall("/groups?$select=id,displayName,description,securityEnabled&$top=100");
@@ -883,7 +912,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Entra ID Group Members: GET /api/entra/groups/:id/members ─────────
+  // â”€â”€â”€ Entra ID Group Members: GET /api/entra/groups/:id/members â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.startsWith("/api/entra/groups/") && pathname.endsWith("/members") && req.method === "GET") {
     const groupId = pathname.replace("/api/entra/groups/", "").replace("/members", "");
     if (!groupId || groupId.length < 10) return json(res, 400, { error: "Invalid group ID" });
@@ -896,7 +925,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Entra ID User Photo: GET /api/entra/users/:id/photo ───────────────
+  // â”€â”€â”€ Entra ID User Photo: GET /api/entra/users/:id/photo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.startsWith("/api/entra/users/") && pathname.endsWith("/photo") && req.method === "GET") {
     const userId = pathname.replace("/api/entra/users/", "").replace("/photo", "");
     if (!userId || userId.length < 5) return json(res, 400, { error: "Invalid user ID" });
@@ -909,7 +938,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Email Send Endpoint: POST /api/email/send ─────────────────────
+  // â”€â”€â”€ Email Send Endpoint: POST /api/email/send â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/email/send" && req.method === "POST") {
     try {
       const body = await parseBody(req);
@@ -925,7 +954,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ─── Zendesk API Proxy ──────────────────────────────────────────────
+  // â”€â”€â”€ Zendesk API Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.startsWith("/api/zendesk")) {
     if (!ZENDESK_SUBDOMAIN || !ZENDESK_EMAIL || !ZENDESK_API_TOKEN) {
       return json(res, 503, { error: "Zendesk not configured. Set ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN." });
@@ -978,7 +1007,7 @@ const server = http.createServer(async (req, res) => {
     };
 
     try {
-      // GET /api/zendesk/me — verify connection
+      // GET /api/zendesk/me â€” verify connection
       if (pathname === "/api/zendesk/me" && req.method === "GET") {
         const result = await zdRequest("GET", "/users/me.json");
         return json(res, 200, result);
@@ -1012,7 +1041,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, result);
       }
 
-      // PUT /api/zendesk/tickets/:id — update ticket (status, priority, comment)
+      // PUT /api/zendesk/tickets/:id â€” update ticket (status, priority, comment)
       if (pathname.match(/^\/api\/zendesk\/tickets\/\d+$/) && req.method === "PUT") {
         const ticketId = pathname.split("/").pop();
         const body = await parseBody(req);
@@ -1020,7 +1049,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, result);
       }
 
-      // POST /api/zendesk/tickets — create new ticket
+      // POST /api/zendesk/tickets â€” create new ticket
       if (pathname === "/api/zendesk/tickets" && req.method === "POST") {
         const body = await parseBody(req);
         const result = await zdRequest("POST", "/tickets.json", body);
@@ -1042,7 +1071,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/stats — ticket counts by status
+      // GET /api/zendesk/stats â€” ticket counts by status
       if (pathname === "/api/zendesk/stats" && req.method === "GET") {
         const [open, pending, hold, solved] = await Promise.all([
           zdRequest("GET", "/search.json?query=type:ticket status:open").catch(() => ({ count: 0 })),
@@ -1053,7 +1082,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { open: open.count || 0, pending: pending.count || 0, hold: hold.count || 0, solved: solved.count || 0 });
       }
 
-      // POST /api/zendesk/auto-triage — AI auto-triage a ticket (server-side for automation)
+      // POST /api/zendesk/auto-triage â€” AI auto-triage a ticket (server-side for automation)
       if (pathname === "/api/zendesk/auto-triage" && req.method === "POST") {
         if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
           return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -1075,18 +1104,18 @@ const server = http.createServer(async (req, res) => {
           } catch {}
         }
 
-        const systemPrompt = `You are an expert IT support AI for VGC Technology Pte Ltd — a managed IT services company.
+        const systemPrompt = `You are an expert IT support AI for VGC Technology Pte Ltd â€” a managed IT services company.
 Analyze the support ticket and return a JSON object with:
-1. category — one of: Network, Security, Hardware, Software, Email, Cloud, Access/Identity, Printing, General
-2. priority — one of: low, normal, high, urgent  
-3. tags — array of relevant tags
-4. draft_response — professional customer-facing response (150-250 words), signed "VGC Technology Service Desk"
-5. internal_note — brief internal analysis for the agent
-6. confidence — 0-100 how confident you are
-7. suggested_assignee — one of: L1 Support, L2 Support, Network Engineering, Security Team, based on complexity
-8. auto_sendable — true if confidence >= 85 AND the response is safe to send without human review
-9. itsm_category — ITIL category mapping
-10. sla_priority — Sev-A (Critical, 4hr), Sev-B (High, 4hr), Sev-C (Medium, 9hr), Sev-D (Low, 27hr)
+1. category â€” one of: Network, Security, Hardware, Software, Email, Cloud, Access/Identity, Printing, General
+2. priority â€” one of: low, normal, high, urgent  
+3. tags â€” array of relevant tags
+4. draft_response â€” professional customer-facing response (150-250 words), signed "VGC Technology Service Desk"
+5. internal_note â€” brief internal analysis for the agent
+6. confidence â€” 0-100 how confident you are
+7. suggested_assignee â€” one of: L1 Support, L2 Support, Network Engineering, Security Team, based on complexity
+8. auto_sendable â€” true if confidence >= 85 AND the response is safe to send without human review
+9. itsm_category â€” ITIL category mapping
+10. sla_priority â€” Sev-A (Critical, 4hr), Sev-B (High, 4hr), Sev-C (Medium, 9hr), Sev-D (Low, 27hr)
 
 IMPORTANT: Set auto_sendable=true ONLY for routine issues (password resets, basic how-to, status inquiries, simple troubleshooting). 
 Set auto_sendable=false for: security incidents, data loss, system outages, escalations, angry customers, complex issues.
@@ -1132,12 +1161,12 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, { triage: parsed, ticket: ticket.ticket, requester: requester ? { name: requester.name, email: requester.email, phone: requester.phone, organization_id: requester.organization_id } : null });
       }
 
-      // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)
+      // POST /api/zendesk/auto-respond â€” send AI response to ticket (REQUIRES human approval)
       if (pathname === "/api/zendesk/auto-respond" && req.method === "POST") {
         const body = await parseBody(req);
         const { ticketId, response, priority, tags, internalNote, approvedBy } = body;
         if (!ticketId || !response) return json(res, 400, { error: "ticketId and response required" });
-        if (!approvedBy) return json(res, 403, { error: "Human approval required — approvedBy field is mandatory. No auto-sending allowed." });
+        if (!approvedBy) return json(res, 403, { error: "Human approval required â€” approvedBy field is mandatory. No auto-sending allowed." });
 
         const updatePayload = {
           ticket: {
@@ -1149,7 +1178,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         const result = await zdRequest("PUT", `/tickets/${ticketId}.json`, updatePayload);
         
         // Add internal note with approval audit trail
-        const auditNote = `[AI Response — Approved by ${approvedBy}]\n${internalNote || "No additional analysis notes."}`;
+        const auditNote = `[AI Response â€” Approved by ${approvedBy}]\n${internalNote || "No additional analysis notes."}`;
         await zdRequest("PUT", `/tickets/${ticketId}.json`, {
           ticket: { comment: { body: auditNote, public: false } }
         }).catch(() => {});
@@ -1172,7 +1201,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
                 <p style="color:#666;font-size:12px;">This response was reviewed and approved by ${approvedBy}.<br/>
                 Ticket Reference: #${ticketId}<br/>
-                VGC IT Support — <a href="mailto:${MAIL_FROM}">${MAIL_FROM}</a></p>
+                VGC IT Support â€” <a href="mailto:${MAIL_FROM}">${MAIL_FROM}</a></p>
               </div>`;
               await graphSendMail({ to: requesterEmail, subject: `Re: ${ticketSubject} [#${ticketId}]`, body: htmlBody });
               emailResult = { sent: true, to: requesterEmail };
@@ -1184,22 +1213,22 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           console.error(`[M365 Mail] Ticket #${ticketId} email failed: ${emailErr.message}`);
         }
 
-        console.log(`[AUDIT] Ticket #${ticketId} response sent — approved by: ${approvedBy}`);
+        console.log(`[AUDIT] Ticket #${ticketId} response sent â€” approved by: ${approvedBy}`);
         return json(res, 200, { success: true, approvedBy, result, email: emailResult });
       }
 
-      // GET /api/zendesk/new-tickets — fetch only new/open tickets for automation polling
+      // GET /api/zendesk/new-tickets â€” fetch only new/open tickets for automation polling
       if (pathname === "/api/zendesk/new-tickets" && req.method === "GET") {
         const result = await zdRequest("GET", "/search.json?query=type:ticket status:new status:open&sort_by=created_at&sort_order=desc&per_page=50");
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/historical-tickets — cursor-based paginated fetch of ALL tickets for ITSM import
+      // GET /api/zendesk/historical-tickets â€” cursor-based paginated fetch of ALL tickets for ITSM import
       if (pathname === "/api/zendesk/historical-tickets" && req.method === "GET") {
         const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
         const cursor = qs.get("cursor") || "";
         const page = parseInt(qs.get("page") || "1"); // display-only counter
-        // Use cursor-based pagination (CBP) on /tickets.json — no 1000-result cap
+        // Use cursor-based pagination (CBP) on /tickets.json â€” no 1000-result cap
         let zdUrl;
         if (cursor) {
           zdUrl = `/tickets.json?page[size]=100&page[after]=${encodeURIComponent(cursor)}`;
@@ -1226,7 +1255,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, { tickets: enriched, count: result.count || tickets.length, has_more: hasMore, next_cursor: nextCursor, page });
       }
 
-      // GET /api/zendesk/agents — fetch Zendesk agents with groups
+      // GET /api/zendesk/agents â€” fetch Zendesk agents with groups
       if (pathname === "/api/zendesk/agents" && req.method === "GET") {
         const [agents, groups] = await Promise.all([
           zdRequest("GET", "/users.json?role=agent"),
@@ -1235,7 +1264,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, { agents: agents.users || [], groups: groups.groups || [] });
       }
 
-      // GET /api/zendesk/organizations — fetch all organizations (customers)
+      // GET /api/zendesk/organizations â€” fetch all organizations (customers)
       if (pathname === "/api/zendesk/organizations" && req.method === "GET") {
         const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
         const page = qs.get("page") || "1";
@@ -1243,40 +1272,40 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/organizations/:id — single organization
+      // GET /api/zendesk/organizations/:id â€” single organization
       if (pathname.match(/^\/api\/zendesk\/organizations\/\d+$/) && req.method === "GET") {
         const orgId = pathname.split("/").pop();
         const result = await zdRequest("GET", `/organizations/${orgId}.json`);
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/organizations/:id/tickets — tickets for an org
+      // GET /api/zendesk/organizations/:id/tickets â€” tickets for an org
       if (pathname.match(/^\/api\/zendesk\/organizations\/\d+\/tickets$/) && req.method === "GET") {
         const orgId = pathname.split("/")[4];
         const result = await zdRequest("GET", `/organizations/${orgId}/tickets.json`);
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/satisfaction_ratings — CSAT data
+      // GET /api/zendesk/satisfaction_ratings â€” CSAT data
       if (pathname === "/api/zendesk/satisfaction_ratings" && req.method === "GET") {
         const result = await zdRequest("GET", "/satisfaction_ratings.json?sort_by=created_at&sort_order=desc&per_page=100").catch(() => ({ satisfaction_ratings: [] }));
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/ticket_fields — ticket custom fields
+      // GET /api/zendesk/ticket_fields â€” ticket custom fields
       if (pathname === "/api/zendesk/ticket_fields" && req.method === "GET") {
         const result = await zdRequest("GET", "/ticket_fields.json");
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/users/:id — single user details
+      // GET /api/zendesk/users/:id â€” single user details
       if (pathname.match(/^\/api\/zendesk\/users\/\d+$/) && req.method === "GET") {
         const userId = pathname.split("/").pop();
         const result = await zdRequest("GET", `/users/${userId}.json`);
         return json(res, 200, result);
       }
 
-      // POST /api/zendesk/sync-incident — sync an ITSM incident action to Zendesk
+      // POST /api/zendesk/sync-incident â€” sync an ITSM incident action to Zendesk
       if (pathname === "/api/zendesk/sync-incident" && req.method === "POST") {
         const body = await parseBody(req);
         const { zdTicketId, action, status, priority, comment, assignee, isInternal } = body;
@@ -1297,11 +1326,11 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
 
         const result = await zdRequest("PUT", `/tickets/${zdTicketId}.json`, ticketUpdate);
-        console.log(`[ZD Sync] Ticket #${zdTicketId} updated — action: ${action}, status: ${status || '-'}, priority: ${priority || '-'}`);
+        console.log(`[ZD Sync] Ticket #${zdTicketId} updated â€” action: ${action}, status: ${status || '-'}, priority: ${priority || '-'}`);
         return json(res, 200, { success: true, result });
       }
 
-      // GET /api/zendesk/ticket-updates/:id — get latest ticket state for sync back to ITSM
+      // GET /api/zendesk/ticket-updates/:id â€” get latest ticket state for sync back to ITSM
       if (pathname.match(/^\/api\/zendesk\/ticket-updates\/\d+$/) && req.method === "GET") {
         const ticketId = pathname.split("/").pop();
         const [ticketResult, commentsResult] = await Promise.all([
@@ -1327,9 +1356,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         });
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // FULL HISTORICAL IMPORT — Pull ALL Zendesk data into ITSM DB
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // FULL HISTORICAL IMPORT â€” Pull ALL Zendesk data into ITSM DB
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/full-import" && req.method === "POST") {
         if (zdSyncInProgress) return json(res, 409, { error: "Sync already in progress" });
         zdSyncInProgress = true;
@@ -1493,9 +1522,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // INCREMENTAL SYNC — Only fetch changes since last sync
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // INCREMENTAL SYNC â€” Only fetch changes since last sync
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/incremental-sync" && req.method === "POST") {
         if (zdSyncInProgress) return json(res, 409, { error: "Sync already in progress" });
         zdSyncInProgress = true;
@@ -1606,9 +1635,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // WEBHOOK — Receive real-time Zendesk webhook events
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // WEBHOOK â€” Receive real-time Zendesk webhook events
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/webhook" && req.method === "POST") {
         try {
           const event = await readBody(req);
@@ -1649,7 +1678,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                       inc.activityLog = [...(inc.activityLog || []), {
                         id: `AL-WH-${Date.now()}`, type: "sync", user: "Zendesk Webhook",
                         time: new Date().toISOString(),
-                        detail: `Real-time sync: ${eventType} — status=${t.status}, priority=${t.priority}`,
+                        detail: `Real-time sync: ${eventType} â€” status=${t.status}, priority=${t.priority}`,
                       }];
                       await db.upsert("incidents", inc.id, JSON.stringify(inc));
                       console.log(`[ZD Webhook] Updated ITSM ${inc.id} from Zendesk #${t.id}`);
@@ -1732,9 +1761,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // SYNC STATUS — Current sync state and stats
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // SYNC STATUS â€” Current sync state and stats
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/sync-status" && req.method === "GET") {
         try {
           const lastFull = await db.getOne("zendesk_sync_state", "last_full_import");
@@ -1756,9 +1785,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // PUSH ITSM → ZENDESK — Sync ITSM incident changes to Zendesk
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // PUSH ITSM â†’ ZENDESK â€” Sync ITSM incident changes to Zendesk
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/push-to-zendesk" && req.method === "POST") {
         const body = await parseBody(req);
         const { incidentId, status, priority, comment, assignee, isPublic, user } = body;
@@ -1812,9 +1841,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         return json(res, 200, { success: true, action: "updated", zdTicketId: inc.zdTicketId });
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // SYNC ORGANIZATIONS → ITSM CUSTOMERS
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // SYNC ORGANIZATIONS â†’ ITSM CUSTOMERS
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/sync-organizations" && req.method === "POST") {
         try {
           const orgRows = await db.getAll("zendesk_orgs");
@@ -1854,9 +1883,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // GET STORED ZENDESK DATA — Query local DB copies
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+      // GET STORED ZENDESK DATA â€” Query local DB copies
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/stored/tickets" && req.method === "GET") {
         const qs = urlObj.searchParams;
         const limit = Math.min(parseInt(qs.get("limit") || "100"), 500);
@@ -1902,9 +1931,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       // AI KNOWLEDGE TRAINING FROM ZENDESK DATA
-      // ═══════════════════════════════════════════════════════════════
+      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (pathname === "/api/zendesk/train-ai" && req.method === "POST") {
         try {
           const ticketRows = await db.getAll("zendesk_tickets");
@@ -1954,7 +1983,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge Base: CRUD /api/ai/knowledge ─────────────────────
+  // â”€â”€â”€ AI Knowledge Base: CRUD /api/ai/knowledge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/knowledge" && req.method === "GET") {
     try {
       const items = await db.getAll("ai_knowledge");
@@ -1994,7 +2023,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge: PUT /api/ai/knowledge/:id (Update with Version Control) ───
+  // â”€â”€â”€ AI Knowledge: PUT /api/ai/knowledge/:id (Update with Version Control) â”€â”€â”€
   if (pathname.match(/^\/api\/ai\/knowledge\/[^/]+$/) && req.method === "PUT") {
     try {
       const id = decodeURIComponent(pathname.split("/api/ai/knowledge/")[1]);
@@ -2033,7 +2062,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge: GET /api/ai/knowledge/:id/versions ─────────────
+  // â”€â”€â”€ AI Knowledge: GET /api/ai/knowledge/:id/versions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.match(/^\/api\/ai\/knowledge\/[^/]+\/versions$/) && req.method === "GET") {
     try {
       const id = decodeURIComponent(pathname.split("/api/ai/knowledge/")[1].replace("/versions", ""));
@@ -2049,7 +2078,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge: POST /api/ai/knowledge/correction — user corrects AI answer ─
+  // â”€â”€â”€ AI Knowledge: POST /api/ai/knowledge/correction â€” user corrects AI answer â”€
   if (pathname === "/api/ai/knowledge/correction" && req.method === "POST") {
     try {
       const body = await parseBody(req);
@@ -2076,14 +2105,14 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       await db.upsert("ai_knowledge", correctionId, JSON.stringify(entry));
       await db.audit("ai_knowledge", correctionId, "create", JSON.stringify({ type: "ai-correction", correctedBy, question: originalQuestion.substring(0, 100) }), correctedBy);
       console.log(`[AI Correction] Saved by ${correctedBy}: "${originalQuestion.substring(0, 60)}"`);
-      return json(res, 200, { success: true, id: correctionId, message: "Correction saved — VGC AI will use this in future responses" });
+      return json(res, 200, { success: true, id: correctionId, message: "Correction saved â€” VGC AI will use this in future responses" });
     } catch (err) {
       console.error("[AI Correction]", err.message);
       return json(res, 500, { error: err.message });
     }
   }
 
-  // ─── AI Knowledge: POST /api/ai/knowledge/learn ───────────────────
+  // â”€â”€â”€ AI Knowledge: POST /api/ai/knowledge/learn â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/knowledge/learn" && req.method === "POST") {
     try {
       const items = await db.getAll("ai_knowledge");
@@ -2129,7 +2158,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge File Upload: POST /api/ai/knowledge/upload ───────
+  // â”€â”€â”€ AI Knowledge File Upload: POST /api/ai/knowledge/upload â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/knowledge/upload" && req.method === "POST") {
     try {
       const contentType = req.headers["content-type"] || "";
@@ -2193,7 +2222,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge Sync: merge Zendesk + KB into unified training ───
+  // â”€â”€â”€ AI Knowledge Sync: merge Zendesk + KB into unified training â”€â”€â”€
   if (pathname === "/api/ai/knowledge/sync" && req.method === "POST") {
     try {
       let synced = 0;
@@ -2232,7 +2261,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         nextSync: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
       };
       await db.upsert("ai_knowledge", "sync_metadata", JSON.stringify(syncMeta));
-      console.log(`[AI Sync] Completed — ${synced} new entries synced, total: ${syncMeta.totalEntries}`);
+      console.log(`[AI Sync] Completed â€” ${synced} new entries synced, total: ${syncMeta.totalEntries}`);
       return json(res, 200, syncMeta);
     } catch (err) {
       console.error("[AI Sync]", err.message);
@@ -2240,7 +2269,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Knowledge Sync Status ─────────────────────────────────────
+  // â”€â”€â”€ AI Knowledge Sync Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/knowledge/sync-status" && req.method === "GET") {
     try {
       const meta = await db.getOne("ai_knowledge", "sync_metadata");
@@ -2253,7 +2282,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
   }
 
-  // ─── AI Generate Professional Guide from Zendesk History ───────────
+  // â”€â”€â”€ AI Generate Professional Guide from Zendesk History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/generate-guide" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -2316,14 +2345,14 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 TASK: Generate a COMPLETE, professional-grade technical guide/documentation on the topic: "${topic}"
 Category: ${category || "General"}
 
-REQUIREMENTS — MUST follow ALL:
+REQUIREMENTS â€” MUST follow ALL:
 1. TITLE: Clear, professional title with document metadata (version, date, author, category)
 2. TABLE OF CONTENTS: Numbered sections
 3. OVERVIEW/INTRODUCTION: What this guide covers, who it's for, prerequisites
 4. STEP-BY-STEP INSTRUCTIONS: Every step numbered, with clear actions. Each step MUST include:
-   - 📸 [Screenshot: <description of what to capture>] — placeholder for where screenshots should be taken
-   - 💡 Tip or Note callouts for important information
-   - ⚠️ Warning callouts for critical steps
+   - ðŸ“¸ [Screenshot: <description of what to capture>] â€” placeholder for where screenshots should be taken
+   - ðŸ’¡ Tip or Note callouts for important information
+   - âš ï¸ Warning callouts for critical steps
 5. TROUBLESHOOTING SECTION: Common issues and fixes (based on Zendesk history if available)
 6. FAQ SECTION: At least 5 frequently asked questions with answers
 7. REFERENCE LINKS: Official vendor documentation, Microsoft Learn links, etc.
@@ -2331,13 +2360,13 @@ REQUIREMENTS — MUST follow ALL:
 
 FORMATTING RULES:
 - Use Markdown formatting throughout
-- Include screenshot placeholders: 📸 [Screenshot: description]
+- Include screenshot placeholders: ðŸ“¸ [Screenshot: description]
 - Use tables for structured data (settings, configurations, comparison)
 - Use code blocks for commands, scripts, paths
-- Use callout boxes: 💡 **Tip:** | ⚠️ **Warning:** | ℹ️ **Note:** | ✅ **Best Practice:**
+- Use callout boxes: ðŸ’¡ **Tip:** | âš ï¸ **Warning:** | â„¹ï¸ **Note:** | âœ… **Best Practice:**
 - Include estimated time for each major section
 - Professional tone but user-friendly and easy to follow
-- Minimum 2000 words — be thorough and comprehensive
+- Minimum 2000 words â€” be thorough and comprehensive
 
 ${zdContext}
 ${kbContext}
@@ -2389,7 +2418,7 @@ IMPORTANT: Reference real ticket data and resolutions from the Zendesk history a
     }
   }
 
-  // ─── AI Generate Doc from SharePoint Link ─────────────────────────
+  // â”€â”€â”€ AI Generate Doc from SharePoint Link â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/generate-doc" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -2412,7 +2441,7 @@ Create a COMPLETE professional documentation that includes:
 2. **Executive Summary**: 2-3 paragraph overview
 3. **Scope & Purpose**: What this document covers
 4. **Detailed Content**: Comprehensive step-by-step content with:
-   - 📸 [Screenshot: <description>] placeholders for visual references
+   - ðŸ“¸ [Screenshot: <description>] placeholders for visual references
    - Numbered procedures with clear actions
    - Tables for configuration settings or comparisons
    - Code blocks for any commands or scripts
@@ -2470,7 +2499,7 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
     }
   }
 
-  // ─── AI Error Resolver ─────────────────────────────────────────────
+  // â”€â”€â”€ AI Error Resolver â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/resolve-error" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -2508,31 +2537,31 @@ ERROR DETAILS:
 ${pastResolutions}
 
 HARD RULES:
-1. ALWAYS provide a solution — never say "I can't help" or "contact support"
+1. ALWAYS provide a solution â€” never say "I can't help" or "contact support"
 2. Give IMMEDIATE actionable steps the user can try RIGHT NOW
 3. Provide MULTIPLE resolution paths (primary fix + alternatives)
 4. Explain WHY the error occurred in simple terms
 5. Include prevention tips so it doesn't happen again
 
 RESPONSE FORMAT:
-## 🔍 Error Analysis
+## ðŸ” Error Analysis
 Brief explanation of what went wrong and why.
 
-## ⚡ Immediate Fix (Try This First)
+## âš¡ Immediate Fix (Try This First)
 Step-by-step primary solution.
 
-## 🔄 Alternative Solutions
+## ðŸ”„ Alternative Solutions
 2-3 alternative approaches if the primary fix doesn't work.
 
-## 🛡️ Prevention
+## ðŸ›¡ï¸ Prevention
 How to prevent this error in the future.
 
-## 📚 References
+## ðŸ“š References
 Links to relevant documentation.
 
 Keep it conversational, actionable, and human-friendly. Be a helpful colleague, not a bot.`;
 
-      const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
+      const userPrompt = `Resolve this error: ${errorType || "Error"} â€” ${errorMessage}`;
 
       const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
@@ -2564,7 +2593,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── AI Chat File Upload: POST /api/ai/chat/upload ──────────────────
+  // â”€â”€â”€ AI Chat File Upload: POST /api/ai/chat/upload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Accepts file attachments, extracts text content, returns it for AI context
   if (pathname === "/api/ai/chat/upload" && req.method === "POST") {
     try {
@@ -2627,7 +2656,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         if (textExts.includes(ext) || codeExts.includes(ext)) {
           textContent = Buffer.from(body, "binary").toString("utf8").substring(0, 15000);
         } else if (["doc", "docx", "xls", "xlsx", "ppt", "pptx"].includes(ext)) {
-          // Office files: extract readable text from binary (simplified — gets embedded strings)
+          // Office files: extract readable text from binary (simplified â€” gets embedded strings)
           const raw = Buffer.from(body, "binary");
           // For docx/xlsx/pptx (ZIP-based XML), try to extract XML text
           if (ext.endsWith("x")) {
@@ -2652,17 +2681,17 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
             const t = m[1].replace(/[^\x20-\x7E]/g, "").trim();
             if (t.length > 1) textParts.push(t);
           }
-          textContent = textParts.join(" ").substring(0, 15000) || `[PDF file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB — binary content, text extraction limited]`;
+          textContent = textParts.join(" ").substring(0, 15000) || `[PDF file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB â€” binary content, text extraction limited]`;
         } else if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif"].includes(ext)) {
-          textContent = `[Image file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}] — Image content cannot be read as text. User may be asking you to discuss, analyze, or reference this image.`;
+          textContent = `[Image file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}] â€” Image content cannot be read as text. User may be asking you to discuss, analyze, or reference this image.`;
         } else if (["mp3", "wav", "ogg", "flac", "aac", "wma", "m4a"].includes(ext)) {
           textContent = `[Audio file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}]`;
         } else if (["mp4", "avi", "mkv", "mov", "wmv", "flv", "webm"].includes(ext)) {
           textContent = `[Video file: ${fileName}, ${(fileSize / 1024 / 1024).toFixed(1)} MB, format: ${ext.toUpperCase()}]`;
         } else if (["zip", "rar", "7z", "tar", "gz", "bz2", "xz"].includes(ext)) {
-          textContent = `[Archive file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}] — Archive contents cannot be extracted in chat.`;
+          textContent = `[Archive file: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, format: ${ext.toUpperCase()}] â€” Archive contents cannot be extracted in chat.`;
         } else {
-          textContent = `[File: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, type: .${ext}] — Binary content, text extraction not supported for this format.`;
+          textContent = `[File: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB, type: .${ext}] â€” Binary content, text extraction not supported for this format.`;
         }
 
         results.push({
@@ -2683,7 +2712,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Azure OpenAI Proxy: POST /api/ai/chat ─────────────────────────
+  // â”€â”€â”€ Azure OpenAI Proxy: POST /api/ai/chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/chat" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured on server" });
@@ -2710,7 +2739,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
             return { ...e, score };
           }).filter(e => e.score > 0).sort((a, b) => b.score - a.score).slice(0, 3);
           if (matched.length > 0) {
-            kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE (PRIORITY — use this first) ===\n" +
+            kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE (PRIORITY â€” use this first) ===\n" +
               matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
               "\n=== END INTERNAL KB ===\nIMPORTANT: Always reference internal knowledge base articles first. If the internal KB has relevant info, use it as the primary source and cite it. Only supplement with external knowledge if the internal KB doesn't fully answer the question.";
           }
@@ -2753,7 +2782,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Azure OpenAI Streaming Proxy: POST /api/ai/chat/stream ────────
+  // â”€â”€â”€ Azure OpenAI Streaming Proxy: POST /api/ai/chat/stream â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/chat/stream" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured on server" });
@@ -2780,7 +2809,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
             return { ...e, score };
           }).filter(e => e.score > 0).sort((a, b) => b.score - a.score).slice(0, 3);
           if (matched.length > 0) {
-            kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE (PRIORITY — use this first) ===\n" +
+            kbContext = "\n\n=== INTERNAL KNOWLEDGE BASE (PRIORITY â€” use this first) ===\n" +
               matched.map(m => `[${m.category}] ${m.title}:\n${m.content}`).join("\n---\n") +
               "\n=== END INTERNAL KB ===\nIMPORTANT: Always reference internal knowledge base articles first. If the internal KB has relevant info, use it as the primary source and cite it. Only supplement with external knowledge if the internal KB doesn't fully answer the question.";
           }
@@ -2843,7 +2872,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
             }
             try {
               const parsed = JSON.parse(data);
-              // Responses API: response.output_text.delta has {delta: "text"} — often arrives as full text
+              // Responses API: response.output_text.delta has {delta: "text"} â€” often arrives as full text
               // Split into words for ChatGPT-like token-by-token streaming effect
               const rawToken = parsed.delta || parsed.choices?.[0]?.delta?.content;
               if (rawToken && rawToken.length > 0) {
@@ -2908,7 +2937,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       aiReq.write(JSON.stringify(payload));
       aiReq.end();
-      return; // streaming response — don't fall through
+      return; // streaming response â€” don't fall through
     } catch (err) {
       console.error("[AI Stream]", err.message);
       if (!res.headersSent) return json(res, 502, { error: err.message });
@@ -2920,7 +2949,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Azure OpenAI Test Connection: GET /api/ai/test ─────────────────
+  // â”€â”€â”€ Azure OpenAI Test Connection: GET /api/ai/test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/ai/test" && req.method === "GET") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured", configured: false });
@@ -2951,7 +2980,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Cisco Meraki Dashboard API Proxy ──────────────────────────────
+  // â”€â”€â”€ Cisco Meraki Dashboard API Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.startsWith("/api/meraki") && req.method === "GET") {
     if (MERAKI_API_KEYS.length === 0) return json(res, 503, { error: "Meraki API not configured" });
     const CACHE_TTL = 5 * 60 * 1000;
@@ -3043,7 +3072,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── SolarWinds RMM — Test Connection ────────────────────────────────
+  // â”€â”€â”€ SolarWinds RMM â€” Test Connection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/solarwinds/test" && req.method === "POST") {
     const body = await parseBody(req);
     const { apiKey, apiHost } = body || {};
@@ -3061,7 +3090,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         doGet(testUrl);
       });
       if (xml.includes("Login failed")) {
-        return json(res, 200, { ok: false, detail: "Login failed — API key is invalid or expired. Generate a new key in N-able RMM → Settings → General Settings → API." });
+        return json(res, 200, { ok: false, detail: "Login failed â€” API key is invalid or expired. Generate a new key in N-able RMM â†’ Settings â†’ General Settings â†’ API." });
       }
       // Parse clients to get summary
       const clients = []; const re = /<client[\s>]([\s\S]*?)<\/client>/gi; let m;
@@ -3076,7 +3105,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Azure OpenAI — Save Settings (runtime) ─────────────────────────
+  // â”€â”€â”€ Azure OpenAI â€” Save Settings (runtime) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/settings/openai" && req.method === "POST") {
     const body = await parseBody(req);
     const { endpoint, apiKey, model } = body || {};
@@ -3087,7 +3116,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, message: "Azure OpenAI settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
   }
 
-  // ─── Azure OpenAI — Get Current Config: GET /api/settings/openai ────
+  // â”€â”€â”€ Azure OpenAI â€” Get Current Config: GET /api/settings/openai â”€â”€â”€â”€
   if (pathname === "/api/settings/openai" && req.method === "GET") {
     return json(res, 200, {
       model: AZURE_OPENAI_MODEL,
@@ -3096,7 +3125,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     });
   }
 
-  // ─── SolarWinds RMM — Save Settings ────────────────────────────────
+  // â”€â”€â”€ SolarWinds RMM â€” Save Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/settings/solarwinds" && req.method === "POST") {
     const body = await parseBody(req);
     const { apiKey, apiHost } = body || {};
@@ -3108,7 +3137,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     return json(res, 200, { ok: true, message: "SolarWinds RMM settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
   }
 
-  // ─── SolarWinds RMM / N-able API Proxy ──────────────────────────────
+  // â”€â”€â”€ SolarWinds RMM / N-able API Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.startsWith("/api/solarwinds") && req.method === "GET") {
     if (!SOLARWINDS_API_KEY) return json(res, 503, { error: "SolarWinds RMM API not configured" });
     const CACHE_TTL = 5 * 60 * 1000;
@@ -3132,7 +3161,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       doGet(u);
     });
     try {
-      // N-able RMM XML API — parse clients and devices
+      // N-able RMM XML API â€” parse clients and devices
       const [clientsXml, serversXml, workstationsXml] = await Promise.allSettled([
         swFetch("list_clients"), swFetch("list_servers"), swFetch("list_workstations"),
       ]);
@@ -3172,7 +3201,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Sophos Central Firewall API Proxy ──────────────────────────────
+  // â”€â”€â”€ Sophos Central Firewall API Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname.startsWith("/api/sophos") && req.method === "GET") {
     if (!SOPHOS_CLIENT_ID || !SOPHOS_CLIENT_SECRET) return json(res, 503, { error: "Sophos Central API not configured" });
     const CACHE_TTL = 5 * 60 * 1000;
@@ -3254,7 +3283,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── Cyber News: Live RSS Feeds ─────────────────────────────────────
+  // â”€â”€â”€ Cyber News: Live RSS Feeds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (pathname === "/api/cybernews" && req.method === "GET") {
     // Cache for 10 minutes to avoid hammering feeds
     const CACHE_TTL = 10 * 60 * 1000;
@@ -3323,7 +3352,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
           mitreTactics: [],
           iocs: [],
           nextSteps: ["Review the advisory details via the source link", "Assess applicability to your environment", "Update security monitoring rules if relevant"],
-          references: [{ title: `${source} — Full Article`, url: link || sourceUrl }],
+          references: [{ title: `${source} â€” Full Article`, url: link || sourceUrl }],
           status: "open",
         });
       }
@@ -3355,8 +3384,8 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
-  // ─── AI Auto-Triage + Auto-Assignment Engine (Phase 1) ────────────────
-  // POST /api/ai/auto-triage-assign — AI categorizes, prioritizes, and assigns a ticket
+  // â”€â”€â”€ AI Auto-Triage + Auto-Assignment Engine (Phase 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // POST /api/ai/auto-triage-assign â€” AI categorizes, prioritizes, and assigns a ticket
   if (pathname === "/api/ai/auto-triage-assign" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -3387,7 +3416,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       const kbArticles = kbRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
       const kbCategories = [...new Set(kbArticles.map(a => a.category).filter(Boolean))];
 
-      // Historical resolution stats (category → avg resolve time, best assignee)
+      // Historical resolution stats (category â†’ avg resolve time, best assignee)
       const resolvedInc = allIncidents.filter(i => i.status === "Resolved" || i.status === "Closed");
       const categoryStats = {};
       for (const inc of resolvedInc) {
@@ -3419,7 +3448,7 @@ PRIORITY LEVELS (VGC SLA Policy):
 ASSIGNMENT GROUPS: Service Desk, Network Team, Security Team, Cloud Team, Desktop Support, Application Support, Infrastructure
 
 TEAM MEMBERS & WORKLOAD:
-${teamSummary || "No team members data available — assign to Service Desk"}
+${teamSummary || "No team members data available â€” assign to Service Desk"}
 
 HISTORICAL RESOLUTION STATS:
 ${catStatsSummary || "No historical data yet"}
@@ -3499,7 +3528,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         id: `AIT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
         type: "auto_triage",
         severity: triage.priority === "Sev-A" ? "critical" : triage.priority === "Sev-B" ? "high" : triage.priority === "Sev-D" ? "low" : "medium",
-        title: `Auto-Triage: ${ticket.id || "New Ticket"} → ${triage.category} [${triage.priority}] → ${triage.assignee}`,
+        title: `Auto-Triage: ${ticket.id || "New Ticket"} â†’ ${triage.category} [${triage.priority}] â†’ ${triage.assignee}`,
         description: triage.reasoning || "AI auto-triage recommendation",
         incidentId: ticket.id || null,
         suggestedAction: `Set category=${triage.category}, priority=${triage.priority}, assignee=${triage.assignee}, group=${triage.assignmentGroup}`,
@@ -3550,13 +3579,13 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           inc.activityLog = inc.activityLog || [];
           inc.activityLog.push({
             id: `AL-AIT-${Date.now().toString(36)}`, type: "ai_triage", user: "AI Auto-Triage",
-            time: now, detail: `AI auto-triaged (${confidence}% confidence): ${triage.category} [${triage.priority}] → ${triage.assignee}. ${triage.reasoning}`,
+            time: now, detail: `AI auto-triaged (${confidence}% confidence): ${triage.category} [${triage.priority}] â†’ ${triage.assignee}. ${triage.reasoning}`,
           });
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
         }
       }
 
-      console.log(`[AI Triage] ${ticket.id || "NEW"} → ${triage.category} [${triage.priority}] → ${triage.assignee} (${confidence}% confidence, ${autoApply ? "auto-applied" : "pending approval"})`);
+      console.log(`[AI Triage] ${ticket.id || "NEW"} â†’ ${triage.category} [${triage.priority}] â†’ ${triage.assignee} (${confidence}% confidence, ${autoApply ? "auto-applied" : "pending approval"})`);
       return json(res, 200, {
         triage: triageRecord.triage, confidence, autoApplied: autoApply,
         actionId: triageRecord.id, status: triageRecord.status,
@@ -3568,7 +3597,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // POST /api/ai/auto-triage-assign/apply — apply a pending triage to the actual ticket
+  // POST /api/ai/auto-triage-assign/apply â€” apply a pending triage to the actual ticket
   if (pathname === "/api/ai/auto-triage-assign/apply" && req.method === "POST") {
     try {
       const body = await parseBody(req);
@@ -3601,7 +3630,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           inc.activityLog = inc.activityLog || [];
           inc.activityLog.push({
             id: `AL-AIT-${Date.now().toString(36)}`, type: "ai_triage", user: appliedBy,
-            time: now, detail: `AI triage approved by ${appliedBy}: ${triage.category} [${triage.priority}] → ${triage.assignee}`,
+            time: now, detail: `AI triage approved by ${appliedBy}: ${triage.category} [${triage.priority}] â†’ ${triage.assignee}`,
           });
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
         }
@@ -3624,8 +3653,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // ─── Phase 2: AI Predictive SLA Breach Prevention ───────────────────
-  // POST /api/ai/sla-predict — AI predicts SLA breaches and suggests preventive actions
+  // â”€â”€â”€ Phase 2: AI Predictive SLA Breach Prevention â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // POST /api/ai/sla-predict â€” AI predicts SLA breaches and suggests preventive actions
   if (pathname === "/api/ai/sla-predict" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -3723,8 +3752,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // ─── Phase 3: AI Knowledge Base Auto-Generation ─────────────────────
-  // POST /api/ai/kb-auto-generate — generate KB article from resolved ticket
+  // â”€â”€â”€ Phase 3: AI Knowledge Base Auto-Generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // POST /api/ai/kb-auto-generate â€” generate KB article from resolved ticket
   if (pathname === "/api/ai/kb-auto-generate" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -3807,7 +3836,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // POST /api/ai/kb-auto-generate/approve — approve and publish a KB draft
+  // POST /api/ai/kb-auto-generate/approve â€” approve and publish a KB draft
   if (pathname === "/api/ai/kb-auto-generate/approve" && req.method === "POST") {
     try {
       const body = await parseBody(req, 50000);
@@ -3859,8 +3888,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // ─── Phase 4: AI Daily Briefing + Shift Handover ────────────────────
-  // POST /api/ai/daily-briefing — generate AI daily briefing report
+  // â”€â”€â”€ Phase 4: AI Daily Briefing + Shift Handover â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // POST /api/ai/daily-briefing â€” generate AI daily briefing report
   if (pathname === "/api/ai/daily-briefing" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -3893,7 +3922,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const dataSummary = `ITSM Overview (${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}):\n- Total Incidents: ${allInc.length}\n- Open: ${openInc.length} (${criticalOpen.length} critical/high)\n- Resolved: ${resolvedRecent.length}\n- SLA Breaches: ${totalSLABreaches}\n- Open Requests: ${allReqs.filter(r => r.status !== "Completed" && r.status !== "Closed").length}\n- Scheduled Changes: ${allChanges.filter(c => c.status === "Scheduled" || c.status === "Approved").length}\n- AI Actions Pending: ${pendingActions}\n- AI Auto-Applied: ${autoApplied}\n\nCritical Items:\n${criticalOpen.map(i => `- ${i.id}: "${i.title}" [${i.priority}] assigned to ${i.assignee || "Unassigned"}, SLA ${Math.round((i.created / (i.slaTarget || 9)) * 100)}%`).join("\n") || "None"}`;
 
-      const systemPrompt = `You are VGC Technology's ITSM briefing AI. Generate a concise, actionable ${shift || "daily"} briefing for the IT operations team. Format with clear sections. Be direct — highlight risks, blockers, and actions needed. Return JSON ONLY: { "executiveSummary": "2-3 sentence overview", "criticalItems": [{ "id": "ticket ID", "issue": "brief", "action": "needed action" }], "slaStatus": "overall SLA health description", "handoverNotes": "key things for next shift", "actionItems": ["action 1", "action 2"], "upcomingChanges": "scheduled changes summary", "aiInsights": "any AI-detected patterns or recommendations", "riskLevel": "low|medium|high|critical" }`;
+      const systemPrompt = `You are VGC Technology's ITSM briefing AI. Generate a concise, actionable ${shift || "daily"} briefing for the IT operations team. Format with clear sections. Be direct â€” highlight risks, blockers, and actions needed. Return JSON ONLY: { "executiveSummary": "2-3 sentence overview", "criticalItems": [{ "id": "ticket ID", "issue": "brief", "action": "needed action" }], "slaStatus": "overall SLA health description", "handoverNotes": "key things for next shift", "actionItems": ["action 1", "action 2"], "upcomingChanges": "scheduled changes summary", "aiInsights": "any AI-detected patterns or recommendations", "riskLevel": "low|medium|high|critical" }`;
 
       const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataSummary }], max_output_tokens: 2000 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
@@ -3932,9 +3961,9 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       // Send email if recipients provided and graphSendMail available
       if (recipients && recipients.length > 0) {
         const riskColors = { critical: "#FF4444", high: "#FF6B6B", medium: "#FFB347", low: "#81C784" };
-        const emailBody = `<div style="font-family:Segoe UI,sans-serif;max-width:600px;margin:0 auto"><h2 style="color:#6366F1">🤖 VGC ITSM Daily Briefing</h2><div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:16px;border-left:4px solid ${riskColors[briefing.riskLevel] || "#6366F1"}"><strong>Risk Level:</strong> <span style="color:${riskColors[briefing.riskLevel] || "#333"};font-weight:700;text-transform:uppercase">${briefing.riskLevel || "medium"}</span><br><br>${briefing.executiveSummary || ""}</div><h3>📊 SLA Status</h3><p>${briefing.slaStatus || "N/A"}</p><h3>⚡ Action Items</h3><ul>${(briefing.actionItems || []).map(a => `<li>${a}</li>`).join("")}</ul><h3>📋 Handover Notes</h3><p>${briefing.handoverNotes || "None"}</p><h3>🤖 AI Insights</h3><p>${briefing.aiInsights || "No patterns detected"}</p><hr><p style="font-size:11px;color:#888">Generated by VGC AI Engine · ${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}</p></div>`;
+        const emailBody = `<div style="font-family:Segoe UI,sans-serif;max-width:600px;margin:0 auto"><h2 style="color:#6366F1">ðŸ¤– VGC ITSM Daily Briefing</h2><div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:16px;border-left:4px solid ${riskColors[briefing.riskLevel] || "#6366F1"}"><strong>Risk Level:</strong> <span style="color:${riskColors[briefing.riskLevel] || "#333"};font-weight:700;text-transform:uppercase">${briefing.riskLevel || "medium"}</span><br><br>${briefing.executiveSummary || ""}</div><h3>ðŸ“Š SLA Status</h3><p>${briefing.slaStatus || "N/A"}</p><h3>âš¡ Action Items</h3><ul>${(briefing.actionItems || []).map(a => `<li>${a}</li>`).join("")}</ul><h3>ðŸ“‹ Handover Notes</h3><p>${briefing.handoverNotes || "None"}</p><h3>ðŸ¤– AI Insights</h3><p>${briefing.aiInsights || "No patterns detected"}</p><hr><p style="font-size:11px;color:#888">Generated by VGC AI Engine Â· ${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}</p></div>`;
         try {
-          await graphSendMail({ to: recipients, subject: `[VGC ITSM] ${shift || "Daily"} Briefing — Risk: ${(briefing.riskLevel || "medium").toUpperCase()}`, body: emailBody });
+          await graphSendMail({ to: recipients, subject: `[VGC ITSM] ${shift || "Daily"} Briefing â€” Risk: ${(briefing.riskLevel || "medium").toUpperCase()}`, body: emailBody });
         } catch (emailErr) {
           console.error("[AI Briefing] Email send failed:", emailErr.message);
         }
@@ -3948,7 +3977,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // GET /api/ai/briefings — list past briefings
+  // GET /api/ai/briefings â€” list past briefings
   if (pathname === "/api/ai/briefings" && req.method === "GET") {
     try {
       const rows = await db.getAll("ai_briefings");
@@ -3960,8 +3989,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // ─── Phase 5: AI Pattern Detection + Proactive Prevention ──────────
-  // POST /api/ai/pattern-detect — analyze historical data for recurring patterns
+  // â”€â”€â”€ Phase 5: AI Pattern Detection + Proactive Prevention â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // POST /api/ai/pattern-detect â€” analyze historical data for recurring patterns
   if (pathname === "/api/ai/pattern-detect" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -4061,7 +4090,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // GET /api/ai/patterns — list detected patterns
+  // GET /api/ai/patterns â€” list detected patterns
   if (pathname === "/api/ai/patterns" && req.method === "GET") {
     try {
       const rows = await db.getAll("ai_patterns");
@@ -4073,7 +4102,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // POST /api/ai/patterns/:id/create-problem — convert pattern to Problem record
+  // POST /api/ai/patterns/:id/create-problem â€” convert pattern to Problem record
   if (pathname.match(/^\/api\/ai\/patterns\/[^/]+\/create-problem$/) && req.method === "POST") {
     try {
       const patternId = pathname.split("/")[4];
@@ -4120,8 +4149,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
-  // ─── AI Actions Engine: Proactive Monitor + Approval Workflow ────────
-  // POST /api/ai/actions/scan — AI scans all open incidents/tickets for critical cases, generates action items
+  // â”€â”€â”€ AI Actions Engine: Proactive Monitor + Approval Workflow â”€â”€â”€â”€â”€â”€â”€â”€
+  // POST /api/ai/actions/scan â€” AI scans all open incidents/tickets for critical cases, generates action items
   if (pathname === "/api/ai/actions/scan" && req.method === "POST") {
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
       return json(res, 503, { error: "Azure OpenAI not configured" });
@@ -4247,7 +4276,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
-  // GET /api/ai/actions — list all AI action items (with optional status filter)
+  // GET /api/ai/actions â€” list all AI action items (with optional status filter)
   if (pathname === "/api/ai/actions" && req.method === "GET") {
     try {
       const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
@@ -4265,7 +4294,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
-  // POST /api/ai/actions/:id/approve — approve an AI action (requires Entra user)
+  // POST /api/ai/actions/:id/approve â€” approve an AI action (requires Entra user)
   if (pathname.match(/^\/api\/ai\/actions\/([^/]+)\/approve$/) && req.method === "POST") {
     const actionId = pathname.match(/^\/api\/ai\/actions\/([^/]+)\/approve$/)[1];
     try {
@@ -4302,7 +4331,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
                 <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
                 <p style="color:#888;font-size:11px;">This notification was generated by VGC AI Assist and approved by ${approvedBy}.<br/>
                 Action ID: ${actionId} | ${new Date().toISOString()}<br/>
-                VGC Technology Pte Ltd — IT Service Management</p>
+                VGC Technology Pte Ltd â€” IT Service Management</p>
               </div>`
             });
             executionResult = { emailSent: true, to: draft.to };
@@ -4330,17 +4359,17 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
             subject: `[VGC AI Assist] Action Approved: ${action.title}`,
             body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
               <div style="background:linear-gradient(135deg,#4CAF50,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
-                <h2 style="margin:0;color:#fff;font-size:18px;">✅ AI Action Approved</h2>
+                <h2 style="margin:0;color:#fff;font-size:18px;">âœ… AI Action Approved</h2>
               </div>
               <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
                 <p style="margin:0 0 12px;color:#333;"><strong>Action:</strong> ${action.title}</p>
                 <p style="margin:0 0 12px;color:#333;"><strong>Type:</strong> ${action.type} | <strong>Severity:</strong> ${action.severity}</p>
                 <p style="margin:0 0 12px;color:#333;"><strong>Approved by:</strong> ${approvedBy}</p>
-                <p style="margin:0 0 12px;color:#333;"><strong>Status:</strong> ${action.status === "executed" ? "Executed Successfully" : "Approved — Awaiting Execution"}</p>
+                <p style="margin:0 0 12px;color:#333;"><strong>Status:</strong> ${action.status === "executed" ? "Executed Successfully" : "Approved â€” Awaiting Execution"}</p>
                 ${executionResult ? `<p style="margin:0 0 12px;color:#333;"><strong>Result:</strong> ${JSON.stringify(executionResult)}</p>` : ""}
                 <p style="margin:0 0 12px;color:#666;"><strong>Description:</strong> ${action.description}</p>
                 <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-                <p style="color:#888;font-size:11px;">VGC AI Assist — All actions are logged and auditable.<br/>Action ID: ${actionId}</p>
+                <p style="color:#888;font-size:11px;">VGC AI Assist â€” All actions are logged and auditable.<br/>Action ID: ${actionId}</p>
               </div>
             </div>`
           });
@@ -4353,7 +4382,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
-  // POST /api/ai/actions/:id/reject — reject an AI action
+  // POST /api/ai/actions/:id/reject â€” reject an AI action
   if (pathname.match(/^\/api\/ai\/actions\/([^/]+)\/reject$/) && req.method === "POST") {
     const actionId = pathname.match(/^\/api\/ai\/actions\/([^/]+)\/reject$/)[1];
     try {
@@ -4381,7 +4410,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
-  // POST /api/ai/actions/:id/execute — execute an approved action
+  // POST /api/ai/actions/:id/execute â€” execute an approved action
   if (pathname.match(/^\/api\/ai\/actions\/([^/]+)\/execute$/) && req.method === "POST") {
     const actionId = pathname.match(/^\/api\/ai\/actions\/([^/]+)\/execute$/)[1];
     try {
@@ -4410,7 +4439,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
                 ${draft.body.replace(/\n/g, "<br/>")}
                 <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
                 <p style="color:#888;font-size:11px;">Sent by VGC AI Assist, approved by ${action.approvedBy}.<br/>
-                Action ID: ${actionId}<br/>VGC Technology — IT Service Management</p>
+                Action ID: ${actionId}<br/>VGC Technology â€” IT Service Management</p>
               </div>`
             });
             executionResult = { emailSent: true, to: draft.to };
@@ -4437,7 +4466,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
-  // POST /api/ai/actions/send-approval-email — send approval request via Outlook
+  // POST /api/ai/actions/send-approval-email â€” send approval request via Outlook
   if (pathname === "/api/ai/actions/send-approval-email" && req.method === "POST") {
     try {
       const body = await parseBody(req);
@@ -4454,45 +4483,45 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
 
       const emailBody = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:650px;margin:0 auto;">
         <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;border-radius:10px 10px 0 0;">
-          <h2 style="margin:0;color:#fff;font-size:20px;">🤖 VGC AI Assist — Action Requires Your Approval</h2>
+          <h2 style="margin:0;color:#fff;font-size:20px;">ðŸ¤– VGC AI Assist â€” Action Requires Your Approval</h2>
           <p style="margin:6px 0 0;color:#8B8FA3;font-size:13px;">AI has identified an action that needs human review</p>
         </div>
         <div style="background:#ffffff;padding:24px;border:1px solid #e0e0e0;border-top:none;">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
             <span style="display:inline-block;padding:4px 12px;border-radius:20px;background:${sevColor}22;color:${sevColor};font-weight:700;font-size:12px;text-transform:uppercase;">${action.severity}</span>
             <span style="display:inline-block;padding:4px 12px;border-radius:20px;background:#6366F122;color:#6366F1;font-weight:600;font-size:12px;">${action.type}</span>
-            ${action.incidentId ? `<span style="display:inline-block;padding:4px 12px;border-radius:20px;background:#EC489922;color:#EC4899;font-weight:600;font-size:12px;">🎫 ${action.incidentId}</span>` : ""}
+            ${action.incidentId ? `<span style="display:inline-block;padding:4px 12px;border-radius:20px;background:#EC489922;color:#EC4899;font-weight:600;font-size:12px;">ðŸŽ« ${action.incidentId}</span>` : ""}
           </div>
           <h3 style="margin:0 0 12px;color:#1a1a2e;font-size:17px;">${action.title}</h3>
           <p style="margin:0 0 16px;color:#444;font-size:14px;line-height:1.6;">${action.description}</p>
           <div style="background:#f0f4ff;padding:14px 16px;border-radius:8px;border-left:4px solid #6366F1;margin:16px 0;">
-            <p style="margin:0 0 4px;color:#6366F1;font-weight:700;font-size:13px;">💡 AI Suggested Action:</p>
+            <p style="margin:0 0 4px;color:#6366F1;font-weight:700;font-size:13px;">ðŸ’¡ AI Suggested Action:</p>
             <p style="margin:0;color:#333;font-size:13px;line-height:1.5;">${action.suggestedAction || action.description}</p>
           </div>
           ${action.internalNote ? `<div style="background:#FFF8E1;padding:14px 16px;border-radius:8px;border-left:4px solid #FFB347;margin:16px 0;">
-            <p style="margin:0 0 4px;color:#F57C00;font-weight:700;font-size:13px;">📋 Internal Note:</p>
+            <p style="margin:0 0 4px;color:#F57C00;font-weight:700;font-size:13px;">ðŸ“‹ Internal Note:</p>
             <p style="margin:0;color:#555;font-size:13px;line-height:1.5;">${action.internalNote}</p>
           </div>` : ""}
           <p style="margin:16px 0 8px;color:#333;font-size:13px;"><strong>AI Confidence:</strong> ${action.confidence || "N/A"}%</p>
           <p style="margin:0 0 20px;color:#333;font-size:13px;"><strong>Reasoning:</strong> ${action.reasoning || "Based on severity and SLA analysis"}</p>
           <div style="text-align:center;margin:24px 0 16px;">
             <p style="color:#666;font-size:13px;margin:0 0 12px;">Please review and take action in VGC ITSM:</p>
-            <a href="${baseUrl}/#ai-actions" style="display:inline-block;padding:12px 32px;background:linear-gradient(135deg,#4CAF50,#45a049);color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:0 8px;">✅ Review & Approve</a>
-            <a href="${baseUrl}/#ai-actions" style="display:inline-block;padding:12px 32px;background:linear-gradient(135deg,#FF5252,#f44336);color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:0 8px;">❌ Review & Reject</a>
+            <a href="${baseUrl}/#ai-actions" style="display:inline-block;padding:12px 32px;background:linear-gradient(135deg,#4CAF50,#45a049);color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:0 8px;">âœ… Review & Approve</a>
+            <a href="${baseUrl}/#ai-actions" style="display:inline-block;padding:12px 32px;background:linear-gradient(135deg,#FF5252,#f44336);color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:0 8px;">âŒ Review & Reject</a>
           </div>
           <p style="text-align:center;color:#999;font-size:11px;margin-top:8px;">Click either button to open VGC ITSM and review the full action details</p>
         </div>
         <div style="background:#f8f9fa;padding:14px 24px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
-          <p style="margin:0;color:#999;font-size:11px;">VGC AI Assist — All actions require human approval before execution.<br/>
+          <p style="margin:0;color:#999;font-size:11px;">VGC AI Assist â€” All actions require human approval before execution.<br/>
           Action ID: ${actionId} | Generated: ${action.createdAt}<br/>
-          VGC Technology Pte Ltd — IT Service Management</p>
+          VGC Technology Pte Ltd â€” IT Service Management</p>
         </div>
       </div>`;
 
       const recipients = Array.isArray(approverEmails) ? approverEmails : [approverEmails];
       await graphSendMail({
         to: recipients,
-        subject: `[Action Required] 🤖 AI Assist: ${action.severity.toUpperCase()} — ${action.title}`,
+        subject: `[Action Required] ðŸ¤– AI Assist: ${action.severity.toUpperCase()} â€” ${action.title}`,
         body: emailBody
       });
 
@@ -4504,7 +4533,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
-  // POST /api/ai/actions/monitor — background AI monitor: scan + auto-email approvers for critical items
+  // POST /api/ai/actions/monitor â€” background AI monitor: scan + auto-email approvers for critical items
   if (pathname === "/api/ai/actions/monitor" && req.method === "POST") {
     try {
       const body = await parseBody(req, 200000);
@@ -4524,7 +4553,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       );
 
       if (critical.length === 0 && slaAtRisk.length === 0) {
-        return json(res, 200, { actions: [], message: "All clear — no critical items detected", monitoredAt: new Date().toISOString() });
+        return json(res, 200, { actions: [], message: "All clear â€” no critical items detected", monitoredAt: new Date().toISOString() });
       }
 
       // Step 2: Generate actions via AI (reuse scan logic internally)
@@ -4606,12 +4635,14 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       mailConfigured: !!(process.env.IDENTITY_ENDPOINT),
       slaEngineRunning: slaEngine ? !!slaEngine.timer : false,
       slaLastRun: slaEngine ? slaEngine.lastRun : null,
+      wsConnections: wsServer ? wsServer.getStats().connections : 0,
+      notifyStats: notifyEngine ? notifyEngine.getStats() : null,
       mailFrom: MAIL_FROM,
       timestamp: new Date().toISOString(),
     });
   }
 
-  // ─── Static File Serving ──────────────────────────────────────────────
+  // â”€â”€â”€ Static File Serving â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const distDir = path.join(__dirname, "dist");
   const hasDistDir = fs.existsSync(distDir);
   const serveRoot = hasDistDir ? distDir : __dirname;
@@ -4645,11 +4676,35 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   });
 });
 
-// ─── Start Server ───────────────────────────────────────────────────────
+// â”€â”€â”€ Start Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function start() {
   await initDatabase();
   // Start SLA Engine (after DB is initialized)
-  slaEngine = new SlaEngine(db, { interval: 5 * 60 * 1000 });
+  // Initialize WebSocket server
+  wsServer = new WebSocketServer();
+  server.on("upgrade", (req, socket, head) => wsServer.handleUpgrade(req, socket));
+
+  // Initialize Notification Engine
+  notifyEngine = new NotificationEngine({ graphSendMail, wsServer, db });
+
+  // Initialize SLA Engine with breach notifications
+  slaEngine = new SlaEngine(db, {
+    interval: 5 * 60 * 1000,
+    onBreach: async (esc) => {
+      try {
+        if (notifyEngine) {
+          await notifyEngine.send({
+            channels: ["inapp", "email"],
+            subject: `SLA Breach: ${esc.incidentTitle || esc.incidentId}`,
+            body: `Priority ${esc.priority} SLA breached - escalation level ${esc.level}`,
+            recipients: [esc.assignee].filter(Boolean),
+            metadata: { type: "sla_breach", incidentId: esc.incidentId, level: esc.level }
+          });
+        }
+        if (wsServer) wsServer.broadcast("sla", { action: "breach", ...esc });
+      } catch (e) { console.error("[SLA Breach Notify]", e.message); }
+    }
+  });
   server.listen(PORT, async () => {
     const stats = {};
     for (const c of VALID_COLLECTIONS) stats[c] = await db.count(c);
@@ -4672,7 +4727,7 @@ async function start() {
       console.log(`[Seed] Created ${defaultKB.length} default KB articles`);
     }
 
-    // ─── Daily AI Knowledge Sync (every 24h) ────────────────────────
+    // â”€â”€â”€ Daily AI Knowledge Sync (every 24h) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const runDailySync = async () => {
       try {
         console.log("[Daily Sync] Starting AI knowledge sync...");
@@ -4693,5 +4748,5 @@ async function start() {
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
 
 // Graceful shutdown
-process.on("SIGINT", () => { if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
-process.on("SIGTERM", () => { if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGINT", () => { if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGTERM", () => { if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
