@@ -3,6 +3,8 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const crypto = require("crypto");
+const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware");
+const { SlaEngine, computeSlaStatus } = require("./slaEngine");
 
 const PORT = process.env.PORT || 8080;
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
@@ -117,6 +119,7 @@ const MIME = {
 
 // ─── Database Abstraction Layer ─────────────────────────────────────────
 let db; // set during init()
+let slaEngine = null; // set after DB init
 
 async function initDatabase() {
   if (USE_MSSQL) {
@@ -450,6 +453,7 @@ const VALID_COLLECTIONS = new Set([
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
   "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
+  "sla_tracking", "sla_config",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -639,6 +643,32 @@ const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = urlObj.pathname;
 
+  // ─── Auth & Rate Limiting (API routes only) ────────────────────────
+  let authResult = { authenticated: false, user: null, role: "anonymous", skipped: true };
+  if (pathname.startsWith("/api/")) {
+    authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID);
+    if (authResult.blocked) return; // 429 already sent
+  }
+
+  // ─── SLA Engine API ────────────────────────────────────────────────
+  if (pathname === "/api/sla/status" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("sla_tracking");
+      const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { count: items.length, data: items, engine: slaEngine ? slaEngine.getStats() : null });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/sla/engine" && req.method === "GET") {
+    return json(res, 200, slaEngine ? slaEngine.getStats() : { error: "SLA engine not initialized" });
+  }
+  if (pathname === "/api/sla/run" && req.method === "POST") {
+    if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") {
+      return json(res, 403, { error: "Admin only" });
+    }
+    if (slaEngine) { await slaEngine.runCycle(); }
+    return json(res, 200, { ok: true, stats: slaEngine ? slaEngine.getStats() : null });
+  }
+
   // ─── REST API: /api/db/:collection ─────────────────────────────────
   const dbMatch = pathname.match(/^\/api\/db\/([a-z_]+)(?:\/([^/]+))?$/);
   if (dbMatch) {
@@ -647,6 +677,11 @@ const server = http.createServer(async (req, res) => {
 
     if (!VALID_COLLECTIONS.has(collection)) {
       return json(res, 400, { error: "Invalid collection name" });
+    }
+
+    // RBAC enforcement for DB routes
+    if (authResult.role && authResult.role !== "anonymous" && !checkPermission(authResult.role, collection, req.method)) {
+      return json(res, 403, { error: "Insufficient permissions", role: authResult.role, collection, method: req.method });
     }
 
     try {
@@ -669,13 +704,13 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req);
         if (Array.isArray(body)) {
           await db.bulkUpsert(collection, body);
-          await db.audit(collection, "*", "bulk_upsert", JSON.stringify({ count: body.length }), "system");
+          await db.audit(collection, "*", "bulk_upsert", JSON.stringify({ count: body.length }), authResult.user?.email || body[0]?._user || "system");
           return json(res, 200, { ok: true, collection, upserted: body.length });
         } else {
           const id = body.id || recordId || String(Date.now());
           body.id = id;
           await db.upsert(collection, id, JSON.stringify(body));
-          await db.audit(collection, id, "upsert", JSON.stringify(body), body._user || "system");
+          await db.audit(collection, id, "upsert", JSON.stringify(body), authResult.user?.email || body._user || "system");
           return json(res, 200, { ok: true, id });
         }
       }
@@ -685,14 +720,14 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req);
         body.id = recordId;
         await db.upsert(collection, recordId, JSON.stringify(body));
-        await db.audit(collection, recordId, "update", JSON.stringify(body), body._user || "system");
+        await db.audit(collection, recordId, "update", JSON.stringify(body), authResult.user?.email || body._user || "system");
         return json(res, 200, { ok: true, id: recordId });
       }
 
       // DELETE /api/db/:collection/:id — delete one
       if (req.method === "DELETE" && recordId) {
         await db.deleteOne(collection, recordId);
-        await db.audit(collection, recordId, "delete", null, "system");
+        await db.audit(collection, recordId, "delete", null, authResult.user?.email || "system");
         return json(res, 200, { ok: true, deleted: recordId });
       }
 

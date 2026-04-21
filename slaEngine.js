@@ -1,0 +1,199 @@
+// ─── Server-Side SLA Engine ─────────────────────────────────────────────
+// Computes SLA compliance, tracks breaches, and auto-escalates.
+// Runs as a periodic timer on the server.
+
+// ─── Default SLA Policy (matches client-side DEFAULT_SLA_POLICY) ────────
+const DEFAULT_SLA_POLICY = {
+  supportHours: { start: 9, end: 18, days: "Mon-Fri", tz: "Asia/Singapore" },
+  severities: {
+    "Sev-A": { firstResponse: 0.5, worstResponse: 4 },
+    "Sev-B": { firstResponse: 1,   worstResponse: 4 },
+    "Sev-C": { firstResponse: 4,   worstResponse: 9 },
+    "Sev-D": { firstResponse: 9,   worstResponse: 27 },
+  },
+};
+
+// ─── Business Hours Elapsed Calculator (server-side mirror) ─────────────
+function getBusinessHoursElapsed(createdAt, now) {
+  if (!createdAt) return 0;
+  const start = new Date(createdAt);
+  const end = now || new Date();
+  if (isNaN(start.getTime())) return 0;
+  const BH_START = 9, BH_END = 18;
+  let elapsed = 0;
+  let cursor = new Date(start);
+  while (cursor < end) {
+    const day = cursor.getDay();
+    if (day >= 1 && day <= 5) {
+      const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+      if (hrs >= BH_START && hrs < BH_END) {
+        const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
+        const chunkEnd = endOfBH < end ? endOfBH : end;
+        elapsed += (chunkEnd - cursor) / 3600000;
+        cursor = new Date(chunkEnd);
+      } else if (hrs < BH_START) {
+        cursor.setHours(BH_START, 0, 0, 0);
+      } else {
+        cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+      }
+    } else {
+      const daysToMon = day === 0 ? 1 : 8 - day;
+      cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+    }
+    if (cursor >= end) break;
+  }
+  return Math.round(elapsed * 100) / 100;
+}
+
+// ─── Compute SLA status for a single incident ──────────────────────────
+function computeSlaStatus(incident, policy) {
+  const sev = policy.severities[incident.priority] || policy.severities["Sev-C"];
+  const createdAt = incident.createdAt || incident.created_at || incident.created;
+  const now = new Date();
+
+  // If created is already a number (hours elapsed, from seed data), use it directly
+  let hoursElapsed;
+  if (typeof createdAt === "number") {
+    hoursElapsed = createdAt;
+  } else {
+    hoursElapsed = getBusinessHoursElapsed(createdAt, now);
+  }
+
+  const firstResponseTarget = sev.firstResponse;
+  const worstResponseTarget = sev.worstResponse;
+
+  const firstResponsePct = Math.min((hoursElapsed / firstResponseTarget) * 100, 999);
+  const resolutionPct = Math.min((hoursElapsed / worstResponseTarget) * 100, 999);
+
+  // Determine breach status
+  let status = "on_track"; // green
+  if (resolutionPct >= 100) status = "breached";
+  else if (resolutionPct >= 90) status = "critical";
+  else if (resolutionPct >= 80) status = "at_risk";
+
+  return {
+    incidentId: incident.id,
+    priority: incident.priority,
+    hoursElapsed,
+    firstResponseTarget,
+    worstResponseTarget,
+    firstResponsePct: Math.round(firstResponsePct * 10) / 10,
+    resolutionPct: Math.round(resolutionPct * 10) / 10,
+    status,
+    remainingHours: Math.max(0, Math.round((worstResponseTarget - hoursElapsed) * 100) / 100),
+    breached: resolutionPct >= 100,
+    computedAt: now.toISOString(),
+  };
+}
+
+// ─── SLA Engine Class ───────────────────────────────────────────────────
+class SlaEngine {
+  constructor(db, options = {}) {
+    this.db = db;
+    this.interval = options.interval || 5 * 60 * 1000; // 5 minutes default
+    this.timer = null;
+    this.policy = { ...DEFAULT_SLA_POLICY, ...(options.policy || {}) };
+    this.lastRun = null;
+    this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0 };
+  }
+
+  async start() {
+    console.log(`[SLA Engine] Started — checking every ${this.interval / 60000} minutes`);
+    // Load custom policy from DB if saved
+    await this.loadPolicy();
+    // Run immediately, then on interval
+    await this.runCycle();
+    this.timer = setInterval(() => this.runCycle(), this.interval);
+  }
+
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    console.log("[SLA Engine] Stopped");
+  }
+
+  async loadPolicy() {
+    try {
+      const row = await this.db.getOne("sla_config", "active_policy");
+      if (row) {
+        const saved = JSON.parse(row.data);
+        if (saved.severities) {
+          this.policy.severities = { ...this.policy.severities, ...saved.severities };
+        }
+      }
+    } catch (err) {
+      console.warn("[SLA Engine] Could not load policy:", err.message);
+    }
+  }
+
+  async runCycle() {
+    try {
+      const now = new Date();
+      this.lastRun = now.toISOString();
+
+      // Get all open incidents
+      const incidentRows = await this.db.getAll("incidents");
+      const incidents = incidentRows.map(r => {
+        try { return JSON.parse(r.data); } catch { return null; }
+      }).filter(Boolean);
+
+      const openStatuses = new Set(["Open", "In Progress", "Pending", "Assigned", "open", "in_progress", "pending", "assigned", "new"]);
+      const openIncidents = incidents.filter(i => openStatuses.has(i.status));
+
+      let atRisk = 0, breached = 0, escalated = 0;
+      const escalations = [];
+
+      for (const inc of openIncidents) {
+        const sla = computeSlaStatus(inc, this.policy);
+
+        // Track SLA state in a separate collection
+        await this.db.upsert("sla_tracking", inc.id, JSON.stringify({
+          ...sla,
+          title: inc.title,
+          assignee: inc.assignee,
+          assignmentGroup: inc.assignmentGroup,
+          category: inc.category,
+          customer: inc.customer,
+        }));
+
+        if (sla.status === "at_risk") atRisk++;
+        if (sla.status === "critical") { atRisk++; }
+        if (sla.breached) {
+          breached++;
+          // Auto-escalate on breach
+          escalations.push({
+            id: `ESC-${inc.id}-${Date.now()}`,
+            incidentId: inc.id,
+            title: inc.title,
+            priority: inc.priority,
+            assignee: inc.assignee,
+            reason: `SLA breached — ${sla.hoursElapsed}h elapsed vs ${sla.worstResponseTarget}h target`,
+            type: "sla_breach",
+            timestamp: now.toISOString(),
+          });
+          escalated++;
+        }
+      }
+
+      // Store escalations
+      for (const esc of escalations) {
+        await this.db.upsert("escalation_log", esc.id, JSON.stringify(esc));
+        await this.db.audit("escalation_log", esc.id, "auto_escalate", JSON.stringify(esc), "sla_engine");
+      }
+
+      this.stats = { totalChecked: openIncidents.length, atRisk, breached, escalated, lastRun: this.lastRun };
+
+      if (atRisk > 0 || breached > 0) {
+        console.log(`[SLA Engine] Checked ${openIncidents.length} incidents — ${atRisk} at-risk, ${breached} breached, ${escalated} escalated`);
+      }
+    } catch (err) {
+      console.error("[SLA Engine] Cycle failed:", err.message);
+    }
+  }
+
+  getStats() {
+    return { ...this.stats, policy: this.policy };
+  }
+}
+
+module.exports = { SlaEngine, computeSlaStatus, getBusinessHoursElapsed, DEFAULT_SLA_POLICY };
