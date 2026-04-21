@@ -737,6 +737,7 @@ const server = http.createServer(async (req, res) => {
           await db.bulkUpsert(collection, body);
           await db.audit(collection, "*", "bulk_upsert", JSON.stringify({ count: body.length }), authResult.user?.email || body[0]?._user || "system");
           if (wsServer) wsServer.broadcast(collection, { action: "bulk_upsert", collection, count: body.length });
+          if (cacheLayer) cacheLayer.invalidatePrefix(collection);
           return json(res, 200, { ok: true, collection, upserted: body.length });
         } else {
           const id = body.id || recordId || String(Date.now());
@@ -763,6 +764,7 @@ const server = http.createServer(async (req, res) => {
         await db.deleteOne(collection, recordId);
         await db.audit(collection, recordId, "delete", null, authResult.user?.email || "system");
         if (wsServer) wsServer.broadcast(collection, { action: "delete", collection, id: recordId });
+        if (cacheLayer) cacheLayer.invalidatePrefix(collection);
         return json(res, 200, { ok: true, deleted: recordId });
       }
 
@@ -4638,6 +4640,9 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       slaLastRun: slaEngine ? slaEngine.lastRun : null,
       wsConnections: wsServer ? wsServer.getStats().totalConnections : 0,
       notifyStats: notifyEngine ? notifyEngine.getStats() : null,
+      workflowStats: workflowEngine ? workflowEngine.getStats() : null,
+      analyticsAvailable: !!analyticsEngine,
+      cacheStats: cacheLayer ? cacheLayer.getStats() : null,
       mailFrom: MAIL_FROM,
       timestamp: new Date().toISOString(),
     });
@@ -4687,6 +4692,15 @@ async function start() {
 
   // Initialize Notification Engine
   notifyEngine = new NotificationEngine({ graphSendMail, wsServer, db });
+
+  // Initialize Cache Layer
+  cacheLayer = new CacheLayer({ maxSize: 500, defaultTTL: 5 * 60 * 1000 });
+
+  // Initialize Analytics Engine
+  analyticsEngine = new AnalyticsEngine(db, { cacheTTL: 5 * 60 * 1000 });
+
+  // Initialize Workflow Automation Engine
+  workflowEngine = new WorkflowEngine(db, { notifyEngine, wsServer, graphSendMail, interval: 5 * 60 * 1000 });
 
   // Initialize SLA Engine with breach notifications
   slaEngine = new SlaEngine(db, {
@@ -4744,10 +4758,13 @@ async function start() {
 
     // Start SLA Engine
     slaEngine.start().catch(err => console.error("[SLA Engine] Start failed:", err.message));
+
+    // Start Workflow Engine
+    workflowEngine.start().catch(err => console.error("[WorkflowEngine] Start failed:", err.message));
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
 
 // Graceful shutdown
-process.on("SIGINT", () => { if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
-process.on("SIGTERM", () => { if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGINT", () => { if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+process.on("SIGTERM", () => { if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
