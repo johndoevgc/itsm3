@@ -5,6 +5,8 @@ const https = require("https");
 const crypto = require("crypto");
 const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware");
 const { SlaEngine, computeSlaStatus } = require("./slaEngine");
+const { WebSocketServer } = require("./wsServer");
+const { NotificationEngine } = require("./notificationEngine");
 
 const PORT = process.env.PORT || 8080;
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
@@ -120,6 +122,8 @@ const MIME = {
 // ─── Database Abstraction Layer ─────────────────────────────────────────
 let db; // set during init()
 let slaEngine = null; // set after DB init
+let wsServer = null; // WebSocket server
+let notifyEngine = null; // Notification engine
 
 async function initDatabase() {
   if (USE_MSSQL) {
@@ -452,6 +456,7 @@ const VALID_COLLECTIONS = new Set([
   "customers", "service_reports",
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
+  "notifications",
   "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
   "sla_tracking", "sla_config",
 ]);

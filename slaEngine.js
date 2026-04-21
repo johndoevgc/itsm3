@@ -95,6 +95,7 @@ class SlaEngine {
     this.policy = { ...DEFAULT_SLA_POLICY, ...(options.policy || {}) };
     this.lastRun = null;
     this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0 };
+    this.onBreach = options.onBreach || null; // callback(escalation) for notification
   }
 
   async start() {
@@ -179,6 +180,9 @@ class SlaEngine {
       for (const esc of escalations) {
         await this.db.upsert("escalation_log", esc.id, JSON.stringify(esc));
         await this.db.audit("escalation_log", esc.id, "auto_escalate", JSON.stringify(esc), "sla_engine");
+        if (this.onBreach) {
+          try { await this.onBreach(esc); } catch (e) { console.warn("[SLA Engine] onBreach callback failed:", e.message); }
+        }
       }
 
       this.stats = { totalChecked: openIncidents.length, atRisk, breached, escalated, lastRun: this.lastRun };

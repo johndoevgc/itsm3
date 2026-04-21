@@ -1437,6 +1437,10 @@ export default function ITSMApp() {
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
   };
+  // ─── WebSocket Live Connection ─────────────────────────────────────────
+  const wsRef = useRef(null);
+  const wsReconnectRef = useRef(null);
+  const [wsConnected, setWsConnected] = useState(false);
   // ─── Recycle Bin & Undo ────────────────────────────────────────────────
   const [recycleBin, setRecycleBin] = useState(() => _ls("vgc_recycle_bin", []));
   const [undoToast, setUndoToast] = useState(null); // { id, label, type, timer }
