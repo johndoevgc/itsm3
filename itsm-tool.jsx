@@ -121,7 +121,11 @@ const USERS = [
 ];
 
 // ─── Initial Customer Data ────────────────────────────────────────────
-const INITIAL_CUSTOMERS = [];
+const INITIAL_CUSTOMERS = [
+  { id: "DCUS-001", name: "Demo Corp Pte Ltd", category: "CSP", contactPerson: "Sarah Lim", email: "sarah.lim@democorp.local", phone: "+65 6100 0001", address: "1 Raffles Place, Tower One, Singapore 048616", status: "Active", contractStart: "2025-01-01", contractEnd: "2026-12-31", services: ["Managed IT", "Cloud Hosting", "Security"], notes: "Tier-1 CSP customer — 120 endpoints", createdBy: "Demo Seed", createdAt: "2025-01-01" },
+  { id: "DCUS-002", name: "Kellington Group Pte Ltd", category: "CSP", contactPerson: "Daniel Lim", email: "daniel.lim@kellington.local", phone: "+65 6200 0002", address: "80 Robinson Road, Singapore 068898", status: "Active", contractStart: "2025-06-01", contractEnd: "2027-05-31", services: ["Managed IT", "Network", "Helpdesk"], notes: "Tier-1 CSP — 85 endpoints, 3 offices", createdBy: "Demo Seed", createdAt: "2025-06-01" },
+  { id: "DCUS-003", name: "Horizon Logistics Pte Ltd", category: "Ad-Hoc", contactPerson: "Kevin Tan", email: "kevin.tan@horizonlog.local", phone: "+65 6300 0003", address: "10 Changi Business Park, Singapore 486030", status: "Active", contractStart: "2026-01-15", contractEnd: "2026-07-14", services: ["Break-Fix", "Network"], notes: "Ad-hoc support contract — warehouse IT", createdBy: "Demo Seed", createdAt: "2026-01-15" },
+];
 
 // ─── RBAC Enterprise Roles & Permissions ─────────────────────────────────
 const RBAC_ROLES = [
@@ -1059,7 +1063,14 @@ const INTEGRATION_CATALOG = [
   { id: "INT15", name: "Sophos Central", category: "Security", icon: "🛡️", status: "connected", description: "Firewall management — groups, firewalls, alerts & threat intelligence" },
 ];
 
-const INITIAL_INCIDENTS = [];
+const INITIAL_INCIDENTS = [
+  { id: "INC-D001", title: "Outlook crashes when opening large attachments (>25MB)", status: "In Progress", priority: "Sev-B", category: "Software", subcategory: "Email", urgency: "High", impact: "Department", assignee: "L1 Support", assignmentGroup: "Service Desk", reporter: "Sarah Lim", reporterEmail: "sarah.lim@democorp.local", customer: "Demo Corp Pte Ltd", description: "Multiple users on Floor 2 report Outlook 365 crashes consistently when opening attachments larger than 25MB. Occurs in both desktop and web versions.", contactMethod: "Portal", created: 4, createdAt: "2026-04-22T05:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 92, zdTicketId: null, workaround: "Download attachment to local drive before opening", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D001", type: "status", user: "System", time: "22/04/2026, 09:00:00", detail: "Ticket created via Portal" }] },
+  { id: "INC-D002", title: "WiFi connectivity drops on Floor 3 meeting rooms", status: "New", priority: "Sev-C", category: "Network", subcategory: "WiFi", urgency: "Medium", impact: "Multiple Users", assignee: "Network Engineering", assignmentGroup: "Network Engineering", reporter: "James Wong", reporterEmail: "james.wong@democorp.local", customer: "Demo Corp Pte Ltd", description: "WiFi disconnects every 15-20 minutes in Floor 3 meeting rooms B and C. Affects both corporate and guest SSIDs.", contactMethod: "Email", created: 8, createdAt: "2026-04-21T21:00:00Z", slaTarget: 9, aiTriaged: true, aiConfidence: 87, zdTicketId: null, workaround: "", linkedProblem: "PRB0003", affectedAssets: ["AST-008"], activityLog: [{ id: "AL-D002", type: "status", user: "System", time: "21/04/2026, 21:00:00", detail: "Ticket created via Email" }] },
+  { id: "INC-D003", title: "VPN connection timeout for remote workers (FortiClient)", status: "Open", priority: "Sev-B", category: "Network", subcategory: "VPN", urgency: "High", impact: "Multiple Users", assignee: "Network Engineering", assignmentGroup: "Network Engineering", reporter: "David Chen", reporterEmail: "david.chen@democorp.local", customer: "Demo Corp Pte Ltd", description: "Remote workers in Malaysia and Indonesia experiencing VPN timeout after 5 minutes of inactivity. FortiClient v7.2 SSL-VPN tunnel drops.", contactMethod: "Teams", created: 6, createdAt: "2026-04-22T03:00:00Z", slaTarget: 4, aiTriaged: false, aiConfidence: 0, zdTicketId: null, workaround: "Increase keepalive interval in FortiClient settings to 30s", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D003", type: "status", user: "System", time: "22/04/2026, 03:00:00", detail: "Ticket created via Teams" }] },
+  { id: "INC-D004", title: "Shared printer on Floor 1 printing blank pages", status: "In Progress", priority: "Sev-D", category: "Hardware", subcategory: "Printer", urgency: "Low", impact: "Single User", assignee: "IT Support", assignmentGroup: "End User Computing", reporter: "Lisa Tan", reporterEmail: "lisa.tan@democorp.local", customer: "Demo Corp Pte Ltd", description: "HP LaserJet Pro M404 on Floor 1 printing blank pages intermittently. Toner level shows 45%.", contactMethod: "Portal", created: 24, createdAt: "2026-04-21T09:00:00Z", slaTarget: 27, aiTriaged: true, aiConfidence: 78, zdTicketId: null, workaround: "Use Floor 2 printer temporarily", linkedProblem: "PRB0004", affectedAssets: ["AST-010"], activityLog: [{ id: "AL-D004", type: "status", user: "System", time: "21/04/2026, 09:00:00", detail: "Ticket created via Portal" }] },
+  { id: "INC-D005", title: "Azure AD sync failure — new users not appearing in M365", status: "Resolved", priority: "Sev-A", category: "Cloud", subcategory: "Identity", urgency: "Critical", impact: "Enterprise", assignee: "Cloud Engineering", assignmentGroup: "Cloud Engineering", reporter: "IT Admin", reporterEmail: "admin@democorp.local", customer: "Demo Corp Pte Ltd", description: "Azure AD Connect sync failing since 20/04. Delta sync error: stopped-deletion-threshold-exceeded. 12 new hires cannot access M365.", contactMethod: "Portal", created: 48, createdAt: "2026-04-20T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 95, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: ["AST-007"], activityLog: [{ id: "AL-D005a", type: "status", user: "System", time: "20/04/2026, 09:00:00", detail: "Ticket created — Sev-A escalation" }, { id: "AL-D005b", type: "status", user: "Cloud Engineering", time: "20/04/2026, 10:30:00", detail: "Root cause: deletion threshold too low (50). Increased to 500, re-ran sync." }, { id: "AL-D005c", type: "status", user: "Cloud Engineering", time: "20/04/2026, 11:00:00", detail: "Status changed: Open → Resolved" }] },
+  { id: "INC-D006", title: "Password reset request — locked AD account", status: "Closed", priority: "Sev-D", category: "Access", subcategory: "Password", urgency: "Low", impact: "Single User", assignee: "Service Desk", assignmentGroup: "Service Desk", reporter: "Michael Ng", reporterEmail: "michael.ng@kellington.local", customer: "Kellington Group Pte Ltd", description: "User locked out after 5 failed login attempts. Needs AD password reset and MFA re-enrollment.", contactMethod: "Phone", created: 72, createdAt: "2026-04-19T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 99, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D006a", type: "status", user: "System", time: "19/04/2026, 09:00:00", detail: "Ticket created via Phone" }, { id: "AL-D006b", type: "status", user: "Service Desk", time: "19/04/2026, 09:15:00", detail: "Password reset completed. MFA re-enrolled." }, { id: "AL-D006c", type: "status", user: "System", time: "19/04/2026, 09:20:00", detail: "Status changed: Open → Closed" }] },
+];
 const INITIAL_PROBLEMS = [
   { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", zdTicketId: null },
   { id: "PRB0004", title: "Printer spooler crashes on shared print server", status: "Known Error", priority: "Sev-D", category: "Hardware", assignee: "Server Team", reporter: "Facilities", created: 240, linkedIncidents: [], rootCause: "HP Universal Print Driver v7.1 incompatible with Windows Server 2022 spooler service", workaround: "Restart Print Spooler service — automated via Task Scheduler every 6 hours", description: "Print spooler crashes 2-3 times daily affecting Floor 2 shared printer. HP driver update pending.", affectedAssets: ["AST-010"], customer: "VGC Technology", zdTicketId: null },
@@ -1357,8 +1368,8 @@ export default function ITSMApp() {
   const [aiTrainingTab, setAiTrainingTab] = useState("documents");
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
-  const DATA_VERSION = "v2.4";
-  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests"];
+  const DATA_VERSION = "v2.5";
+  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers"];
   const _ls = (key, fallback) => {
     try {
       // HARD RULE: Entra users must NEVER see seed/demo data — start empty, hydrate from DB
@@ -1375,12 +1386,24 @@ export default function ITSMApp() {
             }
             return []; // Empty fallback — DB hydration will load production data
           }
+          // HARD RULE: Demo users must NEVER see production data from localStorage cache
+          if (u.authType !== "entra" && PRODUCTION_COLLECTIONS.includes(key)) {
+            const s = localStorage.getItem(key);
+            if (s) {
+              const parsed = JSON.parse(s);
+              // If any record has a zdTicketId or looks like production data, discard it
+              if (Array.isArray(parsed) && parsed.some(r => r.zdTicketId || /^\[ZD#/.test(r.title))) {
+                localStorage.removeItem(key);
+                return fallback;
+              }
+            }
+          }
         } catch {}
       }
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
         // Clear stale data on version bump so new seed data takes effect
-        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services","vgc_zd_ai_queue","vgc_zd_tickets","vgc_zd_stats","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
+        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services","vgc_zd_ai_queue","vgc_zd_tickets","vgc_zd_stats","vgc_zd_auto_log","vgc_zd_auto_stats","vgc_customers"].forEach(k => localStorage.removeItem(k));
         localStorage.setItem("vgc_data_version", DATA_VERSION);
         return fallback;
       }
@@ -5543,6 +5566,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           <SearchBar value={search} onChange={setSearch} placeholder="Search incidents..." />
           <button style={btnStyle()} onClick={() => setModal("newIncident")}>+ New Incident</button>
           <button style={{ ...btnStyle("#EC4899"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
+            if (isLocalDemoUser) { showToast("Demo mode — Zendesk import unavailable", "info"); return; }
             fetch("/api/zendesk/tickets").then(r => r.json()).then(data => {
               const tickets = data.tickets || [];
               if (tickets.length === 0) return;
@@ -6679,6 +6703,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     const isSlaCompliant = (inc) => getElapsed(inc) <= inc.slaTarget;
 
     const refreshSlaFromZendesk = async () => {
+      if (isLocalDemoUser) { showToast("Demo mode — Zendesk sync unavailable", "info"); return; }
       setSlaRefreshing(true);
       try {
         await fetch("/api/zendesk/incremental-sync", { method: "POST" });
@@ -12952,6 +12977,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </div>
           {canEdit && <button onClick={openAdd} style={{ ...btnStyle("#6366F1"), fontSize: 12, padding: "8px 16px" }}>+ Add Customer</button>}
           <button onClick={() => {
+            if (isLocalDemoUser) { showToast("Demo mode — Zendesk import unavailable", "info"); return; }
             fetch("/api/zendesk/organizations").then(r => r.json()).then(data => {
               const orgs = data.organizations || [];
               if (orgs.length === 0) return;
@@ -13863,6 +13889,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         {/* Zendesk Analytics Tab */}
         {reportTab === "zendesk" && (() => {
           const loadZdAnalytics = () => {
+            if (isLocalDemoUser) { showToast("Demo mode — Zendesk analytics unavailable", "info"); return; }
             setZdLoading(true);
             Promise.all([
               fetch("/api/zendesk/stats").then(r => r.json()).catch(() => null),
@@ -15736,6 +15763,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   };
 
   const zdFetchStats = async () => {
+    if (isLocalDemoUser) return; // Data Isolation: no production API calls in demo mode
     try {
       const r = await fetch("/api/zendesk/stats");
       if (r.ok) { const data = await r.json(); setZdStats(data); }
