@@ -1,3 +1,0 @@
-<step title="Startup Request" date="2026-04-16T06:08:56.624" instance="f20fe8" url="/api/vfs/LogFiles/" method="GET" type="request" pid="831,1,7" SCM_DO_BUILD_DURING_DEPLOYMENT="true" ScmType="GitHubAction" >
-  <step title="Cleanup Xml Logs" date="2026-04-16T06:08:56.631" /><!-- duration: 6ms -->
-</step><!-- duration: 19ms -->

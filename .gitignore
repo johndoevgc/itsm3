@@ -23,3 +23,11 @@ dist/
 *.pem
 fix-entra.cjs
 tmp_*.json
+buildlogs/
+temp/
+screenshots/
+*.bak
+profiles.json
+sw_clients.xml
+body_role.json
+deploy/
