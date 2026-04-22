@@ -2840,6 +2840,7 @@ export default function ITSMApp() {
 
   // ─── Phase 6: AI Historical Incident Closure ──────────────────────
   const runHistoricalClose = useCallback(async (dryRun = true) => {
+    if (isLocalDemoUser) { showToast("Demo mode — Historical close unavailable", "info"); return; }
     setHistoricalCloseRunning(true);
     try {
       const res = await fetch("/api/ai/historical-close", {
