@@ -4819,6 +4819,141 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     });
   }
 
+  // ─── Phase 6: AI Historical Incident Closure (Bulk Close — No Notifications) ───
+  // POST /api/ai/historical-close — AI bulk-close past incidents with generated resolutions
+  if (pathname === "/api/ai/historical-close" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 10000);
+      const { cutoffDate, requestedBy, dryRun } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const cutoff = new Date(cutoffDate || "2026-04-01T00:00:00Z");
+      if (isNaN(cutoff.getTime())) return json(res, 400, { error: "Invalid cutoffDate" });
+
+      const allRows = await db.getAll("incidents");
+      const allIncidents = allRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      // Filter: non-closed incidents created before cutoff
+      const closableStatuses = new Set(["New", "Open", "In Progress", "Pending", "Resolved"]);
+      const eligible = allIncidents.filter(inc => {
+        const createdStr = inc.createdAt || inc.created || inc.openedDate;
+        if (!createdStr) return false;
+        const created = new Date(createdStr);
+        return !isNaN(created.getTime()) && closableStatuses.has(inc.status) && created < cutoff;
+      });
+
+      if (dryRun) {
+        return json(res, 200, {
+          dryRun: true, eligibleCount: eligible.length, cutoffDate: cutoff.toISOString(),
+          sample: eligible.slice(0, 10).map(i => ({ id: i.id, title: i.title, status: i.status, priority: i.priority, category: i.category, created: i.createdAt || i.created }))
+        });
+      }
+
+      if (eligible.length === 0) {
+        return json(res, 200, { success: true, closedCount: 0, totalEligible: 0, cutoffDate: cutoff.toISOString(), requestedBy, timestamp: new Date().toISOString(), results: [] });
+      }
+
+      // Process in batches of 10
+      const batchSize = 10;
+      let closedCount = 0;
+      const results = [];
+      const now = new Date().toISOString();
+
+      for (let i = 0; i < eligible.length; i += batchSize) {
+        const batch = eligible.slice(i, i + batchSize);
+        const summaries = batch.map(inc =>
+          `ID: ${inc.id} | Title: ${inc.title} | Category: ${inc.category || "General"} | Priority: ${inc.priority || "N/A"} | Status: ${inc.status} | Created: ${inc.createdAt || inc.created || "Unknown"} | Description: ${(inc.description || "").substring(0, 200)}`
+        ).join("\n---\n");
+
+        const systemPrompt = `You are VGC Technology's ITSM closure engine. For each historical incident below, generate a professional closure summary. These are old tickets being archived — provide appropriate resolutions based on the incident details. Return JSON array ONLY (no markdown):
+[{ "id": "INC-XXX", "resolution": "Professional resolution summary (1-2 sentences)", "closureReason": "Reason for closure" }]
+Keep resolutions concise and professional. Do NOT mention AI or automation in the resolution text.`;
+
+        const payload = {
+          model: AZURE_OPENAI_MODEL,
+          input: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `Close these ${batch.length} historical incidents (created before ${cutoff.toISOString()}):\n\n${summaries}` }
+          ],
+          max_output_tokens: 2000,
+        };
+
+        let closures;
+        try {
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({
+              hostname: aiUrl.hostname, port: 443,
+              path: aiUrl.pathname + aiUrl.search,
+              method: "POST",
+              headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+            }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => {
+                if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+                else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+              });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(60000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const text = extractAIText(aiResult);
+          try {
+            closures = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+            if (!Array.isArray(closures)) closures = [closures];
+          } catch {
+            closures = batch.map(b => ({ id: b.id, resolution: "Closed as part of historical incident archival. Issue addressed and no further action required.", closureReason: "Aged out — no recent activity" }));
+          }
+        } catch (aiErr) {
+          console.warn(`[AI Historical Close] AI call failed for batch ${i}-${i+batch.length}: ${aiErr.message}`);
+          closures = batch.map(b => ({ id: b.id, resolution: "Closed as part of historical incident archival. Issue addressed and no further action required.", closureReason: "Aged out — no recent activity" }));
+        }
+
+        // Apply closures — NO notifications sent
+        for (const inc of batch) {
+          const closure = closures.find(c => c.id === inc.id) || { resolution: "Closed during historical archival. No further action required.", closureReason: "Aged out" };
+          inc.status = "Closed";
+          inc.resolution = closure.resolution;
+          inc.closureReason = closure.closureReason;
+          inc.closedAt = now;
+          inc.closedBy = "AI Historical Closure Engine";
+          inc.historicalClose = true;
+          inc.suppressNotification = true;
+          if (!inc.activityLog) inc.activityLog = [];
+          inc.activityLog.push({
+            id: `AL-HC-${Date.now().toString(36)}`,
+            type: "status",
+            user: "AI Historical Closure Engine",
+            time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }),
+            detail: `Bulk closed by AI — ${closure.closureReason}`
+          });
+          await db.upsert("incidents", inc.id, JSON.stringify(inc));
+          await db.audit("incidents", inc.id, "historical_close", JSON.stringify({ resolution: closure.resolution, closureReason: closure.closureReason, requestedBy }), "AI Historical Closure");
+          closedCount++;
+          results.push({ id: inc.id, title: inc.title, resolution: closure.resolution, closureReason: closure.closureReason });
+        }
+      }
+
+      console.log(`[AI Historical Close] Closed ${closedCount}/${eligible.length} incidents before ${cutoff.toISOString()} by ${requestedBy}`);
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+
+      return json(res, 200, {
+        success: true, closedCount, totalEligible: eligible.length,
+        cutoffDate: cutoff.toISOString(), requestedBy, timestamp: now,
+        results: results.slice(0, 50)
+      });
+    } catch (err) {
+      console.error("[AI Historical Close]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Static File Serving ──────────────────────────────────────────────
   const distDir = path.join(__dirname, "dist");
   const hasDistDir = fs.existsSync(distDir);
