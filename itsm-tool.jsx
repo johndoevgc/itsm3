@@ -1611,6 +1611,8 @@ export default function ITSMApp() {
   const [aiAttachments, setAiAttachments] = useState([]);
   const [aiUploadingFiles, setAiUploadingFiles] = useState(false);
   const [adminTab, setAdminTab] = useState("ai");
+  const [wfAnimStep, setWfAnimStep] = useState(0); // animated workflow diagram step
+  const [wfAnimPlaying, setWfAnimPlaying] = useState(false);
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditFilter, setAuditFilter] = useState({ module: "all", actor: "all", search: "" });
   const [auditLoading, setAuditLoading] = useState(false);
@@ -10173,6 +10175,131 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               </div>
               <div style={{ marginTop: 8, fontSize: 9, color: "#5A617888", fontStyle: "italic" }}>All AI-suggested changes are transparent and require explicit admin approval. Goal: optimize response time, maintain SLA compliance, improve customer satisfaction.</div>
             </div>
+
+            {/* ─── Animated AI Auto-Resolve Workflow Diagram ──────────────── */}
+            {(() => {
+              const wfSteps = [
+                { icon: "👤", title: "Human Trigger", desc: "Admin clicks 🤖 AI Auto-Resolve Scan in Incidents Module", detail: "Only authorized users can trigger the scan. Demo users are blocked.", color: "#7C3AED", glow: "#7C3AED44" },
+                { icon: "🔍", title: "Smart DB Scan", desc: "Server queries only OPEN incidents using optimized MySQL JSON filter", detail: "Uses getOpen() — skips Closed/Resolved. Finds incidents idle > 24 hours. Max 10 per scan.", color: "#6366F1", glow: "#6366F144" },
+                { icon: "🧠", title: "AI Analysis", desc: "Azure OpenAI GPT-5.4-nano analyzes each incident individually", detail: "AI generates: Resolution suggestion, Root cause, Confidence score (0-100%), Customer email draft.", color: "#06B6D4", glow: "#06B6D444" },
+                { icon: "📋", title: "Queue Created", desc: "Suggestions stored in ai_resolve_queue with status: pending_approval", detail: "Each suggestion saved to database. Nothing is resolved yet — AI only suggests.", color: "#FFB347", glow: "#FFB34744" },
+                { icon: "👁️", title: "Human Review", desc: "Purple panel appears in Incidents showing each AI suggestion with details", detail: "Reviewer sees: Incident details, AI confidence %, resolution text, root cause, and customer email draft.", color: "#C084FC", glow: "#C084FC44" },
+                { icon: "✅", title: "Approve or Reject", desc: "Human must click Approve (name recorded) or Reject — no auto-action", detail: "approvedBy field is MANDATORY. Rejected items are removed. Approved items resolve the incident.", color: "#4CAF50", glow: "#4CAF5044" },
+                { icon: "🔒", title: "Zendesk Protected", desc: "AI-resolved incidents NEVER push to Zendesk — one-way pull only", detail: "skipZendeskSync=true flag set. Normal human status changes still sync to Zendesk. Customer emails need separate human click.", color: "#FF6B6B", glow: "#FF6B6B44" },
+              ];
+              const activeStep = wfSteps[wfAnimStep] || wfSteps[0];
+              return (
+                <div style={{ background: "linear-gradient(135deg, #0A0C14 0%, #1A1040 50%, #0A0C14 100%)", borderRadius: 12, border: "1px solid #7C3AED33", padding: 20, marginTop: 16, overflow: "hidden" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 18 }}>🔄</span> AI Auto-Resolve Workflow
+                      <span style={{ fontSize: 9, background: "#7C3AED33", color: "#C084FC", padding: "2px 8px", borderRadius: 10, fontWeight: 500 }}>Interactive</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <button onClick={() => {
+                        if (wfAnimPlaying) { setWfAnimPlaying(false); return; }
+                        setWfAnimPlaying(true); setWfAnimStep(0);
+                        let step = 0;
+                        const iv = setInterval(() => {
+                          step++;
+                          if (step >= wfSteps.length) { clearInterval(iv); setWfAnimPlaying(false); return; }
+                          setWfAnimStep(step);
+                        }, 2500);
+                        // store interval for cleanup
+                        window.__wfAnimIv = iv;
+                      }} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #7C3AED55", background: wfAnimPlaying ? "#7C3AED33" : "#0F1117", color: wfAnimPlaying ? "#C084FC" : "#7C3AED", fontSize: 11, fontWeight: 600, cursor: "pointer", transition: "all 0.3s", display: "flex", alignItems: "center", gap: 5 }}>
+                        {wfAnimPlaying ? "⏸ Pause" : "▶ Play Animation"}
+                      </button>
+                      <button onClick={() => { setWfAnimStep(0); setWfAnimPlaying(false); if (window.__wfAnimIv) clearInterval(window.__wfAnimIv); }}
+                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #1E2130", background: "#0F1117", color: "#5A6178", fontSize: 11, cursor: "pointer" }}>↺ Reset</button>
+                    </div>
+                  </div>
+
+                  {/* Step Progress Bar */}
+                  <div style={{ display: "flex", gap: 0, marginBottom: 20, position: "relative" }}>
+                    {wfSteps.map((s, i) => (
+                      <div key={i} onClick={() => { setWfAnimStep(i); setWfAnimPlaying(false); if (window.__wfAnimIv) clearInterval(window.__wfAnimIv); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", position: "relative", zIndex: 2 }}>
+                        {/* Connector line */}
+                        {i > 0 && <div style={{ position: "absolute", top: 17, right: "50%", width: "100%", height: 3, background: i <= wfAnimStep ? `linear-gradient(90deg, ${wfSteps[i-1].color}, ${s.color})` : "#1E2130", transition: "background 0.6s ease", zIndex: 1 }} />}
+                        {/* Node */}
+                        <div style={{
+                          width: 34, height: 34, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16,
+                          background: i <= wfAnimStep ? s.color + "22" : "#0A0C14",
+                          border: `2px solid ${i <= wfAnimStep ? s.color : "#1E2130"}`,
+                          boxShadow: i === wfAnimStep ? `0 0 12px ${s.glow}, 0 0 24px ${s.glow}` : "none",
+                          transition: "all 0.5s ease", transform: i === wfAnimStep ? "scale(1.2)" : "scale(1)", position: "relative", zIndex: 3,
+                        }}>{s.icon}</div>
+                        <div style={{
+                          fontSize: 8, color: i <= wfAnimStep ? s.color : "#3A3F55", marginTop: 6, textAlign: "center",
+                          fontWeight: i === wfAnimStep ? 700 : 400, transition: "all 0.4s", maxWidth: 80,
+                          fontFamily: "'Space Grotesk', sans-serif",
+                        }}>{s.title}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Active Step Detail Card */}
+                  <div style={{
+                    background: "#0F1117", borderRadius: 10, border: `1px solid ${activeStep.color}33`,
+                    padding: 20, transition: "all 0.4s ease",
+                    boxShadow: `0 0 20px ${activeStep.glow}, inset 0 0 30px ${activeStep.color}08`,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
+                      <div style={{
+                        width: 48, height: 48, borderRadius: 12, background: `linear-gradient(135deg, ${activeStep.color}22, ${activeStep.color}08)`,
+                        border: `1px solid ${activeStep.color}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0,
+                        boxShadow: `0 0 16px ${activeStep.glow}`,
+                        animation: wfAnimPlaying ? "pulse 2s infinite" : "none",
+                      }}>{activeStep.icon}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 10, color: activeStep.color, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>
+                          Step {wfAnimStep + 1} of {wfSteps.length}
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", marginBottom: 6, fontFamily: "'Space Grotesk', sans-serif" }}>{activeStep.title}</div>
+                        <div style={{ fontSize: 12, color: "#C4CAD6", marginBottom: 10, lineHeight: 1.5 }}>{activeStep.desc}</div>
+                        <div style={{
+                          fontSize: 11, color: "#A0A8B8", background: `${activeStep.color}08`, padding: "10px 14px",
+                          borderRadius: 8, border: `1px solid ${activeStep.color}18`, lineHeight: 1.6,
+                          borderLeft: `3px solid ${activeStep.color}`,
+                        }}>
+                          💡 <strong style={{ color: activeStep.color }}>AI Insight:</strong> {activeStep.detail}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bottom Quick Nav */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
+                    <button disabled={wfAnimStep === 0} onClick={() => { setWfAnimStep(p => Math.max(0, p - 1)); setWfAnimPlaying(false); if (window.__wfAnimIv) clearInterval(window.__wfAnimIv); }}
+                      style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0F1117", color: wfAnimStep === 0 ? "#1E2130" : "#C4CAD6", fontSize: 11, cursor: wfAnimStep === 0 ? "not-allowed" : "pointer" }}>← Previous</button>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {wfSteps.map((s, i) => (
+                        <div key={i} onClick={() => { setWfAnimStep(i); setWfAnimPlaying(false); if (window.__wfAnimIv) clearInterval(window.__wfAnimIv); }}
+                          style={{ width: i === wfAnimStep ? 20 : 8, height: 8, borderRadius: 4, background: i <= wfAnimStep ? s.color : "#1E2130", cursor: "pointer", transition: "all 0.3s" }} />
+                      ))}
+                    </div>
+                    <button disabled={wfAnimStep === wfSteps.length - 1} onClick={() => { setWfAnimStep(p => Math.min(wfSteps.length - 1, p + 1)); setWfAnimPlaying(false); if (window.__wfAnimIv) clearInterval(window.__wfAnimIv); }}
+                      style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0F1117", color: wfAnimStep === wfSteps.length - 1 ? "#1E2130" : "#C4CAD6", fontSize: 11, cursor: wfAnimStep === wfSteps.length - 1 ? "not-allowed" : "pointer" }}>Next →</button>
+                  </div>
+
+                  {/* Architecture Summary */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 16 }}>
+                    {[
+                      { icon: "✅", label: "Zendesk → ITSM", desc: "Pull tickets into ITSM (always works)", color: "#4CAF50" },
+                      { icon: "🚫", label: "ITSM → Zendesk", desc: "BLOCKED for AI-resolved incidents", color: "#FF6B6B" },
+                      { icon: "📧", label: "Customer Email", desc: "Draft shown, requires human click to send", color: "#FFB347" },
+                    ].map((r, i) => (
+                      <div key={i} style={{ padding: 12, borderRadius: 8, background: `${r.color}08`, border: `1px solid ${r.color}22`, textAlign: "center" }}>
+                        <div style={{ fontSize: 18, marginBottom: 4 }}>{r.icon}</div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: r.color, marginBottom: 2 }}>{r.label}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178", lineHeight: 1.4 }}>{r.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
