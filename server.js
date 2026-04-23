@@ -326,6 +326,14 @@ async function initDatabase() {
         const [rows] = await pool.execute("SELECT id, data FROM itsm_data WHERE collection = ? ORDER BY updated_at DESC", [coll]);
         return rows;
       },
+      getOpen: async (coll) => {
+        // Optimized: only return non-closed/resolved records (JSON status filter)
+        const [rows] = await pool.execute(
+          `SELECT id, data FROM itsm_data WHERE collection = ? AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')) NOT IN ('Closed', 'closed', 'Resolved', 'resolved') ORDER BY updated_at DESC`,
+          [coll]
+        );
+        return rows;
+      },
       getOne: async (coll, id) => {
         const [rows] = await pool.execute("SELECT data FROM itsm_data WHERE collection = ? AND id = ?", [coll, id]);
         return rows[0] || null;
@@ -4950,6 +4958,151 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
       });
     } catch (err) {
       console.error("[AI Historical Close]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI Auto-Resolve: Scan open incidents, generate AI resolution suggestions ───
+  if (pathname === "/api/ai/auto-resolve" && req.method === "POST") {
+    try {
+      if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+      const body = await parseBody(req);
+      const requestedBy = body.requestedBy || "system";
+      const idleHours = body.idleHours || 24;
+      const maxItems = Math.min(body.maxItems || 10, 20);
+
+      const incidentRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - idleHours * 60 * 60 * 1000);
+
+      // Filter: open incidents idle for > idleHours
+      const candidates = incidentRows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(inc => {
+        if (!inc || !inc.id) return false;
+        const status = (inc.status || "").toLowerCase();
+        if (["closed", "resolved"].includes(status)) return false;
+        const lastUpdate = new Date(inc.updatedAt || inc.createdAt || 0);
+        return lastUpdate < cutoff;
+      }).slice(0, maxItems);
+
+      if (!candidates.length) return json(res, 200, { success: true, suggestions: [], message: "No idle incidents found" });
+
+      const suggestions = [];
+      for (const inc of candidates) {
+        try {
+          const prompt = `You are an ITSM AI assistant. Analyze this incident and suggest a resolution.
+Incident: ${JSON.stringify({ id: inc.id, title: inc.title, description: inc.description, priority: inc.priority, category: inc.category, status: inc.status, assignee: inc.assignee, createdAt: inc.createdAt })}
+Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "Resolved", "confidence": 0-100, "customerEmail": "short message to customer about resolution"}`;
+
+          const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: "You are an expert IT support analyst. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 800 };
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({
+              hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+              method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+            }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => {
+                if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+                else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 300)}`));
+              });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const text = extractAIText(aiResult);
+          let parsed;
+          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { resolution: text, rootCause: "Unknown", suggestedStatus: "Resolved", confidence: 50, customerEmail: "" }; }
+
+          const suggestion = {
+            id: `AIR-${inc.id}-${Date.now()}`,
+            incidentId: inc.id,
+            incidentTitle: inc.title,
+            priority: inc.priority,
+            assignee: inc.assignee,
+            resolution: parsed.resolution || "",
+            rootCause: parsed.rootCause || "",
+            suggestedStatus: parsed.suggestedStatus || "Resolved",
+            confidence: parsed.confidence || 50,
+            customerEmail: parsed.customerEmail || "",
+            status: "pending_approval",
+            createdAt: now.toISOString(),
+            requestedBy,
+          };
+
+          // Store in DB
+          await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+          suggestions.push(suggestion);
+        } catch (err) {
+          console.error(`[AI Auto-Resolve] Failed for ${inc.id}:`, err.message);
+          suggestions.push({ incidentId: inc.id, error: err.message });
+        }
+      }
+
+      return json(res, 200, { success: true, suggestions, total: candidates.length });
+    } catch (err) {
+      console.error("[AI Auto-Resolve]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/resolve-queue — fetch pending AI resolution suggestions
+  if (pathname === "/api/ai/resolve-queue" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_resolve_queue");
+      const items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { items });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/resolve-queue/action — approve or reject AI suggestion
+  if (pathname === "/api/ai/resolve-queue/action" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { suggestionId, action, approvedBy, editedResolution } = body;
+      if (!suggestionId || !action) return json(res, 400, { error: "suggestionId and action required" });
+      if (action === "approve" && !approvedBy) return json(res, 403, { error: "Human approval required — approvedBy is mandatory" });
+
+      const row = await db.getOne("ai_resolve_queue", suggestionId);
+      if (!row) return json(res, 404, { error: "Suggestion not found" });
+      const suggestion = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+
+      if (action === "approve") {
+        // Update the incident status (DO NOT sync to Zendesk — one-way pull only)
+        const incRow = await db.getOne("incidents", suggestion.incidentId);
+        if (incRow) {
+          const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+          inc.status = suggestion.suggestedStatus || "Resolved";
+          inc.resolution = editedResolution || suggestion.resolution;
+          inc.rootCause = suggestion.rootCause;
+          inc.resolvedAt = new Date().toISOString();
+          inc.resolvedBy = `AI (approved by ${approvedBy})`;
+          inc.updatedAt = new Date().toISOString();
+          inc.aiResolved = true;
+          inc.skipZendeskSync = true; // Flag: do NOT push to Zendesk
+          await db.upsert("incidents", inc.id, inc);
+        }
+        suggestion.status = "approved";
+        suggestion.approvedBy = approvedBy;
+        suggestion.approvedAt = new Date().toISOString();
+        if (editedResolution) suggestion.resolution = editedResolution;
+      } else if (action === "reject") {
+        suggestion.status = "rejected";
+        suggestion.rejectedBy = approvedBy || "unknown";
+        suggestion.rejectedAt = new Date().toISOString();
+      }
+
+      await db.upsert("ai_resolve_queue", suggestionId, suggestion);
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+      return json(res, 200, { success: true, suggestion });
+    } catch (err) {
+      console.error("[AI Resolve Queue Action]", err.message);
       return json(res, 500, { error: err.message });
     }
   }

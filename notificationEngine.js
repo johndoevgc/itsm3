@@ -62,7 +62,11 @@ class NotificationEngine {
             result = { channel, success: false, error: "Unknown channel" };
         }
         results.push(result);
-        this.stats.sent++;
+        if (result && result.success) {
+          this.stats.sent++;
+        } else {
+          this.stats.failed++;
+        }
         this.stats.byChannel[channel] = (this.stats.byChannel[channel] || 0) + 1;
       } catch (err) {
         results.push({ channel, success: false, error: err.message });

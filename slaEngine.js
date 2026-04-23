@@ -96,6 +96,7 @@ class SlaEngine {
     this.lastRun = null;
     this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0 };
     this.onBreach = options.onBreach || null; // callback(escalation) for notification
+    this._notifiedBreaches = new Set(); // dedup: track incident IDs already notified this session
   }
 
   async start() {
@@ -132,8 +133,8 @@ class SlaEngine {
       const now = new Date();
       this.lastRun = now.toISOString();
 
-      // Get all open incidents
-      const incidentRows = await this.db.getAll("incidents");
+      // Get open incidents (use optimized query if available)
+      const incidentRows = this.db.getOpen ? await this.db.getOpen("incidents") : await this.db.getAll("incidents");
       const incidents = incidentRows.map(r => {
         try { return JSON.parse(r.data); } catch { return null; }
       }).filter(Boolean);
@@ -161,18 +162,21 @@ class SlaEngine {
         if (sla.status === "critical") { atRisk++; }
         if (sla.breached) {
           breached++;
-          // Auto-escalate on breach
-          escalations.push({
-            id: `ESC-${inc.id}-${Date.now()}`,
-            incidentId: inc.id,
-            title: inc.title,
-            priority: inc.priority,
-            assignee: inc.assignee,
-            reason: `SLA breached — ${sla.hoursElapsed}h elapsed vs ${sla.worstResponseTarget}h target`,
-            type: "sla_breach",
-            timestamp: now.toISOString(),
-          });
-          escalated++;
+          // Auto-escalate on breach — deduplicate to avoid notification flood
+          if (!this._notifiedBreaches.has(inc.id)) {
+            this._notifiedBreaches.add(inc.id);
+            escalations.push({
+              id: `ESC-${inc.id}-${Date.now()}`,
+              incidentId: inc.id,
+              title: inc.title,
+              priority: inc.priority,
+              assignee: inc.assignee,
+              reason: `SLA breached — ${sla.hoursElapsed}h elapsed vs ${sla.worstResponseTarget}h target`,
+              type: "sla_breach",
+              timestamp: now.toISOString(),
+            });
+            escalated++;
+          }
         }
       }
 
