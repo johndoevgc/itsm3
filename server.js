@@ -4835,7 +4835,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
     try {
       const body = await parseBody(req, 10000);
-      const { cutoffDate, requestedBy, dryRun } = body;
+      const { cutoffDate, requestedBy, dryRun, limit } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
 
       const cutoff = new Date(cutoffDate || "2026-04-01T00:00:00Z");
@@ -4845,12 +4845,16 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const allIncidents = allRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
 
       // Filter: non-closed incidents created before cutoff
-      const closableStatuses = new Set(["New", "Open", "In Progress", "Pending", "Resolved"]);
+      const closableStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold", "Reopened"]);
       const eligible = allIncidents.filter(inc => {
+        if (!closableStatuses.has(inc.status)) return false;
         const createdStr = inc.createdAt || inc.created || inc.openedDate;
-        if (!createdStr) return false;
+        if (createdStr === undefined || createdStr === null || createdStr === "") {
+          return true; // No date = treat as old / eligible
+        }
         const created = new Date(createdStr);
-        return !isNaN(created.getTime()) && closableStatuses.has(inc.status) && created < cutoff;
+        if (isNaN(created.getTime())) return true; // Invalid date = treat as eligible
+        return created < cutoff;
       });
 
       if (dryRun) {
@@ -4860,8 +4864,11 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
         });
       }
 
-      if (eligible.length === 0) {
-        return json(res, 200, { success: true, closedCount: 0, totalEligible: 0, cutoffDate: cutoff.toISOString(), requestedBy, timestamp: new Date().toISOString(), results: [] });
+      // Apply limit if provided (process in chunks to avoid timeout)
+      const toProcess = limit && limit > 0 ? eligible.slice(0, limit) : eligible;
+
+      if (toProcess.length === 0) {
+        return json(res, 200, { success: true, closedCount: 0, totalEligible: eligible.length, remaining: eligible.length, cutoffDate: cutoff.toISOString(), requestedBy, timestamp: new Date().toISOString(), results: [] });
       }
 
       // Process in batches of 10
@@ -4870,8 +4877,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const results = [];
       const now = new Date().toISOString();
 
-      for (let i = 0; i < eligible.length; i += batchSize) {
-        const batch = eligible.slice(i, i + batchSize);
+      for (let i = 0; i < toProcess.length; i += batchSize) {
+        const batch = toProcess.slice(i, i + batchSize);
         const summaries = batch.map(inc =>
           `ID: ${inc.id} | Title: ${inc.title} | Category: ${inc.category || "General"} | Priority: ${inc.priority || "N/A"} | Status: ${inc.status} | Created: ${inc.createdAt || inc.created || "Unknown"} | Description: ${(inc.description || "").substring(0, 200)}`
         ).join("\n---\n");
@@ -4948,11 +4955,12 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
         }
       }
 
-      console.log(`[AI Historical Close] Closed ${closedCount}/${eligible.length} incidents before ${cutoff.toISOString()} by ${requestedBy}`);
+      console.log(`[AI Historical Close] Closed ${closedCount}/${toProcess.length} incidents (${eligible.length} total eligible) before ${cutoff.toISOString()} by ${requestedBy}`);
       if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
 
       return json(res, 200, {
         success: true, closedCount, totalEligible: eligible.length,
+        remaining: eligible.length - closedCount,
         cutoffDate: cutoff.toISOString(), requestedBy, timestamp: now,
         results: results.slice(0, 50)
       });
