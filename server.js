@@ -1790,6 +1790,55 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           await db.upsert("zendesk_sync_state", "last_incremental_sync", JSON.stringify(syncState));
           zdLastSyncTime = new Date().toISOString();
 
+          // ─── Stale-check pass: catch ITSM incidents whose ZD tickets changed while sync was inactive ───
+          try {
+            const staleRows = await db.getAll("incidents");
+            const statusMap2 = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+            const priorityMap2 = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+            const staleNow = Date.now();
+            const STALE_THRESHOLD = 60 * 60 * 1000; // 1 hour
+            const staleCandidates = [];
+            for (const row of staleRows) {
+              try {
+                const inc = JSON.parse(row.data);
+                if (!inc.zdTicketId || inc._deleted) continue;
+                if (["closed", "resolved"].includes((inc.status || "").toLowerCase())) continue;
+                const lastSync = inc.zdLastSync ? new Date(inc.zdLastSync).getTime() : 0;
+                if (staleNow - lastSync > STALE_THRESHOLD) staleCandidates.push(inc);
+              } catch {}
+            }
+            if (staleCandidates.length > 0) {
+              const staleIds = [...new Set(staleCandidates.map(i => i.zdTicketId))];
+              const zdCache = {};
+              for (let si = 0; si < staleIds.length; si += 100) {
+                try {
+                  const batch = staleIds.slice(si, si + 100);
+                  const res2 = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}`);
+                  for (const t of (res2.tickets || [])) zdCache[t.id] = { status: t.status, priority: t.priority };
+                } catch {}
+              }
+              let staleFixed = 0;
+              for (const inc of staleCandidates) {
+                const zd = zdCache[inc.zdTicketId];
+                if (!zd) continue;
+                const ns = statusMap2[zd.status], np = priorityMap2[zd.priority];
+                let ch = false;
+                if (ns && ns !== inc.status) { inc.status = ns; ch = true; }
+                if (np && np !== inc.priority) { inc.priority = np; ch = true; }
+                if (ch) {
+                  inc.zdLastSync = new Date().toISOString();
+                  inc.updatedAt = inc.zdLastSync;
+                  if (["Resolved", "Closed"].includes(inc.status) && !inc.resolvedAt) inc.resolvedAt = inc.zdLastSync;
+                  if (inc.status === "Closed" && !inc.closedAt) inc.closedAt = inc.zdLastSync;
+                  inc.activityLog = [...(inc.activityLog || []), { id: `AL-STALE-${Date.now()}`, type: "sync", user: "ZD Stale-Check", time: inc.zdLastSync, detail: `Stale-check: ZD #${inc.zdTicketId} → status=${ns || '-'}, priority=${np || '-'}` }];
+                  await db.upsert("incidents", inc.id, JSON.stringify(inc));
+                  staleFixed++;
+                }
+              }
+              if (staleFixed > 0) { syncResult.staleFixed = staleFixed; console.log(`[ZD Incremental] Stale-check fixed ${staleFixed} incidents`); }
+            }
+          } catch (staleErr) { console.warn("[ZD Incremental] Stale-check error:", staleErr.message); }
+
           console.log(`[ZD Incremental] Updated: ${syncResult.ticketsUpdated}, Created: ${syncResult.ticketsCreated}, Comments: ${syncResult.commentsAdded}`);
           return json(res, 200, { success: true, stats: syncResult });
         } catch (err) {
@@ -1951,75 +2000,80 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // RECONCILE — Ensure every ZD ticket has a corresponding ITSM incident
+      // SYNC ALL STATUSES — Align ITSM incident statuses with Zendesk
+      // Deletes INC-ZD* stale incidents + batch-syncs all ZD-linked statuses
       // ═══════════════════════════════════════════════════════════════
-      if (pathname === "/api/zendesk/reconcile" && req.method === "POST") {
+      if (pathname === "/api/zendesk/sync-all-statuses" && req.method === "POST") {
         try {
-          // Get all ZD tickets and ITSM incidents
-          const zdRows = await db.getAll("zendesk_tickets");
           const incRows = await db.getAll("incidents");
+          let cleaned = 0, updated = 0, alreadyMatched = 0, errors = 0;
+          const zdLinked = []; // { inc, zdTicketId }
 
-          // Build set of ZD ticket IDs that already have linked ITSM incidents
-          const linkedZdIds = new Set();
+          // Phase 1: Delete stale INC-ZD* incidents (from old reconciliation)
           for (const row of incRows) {
             try {
               const inc = JSON.parse(row.data);
-              if (inc.zdTicketId) linkedZdIds.add(Number(inc.zdTicketId));
+              if (inc.id && inc.id.startsWith("INC-ZD")) {
+                await db.deleteOne("incidents", inc.id);
+                cleaned++;
+              } else if (inc.zdTicketId && !inc._deleted) {
+                zdLinked.push({ inc, zdTicketId: inc.zdTicketId });
+              }
             } catch {}
           }
+          console.log(`[ZD SyncAll] Phase 1: Cleaned ${cleaned} INC-ZD* incidents`);
 
-          let created = 0;
-          let skipped = 0;
-          const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-          const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+          // Phase 2: Batch-fetch ZD ticket statuses (100 per call)
           const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+          const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+          const zdStatusCache = {};
 
-          for (const row of zdRows) {
+          // Collect unique ZD ticket IDs
+          const uniqueZdIds = [...new Set(zdLinked.map(x => x.zdTicketId))];
+          for (let i = 0; i < uniqueZdIds.length; i += 100) {
+            const batch = uniqueZdIds.slice(i, i + 100);
             try {
-              const t = JSON.parse(row.data);
-              const zdId = Number(t.id);
-              if (linkedZdIds.has(zdId)) { skipped++; continue; }
+              const result = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}`);
+              for (const t of (result.tickets || [])) {
+                zdStatusCache[t.id] = { status: t.status, priority: t.priority };
+              }
+            } catch (batchErr) {
+              console.warn(`[ZD SyncAll] Batch fetch failed for chunk ${i}:`, batchErr.message);
+              errors++;
+            }
+          }
+          console.log(`[ZD SyncAll] Phase 2: Fetched ${Object.keys(zdStatusCache).length} ZD ticket statuses`);
 
-              const itsmPriority = priorityMap[t.priority] || "Sev-C";
-              const itsmStatus = statusMap[t.status] || "New";
-
-              // Categorize from tags/subject
-              let category = "General";
-              const tagStr = (t.tags || []).join(" ").toLowerCase();
-              const subj = (t.subject || "").toLowerCase();
-              if (tagStr.includes("network") || subj.includes("network") || subj.includes("wifi") || subj.includes("vpn")) category = "Network";
-              else if (tagStr.includes("security") || subj.includes("security") || subj.includes("phishing")) category = "Security";
-              else if (tagStr.includes("hardware") || subj.includes("hardware") || subj.includes("laptop") || subj.includes("printer")) category = "Hardware";
-              else if (tagStr.includes("software") || subj.includes("software") || subj.includes("install")) category = "Software";
-              else if (tagStr.includes("email") || subj.includes("email") || subj.includes("outlook")) category = "Email";
-              else if (tagStr.includes("cloud") || subj.includes("azure") || subj.includes("teams")) category = "Cloud";
-              else if (tagStr.includes("access") || subj.includes("password") || subj.includes("login")) category = "Access/Identity";
-
-              const newInc = {
-                id: `INC-ZD${zdId}`, title: t.subject || "Untitled",
-                description: t.description || "", category,
-                subcategory: "", priority: itsmPriority, status: itsmStatus,
-                urgency: t.priority === "urgent" ? "Critical" : "Standard",
-                impact: t.priority === "urgent" ? "Enterprise" : "Individual",
-                assignee: "Unassigned", assignmentGroup: "Service Desk",
-                reporter: "Zendesk Reconciliation", reporterEmail: "",
-                customer: "", contactMethod: "Zendesk",
-                created: 0, createdAt: t.createdAt || t.created_at || new Date().toISOString(),
-                slaTarget: slaMap[itsmPriority] || 9,
-                aiTriaged: false, aiConfidence: 0, zdTicketId: zdId,
-                zdLastSync: new Date().toISOString(),
-                workaround: "", linkedProblem: "", affectedAssets: [],
-                activityLog: [{ id: `AL-RC-${zdId}`, type: "sync", user: "Zendesk Reconciliation", time: new Date().toISOString(), detail: `Reconciled from Zendesk #${zdId}` }],
-              };
-              await db.upsert("incidents", newInc.id, JSON.stringify(newInc));
-              created++;
-            } catch {}
+          // Phase 3: Update ITSM incidents to match ZD
+          const nowISO = new Date().toISOString();
+          for (const { inc, zdTicketId } of zdLinked) {
+            const zd = zdStatusCache[zdTicketId];
+            if (!zd) continue;
+            const newStatus = statusMap[zd.status];
+            const newPriority = priorityMap[zd.priority];
+            let changed = false;
+            if (newStatus && newStatus !== inc.status) { inc.status = newStatus; changed = true; }
+            if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; changed = true; }
+            if (changed) {
+              inc.zdLastSync = nowISO;
+              inc.updatedAt = nowISO;
+              if (["Resolved", "Closed"].includes(inc.status) && !inc.resolvedAt) inc.resolvedAt = nowISO;
+              if (inc.status === "Closed" && !inc.closedAt) inc.closedAt = nowISO;
+              inc.activityLog = [...(inc.activityLog || []), {
+                id: `AL-SYNCALL-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: "sync", user: "ZD Status Sync",
+                time: nowISO, detail: `Bulk status sync: ZD #${zdTicketId} → status=${newStatus || '-'}, priority=${newPriority || '-'}`,
+              }];
+              await db.upsert("incidents", inc.id, JSON.stringify(inc));
+              updated++;
+            } else {
+              alreadyMatched++;
+            }
           }
 
-          console.log(`[ZD Reconcile] Created ${created} incidents, ${skipped} already linked, ${zdRows.length} total ZD tickets`);
-          return json(res, 200, { success: true, created, skipped, totalZdTickets: zdRows.length, totalIncidents: incRows.length + created });
+          console.log(`[ZD SyncAll] Phase 3: Updated ${updated}, already matched ${alreadyMatched}, errors ${errors}`);
+          return json(res, 200, { success: true, cleaned, updated, alreadyMatched, errors, totalZdLinked: zdLinked.length });
         } catch (err) {
-          console.error("[ZD Reconcile]", err.message);
+          console.error("[ZD SyncAll]", err.message);
           return json(res, 500, { error: err.message });
         }
       }
@@ -5234,6 +5288,27 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
               }
               await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
               console.log(`[AI Pipeline] Auto-resolved ${inc.id} (${suggestion.confidence}% confidence)`);
+
+              // Send engineer review email for AI auto-resolved incidents
+              try {
+                await graphSendMail({
+                  to: ["itsupport@vgctechnology.com"],
+                  subject: `[ITSM AI Review] ${inc.id} auto-resolved — please verify`,
+                  body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+                    <h2 style="color:#7C3AED;">🤖 AI Auto-Resolve Review</h2>
+                    <table style="border-collapse:collapse;width:100%;">
+                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:6px 12px;">${inc.id}</td></tr>
+                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:6px 12px;">${(inc.title || "").replace(/</g, "&lt;")}</td></tr>
+                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:6px 12px;">${inc.priority || "-"}</td></tr>
+                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">AI Confidence</td><td style="padding:6px 12px;">${suggestion.confidence}%</td></tr>
+                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Resolution</td><td style="padding:6px 12px;">${(suggestion.resolution || "").substring(0, 500).replace(/</g, "&lt;")}</td></tr>
+                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Root Cause</td><td style="padding:6px 12px;">${(suggestion.rootCause || "").replace(/</g, "&lt;")}</td></tr>
+                    </table>
+                    <p style="color:#9CA3AF;font-size:12px;margin-top:16px;">This incident was auto-resolved by the AI pipeline. Please verify the resolution is correct.</p>
+                  </div>`,
+                });
+                console.log(`[AI Pipeline] Review email sent for ${inc.id}`);
+              } catch (emailErr) { console.warn(`[AI Pipeline] Review email failed for ${inc.id}:`, emailErr.message); }
             } catch (autoErr) { console.warn(`[AI Pipeline] Auto-resolve apply failed for ${inc.id}:`, autoErr.message); }
           }
         } catch (err) {
