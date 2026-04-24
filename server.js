@@ -1951,6 +1951,80 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       }
 
       // ═══════════════════════════════════════════════════════════════
+      // RECONCILE — Ensure every ZD ticket has a corresponding ITSM incident
+      // ═══════════════════════════════════════════════════════════════
+      if (pathname === "/api/zendesk/reconcile" && req.method === "POST") {
+        try {
+          // Get all ZD tickets and ITSM incidents
+          const zdRows = await db.getAll("zendesk_tickets");
+          const incRows = await db.getAll("incidents");
+
+          // Build set of ZD ticket IDs that already have linked ITSM incidents
+          const linkedZdIds = new Set();
+          for (const row of incRows) {
+            try {
+              const inc = JSON.parse(row.data);
+              if (inc.zdTicketId) linkedZdIds.add(Number(inc.zdTicketId));
+            } catch {}
+          }
+
+          let created = 0;
+          let skipped = 0;
+          const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+          const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+          const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+
+          for (const row of zdRows) {
+            try {
+              const t = JSON.parse(row.data);
+              const zdId = Number(t.id);
+              if (linkedZdIds.has(zdId)) { skipped++; continue; }
+
+              const itsmPriority = priorityMap[t.priority] || "Sev-C";
+              const itsmStatus = statusMap[t.status] || "New";
+
+              // Categorize from tags/subject
+              let category = "General";
+              const tagStr = (t.tags || []).join(" ").toLowerCase();
+              const subj = (t.subject || "").toLowerCase();
+              if (tagStr.includes("network") || subj.includes("network") || subj.includes("wifi") || subj.includes("vpn")) category = "Network";
+              else if (tagStr.includes("security") || subj.includes("security") || subj.includes("phishing")) category = "Security";
+              else if (tagStr.includes("hardware") || subj.includes("hardware") || subj.includes("laptop") || subj.includes("printer")) category = "Hardware";
+              else if (tagStr.includes("software") || subj.includes("software") || subj.includes("install")) category = "Software";
+              else if (tagStr.includes("email") || subj.includes("email") || subj.includes("outlook")) category = "Email";
+              else if (tagStr.includes("cloud") || subj.includes("azure") || subj.includes("teams")) category = "Cloud";
+              else if (tagStr.includes("access") || subj.includes("password") || subj.includes("login")) category = "Access/Identity";
+
+              const newInc = {
+                id: `INC-ZD${zdId}`, title: t.subject || "Untitled",
+                description: t.description || "", category,
+                subcategory: "", priority: itsmPriority, status: itsmStatus,
+                urgency: t.priority === "urgent" ? "Critical" : "Standard",
+                impact: t.priority === "urgent" ? "Enterprise" : "Individual",
+                assignee: "Unassigned", assignmentGroup: "Service Desk",
+                reporter: "Zendesk Reconciliation", reporterEmail: "",
+                customer: "", contactMethod: "Zendesk",
+                created: 0, createdAt: t.createdAt || t.created_at || new Date().toISOString(),
+                slaTarget: slaMap[itsmPriority] || 9,
+                aiTriaged: false, aiConfidence: 0, zdTicketId: zdId,
+                zdLastSync: new Date().toISOString(),
+                workaround: "", linkedProblem: "", affectedAssets: [],
+                activityLog: [{ id: `AL-RC-${zdId}`, type: "sync", user: "Zendesk Reconciliation", time: new Date().toISOString(), detail: `Reconciled from Zendesk #${zdId}` }],
+              };
+              await db.upsert("incidents", newInc.id, JSON.stringify(newInc));
+              created++;
+            } catch {}
+          }
+
+          console.log(`[ZD Reconcile] Created ${created} incidents, ${skipped} already linked, ${zdRows.length} total ZD tickets`);
+          return json(res, 200, { success: true, created, skipped, totalZdTickets: zdRows.length, totalIncidents: incRows.length + created });
+        } catch (err) {
+          console.error("[ZD Reconcile]", err.message);
+          return json(res, 500, { error: err.message });
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════════
       // PUSH ITSM → ZENDESK — Sync ITSM incident changes to Zendesk
       // ═══════════════════════════════════════════════════════════════
       if (pathname === "/api/zendesk/push-to-zendesk" && req.method === "POST") {
