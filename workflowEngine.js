@@ -49,9 +49,56 @@ class WorkflowEngine {
           this._log("error", rule.id, `Rule evaluation failed: ${err.message}`);
         }
       }
+
+      // ─── AI Auto-Resolve for idle incidents (Production Pipeline) ─────
+      await this._triggerAutoResolveForIdle();
     } catch (err) {
       this.stats.errors++;
       console.error("[WorkflowEngine] Cycle error:", err.message);
+    }
+  }
+
+  // ─── Auto-resolve idle incidents via AI ───────────────────────────────
+  async _triggerAutoResolveForIdle() {
+    try {
+      const http = require("http");
+      const rows = await this.db.getAll("incidents");
+      const now = Date.now();
+      const IDLE_THRESHOLD = 2 * 60 * 60 * 1000; // 2 hours idle
+
+      for (const row of rows) {
+        try {
+          const inc = JSON.parse(row.data);
+          if (inc._deleted) continue;
+          const status = (inc.status || "").toLowerCase();
+          if (["closed", "resolved"].includes(status)) continue;
+          if (inc._autoResolveAttempted) continue;
+          const lastActivity = inc.updatedAt || inc.lastModified || inc.createdAt;
+          if (!lastActivity) continue;
+          const idle = now - new Date(lastActivity).getTime();
+          if (idle < IDLE_THRESHOLD) continue;
+
+          // Mark so we don't re-trigger
+          inc._autoResolveAttempted = new Date().toISOString();
+          await this.db.upsert("incidents", inc.id, JSON.stringify(inc));
+
+          // Fire auto-resolve via internal HTTP
+          const payload = JSON.stringify({ requestedBy: "WorkflowEngine Auto-Resolve", maxItems: 1, incidentId: inc.id });
+          const port = process.env.PORT || 8080;
+          const req = http.request({ hostname: "127.0.0.1", port, path: "/api/ai/auto-resolve", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } }, (res) => {
+            let d = ""; res.on("data", c => d += c);
+            res.on("end", () => { console.log(`[WorkflowEngine] Auto-resolve for ${inc.id}: ${d.substring(0, 200)}`); });
+          });
+          req.on("error", e => console.warn(`[WorkflowEngine] Auto-resolve failed for ${inc.id}:`, e.message));
+          req.setTimeout(35000, () => { req.destroy(); });
+          req.write(payload);
+          req.end();
+
+          this._log("action", "AUTO_RESOLVE", `Triggered auto-resolve for idle incident ${inc.id} (idle ${Math.round(idle / 3600000)}h)`);
+        } catch {}
+      }
+    } catch (err) {
+      console.warn("[WorkflowEngine] Auto-resolve scan error:", err.message);
     }
   }
 

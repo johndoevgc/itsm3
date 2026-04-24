@@ -6,9 +6,9 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.9.0",
-  build: "kp-workflow-assist-v1",
-  date: "2026-04-24",
+  version: "3.10.0",
+  build: "kp-production-live-v1",
+  date: "2026-04-25",
   channel: "Production",
   name: "VGC-ITSM",
   engine: "VGC-AI v3.8 (GPT-5.4-Pro)",
@@ -1548,6 +1548,24 @@ export default function ITSMApp() {
   const [kbArticles, setKbArticles] = useState(() => _ls("vgc_kb", KB_ARTICLES));
   const [serviceCatalog, setServiceCatalog] = useState(() => _ls("vgc_services", SERVICES));
   const [search, setSearch] = useState("");
+
+  // ─── Production Test Mode detection ─────────────────────────────────
+  const [prodTestMode, setProdTestMode] = useState(false);
+  const [aiPipelineStats, setAiPipelineStats] = useState(null);
+  useEffect(() => {
+    const checkProdMode = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/health`);
+        if (r.ok) {
+          const data = await r.json();
+          if (data.prodTestMode) setProdTestMode(true);
+        }
+      } catch {}
+    };
+    checkProdMode();
+    const iv = setInterval(checkProdMode, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, []);
   const [modal, setModal] = useState(null);
   const [detailItem, setDetailItem] = useState(null);
   const [sideCollapsed, setSideCollapsed] = useState(false);
@@ -18834,6 +18852,22 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           .vgc-donut-grid { grid-template-columns: repeat(2, 1fr) !important; }
         }
       `}</style>
+
+      {/* ─── Production Test Mode Banner ──────────────────────────────────── */}
+      {prodTestMode && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999,
+          background: "linear-gradient(90deg, #F59E0B, #D97706, #F59E0B)",
+          color: "#1A1A1A", textAlign: "center", padding: "6px 16px",
+          fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif",
+          letterSpacing: 0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
+          boxShadow: "0 2px 12px rgba(245, 158, 11, 0.4)"
+        }}>
+          <span style={{ fontSize: 14 }}>⚠</span>
+          <span>PRODUCTION TEST MODE — All emails redirected to itsupport@vgctechnology.com • AI Pipeline: Full Auto • ZD→ITSM: One-Way Sync</span>
+          <span style={{ fontSize: 14 }}>⚠</span>
+        </div>
+      )}
 
       {/* Sidebar */}
       <div className={`vgc-sidebar${sideCollapsed ? ' collapsed' : ''}`} style={{

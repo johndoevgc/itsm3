@@ -88,6 +88,12 @@ const SOPHOS_CLIENT_SECRET = process.env.SOPHOS_CLIENT_SECRET || "";
 // M365 Mail sending via Managed Identity
 const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 
+// ─── Production Test Mode ───────────────────────────────────────────────
+// When true, ALL outbound emails are redirected to PROD_TEST_EMAIL
+// Flip to false when ready to send to real customers
+const PROD_TEST_MODE = true;
+const PROD_TEST_EMAIL = "itsupport@vgctechnology.com";
+
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
 // Local admin users are configured via environment variables
@@ -605,11 +611,27 @@ function graphAppCallBinary(endpoint) {
 async function graphSendMail({ to, subject, body, from }) {
   const token = await getManagedIdentityToken();
   const sender = from || MAIL_FROM;
+
+  // ─── Production Test Mode: redirect ALL emails to test inbox ──────
+  let finalTo = Array.isArray(to) ? to : [to];
+  let finalSubject = subject;
+  let finalBody = body;
+  if (PROD_TEST_MODE) {
+    const originalRecipients = finalTo.join(", ");
+    finalSubject = `[TEST → ${originalRecipients}] ${subject}`;
+    finalBody = `<div style="background:#FFF3CD;border:1px solid #FFD700;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-family:Arial,sans-serif;">
+      <strong style="color:#856404;">⚠️ PRODUCTION TEST MODE</strong><br/>
+      <span style="color:#856404;font-size:13px;">Original recipient(s): <code>${originalRecipients}</code></span>
+    </div>\n${body}`;
+    finalTo = [PROD_TEST_EMAIL];
+    console.log(`[M365 Mail] PROD_TEST_MODE: Redirected email from [${originalRecipients}] → ${PROD_TEST_EMAIL}`);
+  }
+
   const mailPayload = JSON.stringify({
     message: {
-      subject,
-      body: { contentType: "HTML", content: body },
-      toRecipients: (Array.isArray(to) ? to : [to]).map(addr => ({ emailAddress: { address: addr } })),
+      subject: finalSubject,
+      body: { contentType: "HTML", content: finalBody },
+      toRecipients: finalTo.map(addr => ({ emailAddress: { address: addr } })),
       from: { emailAddress: { address: sender } },
     },
     saveToSentItems: true,
@@ -1404,6 +1426,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
       // POST /api/zendesk/sync-incident — sync an ITSM incident action to Zendesk
       if (pathname === "/api/zendesk/sync-incident" && req.method === "POST") {
+        // Block outbound sync in Production Test Mode (one-way ZD→ITSM only)
+        if (PROD_TEST_MODE) return json(res, 200, { skipped: true, reason: "Production Test Mode — one-way sync only (ZD→ITSM)" });
         const body = await parseBody(req);
         const { zdTicketId, action, status, priority, comment, assignee, isInternal } = body;
         if (!zdTicketId) return json(res, 400, { error: "zdTicketId required" });
@@ -1664,10 +1688,12 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
                 // Sync status/priority back to ITSM incidents if linked
                 const itsmRows = await db.getAll("incidents");
+                let hasLinkedIncident = false;
                 for (const row of itsmRows) {
                   try {
                     const inc = JSON.parse(row.data);
                     if (inc.zdTicketId === t.id) {
+                      hasLinkedIncident = true;
                       const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                       const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
                       let changed = false;
@@ -1684,8 +1710,50 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                         }];
                         await db.upsert("incidents", inc.id, JSON.stringify(inc));
                       }
+                      break;
                     }
                   } catch {}
+                }
+
+                // Auto-create ITSM incident if no linked incident exists (Production Live)
+                if (!hasLinkedIncident && !["closed", "solved"].includes(t.status)) {
+                  const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+                  const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+                  const itsmPriority = priorityMap[t.priority] || "Sev-C";
+                  const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold" };
+                  const newInc = {
+                    id: `INC-ZD${t.id}`, title: t.subject || "Untitled",
+                    description: t.description || "", category: (t.tags || [])[0] || "General",
+                    subcategory: "", priority: itsmPriority, status: statusMap[t.status] || "New",
+                    urgency: t.priority === "urgent" ? "Critical" : "Standard",
+                    impact: t.priority === "urgent" ? "Enterprise" : "Individual",
+                    assignee: "Unassigned", assignmentGroup: "Service Desk",
+                    reporter: "Zendesk Incremental Sync", reporterEmail: "",
+                    customer: "", contactMethod: "Zendesk",
+                    created: 0, createdAt: t.created_at, slaTarget: slaMap[itsmPriority] || 9,
+                    aiTriaged: false, aiConfidence: 0, zdTicketId: t.id,
+                    zdLastSync: new Date().toISOString(),
+                    workaround: "", linkedProblem: "", affectedAssets: [],
+                    activityLog: [{ id: `AL-IS-${t.id}`, type: "sync", user: "Zendesk Incremental Sync", time: new Date().toISOString(), detail: `Auto-created from incremental sync — Zendesk #${t.id}` }],
+                  };
+                  await db.upsert("incidents", newInc.id, JSON.stringify(newInc));
+                  syncResult.incidentsCreated = (syncResult.incidentsCreated || 0) + 1;
+                  console.log(`[ZD Incremental] Auto-created ITSM ${newInc.id} from Zendesk #${t.id}`);
+
+                  // Fire AI auto-triage + workflow-assist pipeline
+                  if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
+                    try {
+                      const triagePayload = JSON.stringify({ ticket: newInc, requestedBy: "Zendesk Incremental Sync Auto-Triage" });
+                      const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) } }, (triageRes) => {
+                        let d = ""; triageRes.on("data", c => d += c);
+                        triageRes.on("end", () => { console.log(`[ZD Incremental] AI auto-triage for ${newInc.id}: ${d.substring(0, 200)}`); });
+                      });
+                      triageReq.on("error", e => console.warn(`[ZD Incremental] AI triage failed for ${newInc.id}:`, e.message));
+                      triageReq.setTimeout(35000, () => { triageReq.destroy(); });
+                      triageReq.write(triagePayload);
+                      triageReq.end();
+                    } catch (triageErr) { console.warn("[ZD Incremental] AI triage error:", triageErr.message); }
+                  }
                 }
 
                 // Fetch latest comments
@@ -1886,6 +1954,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       // PUSH ITSM → ZENDESK — Sync ITSM incident changes to Zendesk
       // ═══════════════════════════════════════════════════════════════
       if (pathname === "/api/zendesk/push-to-zendesk" && req.method === "POST") {
+        // Block outbound sync in Production Test Mode (one-way ZD→ITSM only)
+        if (PROD_TEST_MODE) return json(res, 200, { skipped: true, reason: "Production Test Mode — one-way sync only (ZD→ITSM)" });
         const body = await parseBody(req);
         const { incidentId, status, priority, comment, assignee, isPublic, user } = body;
         if (!incidentId) return json(res, 400, { error: "incidentId required" });
@@ -3619,8 +3689,9 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       const confidence = triage.confidence || 50;
       const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
 
-      // High confidence (>=85): auto-apply triage directly
-      const autoApply = confidence >= 85;
+      // High confidence: auto-apply triage directly (70% in PROD_TEST_MODE, 85% normal)
+      const autoApplyThreshold = PROD_TEST_MODE ? 70 : 85;
+      const autoApply = confidence >= autoApplyThreshold;
       const triageRecord = {
         id: `AIT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
         type: "auto_triage",
@@ -3679,6 +3750,21 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
             time: now, detail: `AI auto-triaged (${confidence}% confidence): ${triage.category} [${triage.priority}] → ${triage.assignee}. ${triage.reasoning}`,
           });
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
+
+          // ─── Auto-trigger AI Workflow Assist after triage (Production Pipeline) ───
+          if (PROD_TEST_MODE || confidence >= 85) {
+            try {
+              const wfPayload = JSON.stringify({ requestedBy: "AI Post-Triage Pipeline", maxItems: 1, incidentId: inc.id });
+              const wfReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/workflow-assist", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(wfPayload) } }, (wfRes) => {
+                let d = ""; wfRes.on("data", c => d += c);
+                wfRes.on("end", () => { console.log(`[AI Pipeline] Workflow assist for ${inc.id}: ${d.substring(0, 200)}`); });
+              });
+              wfReq.on("error", e => console.warn(`[AI Pipeline] Workflow assist failed for ${inc.id}:`, e.message));
+              wfReq.setTimeout(35000, () => { wfReq.destroy(); });
+              wfReq.write(wfPayload);
+              wfReq.end();
+            } catch (wfErr) { console.warn("[AI Pipeline] Workflow assist trigger error:", wfErr.message); }
+          }
         }
       }
 
@@ -4823,6 +4909,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       zdAutoSync: !!zdAutoSyncInterval,
       zdLastSyncTime,
       mailFrom: MAIL_FROM,
+      prodTestMode: PROD_TEST_MODE,
+      prodTestEmail: PROD_TEST_MODE ? PROD_TEST_EMAIL : null,
       timestamp: new Date().toISOString(),
     });
   }
@@ -4978,6 +5066,7 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
       const requestedBy = body.requestedBy || "system";
       const idleHours = body.idleHours || 24;
       const maxItems = Math.min(body.maxItems || 10, 20);
+      const targetIncidentId = body.incidentId || null;
 
       const incidentRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
       const now = new Date();
@@ -4988,10 +5077,14 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
         try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
       }).filter(inc => {
         if (!inc || !inc.id) return false;
+        if (targetIncidentId && inc.id !== targetIncidentId) return false;
         const status = (inc.status || "").toLowerCase();
         if (["closed", "resolved"].includes(status)) return false;
-        const lastUpdate = new Date(inc.updatedAt || inc.createdAt || 0);
-        return lastUpdate < cutoff;
+        if (!targetIncidentId) {
+          const lastUpdate = new Date(inc.updatedAt || inc.createdAt || 0);
+          if (lastUpdate >= cutoff) return false;
+        }
+        return true;
       }).slice(0, maxItems);
 
       if (!candidates.length) return json(res, 200, { success: true, suggestions: [], message: "No idle incidents found" });
@@ -5045,6 +5138,30 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
           // Store in DB
           await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
           suggestions.push(suggestion);
+
+          // ─── Auto-approve & apply resolution in PROD_TEST_MODE ───
+          if (PROD_TEST_MODE && suggestion.confidence >= 60) {
+            try {
+              suggestion.status = "auto_approved";
+              suggestion.approvedBy = "AI Pipeline (PROD_TEST_MODE)";
+              suggestion.approvedAt = new Date().toISOString();
+
+              const incRow = await db.get("incidents", inc.id);
+              if (incRow) {
+                const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+                liveInc.status = suggestion.suggestedStatus || "Resolved";
+                liveInc.resolvedAt = new Date().toISOString();
+                liveInc.resolution = suggestion.resolution;
+                liveInc.rootCause = suggestion.rootCause || liveInc.rootCause;
+                liveInc.updatedAt = new Date().toISOString();
+                liveInc.activityLog = liveInc.activityLog || [];
+                liveInc.activityLog.push({ id: `AL-AIR-${Date.now()}`, type: "ai_resolve", user: "AI Auto-Resolve", time: new Date().toISOString(), detail: `AI auto-resolved (${suggestion.confidence}% confidence): ${(suggestion.resolution || "").substring(0, 200)}` });
+                await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
+              }
+              await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+              console.log(`[AI Pipeline] Auto-resolved ${inc.id} (${suggestion.confidence}% confidence)`);
+            } catch (autoErr) { console.warn(`[AI Pipeline] Auto-resolve apply failed for ${inc.id}:`, autoErr.message); }
+          }
         } catch (err) {
           console.error(`[AI Auto-Resolve] Failed for ${inc.id}:`, err.message);
           suggestions.push({ incidentId: inc.id, error: err.message });
@@ -5122,12 +5239,14 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
       const body = await parseBody(req);
       const requestedBy = body.requestedBy || "system";
       const maxItems = Math.min(body.maxItems || 10, 20);
+      const targetIncidentId = body.incidentId || null;
 
       const incidentRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
       const openIncidents = incidentRows.map(r => {
         try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
       }).filter(inc => {
         if (!inc || !inc.id) return false;
+        if (targetIncidentId && inc.id !== targetIncidentId) return false;
         const status = (inc.status || "").toLowerCase();
         return !["closed", "resolved"].includes(status);
       }).slice(0, maxItems);
@@ -5189,6 +5308,46 @@ Respond in JSON ONLY:
 
           await db.upsert("ai_workflow_queue", wfAction.id, wfAction);
           actions.push(wfAction);
+
+          // ─── Auto-execute workflow action in PROD_TEST_MODE ───
+          if (PROD_TEST_MODE && wfAction.confidence >= 60) {
+            try {
+              // Auto-approve
+              wfAction.status = "auto_executed";
+              wfAction.approvedBy = "AI Pipeline (PROD_TEST_MODE)";
+              wfAction.approvedAt = new Date().toISOString();
+
+              // Execute action on incident
+              const incRow = await db.get("incidents", inc.id);
+              if (incRow) {
+                const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+                liveInc.activityLog = liveInc.activityLog || [];
+
+                if (wfAction.action === "escalate") {
+                  liveInc.priority = liveInc.priority === "Sev-C" ? "Sev-B" : liveInc.priority === "Sev-B" ? "Sev-A" : liveInc.priority;
+                  liveInc.activityLog.push({ id: `AL-WFA-${Date.now()}`, type: "workflow", user: "AI Workflow Auto-Execute", time: new Date().toISOString(), detail: `Auto-escalated: ${wfAction.reasoning}` });
+                } else if (wfAction.action === "reassign" && wfAction.suggestedAssignee) {
+                  liveInc.assignee = wfAction.suggestedAssignee;
+                  liveInc.activityLog.push({ id: `AL-WFA-${Date.now()}`, type: "workflow", user: "AI Workflow Auto-Execute", time: new Date().toISOString(), detail: `Auto-reassigned to ${wfAction.suggestedAssignee}: ${wfAction.reasoning}` });
+                } else if (wfAction.action === "add_internal_note" && wfAction.internalNote) {
+                  liveInc.activityLog.push({ id: `AL-WFA-${Date.now()}`, type: "internal_note", user: "AI Workflow Auto-Execute", time: new Date().toISOString(), detail: wfAction.internalNote });
+                } else if (wfAction.action === "add_workaround" && wfAction.internalNote) {
+                  liveInc.workaround = wfAction.internalNote;
+                  liveInc.activityLog.push({ id: `AL-WFA-${Date.now()}`, type: "workflow", user: "AI Workflow Auto-Execute", time: new Date().toISOString(), detail: `Auto-added workaround: ${wfAction.internalNote.substring(0, 100)}` });
+                } else {
+                  liveInc.activityLog.push({ id: `AL-WFA-${Date.now()}`, type: "workflow", user: "AI Workflow Auto-Execute", time: new Date().toISOString(), detail: `AI recommends: ${wfAction.action} — ${wfAction.reasoning}` });
+                }
+
+                liveInc.updatedAt = new Date().toISOString();
+                await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
+              }
+
+              await db.upsert("ai_workflow_queue", wfAction.id, wfAction);
+              console.log(`[AI Pipeline] Auto-executed ${wfAction.action} for ${inc.id} (${wfAction.confidence}% confidence)`);
+            } catch (execErr) {
+              console.warn(`[AI Pipeline] Auto-execute failed for ${inc.id}:`, execErr.message);
+            }
+          }
         } catch (err) {
           console.error(`[AI Workflow Assist] Failed for ${inc.id}:`, err.message);
           actions.push({ incidentId: inc.id, error: err.message });
