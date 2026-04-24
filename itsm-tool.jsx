@@ -6,9 +6,9 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.8.1",
-  build: "kp-harmony-v1",
-  date: "2026-04-20",
+  version: "3.9.0",
+  build: "kp-workflow-assist-v1",
+  date: "2026-04-24",
   channel: "Production",
   name: "VGC-ITSM",
   engine: "VGC-AI v3.8 (GPT-5.4-Pro)",
@@ -1262,7 +1262,7 @@ const DataTable = ({ columns, data, onRowClick }) => (
       </thead>
       <tbody>
         {data.map((row, i) => (
-          <tr key={i}
+          <tr key={row.id || row.Id || i}
             onClick={() => onRowClick?.(row)}
             style={{
               background: i % 2 === 0 ? "#0F1117" : "#0C0E16",
@@ -1296,6 +1296,107 @@ const DataTable = ({ columns, data, onRowClick }) => (
     </table>
   </div>
 );
+
+// ─── Workflow Header Component ──────────────────────────────────────────
+const WORKFLOW_STEPS = {
+  incidents: [
+    { icon: "📥", title: "Ingest", desc: "Receive & log", color: "#6366F1" },
+    { icon: "🤖", title: "AI Triage", desc: "Auto-classify", color: "#7C3AED" },
+    { icon: "📋", title: "Assign", desc: "Route to team", color: "#06B6D4" },
+    { icon: "🔧", title: "Resolve", desc: "Fix & verify", color: "#81C784" },
+    { icon: "📊", title: "Close & Learn", desc: "KB & metrics", color: "#FFB347" },
+  ],
+  problems: [
+    { icon: "🔍", title: "Detect", desc: "Identify trend", color: "#CE93D8" },
+    { icon: "📊", title: "Analyze", desc: "Impact assess", color: "#6366F1" },
+    { icon: "🔬", title: "Root Cause", desc: "Deep analysis", color: "#FF6B6B" },
+    { icon: "🛠️", title: "Fix", desc: "Implement fix", color: "#81C784" },
+    { icon: "✅", title: "Verify", desc: "Confirm resolved", color: "#06B6D4" },
+  ],
+  changes: [
+    { icon: "📝", title: "Request", desc: "Submit RFC", color: "#FFB347" },
+    { icon: "🔍", title: "Review", desc: "CAB review", color: "#6366F1" },
+    { icon: "✅", title: "Approve", desc: "Authorization", color: "#81C784" },
+    { icon: "🚀", title: "Deploy", desc: "Implement", color: "#06B6D4" },
+    { icon: "📋", title: "PIR", desc: "Post review", color: "#CE93D8" },
+  ],
+  requests: [
+    { icon: "📥", title: "Submit", desc: "User request", color: "#6366F1" },
+    { icon: "📋", title: "Catalog", desc: "Match service", color: "#FFB347" },
+    { icon: "👤", title: "Fulfill", desc: "Process", color: "#06B6D4" },
+    { icon: "✅", title: "Deliver", desc: "Complete", color: "#81C784" },
+    { icon: "⭐", title: "Survey", desc: "Feedback", color: "#CE93D8" },
+  ],
+  knowledge: [
+    { icon: "📚", title: "Create", desc: "Author article", color: "#0078D4" },
+    { icon: "🤖", title: "AI Enrich", desc: "Auto-enhance", color: "#7C3AED" },
+    { icon: "📝", title: "Review", desc: "Peer review", color: "#FFB347" },
+    { icon: "✅", title: "Publish", desc: "Go live", color: "#81C784" },
+    { icon: "📈", title: "Track", desc: "Views & rating", color: "#06B6D4" },
+  ],
+};
+
+const WorkflowHeader = ({ module, version }) => {
+  const steps = WORKFLOW_STEPS[module] || WORKFLOW_STEPS.incidents;
+  const [activeStep, setActiveStep] = React.useState(0);
+  React.useEffect(() => {
+    const timer = setInterval(() => setActiveStep(p => (p + 1) % steps.length), 3000);
+    return () => clearInterval(timer);
+  }, [steps.length]);
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 0, marginBottom: 16, padding: "10px 16px",
+      background: "linear-gradient(135deg, #0A0C14 0%, #0F1117 50%, #0A0C14 100%)",
+      borderRadius: 10, border: "1px solid #1E213044", overflow: "hidden", position: "relative",
+    }}>
+      {steps.map((step, i) => (
+        <React.Fragment key={i}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8,
+            background: i === activeStep ? `${step.color}15` : "transparent",
+            border: i === activeStep ? `1px solid ${step.color}33` : "1px solid transparent",
+            transition: "all 0.5s ease", flex: 1, minWidth: 0, cursor: "default",
+          }}>
+            <span style={{
+              fontSize: 16, display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 28, height: 28, borderRadius: 8,
+              background: i === activeStep ? `${step.color}22` : "#1E213022",
+              boxShadow: i === activeStep ? `0 0 12px ${step.color}33` : "none",
+              transition: "all 0.5s ease",
+              animation: i === activeStep ? "wfIconPulse 2s ease-in-out infinite" : "none",
+            }}>{step.icon}</span>
+            <div style={{ overflow: "hidden" }}>
+              <div style={{
+                fontSize: 10, fontWeight: 700, color: i === activeStep ? step.color : "#5A6178",
+                fontFamily: "'Space Grotesk', sans-serif", transition: "color 0.5s",
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>{step.title}</div>
+              <div style={{
+                fontSize: 8, color: i === activeStep ? "#A0A8B8" : "#5A617855",
+                transition: "color 0.5s", whiteSpace: "nowrap",
+              }}>{step.desc}</div>
+            </div>
+          </div>
+          {i < steps.length - 1 && (
+            <div style={{
+              width: 20, height: 2, flexShrink: 0,
+              background: i < activeStep ? `linear-gradient(90deg, ${steps[i].color}, ${steps[i+1].color})` : "#1E213044",
+              borderRadius: 1, transition: "background 0.5s",
+            }} />
+          )}
+        </React.Fragment>
+      ))}
+      {version && (
+        <div style={{
+          position: "absolute", right: 12, top: 6, fontSize: 8, color: "#5A617866",
+          fontFamily: "'JetBrains Mono', monospace", background: "#0A0C14", padding: "1px 6px",
+          borderRadius: 4, border: "1px solid #1E213033",
+        }}>v{version}</div>
+      )}
+    </div>
+  );
+};
 
 const Modal = ({ title, onClose, children, wide }) => (
   <div style={{
@@ -1595,6 +1696,12 @@ export default function ITSMApp() {
   const [aiResolveQueue, setAiResolveQueue] = useState([]);
   const [aiResolveLoading, setAiResolveLoading] = useState(false);
   const [aiResolveScanLoading, setAiResolveScanLoading] = useState(false);
+  // ─── AI Workflow Assist State ──────────────────────────────────
+  const [aiWorkflowQueue, setAiWorkflowQueue] = useState([]);
+  const [aiWorkflowLoading, setAiWorkflowLoading] = useState(false);
+  const [aiWorkflowScanLoading, setAiWorkflowScanLoading] = useState(false);
+  // ─── KB Learning from Incidents State ─────────────────────────
+  const [kbLearningLoading, setKbLearningLoading] = useState(false);
   // ─── AI Chat Correction/Edit State ──────────────────────────────────
   const [aiEditingIdx, setAiEditingIdx] = useState(null);
   const [aiEditText, setAiEditText] = useState("");
@@ -2935,6 +3042,124 @@ export default function ITSMApp() {
   useEffect(() => {
     if (isLoggedIn && !isLocalDemoUser) fetchAiResolveQueue();
   }, [isLoggedIn, fetchAiResolveQueue]);
+
+  // ─── AI Workflow Assist: Scan + Queue Management ──────────────────────
+  const fetchAiWorkflowQueue = useCallback(async () => {
+    if (isLocalDemoUser) return;
+    try {
+      const res = await fetch("/api/ai/workflow-queue");
+      if (res.ok) {
+        const data = await res.json();
+        setAiWorkflowQueue((data.items || []).filter(i => i.status === "pending"));
+      }
+    } catch {}
+  }, []);
+
+  const runAiWorkflowAssist = useCallback(async () => {
+    if (isLocalDemoUser) { showToast("Demo mode — AI workflow assist unavailable", "info"); return; }
+    setAiWorkflowScanLoading(true);
+    try {
+      const res = await fetch("/api/ai/workflow-assist", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedBy: currentUser?.name || "System", maxItems: 10 })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "AI workflow scan failed", "error"); setAiWorkflowScanLoading(false); return; }
+      const data = await res.json();
+      showToast(`🤖 AI analyzed ${data.total} open incidents, ${data.actions.filter(a => !a.error).length} workflow suggestions ready`, "success");
+      await fetchAiWorkflowQueue();
+    } catch (err) { showToast("AI workflow scan failed: " + err.message, "error"); }
+    setAiWorkflowScanLoading(false);
+  }, [currentUser?.name, fetchAiWorkflowQueue]);
+
+  const handleAiWorkflowAction = useCallback(async (suggestionId, action) => {
+    setAiWorkflowLoading(true);
+    try {
+      const res = await fetch("/api/ai/workflow-queue/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ suggestionId, action, approvedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Action failed", "error"); setAiWorkflowLoading(false); return; }
+      const data = await res.json();
+      if (action === "approve") {
+        showToast(`✅ Workflow action "${data.suggestion.action}" applied to ${data.suggestion.incidentId}${data.suggestion.zdSynced ? " (internal note posted to Zendesk)" : ""}`, "success");
+        try {
+          const incR = await fetch("/api/db/incidents");
+          if (incR.ok) {
+            const incData = await incR.json();
+            const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
+            setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
+          }
+        } catch {}
+      } else {
+        showToast(`❌ Workflow suggestion rejected`, "info");
+      }
+      setAiWorkflowQueue(prev => prev.filter(s => s.id !== suggestionId));
+    } catch (err) { showToast("Action failed: " + err.message, "error"); }
+    setAiWorkflowLoading(false);
+  }, [currentUser?.name]);
+
+  // Fetch AI workflow queue on login
+  useEffect(() => {
+    if (isLoggedIn && !isLocalDemoUser) fetchAiWorkflowQueue();
+  }, [isLoggedIn, fetchAiWorkflowQueue]);
+
+  // ─── AI Learn from Incidents → KB Articles ─────────────────────────────
+  const runKbLearning = useCallback(async () => {
+    if (isLocalDemoUser) { showToast("Demo mode — KB learning unavailable", "info"); return; }
+    setKbLearningLoading(true);
+    try {
+      const res = await fetch("/api/ai/learn-incidents-kb", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "KB learning failed", "error"); setKbLearningLoading(false); return; }
+      const data = await res.json();
+      if (data.articlesCreated > 0) {
+        showToast(`🧠 Created ${data.articlesCreated} professional KB articles from ${data.totalIncidentsAnalyzed} resolved incidents!`, "success");
+        // Add learned articles to kbArticles state
+        setKbArticles(prev => [...data.articles, ...prev]);
+      } else {
+        showToast(`📊 Analyzed ${data.totalIncidentsAnalyzed} incidents but no new unique articles to create`, "info");
+      }
+    } catch (err) { showToast("KB learning failed: " + err.message, "error"); }
+    setKbLearningLoading(false);
+  }, [currentUser?.name]);
+
+  // ─── AI Bulk Close Past Tickets ─────────────────────────────────────────
+  const runBulkCloseTickets = useCallback(async (dryRun = true) => {
+    setHistoricalCloseRunning(true);
+    try {
+      const cutoffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const res = await fetch("/api/ai/historical-close", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cutoffDate, requestedBy: currentUser?.name || "System", dryRun })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Bulk close failed", "error"); setHistoricalCloseRunning(false); return; }
+      const data = await res.json();
+      if (dryRun) {
+        if (data.eligibleCount > 0) {
+          if (confirm(`🗄️ Found ${data.eligibleCount} incidents older than 30 days eligible for AI closure.\n\nProceed with closing them? (No Zendesk updates will be made)`)) {
+            setHistoricalCloseRunning(false);
+            await runBulkCloseTickets(false);
+            return;
+          }
+        } else {
+          showToast("No incidents older than 30 days eligible for closure", "info");
+        }
+      } else if (data.closedCount > 0) {
+        showToast(`🗄️ AI closed ${data.closedCount} historical incidents (no Zendesk sync, no notifications)`, "success");
+        try {
+          const incR = await fetch("/api/db/incidents");
+          if (incR.ok) {
+            const incData = await incR.json();
+            const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
+            setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
+          }
+        } catch {}
+      }
+    } catch (err) { showToast("Bulk close failed: " + err.message, "error"); }
+    setHistoricalCloseRunning(false);
+  }, [currentUser?.name]);
 
   // Auto-monitor: run every 5 minutes when enabled
   // Placed after all Phase 1-5 function definitions to avoid forward references
@@ -5622,14 +5847,26 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   };
 
   // ─── Incidents Module ─────────────────────────────────────────────────
+  const STATUS_SORT_ORDER = { "New": 0, "Open": 1, "In Progress": 2, "Pending": 3, "On Hold": 4, "Reopened": 5, "Resolved": 6, "Closed": 7 };
   const IncidentsModule = () => {
-    const filtered = incidents.filter(i =>
-      (i.title || "").toLowerCase().includes(search.toLowerCase()) ||
-      (i.id || "").toLowerCase().includes(search.toLowerCase()) ||
-      (i.category || "").toLowerCase().includes(search.toLowerCase())
-    );
+    const filtered = useMemo(() => {
+      const list = incidents.filter(i =>
+        (i.title || "").toLowerCase().includes(search.toLowerCase()) ||
+        (i.id || "").toLowerCase().includes(search.toLowerCase()) ||
+        (i.category || "").toLowerCase().includes(search.toLowerCase())
+      );
+      return list.sort((a, b) => {
+        const sa = STATUS_SORT_ORDER[a.status] ?? 5;
+        const sb = STATUS_SORT_ORDER[b.status] ?? 5;
+        if (sa !== sb) return sa - sb;
+        const da = new Date(a.created || a.createdAt || 0).getTime();
+        const db = new Date(b.created || b.createdAt || 0).getTime();
+        return db - da;
+      });
+    }, [incidents, search]);
     return (
       <div>
+        <WorkflowHeader module="incidents" version={APP_VERSION.version} />
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search incidents..." />
           <button style={btnStyle()} onClick={() => setModal("newIncident")}>+ New Incident</button>
@@ -5746,13 +5983,60 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         )}
 
         {/* AI Auto-Resolve Scan Button */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <button disabled={aiResolveScanLoading} onClick={runAiAutoResolve}
             style={{ ...btnStyle("#7C3AED"), fontSize: 11, display: "flex", alignItems: "center", gap: 4, opacity: aiResolveScanLoading ? 0.5 : 1 }}>
             {aiResolveScanLoading ? "⏳ Scanning..." : "🤖 AI Auto-Resolve Scan"}
           </button>
-          {aiResolveQueue.length > 0 && <span style={{ fontSize: 10, color: "#C084FC", alignSelf: "center" }}>{aiResolveQueue.length} suggestions awaiting review</span>}
+          <button disabled={aiWorkflowScanLoading} onClick={runAiWorkflowAssist}
+            style={{ ...btnStyle("#06B6D4"), fontSize: 11, display: "flex", alignItems: "center", gap: 4, opacity: aiWorkflowScanLoading ? 0.5 : 1 }}>
+            {aiWorkflowScanLoading ? "⏳ Analyzing..." : "🔄 AI Workflow Assist"}
+          </button>
+          <button disabled={historicalCloseRunning} onClick={() => runBulkCloseTickets(true)}
+            style={{ ...btnStyle("#FF6B6B"), fontSize: 11, display: "flex", alignItems: "center", gap: 4, opacity: historicalCloseRunning ? 0.5 : 1 }}>
+            {historicalCloseRunning ? "⏳ Processing..." : "🗄️ AI Close Past Tickets"}
+          </button>
+          {aiResolveQueue.length > 0 && <span style={{ fontSize: 10, color: "#C084FC", alignSelf: "center" }}>{aiResolveQueue.length} resolve suggestions</span>}
+          {aiWorkflowQueue.length > 0 && <span style={{ fontSize: 10, color: "#06B6D4", alignSelf: "center" }}>{aiWorkflowQueue.length} workflow suggestions</span>}
         </div>
+
+        {/* ─── AI Workflow Assist Queue ────────────────────────────────── */}
+        {aiWorkflowQueue.length > 0 && (
+          <div style={{ marginBottom: 16, background: "linear-gradient(135deg, #0F1117 0%, #0A2030 100%)", borderRadius: 10, border: "1px solid #06B6D444", padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 13, color: "#22D3EE", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                🔄 AI Workflow Assist Queue <span style={{ fontSize: 10, background: "#06B6D433", color: "#22D3EE", padding: "2px 8px", borderRadius: 10 }}>{aiWorkflowQueue.length} pending</span>
+              </h3>
+              <span style={{ fontSize: 9, color: "#5A6178" }}>Internal notes only • No customer emails</span>
+            </div>
+            {aiWorkflowQueue.map(s => (
+              <div key={s.id} style={{ background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213066", padding: 12, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div>
+                    <span style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{s.incidentId}</span>
+                    <span style={{ fontSize: 11, color: "#C4CAD6", marginLeft: 8 }}>{s.incidentTitle}</span>
+                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                      <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: s.action === "escalate" ? "#FF6B6B22" : s.action === "reassign" ? "#FFB34722" : "#06B6D422", color: s.action === "escalate" ? "#FF6B6B" : s.action === "reassign" ? "#FFB347" : "#22D3EE", fontWeight: 600 }}>{s.action}</span>
+                      <span style={{ fontSize: 10, color: "#5A6178" }}>Confidence: <span style={{ color: s.confidence >= 80 ? "#4CAF50" : s.confidence >= 60 ? "#FFB347" : "#FF6B6B", fontWeight: 600 }}>{s.confidence}%</span></span>
+                      {s.zdTicketId && <span style={{ fontSize: 9, color: "#EC4899" }}>ZD #{s.zdTicketId}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button disabled={aiWorkflowLoading} onClick={() => handleAiWorkflowAction(s.id, "approve")}
+                      style={{ ...btnStyle("#4CAF50"), fontSize: 10, padding: "4px 12px", opacity: aiWorkflowLoading ? 0.5 : 1 }}>✅ Approve</button>
+                    <button disabled={aiWorkflowLoading} onClick={() => handleAiWorkflowAction(s.id, "reject")}
+                      style={{ ...btnStyle("#FF6B6B"), fontSize: 10, padding: "4px 12px", opacity: aiWorkflowLoading ? 0.5 : 1 }}>❌ Reject</button>
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: "#A0A8B8", background: "#0F111766", padding: 8, borderRadius: 6, border: "1px solid #1E213033" }}>
+                  <div style={{ marginBottom: 4 }}><strong style={{ color: "#22D3EE" }}>Reasoning:</strong> {s.reasoning}</div>
+                  {s.internalNote && <div style={{ marginBottom: 4 }}><strong style={{ color: "#FFB347" }}>Internal Note:</strong> {s.internalNote}</div>}
+                  {s.suggestedAssignee && <div><strong style={{ color: "#81C784" }}>Suggested Assignee:</strong> {s.suggestedAssignee}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <DataTable
           columns={[
@@ -5807,6 +6091,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // ─── Problems Module ──────────────────────────────────────────────────
   const ProblemsModule = () => (
     <div>
+      <WorkflowHeader module="problems" version={APP_VERSION.version} />
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search problems..." />
         <button style={btnStyle()} onClick={() => setModal("newProblem")}>+ New Problem</button>
@@ -5834,6 +6119,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // ─── Changes Module ───────────────────────────────────────────────────
   const ChangesModule = () => (
     <div>
+      <WorkflowHeader module="changes" version={APP_VERSION.version} />
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search changes..." />
         <button style={btnStyle()} onClick={() => setModal("newChange")}>+ New Change Request</button>
@@ -5859,6 +6145,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // ─── Service Requests Module ──────────────────────────────────────────
   const RequestsModule = () => (
     <div>
+      <WorkflowHeader module="requests" version={APP_VERSION.version} />
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search requests..." />
         <button style={btnStyle()} onClick={() => setActiveModule("catalog")}>Browse Catalog →</button>
@@ -6043,6 +6330,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
     return (
     <div>
+      <WorkflowHeader module="knowledge" version={APP_VERSION.version} />
       {/* SharePoint Connection Banner */}
       <div style={{ background: "linear-gradient(135deg, #0078D408, #0089D618)", borderRadius: 10, border: "1px solid #0078D433", padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -6061,6 +6349,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button disabled={kbLearningLoading} onClick={runKbLearning}
+            style={{ ...btnStyle("#7C3AED"), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4, opacity: kbLearningLoading ? 0.5 : 1 }}>
+            {kbLearningLoading ? "⏳ Learning..." : "🧠 Learn from Incidents"}
+          </button>
           <button style={{ ...btnStyle("#0078D4"), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.helpdeskLibraryUrl, "_blank", "noopener")}>📂 Helpdesk Library</button>
           <button style={{ ...btnStyle(), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")}>🔗 SharePoint Site</button>
           <button style={btnStyle()} onClick={() => setModal("newKBArticle")}>+ New Article</button>
@@ -6595,6 +6887,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                   <span style={{ color: cm.color, fontSize: 10, fontFamily: "'JetBrains Mono', monospace", background: `${cm.color}11`, padding: "2px 6px", borderRadius: 4, border: `1px solid ${cm.color}22` }}>{art.id}</span>
                   <Badge color={{ bg: `${cm.color}18`, text: cm.color }}>{cm.icon} {art.category}</Badge>
                   {art.bestFor && <Badge color={{ bg: art.bestFor === "Incident" ? "#FF6B6B18" : art.bestFor === "Change" ? "#FFB34718" : "#81C78418", text: art.bestFor === "Incident" ? "#FF6B6B" : art.bestFor === "Change" ? "#FFB347" : "#81C784" }}>{art.bestFor}</Badge>}
+                  {art.source === "ai-incident-learning" && <Badge color={{ bg: "#7C3AED18", text: "#C084FC" }}>🧠 AI Learned</Badge>}
+                  {art.aiGenerated && !art.source && <Badge color={{ bg: "#06B6D418", text: "#22D3EE" }}>🤖 AI Generated</Badge>}
                 </div>
                 <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{art.updated}</div>
               </div>
@@ -18486,6 +18780,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         @keyframes slaBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
         @keyframes slaBlinkFast { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
         @keyframes slaBreachPulse { 0%, 100% { color: #FF4444; text-shadow: 0 0 4px #FF444444; } 50% { color: #FF6666; text-shadow: 0 0 12px #FF444488, 0 0 24px #FF444444; } }
+        @keyframes wfIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.85; } }
         @keyframes weatherSunPulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.08); filter: brightness(1.15); } }
         @keyframes weatherRayPulse { 0%, 100% { opacity: 0.6; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.3); } }
         @keyframes weatherMoonGlow { 0%, 100% { filter: brightness(1) drop-shadow(0 0 4px rgba(200,210,255,0.3)); } 50% { filter: brightness(1.15) drop-shadow(0 0 10px rgba(200,210,255,0.6)); } }

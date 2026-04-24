@@ -1415,7 +1415,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         if (status) ticketUpdate.ticket.status = statusMap[status] || status;
         if (priority) ticketUpdate.ticket.priority = priorityMap[priority] || priority;
         if (comment) {
-          ticketUpdate.ticket.comment = { body: `[ITSM Sync] ${comment}`, public: isInternal === false };
+          ticketUpdate.ticket.comment = { body: `[ITSM Sync] ${comment}`, public: isInternal === true ? false : (isInternal === false ? true : false) };
         }
 
         if (Object.keys(ticketUpdate.ticket).length === 0) {
@@ -5103,6 +5103,295 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
       return json(res, 200, { success: true, suggestion });
     } catch (err) {
       console.error("[AI Resolve Queue Action]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI Workflow Assist (Zendesk Internal Notes Only) ──────────────────
+  if (pathname === "/api/ai/workflow-assist" && req.method === "POST") {
+    try {
+      if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+      const body = await parseBody(req);
+      const requestedBy = body.requestedBy || "system";
+      const maxItems = Math.min(body.maxItems || 10, 20);
+
+      const incidentRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
+      const openIncidents = incidentRows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(inc => {
+        if (!inc || !inc.id) return false;
+        const status = (inc.status || "").toLowerCase();
+        return !["closed", "resolved"].includes(status);
+      }).slice(0, maxItems);
+
+      if (!openIncidents.length) return json(res, 200, { success: true, actions: [], message: "No open incidents found" });
+
+      const actions = [];
+      for (const inc of openIncidents) {
+        try {
+          const prompt = `You are an expert ITSM workflow advisor for VGC Technology. Analyze this open incident and recommend the best NEXT workflow action.
+Incident: ${JSON.stringify({ id: inc.id, title: inc.title, description: (inc.description || "").substring(0, 400), priority: inc.priority, category: inc.category, status: inc.status, assignee: inc.assignee, assignmentGroup: inc.assignmentGroup, createdAt: inc.createdAt, updatedAt: inc.updatedAt })}
+Respond in JSON ONLY:
+{"action": "one of: escalate|reassign|add_workaround|add_internal_note|monitor|request_info", "reasoning": "why this action", "internalNote": "exact text for internal note to add (NO customer emails, NO email addresses)", "suggestedAssignee": "team or person if reassigning", "urgency": "high|medium|low", "confidence": 0-100}`;
+
+          const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: "You are an expert IT workflow advisor. Respond ONLY in valid JSON. NEVER include email addresses in your response." }, { role: "user", content: prompt }], max_output_tokens: 600 };
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({
+              hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+              method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+            }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => {
+                if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+                else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 300)}`));
+              });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const text = extractAIText(aiResult);
+          let parsed;
+          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { action: "monitor", reasoning: text, internalNote: "", confidence: 40 }; }
+
+          // Strip ALL email addresses from AI output for security
+          const stripEmails = (s) => (s || "").replace(/[\w.-]+@[\w.-]+\.\w+/g, "[email redacted]");
+          parsed.reasoning = stripEmails(parsed.reasoning);
+          parsed.internalNote = stripEmails(parsed.internalNote);
+
+          const wfAction = {
+            id: `WF-${inc.id}-${Date.now()}`,
+            incidentId: inc.id,
+            incidentTitle: inc.title,
+            priority: inc.priority,
+            status: "pending",
+            action: parsed.action || "monitor",
+            reasoning: parsed.reasoning || "",
+            internalNote: parsed.internalNote || "",
+            suggestedAssignee: parsed.suggestedAssignee || "",
+            urgency: parsed.urgency || "medium",
+            confidence: parsed.confidence || 50,
+            createdAt: new Date().toISOString(),
+            requestedBy,
+            zdTicketId: inc.zdTicketId || null,
+          };
+
+          await db.upsert("ai_workflow_queue", wfAction.id, wfAction);
+          actions.push(wfAction);
+        } catch (err) {
+          console.error(`[AI Workflow Assist] Failed for ${inc.id}:`, err.message);
+          actions.push({ incidentId: inc.id, error: err.message });
+        }
+      }
+
+      return json(res, 200, { success: true, actions, total: openIncidents.length });
+    } catch (err) {
+      console.error("[AI Workflow Assist]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/workflow-queue — fetch pending workflow suggestions
+  if (pathname === "/api/ai/workflow-queue" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_workflow_queue");
+      const items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { items });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/workflow-queue/action — approve/reject/apply workflow suggestion
+  if (pathname === "/api/ai/workflow-queue/action" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { suggestionId, action, approvedBy } = body;
+      if (!suggestionId || !action) return json(res, 400, { error: "suggestionId and action required" });
+
+      const row = await db.getOne("ai_workflow_queue", suggestionId);
+      if (!row) return json(res, 404, { error: "Suggestion not found" });
+      const suggestion = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+
+      if (action === "approve") {
+        suggestion.status = "approved";
+        suggestion.approvedBy = approvedBy || "unknown";
+        suggestion.approvedAt = new Date().toISOString();
+
+        // Post internal note to Zendesk if ticket exists
+        if (suggestion.zdTicketId && suggestion.internalNote && ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_TOKEN) {
+          try {
+            const noteText = `[AI Workflow Assist] Action: ${suggestion.action}\n${suggestion.internalNote}\n\n— AI generated (approved by ${approvedBy})`;
+            await zdRequest("PUT", `/tickets/${suggestion.zdTicketId}.json`, {
+              ticket: { comment: { body: noteText, public: false } }
+            });
+            suggestion.zdSynced = true;
+            console.log(`[AI Workflow] Internal note posted to Zendesk #${suggestion.zdTicketId}`);
+          } catch (zdErr) {
+            console.error(`[AI Workflow] Zendesk sync failed:`, zdErr.message);
+            suggestion.zdSyncError = zdErr.message;
+          }
+        }
+
+        // Update incident if action requires it
+        if (suggestion.action === "escalate" || suggestion.action === "reassign") {
+          try {
+            const incRow = await db.getOne("incidents", suggestion.incidentId);
+            if (incRow) {
+              const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+              if (suggestion.action === "escalate") {
+                inc.priority = inc.priority === "Sev-D" ? "Sev-C" : inc.priority === "Sev-C" ? "Sev-B" : "Sev-A";
+                inc.escalated = true;
+              }
+              if (suggestion.suggestedAssignee) inc.assignee = suggestion.suggestedAssignee;
+              inc.updatedAt = new Date().toISOString();
+              inc.skipZendeskSync = true;
+              await db.upsert("incidents", inc.id, inc);
+            }
+          } catch {}
+        }
+      } else if (action === "reject") {
+        suggestion.status = "rejected";
+        suggestion.rejectedBy = approvedBy || "unknown";
+        suggestion.rejectedAt = new Date().toISOString();
+      }
+
+      await db.upsert("ai_workflow_queue", suggestionId, suggestion);
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+      return json(res, 200, { success: true, suggestion });
+    } catch (err) {
+      console.error("[AI Workflow Queue Action]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI Learn from Incidents → KB Articles ────────────────────────────
+  if (pathname === "/api/ai/learn-incidents-kb" && req.method === "POST") {
+    try {
+      if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+      const body = await parseBody(req);
+      const requestedBy = body.requestedBy || "system";
+
+      const allRows = await db.getAll("incidents");
+      const closedIncidents = allRows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(inc => inc && inc.id && ["Resolved", "Closed"].includes(inc.status) && (inc.resolution || inc.resolutionNotes || inc.description));
+
+      if (closedIncidents.length < 3) return json(res, 200, { success: true, articlesCreated: 0, message: "Not enough resolved incidents to learn from (need at least 3)" });
+
+      // Group by normalized category
+      const categoryMap = {};
+      const normalizeCategory = (cat) => {
+        const c = (cat || "General").toLowerCase();
+        if (c.includes("network") || c.includes("connectivity") || c.includes("vpn") || c.includes("firewall")) return "Network & Connectivity";
+        if (c.includes("hardware") || c.includes("laptop") || c.includes("printer") || c.includes("device")) return "Hardware";
+        if (c.includes("software") || c.includes("application") || c.includes("app")) return "Software & Applications";
+        if (c.includes("security") || c.includes("phishing") || c.includes("malware") || c.includes("virus")) return "Security";
+        if (c.includes("email") || c.includes("outlook") || c.includes("exchange")) return "Email & Communication";
+        if (c.includes("access") || c.includes("password") || c.includes("login") || c.includes("permission") || c.includes("mfa")) return "Access Management";
+        if (c.includes("cloud") || c.includes("azure") || c.includes("m365") || c.includes("microsoft")) return "Cloud & M365";
+        if (c.includes("database") || c.includes("sql") || c.includes("data")) return "Database";
+        return "General IT Support";
+      };
+
+      closedIncidents.forEach(inc => {
+        const cat = normalizeCategory(inc.category);
+        if (!categoryMap[cat]) categoryMap[cat] = [];
+        categoryMap[cat].push(inc);
+      });
+
+      // Get existing KB articles for dedup
+      let existingTitles = [];
+      try {
+        const kbRows = await db.getAll("kb");
+        existingTitles = kbRows.map(r => {
+          try { const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return (d.title || "").toLowerCase(); } catch { return ""; }
+        }).filter(Boolean);
+      } catch {}
+
+      const articles = [];
+      for (const [category, incs] of Object.entries(categoryMap)) {
+        if (incs.length < 2) continue; // Need at least 2 incidents per category
+
+        try {
+          const incSummaries = incs.slice(0, 15).map(i => `- Title: ${i.title}\n  Category: ${i.category}\n  Priority: ${i.priority}\n  Resolution: ${(i.resolution || i.resolutionNotes || "N/A").substring(0, 300)}\n  Description: ${(i.description || "").substring(0, 200)}`).join("\n\n");
+
+          const prompt = `You are a senior IT knowledge base author for VGC Technology. Analyze these ${incs.length} resolved ${category} incidents and create ONE comprehensive, professional KB article that synthesizes common patterns, solutions, and prevention steps.
+
+RESOLVED INCIDENTS IN "${category}":
+${incSummaries}
+
+Create a professional KB article. Respond in JSON ONLY:
+{
+  "title": "How to: <clear actionable title covering main theme>",
+  "category": "${category}",
+  "content": "Professional article with sections: ## Overview\\n...\\n## Common Symptoms\\n...\\n## Step-by-Step Resolution\\n1. ...\\n2. ...\\n## Prevention & Best Practices\\n...",
+  "tags": ["tag1", "tag2", "tag3"],
+  "whenToUse": "One-line description of when this article is helpful",
+  "bestFor": "Target audience (e.g., L1 Support, End Users, Network Team)",
+  "quickFix": ["Step 1 quick fix", "Step 2 quick fix", "Step 3 quick fix"]
+}`;
+
+          const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: "You are an expert IT knowledge base author. Create professional, actionable KB articles. Respond ONLY in valid JSON." }, { role: "user", content: prompt }], max_output_tokens: 1200 };
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({
+              hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+              method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+            }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => {
+                if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+                else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 300)}`));
+              });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const text = extractAIText(aiResult);
+          let parsed;
+          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { continue; }
+
+          // Dedup check
+          if (existingTitles.includes((parsed.title || "").toLowerCase())) continue;
+
+          const article = {
+            id: `KB-AI-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            title: parsed.title || `${category} Knowledge Article`,
+            category: parsed.category || category,
+            content: parsed.content || "",
+            tags: parsed.tags || [],
+            whenToUse: parsed.whenToUse || "",
+            bestFor: parsed.bestFor || "",
+            quickFix: parsed.quickFix || [],
+            views: 0,
+            helpful: 0,
+            author: `AI (requested by ${requestedBy})`,
+            updated: new Date().toISOString(),
+            source: "ai-incident-learning",
+            aiGenerated: true,
+            incidentCount: incs.length,
+            relatedArticles: [],
+          };
+
+          await db.upsert("kb", article.id, article);
+          articles.push(article);
+          existingTitles.push(article.title.toLowerCase());
+          console.log(`[AI KB Learn] Created article: ${article.title} (from ${incs.length} incidents)`);
+        } catch (err) {
+          console.error(`[AI KB Learn] Failed for ${category}:`, err.message);
+        }
+      }
+
+      return json(res, 200, { success: true, articlesCreated: articles.length, articles, totalIncidentsAnalyzed: closedIncidents.length });
+    } catch (err) {
+      console.error("[AI KB Learn]", err.message);
       return json(res, 500, { error: err.message });
     }
   }
