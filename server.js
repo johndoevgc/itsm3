@@ -4948,8 +4948,13 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const now = new Date().toISOString();
       const actions = [];
+      // Dedup: skip if pending sla_prevention already exists for this incident
+      const _slaExisting = await db.getAll("ai_actions");
+      const _slaPendingKeys = new Set();
+      for (const r of _slaExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.type === "sla_prevention" && it.incidentId) _slaPendingKeys.add(it.incidentId); } catch {} }
       for (const pred of predictions) {
         if ((pred.breachProbability || 0) >= 70) {
+          if (_slaPendingKeys.has(pred.ticketId)) continue; // dedup
           const actionRecord = {
             id: `SLA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
             type: "sla_prevention",
@@ -5282,6 +5287,10 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const now = new Date().toISOString();
       const actions = [];
+      // Dedup: skip if pending preventive_action with same normalized title exists
+      const _patExisting = await db.getAll("ai_actions");
+      const _patPendingTitles = new Set();
+      for (const r of _patExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.type === "preventive_action" && it.title) _patPendingTitles.add(it.title.toLowerCase().replace(/[^a-z0-9]/g, "")); } catch {} }
       for (const pat of patterns) {
         const patId = pat.patternId || `PAT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
         pat.id = patId;
@@ -5291,6 +5300,9 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         await db.upsert("ai_patterns", patId, JSON.stringify(pat));
 
         if ((pat.confidence || 0) >= 70) {
+          const _normTitle = `Pattern: ${pat.title}`.toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (_patPendingTitles.has(_normTitle)) continue; // dedup
+          _patPendingTitles.add(_normTitle); // prevent intra-batch dups
           const actionRecord = {
             id: `PRA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
             type: "preventive_action",
@@ -5480,8 +5492,14 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       // Stamp each action with metadata and save to DB
       const now = new Date().toISOString();
       const savedActions = [];
+      // Dedup: skip if pending action of same type for same incident already exists
+      const _wfExisting = await db.getAll("ai_actions");
+      const _wfPendingKeys = new Set();
+      for (const r of _wfExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.incidentId && it.type) _wfPendingKeys.add(`${it.type}:${it.incidentId}`); } catch {} }
       for (const action of actions) {
+        if (action.incidentId && action.type && _wfPendingKeys.has(`${action.type}:${action.incidentId}`)) continue; // dedup
         const actionId = action.id || `AIA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2,6)}`;
+        if (action.incidentId && action.type) _wfPendingKeys.add(`${action.type}:${action.incidentId}`); // prevent intra-batch dups
         const record = {
           ...action,
           id: actionId,
@@ -6054,7 +6072,13 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
 
       if (!candidates.length) return json(res, 200, { success: true, suggestions: [], message: "No idle incidents found" });
 
+      // Dedup: load existing pending resolutions to avoid duplicates
+      const _resExisting = await db.getAll("ai_resolve_queue");
+      const _resPendingIncIds = new Set();
+      for (const r of _resExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.incidentId) _resPendingIncIds.add(it.incidentId); } catch {} }
+
       const suggestions = [];
+      let skipped = 0;
       for (const inc of candidates) {
         try {
           const prompt = `You are an ITSM AI assistant. Analyze this incident and suggest a resolution.
@@ -6099,6 +6123,10 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
             createdAt: now.toISOString(),
             requestedBy,
           };
+
+          // Dedup: skip if pending resolution for this incident already exists
+          if (_resPendingIncIds.has(inc.id)) { skipped++; continue; }
+          _resPendingIncIds.add(inc.id); // prevent intra-batch dups
 
           // Store in DB
           await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
@@ -7024,26 +7052,53 @@ Respond in JSON ONLY:
 
       // Process ai_actions
       const actionRows = await db.getAll("ai_actions");
-      let actionsDismissed = 0, actionsStale = 0, actionsTotal = actionRows.length;
+      let actionsDismissed = 0, actionsStale = 0, actionsDupes = 0, actionsTotal = actionRows.length;
+
+      // Build dedup map: keep newest pending per (type:incidentId) or (type:normalizedTitle)
+      const _dedupMap = {}; // key -> { newest item, older items[] }
+      const _pendingItems = [];
       for (const r of actionRows) {
         try {
           const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
           if (!item || item.status !== "pending_approval") continue;
-          // Dismiss if: incident is resolved/closed, OR item is older than cutoff
-          const isStale = (item.createdAt && item.createdAt < cutoff);
-          const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
-          if (isStale || incResolved) {
-            actionsStale++;
-            if (!dryRun) {
-              item.status = "dismissed";
-              item.dismissedAt = new Date().toISOString();
-              item.dismissedBy = "admin-cleanup";
-              item.dismissReason = incResolved ? "incident_resolved" : "stale_age";
-              await db.upsert("ai_actions", item.id, JSON.stringify(item));
-              actionsDismissed++;
-            }
+          _pendingItems.push(item);
+          let dedupKey = null;
+          if (item.type && item.incidentId) {
+            dedupKey = `${item.type}:${item.incidentId}`;
+          } else if (item.type === "preventive_action" && item.title) {
+            dedupKey = `preventive:${item.title.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+          }
+          if (dedupKey) {
+            if (!_dedupMap[dedupKey]) _dedupMap[dedupKey] = [];
+            _dedupMap[dedupKey].push(item);
           }
         } catch {}
+      }
+      // Sort each group by createdAt desc, mark older ones as duplicates
+      const _dupeIds = new Set();
+      for (const items of Object.values(_dedupMap)) {
+        if (items.length <= 1) continue;
+        items.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+        for (let i = 1; i < items.length; i++) _dupeIds.add(items[i].id);
+      }
+
+      for (const item of _pendingItems) {
+        // Dismiss if: incident is resolved/closed, OR item is older than cutoff, OR is a duplicate
+        const isStale = (item.createdAt && item.createdAt < cutoff);
+        const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
+        const isDupe = _dupeIds.has(item.id);
+        if (isStale || incResolved || isDupe) {
+          actionsStale++;
+          if (isDupe && !isStale && !incResolved) actionsDupes++;
+          if (!dryRun) {
+            item.status = "dismissed";
+            item.dismissedAt = new Date().toISOString();
+            item.dismissedBy = "admin-cleanup";
+            item.dismissReason = incResolved ? "incident_resolved" : isDupe ? "duplicate" : "stale_age";
+            await db.upsert("ai_actions", item.id, JSON.stringify(item));
+            actionsDismissed++;
+          }
+        }
       }
 
       // Process ai_workflow_queue
@@ -7070,11 +7125,11 @@ Respond in JSON ONLY:
       }
 
       if (cacheLayer) { cacheLayer.invalidatePrefix("ai_actions"); cacheLayer.invalidatePrefix("ai_workflow_queue"); }
-      console.log(`[Queue Cleanup] ${dryRun ? "DRY RUN" : "EXECUTED"} — ai_actions: ${actionsDismissed}/${actionsTotal} dismissed, ai_workflow_queue: ${wfDismissed}/${wfTotal} dismissed`);
+      console.log(`[Queue Cleanup] ${dryRun ? "DRY RUN" : "EXECUTED"} — ai_actions: ${actionsDismissed}/${actionsTotal} dismissed (${actionsDupes} dupes), ai_workflow_queue: ${wfDismissed}/${wfTotal} dismissed`);
       return json(res, 200, {
         success: true, dryRun, maxAgeDays, cutoff,
         resolvedIncidents: resolvedIds.size,
-        ai_actions: { total: actionsTotal, stale: dryRun ? actionsStale : undefined, dismissed: dryRun ? undefined : actionsDismissed },
+        ai_actions: { total: actionsTotal, stale: dryRun ? actionsStale : undefined, duplicates: dryRun ? actionsDupes : undefined, dismissed: dryRun ? undefined : actionsDismissed },
         ai_workflow_queue: { total: wfTotal, stale: dryRun ? wfStale : undefined, dismissed: dryRun ? undefined : wfDismissed }
       });
     } catch (err) {
