@@ -190,6 +190,19 @@ let workflowEngine = null;
 let analyticsEngine = null;
 let cacheLayer = null;
 
+// ─── Configurable AI Thresholds ─────────────────────────────────────────
+const AI_THRESHOLDS = {
+  autoApply: parseInt(process.env.AI_AUTO_APPLY_THRESHOLD || (PROD_TEST_MODE ? "70" : "85"), 10),
+  slaRisk: parseInt(process.env.AI_SLA_RISK_THRESHOLD || "70", 10),
+  patternConfidence: parseInt(process.env.AI_PATTERN_CONFIDENCE_THRESHOLD || "70", 10),
+  autoResolveConfidence: parseInt(process.env.AI_AUTO_RESOLVE_THRESHOLD || "60", 10),
+  maxPendingPerIncident: parseInt(process.env.AI_MAX_PENDING_PER_INCIDENT || "3", 10),
+  maxPendingTotal: parseInt(process.env.AI_MAX_PENDING_TOTAL || "200", 10),
+  staleDays: parseInt(process.env.AI_STALE_DAYS || "1", 10),
+  monitorIntervalMin: parseInt(process.env.AI_MONITOR_INTERVAL_MIN || "15", 10),
+};
+console.log("[AI Thresholds]", JSON.stringify(AI_THRESHOLDS));
+
 // ─── Scheduled Purge Status Tracker ─────────────────────────────────────
 const purgeStatus = {
   queueCleanup: { lastRun: null, lastResult: null, nextRun: null, totalDismissed: 0, runCount: 0 },
@@ -220,6 +233,51 @@ async function cachedGetOne(collection, id) {
     return row;
   }
   return db.getOne(collection, id);
+}
+
+// ─── Shared AI Actions Dedup Helper ─────────────────────────────────────
+// Returns { pendingByIncident: Map<incidentId, count>, pendingTotal: number, pendingByTypeInc: Set<"type:incidentId">, pendingByTitle: Set<normalized-title> }
+async function getAiActionsDedupState() {
+  const rows = await cachedGetAll("ai_actions");
+  const pendingByIncident = new Map();
+  const pendingByTypeInc = new Set();
+  const pendingByTitle = new Set();
+  let pendingTotal = 0;
+  for (const r of rows) {
+    try {
+      const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+      if (!item || item.status !== "pending_approval") continue;
+      pendingTotal++;
+      if (item.incidentId) {
+        pendingByIncident.set(item.incidentId, (pendingByIncident.get(item.incidentId) || 0) + 1);
+        if (item.type) pendingByTypeInc.add(`${item.type}:${item.incidentId}`);
+      }
+      if (item.title) pendingByTitle.add(item.title.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    } catch {}
+  }
+  return { pendingByIncident, pendingTotal, pendingByTypeInc, pendingByTitle };
+}
+
+// Check if we should skip creating a new pending action (returns reason string, or null if OK)
+function shouldSkipAction(dedupState, { incidentId, type, title } = {}) {
+  if (dedupState.pendingTotal >= AI_THRESHOLDS.maxPendingTotal) return `pending_total_cap (${dedupState.pendingTotal}>=${AI_THRESHOLDS.maxPendingTotal})`;
+  if (incidentId && dedupState.pendingByIncident.get(incidentId) >= AI_THRESHOLDS.maxPendingPerIncident) return `per_incident_cap (${incidentId} has ${dedupState.pendingByIncident.get(incidentId)})`;
+  if (incidentId && type && dedupState.pendingByTypeInc.has(`${type}:${incidentId}`)) return `dup_type_incident (${type}:${incidentId})`;
+  if (title) {
+    const norm = title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (dedupState.pendingByTitle.has(norm)) return `dup_title`;
+  }
+  return null;
+}
+
+// After creating an action, update the dedup state in-memory for intra-batch dedup
+function trackNewAction(dedupState, { incidentId, type, title } = {}) {
+  dedupState.pendingTotal++;
+  if (incidentId) {
+    dedupState.pendingByIncident.set(incidentId, (dedupState.pendingByIncident.get(incidentId) || 0) + 1);
+    if (type) dedupState.pendingByTypeInc.add(`${type}:${incidentId}`);
+  }
+  if (title) dedupState.pendingByTitle.add(title.toLowerCase().replace(/[^a-z0-9]/g, ""));
 }
 
 // ─── Dynamic SLA Map helper (reads from slaEngine policy, falls back to defaults) ──
@@ -4824,9 +4882,18 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       const confidence = triage.confidence || 50;
       const slaMap = getSlaMap();
 
-      // High confidence: auto-apply triage directly (70% in PROD_TEST_MODE, 85% normal)
-      const autoApplyThreshold = PROD_TEST_MODE ? 70 : 85;
-      const autoApply = confidence >= autoApplyThreshold;
+      // High confidence: auto-apply triage directly (configurable threshold)
+      const autoApply = confidence >= AI_THRESHOLDS.autoApply;
+
+      // Dedup: skip if pending auto_triage already exists for same incident, or total cap exceeded
+      const dedupState = await getAiActionsDedupState();
+      const skipReason = !autoApply ? shouldSkipAction(dedupState, { incidentId: ticket.id, type: "auto_triage" }) : null;
+      if (skipReason) {
+        console.log(`[AI Triage] Skipped pending_approval for ${ticket.id}: ${skipReason}`);
+        // Still return the triage result so caller knows what AI recommended
+        return json(res, 200, { action: { ...triage, skipped: true, skipReason }, triage, confidence, autoApplied: false, skipped: true });
+      }
+
       const triageRecord = {
         id: `AIT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
         type: "auto_triage",
@@ -5119,13 +5186,12 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const now = new Date().toISOString();
       const actions = [];
-      // Dedup: skip if pending sla_prevention already exists for this incident
-      const _slaExisting = await db.getAll("ai_actions");
-      const _slaPendingKeys = new Set();
-      for (const r of _slaExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.type === "sla_prevention" && it.incidentId) _slaPendingKeys.add(it.incidentId); } catch {} }
+      // Unified dedup: use shared helper + per-incident cap
+      const dedupState = await getAiActionsDedupState();
       for (const pred of predictions) {
-        if ((pred.breachProbability || 0) >= 70) {
-          if (_slaPendingKeys.has(pred.ticketId)) continue; // dedup
+        if ((pred.breachProbability || 0) >= AI_THRESHOLDS.slaRisk) {
+          const skipReason = shouldSkipAction(dedupState, { incidentId: pred.ticketId, type: "sla_prevention" });
+          if (skipReason) { console.log(`[AI SLA] Skipped ${pred.ticketId}: ${skipReason}`); continue; }
           const actionRecord = {
             id: `SLA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
             type: "sla_prevention",
@@ -5146,6 +5212,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
             requestedBy,
           };
           await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+          trackNewAction(dedupState, { incidentId: pred.ticketId, type: "sla_prevention", title: actionRecord.title });
           actions.push(actionRecord);
         }
       }
@@ -5458,10 +5525,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const now = new Date().toISOString();
       const actions = [];
-      // Dedup: skip if pending preventive_action with same normalized title exists
-      const _patExisting = await db.getAll("ai_actions");
-      const _patPendingTitles = new Set();
-      for (const r of _patExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.type === "preventive_action" && it.title) _patPendingTitles.add(it.title.toLowerCase().replace(/[^a-z0-9]/g, "")); } catch {} }
+      // Unified dedup: use shared helper + per-incident/total cap + title dedup
+      const dedupState = await getAiActionsDedupState();
       for (const pat of patterns) {
         const patId = pat.patternId || `PAT-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
         pat.id = patId;
@@ -5470,15 +5535,15 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         pat.status = "active";
         await db.upsert("ai_patterns", patId, JSON.stringify(pat));
 
-        if ((pat.confidence || 0) >= 70) {
-          const _normTitle = `Pattern: ${pat.title}`.toLowerCase().replace(/[^a-z0-9]/g, "");
-          if (_patPendingTitles.has(_normTitle)) continue; // dedup
-          _patPendingTitles.add(_normTitle); // prevent intra-batch dups
+        if ((pat.confidence || 0) >= AI_THRESHOLDS.patternConfidence) {
+          const actionTitle = `Pattern: ${pat.title}`;
+          const skipReason = shouldSkipAction(dedupState, { type: "preventive_action", title: actionTitle });
+          if (skipReason) { console.log(`[AI Patterns] Skipped "${pat.title}": ${skipReason}`); continue; }
           const actionRecord = {
             id: `PRA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
             type: "preventive_action",
             severity: pat.confidence >= 90 ? "critical" : "high",
-            title: `Pattern: ${pat.title}`,
+            title: actionTitle,
             description: pat.description,
             patternId: patId,
             suggestedAction: pat.suggestedPrevention || "Investigate pattern",
@@ -5491,6 +5556,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
             requestedBy,
           };
           await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+          trackNewAction(dedupState, { type: "preventive_action", title: actionTitle });
           actions.push(actionRecord);
         }
       }
@@ -5663,18 +5729,17 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       // Stamp each action with metadata and save to DB
       const now = new Date().toISOString();
       const savedActions = [];
-      // Dedup: skip if pending action of same type for same incident already exists
-      const _wfExisting = await db.getAll("ai_actions");
-      const _wfPendingKeys = new Set();
-      for (const r of _wfExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.incidentId && it.type) _wfPendingKeys.add(`${it.type}:${it.incidentId}`); } catch {} }
+      // Unified dedup: use shared helper — per-incident cap + type:incident + total cap
+      const dedupState = await getAiActionsDedupState();
+      let skippedCount = 0;
       for (const action of actions) {
-        if (action.incidentId && action.type && _wfPendingKeys.has(`${action.type}:${action.incidentId}`)) continue; // dedup
+        const skipReason = shouldSkipAction(dedupState, { incidentId: action.incidentId, type: action.type, title: action.title });
+        if (skipReason) { skippedCount++; continue; }
         const actionId = action.id || `AIA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2,6)}`;
-        if (action.incidentId && action.type) _wfPendingKeys.add(`${action.type}:${action.incidentId}`); // prevent intra-batch dups
         const record = {
           ...action,
           id: actionId,
-          status: "pending_approval", // pending_approval | approved | rejected | executed | failed
+          status: "pending_approval",
           createdAt: now,
           createdBy: "AI Assist Engine",
           requestedBy,
@@ -5684,8 +5749,10 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
           executionResult: null,
         };
         await db.upsert("ai_actions", actionId, JSON.stringify(record));
+        trackNewAction(dedupState, { incidentId: action.incidentId, type: action.type, title: action.title });
         savedActions.push(record);
       }
+      if (skippedCount > 0) console.log(`[AI Actions] Skipped ${skippedCount} actions (dedup/cap)`);
 
       console.log(`[AI Actions] Scan generated ${savedActions.length} action items for ${requestedBy}`);
       return json(res, 200, { actions: savedActions, scannedAt: now, criticalCount: critical.length, slaAtRiskCount: slaAtRisk.length });
@@ -6087,7 +6154,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
         aiActionsTotal: actionRows.length,
         aiActionsBreakdown: statusBreakdown,
         schedules: {
-          queueCleanup: { interval: "6 hours", retentionDays: 3, description: "Dismisses stale pending_approval ai_actions (>3 days or incident resolved)" },
+          queueCleanup: { interval: "6 hours", retentionDays: AI_THRESHOLDS.staleDays, description: `Deletes stale pending_approval ai_actions (>${AI_THRESHOLDS.staleDays}d or incident resolved), caps at ${AI_THRESHOLDS.maxPendingTotal}` },
           logPurge: { interval: "6 hours", retentionDays: 2, description: "Deletes old escalation_log, notifications, email_rejections + dismissed AI records" },
           terminalPurge: { interval: "6 hours", retentionDays: 7, description: "Deletes terminal-status ai_actions (auto_applied, approved, executed, rejected, auto_approved) older than 7 days" },
           auditPurge: { interval: "6 hours", retentionDays: 30, description: "Prunes audit_log entries older than 30 days" },
@@ -6097,6 +6164,11 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // ─── GET /api/ai/thresholds — Current AI thresholds for Admin UI ───
+  if (pathname === "/api/ai/thresholds" && req.method === "GET") {
+    return json(res, 200, { thresholds: AI_THRESHOLDS, timestamp: new Date().toISOString() });
   }
 
   // ─── Phase 6: AI Historical Incident Closure (Bulk Close — No Notifications) ───
@@ -6334,7 +6406,7 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
           suggestions.push(suggestion);
 
           // ─── Auto-approve & apply resolution in PROD_TEST_MODE ───
-          if (PROD_TEST_MODE && suggestion.confidence >= 60) {
+          if (PROD_TEST_MODE && suggestion.confidence >= AI_THRESHOLDS.autoResolveConfidence) {
             try {
               suggestion.status = "auto_approved";
               suggestion.approvedBy = "AI Pipeline (PROD_TEST_MODE)";
@@ -7773,7 +7845,7 @@ async function start() {
     const runQueueCleanup = async () => {
       const startTime = Date.now();
       try {
-        const maxAgeDays = 3;
+        const maxAgeDays = AI_THRESHOLDS.staleDays;
         const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
         const incRows = await db.getAll("incidents");
         const resolvedIds = new Set();
@@ -7784,7 +7856,10 @@ async function start() {
           } catch {}
         }
         const actionRows = await db.getAll("ai_actions");
-        let dismissed = 0;
+        let deleted = 0;
+        let cappedDel = 0;
+        // Collect pending items for potential cap enforcement
+        const pendingItems = [];
         for (const r of actionRows) {
           try {
             const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
@@ -7792,24 +7867,33 @@ async function start() {
             const isStale = (item.createdAt && item.createdAt < cutoff);
             const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
             if (isStale || incResolved) {
-              item.status = "dismissed";
-              item.dismissedAt = new Date().toISOString();
-              item.dismissedBy = "scheduled-cleanup";
-              item.dismissReason = incResolved ? "incident_resolved" : "stale_age";
-              await db.upsert("ai_actions", item.id, JSON.stringify(item));
-              dismissed++;
+              // Direct delete instead of dismiss→delete cycle
+              await db.delete("ai_actions", item.id);
+              deleted++;
+            } else {
+              pendingItems.push(item);
             }
           } catch {}
         }
-        if (dismissed > 0) {
+        // Cap enforcement: if still over maxPendingTotal, delete oldest by createdAt
+        if (pendingItems.length > AI_THRESHOLDS.maxPendingTotal) {
+          pendingItems.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+          const excess = pendingItems.length - AI_THRESHOLDS.maxPendingTotal;
+          for (let i = 0; i < excess; i++) {
+            await db.delete("ai_actions", pendingItems[i].id);
+            cappedDel++;
+          }
+        }
+        const totalRemoved = deleted + cappedDel;
+        if (totalRemoved > 0) {
           if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
-          console.log(`[Scheduled Cleanup] Dismissed ${dismissed} stale ai_actions (cutoff: ${maxAgeDays}d, resolved incidents: ${resolvedIds.size})`);
+          console.log(`[Scheduled Cleanup] Deleted ${deleted} stale + ${cappedDel} over-cap ai_actions (staleDays: ${maxAgeDays}, cap: ${AI_THRESHOLDS.maxPendingTotal}, resolved: ${resolvedIds.size})`);
         } else {
           console.log(`[Scheduled Cleanup] No stale items found`);
         }
         purgeStatus.queueCleanup.lastRun = new Date().toISOString();
-        purgeStatus.queueCleanup.lastResult = { dismissed, resolvedIncidents: resolvedIds.size, durationMs: Date.now() - startTime };
-        purgeStatus.queueCleanup.totalDismissed += dismissed;
+        purgeStatus.queueCleanup.lastResult = { deleted, cappedDel, resolvedIncidents: resolvedIds.size, remaining: pendingItems.length - cappedDel, durationMs: Date.now() - startTime };
+        purgeStatus.queueCleanup.totalDismissed += totalRemoved;
         purgeStatus.queueCleanup.runCount++;
         purgeStatus.queueCleanup.nextRun = new Date(Date.now() + CLEANUP_INTERVAL).toISOString();
       } catch (e) {

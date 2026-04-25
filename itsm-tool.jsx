@@ -3203,8 +3203,8 @@ export default function ITSMApp() {
     };
     // Initial scan after 15s
     const initialTimeout = setTimeout(runFullMonitor, 15000);
-    // Then every 5 minutes
-    aiMonitorRef.current = setInterval(runFullMonitor, 5 * 60 * 1000);
+    // Then every 15 minutes (configurable via AI_THRESHOLDS.monitorIntervalMin)
+    aiMonitorRef.current = setInterval(runFullMonitor, 15 * 60 * 1000);
     return () => { clearTimeout(initialTimeout); if (aiMonitorRef.current) clearInterval(aiMonitorRef.current); };
   }, [aiMonitorEnabled, isLoggedIn, runAiMonitor, runSlaPrediction, runPatternDetection]);
 
@@ -14363,6 +14363,41 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 </div>
               </div>
             )}
+
+            {/* AI Thresholds (read-only display, configurable via env vars on server) */}
+            {(() => {
+              const [thresholds, setThresholds] = React.useState(null);
+              React.useEffect(() => {
+                fetch("/api/ai/thresholds").then(r => r.json()).then(d => setThresholds(d.thresholds)).catch(() => {});
+              }, []);
+              if (!thresholds) return null;
+              const items = [
+                { key: "autoApply", label: "Auto-Apply Triage", desc: "Confidence % to auto-apply triage", icon: "🎯" },
+                { key: "slaRisk", label: "SLA Risk Alert", desc: "Breach probability % threshold", icon: "⏱️" },
+                { key: "patternConfidence", label: "Pattern Confidence", desc: "Pattern detection confidence %", icon: "🔍" },
+                { key: "autoResolveConfidence", label: "Auto-Resolve", desc: "Auto-resolve confidence %", icon: "✅" },
+                { key: "maxPendingPerIncident", label: "Max Pending/Incident", desc: "Pending actions cap per incident", icon: "📌" },
+                { key: "maxPendingTotal", label: "Max Pending Total", desc: "Global pending actions cap", icon: "📊" },
+                { key: "staleDays", label: "Stale Cleanup Days", desc: "Days before auto-delete stale items", icon: "🗑️" },
+                { key: "monitorIntervalMin", label: "Monitor Interval", desc: "AI monitor scan interval (minutes)", icon: "⏰" },
+              ];
+              return (
+                <div style={{ background: "linear-gradient(135deg, #FFB34708, #6366F108)", borderRadius: 8, border: "1px solid #FFB34722", padding: 14, marginTop: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#FFB347", marginBottom: 4 }}>⚙️ AI Thresholds (Server Config)</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginBottom: 10 }}>Configurable via environment variables · Changes require server restart</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                    {items.map(it => (
+                      <div key={it.key} style={{ textAlign: "center", padding: 8, borderRadius: 6, background: "#0F1117", border: "1px solid #1E2130" }}>
+                        <div style={{ fontSize: 14 }}>{it.icon}</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", margin: "4px 0" }}>{thresholds[it.key]}{it.key.includes("onfidence") || it.key === "autoApply" || it.key === "slaRisk" ? "%" : ""}</div>
+                        <div style={{ fontSize: 9, fontWeight: 600, color: "#E8ECF4" }}>{it.label}</div>
+                        <div style={{ fontSize: 8, color: "#5A6178" }}>{it.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           );
         })()}
