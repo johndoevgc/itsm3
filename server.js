@@ -6981,6 +6981,86 @@ Respond in JSON ONLY:
     }
   }
 
+  // ─── Bulk Cleanup: Dismiss stale pending_approval items ───────────────
+  // POST /api/ai/cleanup-queue — dismiss old/stale pending_approval items
+  if (pathname === "/api/ai/cleanup-queue" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const dryRun = body.dryRun === true;
+      const maxAgeDays = body.maxAgeDays || 3; // dismiss items older than N days
+      const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
+      // Get all incidents to check which are resolved/closed
+      const incRows = await db.getAll("incidents");
+      const resolvedIds = new Set();
+      for (const r of incRows) {
+        try {
+          const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id);
+        } catch {}
+      }
+
+      // Process ai_actions
+      const actionRows = await db.getAll("ai_actions");
+      let actionsDismissed = 0, actionsStale = 0, actionsTotal = actionRows.length;
+      for (const r of actionRows) {
+        try {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!item || item.status !== "pending_approval") continue;
+          // Dismiss if: incident is resolved/closed, OR item is older than cutoff
+          const isStale = (item.createdAt && item.createdAt < cutoff);
+          const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
+          if (isStale || incResolved) {
+            actionsStale++;
+            if (!dryRun) {
+              item.status = "dismissed";
+              item.dismissedAt = new Date().toISOString();
+              item.dismissedBy = "admin-cleanup";
+              item.dismissReason = incResolved ? "incident_resolved" : "stale_age";
+              await db.upsert("ai_actions", item.id, JSON.stringify(item));
+              actionsDismissed++;
+            }
+          }
+        } catch {}
+      }
+
+      // Process ai_workflow_queue
+      const wfRows = await db.getAll("ai_workflow_queue");
+      let wfDismissed = 0, wfStale = 0, wfTotal = wfRows.length;
+      for (const r of wfRows) {
+        try {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!item || item.status !== "pending_approval") continue;
+          const isStale = (item.createdAt && item.createdAt < cutoff);
+          const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
+          if (isStale || incResolved) {
+            wfStale++;
+            if (!dryRun) {
+              item.status = "dismissed";
+              item.dismissedAt = new Date().toISOString();
+              item.dismissedBy = "admin-cleanup";
+              item.dismissReason = incResolved ? "incident_resolved" : "stale_age";
+              await db.upsert("ai_workflow_queue", item.id, JSON.stringify(item));
+              wfDismissed++;
+            }
+          }
+        } catch {}
+      }
+
+      if (cacheLayer) { cacheLayer.invalidatePrefix("ai_actions"); cacheLayer.invalidatePrefix("ai_workflow_queue"); }
+      console.log(`[Queue Cleanup] ${dryRun ? "DRY RUN" : "EXECUTED"} — ai_actions: ${actionsDismissed}/${actionsTotal} dismissed, ai_workflow_queue: ${wfDismissed}/${wfTotal} dismissed`);
+      return json(res, 200, {
+        success: true, dryRun, maxAgeDays, cutoff,
+        resolvedIncidents: resolvedIds.size,
+        ai_actions: { total: actionsTotal, stale: dryRun ? actionsStale : undefined, dismissed: dryRun ? undefined : actionsDismissed },
+        ai_workflow_queue: { total: wfTotal, stale: dryRun ? wfStale : undefined, dismissed: dryRun ? undefined : wfDismissed }
+      });
+    } catch (err) {
+      console.error("[Queue Cleanup]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── AI Learn from Incidents → KB Articles ────────────────────────────
   if (pathname === "/api/ai/learn-incidents-kb" && req.method === "POST") {
     try {
