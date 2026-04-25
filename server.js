@@ -1316,6 +1316,28 @@ const server = http.createServer(async (req, res) => {
         if (collection === "incidents" && (body.status === "Resolved" || body.status === "Closed")) {
           generateKBDraft(body).catch(e => console.warn("[Auto KB Draft]", e.message));
 
+          // ─── Auto-dismiss pending AI queue items for this incident ──
+          (async () => {
+            try {
+              const actionRows = await db.getAll("ai_actions");
+              let dismissed = 0;
+              for (const r of actionRows) {
+                try {
+                  const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+                  if (item && item.status === "pending_approval" && item.incidentId === recordId) {
+                    item.status = "dismissed";
+                    item.dismissedAt = new Date().toISOString();
+                    item.dismissedBy = "auto-incident-resolved";
+                    item.dismissReason = `Incident ${body.status.toLowerCase()}`;
+                    await db.upsert("ai_actions", item.id, JSON.stringify(item));
+                    dismissed++;
+                  }
+                } catch {}
+              }
+              if (dismissed > 0) console.log(`[Auto-Dismiss] ${dismissed} pending ai_actions dismissed for ${recordId} (${body.status})`);
+            } catch (e) { console.warn("[Auto-Dismiss]", e.message); }
+          })();
+
           // ─── Email: Customer resolution notice ──────────────────────
           graphSendMail({
             to: [body.reporterEmail || body.requesterEmail || "customer@example.com"],
@@ -7414,6 +7436,53 @@ async function start() {
       }, 5 * 60 * 1000);
       console.log("[ZD AutoSync] Scheduled Zendesk incremental sync every 5 minutes");
     }
+
+    // ─── Scheduled Queue Cleanup (every 6 hours) ────────────────────
+    const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+    const queueCleanupInterval = setInterval(async () => {
+      try {
+        const maxAgeDays = 3;
+        const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+        const incRows = await db.getAll("incidents");
+        const resolvedIds = new Set();
+        for (const r of incRows) {
+          try {
+            const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id);
+          } catch {}
+        }
+        const actionRows = await db.getAll("ai_actions");
+        let dismissed = 0;
+        for (const r of actionRows) {
+          try {
+            const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (!item || item.status !== "pending_approval") continue;
+            const isStale = (item.createdAt && item.createdAt < cutoff);
+            const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
+            if (isStale || incResolved) {
+              item.status = "dismissed";
+              item.dismissedAt = new Date().toISOString();
+              item.dismissedBy = "scheduled-cleanup";
+              item.dismissReason = incResolved ? "incident_resolved" : "stale_age";
+              await db.upsert("ai_actions", item.id, JSON.stringify(item));
+              dismissed++;
+            }
+          } catch {}
+        }
+        if (dismissed > 0) {
+          if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
+          console.log(`[Scheduled Cleanup] Dismissed ${dismissed} stale ai_actions (cutoff: ${maxAgeDays}d, resolved incidents: ${resolvedIds.size})`);
+        } else {
+          console.log(`[Scheduled Cleanup] No stale items found`);
+        }
+      } catch (e) { console.warn("[Scheduled Cleanup] Error:", e.message); }
+    }, CLEANUP_INTERVAL);
+    // Run once on startup after 60s delay
+    setTimeout(() => {
+      console.log("[Scheduled Cleanup] Running initial cleanup...");
+      queueCleanupInterval._onTimeout && queueCleanupInterval._onTimeout();
+    }, 60000);
+    console.log("[Scheduled Cleanup] Queue auto-cleanup every 6 hours");
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
