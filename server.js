@@ -39,26 +39,29 @@ const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 const ENTRA_CERT_THUMBPRINT = process.env.ENTRA_CERT_THUMBPRINT || "";
 
 // Helper: Build client assertion JWT for certificate-based auth
+let _cachedPrivateKey = null;
+let _cachedX5t = null;
 function buildClientAssertion() {
   if (!ENTRA_CERT_THUMBPRINT) return null;
   try {
-    // On Azure Linux App Service, certs are at /var/ssl/private/<thumbprint>.p12
-    const pfxPath = `/var/ssl/private/${ENTRA_CERT_THUMBPRINT}.p12`;
-    if (!fs.existsSync(pfxPath)) { console.error("[Entra] PFX not found at", pfxPath); return null; }
-    // Extract private key using openssl (available on Azure Linux)
-    const { execSync } = require("child_process");
-    const pem = execSync(`openssl pkcs12 -in "${pfxPath}" -nocerts -nodes -passin pass:`, { encoding: "utf8" });
-    const privateKey = crypto.createPrivateKey(pem);
-    // Build JWT header with x5t (base64url SHA-1 thumbprint)
-    const x5t = Buffer.from(ENTRA_CERT_THUMBPRINT, "hex").toString("base64url");
-    const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT", x5t })).toString("base64url");
+    // Cache private key after first extraction (avoid blocking execSync on every call)
+    if (!_cachedPrivateKey) {
+      const pfxPath = `/var/ssl/private/${ENTRA_CERT_THUMBPRINT}.p12`;
+      if (!fs.existsSync(pfxPath)) { console.error("[Entra] PFX not found at", pfxPath); return null; }
+      const { execSync } = require("child_process");
+      const pem = execSync(`openssl pkcs12 -in "${pfxPath}" -nocerts -nodes -passin pass:`, { encoding: "utf8" });
+      _cachedPrivateKey = crypto.createPrivateKey(pem);
+      _cachedX5t = Buffer.from(ENTRA_CERT_THUMBPRINT, "hex").toString("base64url");
+      console.log("[Entra] Private key extracted and cached");
+    }
+    const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT", x5t: _cachedX5t })).toString("base64url");
     const now = Math.floor(Date.now() / 1000);
     const payload = Buffer.from(JSON.stringify({
       aud: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`,
       iss: ENTRA_CLIENT_ID, sub: ENTRA_CLIENT_ID,
       jti: crypto.randomUUID(), nbf: now, exp: now + 300,
     })).toString("base64url");
-    const sig = crypto.sign("SHA256", Buffer.from(`${header}.${payload}`), privateKey).toString("base64url");
+    const sig = crypto.sign("SHA256", Buffer.from(`${header}.${payload}`), _cachedPrivateKey).toString("base64url");
     return `${header}.${payload}.${sig}`;
   } catch (err) { console.error("[Entra] Client assertion build failed:", err.message); return null; }
 }
@@ -186,6 +189,30 @@ let notifyEngine = null;
 let workflowEngine = null;
 let analyticsEngine = null;
 let cacheLayer = null;
+
+// ─── Cached DB helpers (uses cacheLayer when available) ─────────────────
+async function cachedGetAll(collection) {
+  if (cacheLayer) {
+    const key = `getAll:${collection}`;
+    const cached = cacheLayer.get(key);
+    if (cached !== null) return cached;
+    const rows = await db.getAll(collection);
+    cacheLayer.set(key, rows);
+    return rows;
+  }
+  return db.getAll(collection);
+}
+async function cachedGetOne(collection, id) {
+  if (cacheLayer) {
+    const key = `getOne:${collection}:${id}`;
+    const cached = cacheLayer.get(key);
+    if (cached !== null) return cached;
+    const row = await db.getOne(collection, id);
+    cacheLayer.set(key, row);
+    return row;
+  }
+  return db.getOne(collection, id);
+}
 
 // ─── Dynamic SLA Map helper (reads from slaEngine policy, falls back to defaults) ──
 function getSlaMap() {
@@ -810,6 +837,13 @@ async function processInboundEmails() {
       rejectedCount++;
     };
 
+    // Pre-load incidents ONCE for email dedup (avoid N+1 per email)
+    const _emailIncRows = await db.getAll("incidents");
+    let _emailParsedIncidents = _emailIncRows.map(row => {
+      try { return typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { return null; }
+    }).filter(Boolean);
+    const _emailMsgIdSet = new Set(_emailParsedIncidents.filter(i => i.emailMessageId).map(i => i.emailMessageId));
+
     for (const msg of messages) {
       try {
         const fromAddr = (msg.from?.emailAddress?.address || "").toLowerCase();
@@ -882,12 +916,7 @@ async function processInboundEmails() {
         }
 
         // ── Gate 5: Duplicate detection — skip if same emailMessageId already exists ──
-        const existingIncidents = await db.getAll("incidents");
-        const parsedIncidents = existingIncidents.map(row => {
-          try { return typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { return null; }
-        }).filter(Boolean);
-
-        const isDuplicate = parsedIncidents.some(inc => inc.emailMessageId === msg.id);
+        const isDuplicate = _emailMsgIdSet.has(msg.id);
         if (isDuplicate) {
           await _markEmailRead(token, sender, msg.id);
           console.log(`[Email-to-Ticket] Skipped duplicate email: ${msg.id}`);
@@ -898,7 +927,7 @@ async function processInboundEmails() {
         const normalizeSubject = (s) => s.replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").replace(/^\[.*?\]\s*/g, "").trim().toLowerCase();
         const normalizedSubject = normalizeSubject(subject);
         const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold"]);
-        const threadMatch = parsedIncidents.find(inc =>
+        const threadMatch = _emailParsedIncidents.find(inc =>
           inc.source === "email" && openStatuses.has(inc.status) &&
           normalizeSubject(inc.title || "") === normalizedSubject
         );
@@ -1227,16 +1256,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // GET /api/db/:collection — list all
+      // GET /api/db/:collection — list all (cached, with optional pagination)
       if (req.method === "GET" && !recordId) {
-        const rows = await db.getAll(collection);
-        const items = rows.map(r => JSON.parse(r.data));
-        return json(res, 200, { collection, count: items.length, data: items });
+        const qs = urlObj.searchParams;
+        const rows = await cachedGetAll(collection);
+        const allItems = rows.map(r => JSON.parse(r.data));
+        const limit = parseInt(qs.get("limit") || "0") || 0;
+        const offset = parseInt(qs.get("offset") || "0") || 0;
+        const search = qs.get("search") || "";
+        let items = allItems;
+        if (search) {
+          const q = search.toLowerCase();
+          items = items.filter(i => JSON.stringify(i).toLowerCase().includes(q));
+        }
+        const total = items.length;
+        if (limit > 0) items = items.slice(offset, offset + limit);
+        return json(res, 200, { collection, count: items.length, total, data: items });
       }
 
-      // GET /api/db/:collection/:id — get one
+      // GET /api/db/:collection/:id — get one (cached)
       if (req.method === "GET" && recordId) {
-        const row = await db.getOne(collection, recordId);
+        const row = await cachedGetOne(collection, recordId);
         if (!row) return json(res, 404, { error: "Not found" });
         return json(res, 200, JSON.parse(row.data));
       }
@@ -2364,6 +2404,17 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
           // 3) Import ALL tickets (including closed)
           let ticketPage = 1; let hasMore = true;
+          // Pre-load incidents ONCE for dedup (avoid N+1 inside ticket loop)
+          const _fiIncRows = await db.getAll("incidents");
+          const _fiIncByZdId = new Set();
+          const _fiIncById = new Set();
+          for (const row of _fiIncRows) {
+            try {
+              const inc = JSON.parse(row.data);
+              if (inc.zdTicketId) _fiIncByZdId.add(String(inc.zdTicketId));
+              _fiIncById.add(inc.id);
+            } catch {}
+          }
           while (hasMore) {
             try {
               const ticketResult = await zdRequest("GET", `/tickets.json?page=${ticketPage}&per_page=100&sort_by=created_at&sort_order=asc`);
@@ -2405,15 +2456,10 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   } catch (e) { zdSyncStats.errors++; }
                 }
 
-                // Auto-create ITSM incidents from tickets
+                // Auto-create ITSM incidents from tickets (uses pre-loaded sets)
                 if (createIncidents) {
-                  const existing = await db.getOne("incidents", `INC-ZD${t.id}`);
-                  // Also scan by zdTicketId to catch frontend-created incidents with random IDs
-                  let existsByZd = false;
-                  if (!existing) {
-                    const allInc = await db.getAll("incidents");
-                    existsByZd = allInc.some(row => { try { return String(JSON.parse(row.data).zdTicketId) === String(t.id); } catch { return false; } });
-                  }
+                  const existing = _fiIncById.has(`INC-ZD${t.id}`);
+                  const existsByZd = _fiIncByZdId.has(String(t.id));
                   if (!existing && !existsByZd) {
                     const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                     const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
@@ -2437,6 +2483,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                       activityLog: [{ id: `AL-ZD${t.id}`, type: "sync", user: "Zendesk Import", time: new Date().toISOString(), detail: `Historical import from Zendesk #${t.id} (${t.status})` }],
                     };
                     await db.upsert("incidents", incident.id, JSON.stringify(incident));
+                    _fiIncById.add(incident.id);
+                    _fiIncByZdId.add(String(t.id));
                   }
                 }
               }
@@ -2492,6 +2540,17 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           // Use Zendesk incremental ticket export
           let url = `/incremental/tickets.json?start_time=${startTime}`;
           let hasMore = true;
+          // Pre-load incidents ONCE (avoid N+1 inside ticket loop)
+          const _incRows = await db.getAll("incidents");
+          const _incByZdId = new Map();
+          const _incById = new Map();
+          for (const row of _incRows) {
+            try {
+              const inc = JSON.parse(row.data);
+              if (inc.zdTicketId) _incByZdId.set(String(inc.zdTicketId), { row, inc });
+              _incById.set(inc.id, { row, inc });
+            } catch {}
+          }
           while (hasMore) {
             try {
               const result = await zdRequest("GET", url);
@@ -2512,39 +2571,33 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 if (existingRow) { syncResult.ticketsUpdated++; }
                 else { syncResult.ticketsCreated++; }
 
-                // Sync status/priority back to ITSM incidents if linked
-                const itsmRows = await db.getAll("incidents");
+                // Sync status/priority back to ITSM incidents if linked (uses pre-loaded map)
                 let hasLinkedIncident = false;
-                for (const row of itsmRows) {
-                  try {
-                    const inc = JSON.parse(row.data);
-                    if (String(inc.zdTicketId) === String(t.id)) {
-                      hasLinkedIncident = true;
-                      const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-                      const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-                      let changed = false;
-                      const newStatus = statusMap[t.status];
-                      const newPriority = priorityMap[t.priority];
-                      if (newStatus && newStatus !== inc.status) { inc.status = newStatus; changed = true; }
-                      if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; changed = true; }
-                      if (changed) {
-                        inc.zdLastSync = new Date().toISOString();
-                        inc.activityLog = [...(inc.activityLog || []), {
-                          id: `AL-SYNC-${Date.now()}`, type: "sync", user: "Zendesk Sync",
-                          time: new Date().toISOString(),
-                          detail: `Auto-synced from Zendesk #${t.id}: status=${newStatus || '-'}, priority=${newPriority || '-'}`,
-                        }];
-                        await db.upsert("incidents", inc.id, JSON.stringify(inc));
-                      }
-                      break;
-                    }
-                  } catch {}
+                const _linked = _incByZdId.get(String(t.id));
+                if (_linked) {
+                  hasLinkedIncident = true;
+                  const inc = _linked.inc;
+                  const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+                  const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+                  let changed = false;
+                  const newStatus = statusMap[t.status];
+                  const newPriority = priorityMap[t.priority];
+                  if (newStatus && newStatus !== inc.status) { inc.status = newStatus; changed = true; }
+                  if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; changed = true; }
+                  if (changed) {
+                    inc.zdLastSync = new Date().toISOString();
+                    inc.activityLog = [...(inc.activityLog || []), {
+                      id: `AL-SYNC-${Date.now()}`, type: "sync", user: "Zendesk Sync",
+                      time: new Date().toISOString(),
+                      detail: `Auto-synced from Zendesk #${t.id}: status=${newStatus || '-'}, priority=${newPriority || '-'}`,
+                    }];
+                    await db.upsert("incidents", inc.id, JSON.stringify(inc));
+                  }
                 }
 
-                // Fast-path dedup: check by known key before creating
+                // Fast-path dedup: check pre-loaded map before creating
                 if (!hasLinkedIncident) {
-                  const existsByKey = await db.getOne("incidents", `INC-ZD${t.id}`);
-                  if (existsByKey) hasLinkedIncident = true;
+                  if (_incById.has(`INC-ZD${t.id}`)) hasLinkedIncident = true;
                 }
 
                 // Auto-create ITSM incident if no linked incident exists (Production Live)
@@ -2708,42 +2761,39 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 importedAt: new Date().toISOString(), source: "webhook",
               }));
 
-              // Sync to ITSM incidents if linked
+              // Sync to ITSM incidents if linked (load once, reuse below)
               const incRows = await db.getAll("incidents");
+              const _whIncByZdId = new Map();
               for (const row of incRows) {
                 try {
                   const inc = JSON.parse(row.data);
-                  if (String(inc.zdTicketId) === String(t.id)) {
-                    const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-                    const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-                    let changed = false;
-                    if (statusMap[t.status] && statusMap[t.status] !== inc.status) { inc.status = statusMap[t.status]; changed = true; }
-                    if (priorityMap[t.priority] && priorityMap[t.priority] !== inc.priority) { inc.priority = priorityMap[t.priority]; changed = true; }
-                    if (changed) {
-                      inc.zdLastSync = new Date().toISOString();
-                      inc.activityLog = [...(inc.activityLog || []), {
-                        id: `AL-WH-${Date.now()}`, type: "sync", user: "Zendesk Webhook",
-                        time: new Date().toISOString(),
-                        detail: `Real-time sync: ${eventType} — status=${t.status}, priority=${t.priority}`,
-                      }];
-                      await db.upsert("incidents", inc.id, JSON.stringify(inc));
-                      console.log(`[ZD Webhook] Updated ITSM ${inc.id} from Zendesk #${t.id}`);
-                    }
-                    break;
-                  }
+                  if (inc.zdTicketId) _whIncByZdId.set(String(inc.zdTicketId), inc);
                 } catch {}
+              }
+              const _whLinked = _whIncByZdId.get(String(t.id));
+              if (_whLinked) {
+                const inc = _whLinked;
+                const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+                const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+                let changed = false;
+                if (statusMap[t.status] && statusMap[t.status] !== inc.status) { inc.status = statusMap[t.status]; changed = true; }
+                if (priorityMap[t.priority] && priorityMap[t.priority] !== inc.priority) { inc.priority = priorityMap[t.priority]; changed = true; }
+                if (changed) {
+                  inc.zdLastSync = new Date().toISOString();
+                  inc.activityLog = [...(inc.activityLog || []), {
+                    id: `AL-WH-${Date.now()}`, type: "sync", user: "Zendesk Webhook",
+                    time: new Date().toISOString(),
+                    detail: `Real-time sync: ${eventType} — status=${t.status}, priority=${t.priority}`,
+                  }];
+                  await db.upsert("incidents", inc.id, JSON.stringify(inc));
+                  console.log(`[ZD Webhook] Updated ITSM ${inc.id} from Zendesk #${t.id}`);
+                }
               }
 
               // If new ticket and no ITSM incident exists, auto-create one
               if (eventType === "ticket_created" || eventType === "zen:event-type:ticket.created") {
-                // Fast-path dedup: check by known key first
-                let hasIncident = !!(await db.getOne("incidents", `INC-ZD${t.id}`));
-                if (!hasIncident) {
-                  const allInc = await db.getAll("incidents");
-                  for (const row of allInc) {
-                    try { if (String(JSON.parse(row.data).zdTicketId) === String(t.id)) { hasIncident = true; break; } } catch {}
-                  }
-                }
+                // Use pre-loaded map for dedup (no second getAll)
+                let hasIncident = _whIncByZdId.has(String(t.id));
                 if (!hasIncident) {
                   const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                   const slaMap = getSlaMap();
@@ -2977,23 +3027,27 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       if (pathname === "/api/zendesk/sync-organizations" && req.method === "POST") {
         try {
           const orgRows = await db.getAll("zendesk_orgs");
+          // Pre-load customers ONCE (avoid N+1 inside org loop)
+          const _custRows = await db.getAll("customers");
+          const _custParsed = _custRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+          const _custByZdOrgId = new Map();
+          const _custByName = new Map();
+          for (const c of _custParsed) {
+            if (c.zdOrgId) _custByZdOrgId.set(String(c.zdOrgId), c);
+            if (c.name) _custByName.set(c.name.toLowerCase(), c);
+          }
           let synced = 0; let created = 0;
           for (const row of orgRows) {
             const org = JSON.parse(row.data);
-            const existingCustomers = await db.getAll("customers");
-            let found = false;
-            for (const cRow of existingCustomers) {
-              const c = JSON.parse(cRow.data);
-              if (c.zdOrgId === org.id || c.name?.toLowerCase() === org.name?.toLowerCase()) {
-                c.zdOrgId = org.id;
-                c.zdDomains = org.domains || [];
-                c.zdTags = org.tags || [];
-                c.zdLastSync = new Date().toISOString();
-                await db.upsert("customers", c.id, JSON.stringify(c));
-                found = true; synced++; break;
-              }
-            }
-            if (!found) {
+            const c = _custByZdOrgId.get(String(org.id)) || _custByName.get(org.name?.toLowerCase());
+            if (c) {
+              c.zdOrgId = org.id;
+              c.zdDomains = org.domains || [];
+              c.zdTags = org.tags || [];
+              c.zdLastSync = new Date().toISOString();
+              await db.upsert("customers", c.id, JSON.stringify(c));
+              synced++;
+            } else {
               const newCust = {
                 id: `CUS-ZD${org.id}`, name: org.name, category: "Zendesk Import",
                 contactPerson: "", email: "", phone: "",
@@ -3021,7 +3075,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         const limit = Math.min(parseInt(qs.get("limit") || "100"), 500);
         const status = qs.get("status");
         try {
-          const rows = await db.getAll("zendesk_tickets");
+          const rows = await cachedGetAll("zendesk_tickets");
           let tickets = rows.map(r => JSON.parse(r.data));
           if (status) tickets = tickets.filter(t => t.status === status);
           return json(res, 200, { tickets: tickets.slice(0, limit), total: tickets.length });
@@ -3032,7 +3086,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
       if (pathname === "/api/zendesk/stored/users" && req.method === "GET") {
         try {
-          const rows = await db.getAll("zendesk_users");
+          const rows = await cachedGetAll("zendesk_users");
           const users = rows.map(r => JSON.parse(r.data));
           return json(res, 200, { users, total: users.length });
         } catch (err) {
@@ -3042,7 +3096,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
       if (pathname === "/api/zendesk/stored/orgs" && req.method === "GET") {
         try {
-          const rows = await db.getAll("zendesk_orgs");
+          const rows = await cachedGetAll("zendesk_orgs");
           const orgs = rows.map(r => JSON.parse(r.data));
           return json(res, 200, { orgs, total: orgs.length });
         } catch (err) {
@@ -3053,7 +3107,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       if (pathname.match(/^\/api\/zendesk\/stored\/tickets\/\d+\/comments$/) && req.method === "GET") {
         const ticketId = pathname.split("/")[5];
         try {
-          const rows = await db.getAll("zendesk_comments");
+          const rows = await cachedGetAll("zendesk_comments");
           const comments = rows.map(r => JSON.parse(r.data)).filter(c => String(c.ticketId) === ticketId);
           return json(res, 200, { comments, total: comments.length });
         } catch (err) {
@@ -3071,10 +3125,18 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           const resolved = tickets.filter(t => t.status === "solved" || t.status === "closed");
           let trained = 0;
 
+          // Pre-load ALL comments ONCE (avoid N+1 inside ticket loop)
+          const _allCommentRows = await db.getAll("zendesk_comments");
+          const _allComments = _allCommentRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+          const _commentsByTicket = new Map();
+          for (const c of _allComments) {
+            const tid = c.ticketId;
+            if (!_commentsByTicket.has(tid)) _commentsByTicket.set(tid, []);
+            _commentsByTicket.get(tid).push(c);
+          }
+
           for (const t of resolved.slice(0, 200)) {
-            // Get comments for this ticket
-            const commentRows = await db.getAll("zendesk_comments");
-            const ticketComments = commentRows.map(r => JSON.parse(r.data)).filter(c => c.ticketId === t.id);
+            const ticketComments = _commentsByTicket.get(t.id) || [];
             const publicComments = ticketComments.filter(c => c.public);
             if (publicComments.length === 0) continue;
 
@@ -7452,13 +7514,13 @@ async function start() {
   notifyEngine = new NotificationEngine({ graphSendMail, wsServer, db });
 
   // Initialize Cache Layer
-  cacheLayer = new CacheLayer({ maxSize: 500, defaultTTL: 5 * 60 * 1000 });
+  cacheLayer = new CacheLayer({ maxSize: 1000, defaultTTL: 5 * 60 * 1000 });
 
-  // Initialize Analytics Engine
-  analyticsEngine = new AnalyticsEngine(db, { cacheTTL: 5 * 60 * 1000 });
+  // Initialize Analytics Engine (15 min scan — non-critical)
+  analyticsEngine = new AnalyticsEngine(db, { cacheTTL: 15 * 60 * 1000 });
 
-  // Initialize Workflow Automation Engine
-  workflowEngine = new WorkflowEngine(db, { notifyEngine, wsServer, graphSendMail, interval: 5 * 60 * 1000 });
+  // Initialize Workflow Automation Engine (15 min scan — non-critical)
+  workflowEngine = new WorkflowEngine(db, { notifyEngine, wsServer, graphSendMail, interval: 15 * 60 * 1000 });
   workflowEngine._processInboundEmails = processInboundEmails;
 
   // Initialize SLA Engine with breach notifications
