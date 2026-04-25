@@ -68,13 +68,52 @@ function buildClientAssertion() {
 let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mod12m44-swedencentral.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
 let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
 let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-pro";
-// Tiered AI models: primary (critical decisions), secondary (interactive), tertiary (bulk/simple)
+// Tiered AI models: primary (long-form generation), secondary (structured decisions), tertiary (simple/bulk)
 const AI_MODELS = {
   primary: process.env.AZURE_OPENAI_MODEL_PRIMARY || "gpt-5.4-pro",
   secondary: process.env.AZURE_OPENAI_MODEL_SECONDARY || "gpt-5.4-mini",
   tertiary: process.env.AZURE_OPENAI_MODEL_TERTIARY || "gpt-5.4-nano",
 };
+// Fallback cascade: if the requested tier fails, try the next one down
+const AI_FALLBACK = { primary: "secondary", secondary: "tertiary", tertiary: null };
 function getAIModel(tier) { return AI_MODELS[tier] || AI_MODELS.primary; }
+
+// Centralized AI call helper with automatic model fallback
+async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens = 1500, timeout = 30000 } = {}) {
+  if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) throw new Error("Azure OpenAI not configured");
+  const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+  let currentTier = tier;
+  let lastError = null;
+  while (currentTier) {
+    const model = getAIModel(currentTier);
+    const payload = { model, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: maxTokens };
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (resp) => {
+          let data = ""; resp.on("data", c => data += c);
+          resp.on("end", () => {
+            if (resp.statusCode >= 200 && resp.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${resp.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        req.on("error", reject);
+        req.setTimeout(timeout, () => { req.destroy(); reject(new Error(`AI timeout (${model})`)); });
+        req.write(JSON.stringify(payload));
+        req.end();
+      });
+      const text = extractAIText(result);
+      return { text, model, tier: currentTier, fallback: currentTier !== tier };
+    } catch (err) {
+      lastError = err;
+      console.error(`[AI] ${model} failed: ${err.message}, trying fallback...`);
+      currentTier = AI_FALLBACK[currentTier];
+    }
+  }
+  throw lastError || new Error("All AI models failed");
+}
 
 // Zendesk API config (server-side only — protects API token)
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
@@ -1532,7 +1571,7 @@ Created: ${ticket.ticket?.created_at}
 Description: ${ticket.ticket?.description || "No description"}
 ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
-        const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
+        const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
         const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
         const aiResult = await new Promise((resolve, reject) => {
@@ -4081,7 +4120,7 @@ Zendesk Ticket: ${ticket.zdTicketId ? "#" + ticket.zdTicketId : "N/A"}
 Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const payload = {
-        model: AZURE_OPENAI_MODEL,
+        model: getAIModel("secondary"),
         input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
         max_output_tokens: 800
       };
@@ -4389,7 +4428,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const userPrompt = `Open tickets:\n${ticketSummaries}\n\nHistorical MTTR: ${mttrSummary || "No historical data yet"}\n\nPredict SLA breaches and suggest preventive actions.`;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
@@ -4466,7 +4505,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const userPrompt = `Resolved Incident:\nID: ${ticket.id}\nTitle: ${ticket.title}\nCategory: ${ticket.category || "General"}\nPriority: ${ticket.priority}\nDescription: ${(ticket.description || "").substring(0, 500)}\nResolution/Workaround: ${(ticket.workaround || ticket.resolution || "").substring(0, 500)}\n\nActivity Log:\n${activitySummary.substring(0, 2000)}\n\nGenerate a KB article from this resolution.`;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
@@ -4617,7 +4656,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const systemPrompt = `You are VGC Technology's ITSM briefing AI. Generate a concise, actionable ${shift || "daily"} briefing for the IT operations team. Format with clear sections. Be direct — highlight risks, blockers, and actions needed. Return JSON ONLY: { "executiveSummary": "2-3 sentence overview", "criticalItems": [{ "id": "ticket ID", "issue": "brief", "action": "needed action" }], "slaStatus": "overall SLA health description", "handoverNotes": "key things for next shift", "actionItems": ["action 1", "action 2"], "upcomingChanges": "scheduled changes summary", "aiInsights": "any AI-detected patterns or recommendations", "riskLevel": "low|medium|high|critical" }`;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataSummary }], max_output_tokens: 2000 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataSummary }], max_output_tokens: 2000 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
@@ -4723,7 +4762,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const userPrompt = `Historical Data (${allInc.length} incidents, ${allProblems.length} problems):\n\nBy Category:\n${categorySummary}\n\nRepeat Assets:\n${assetSummary || "None"}\n\nRepeat Customers:\n${customerSummary || "None"}\n\nExisting Problems:\n${problemSummary || "None"}\n\nDetect patterns and predict future incidents.`;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 3000 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
@@ -4905,12 +4944,12 @@ RULES:
 Respond ONLY with a valid JSON array. No markdown wrapping.`;
 
       const payload = {
-        model: AZURE_OPENAI_MODEL,
+        model: getAIModel("secondary"),
         input: [
           { role: "system", content: systemPrompt },
           { role: "user", content: `Current time: ${new Date().toISOString()}\nRequested by: ${requestedBy}\n\n${contextSummary}` }
         ],
-        max_output_tokens: 3000
+        max_output_tokens: 2000
       };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
