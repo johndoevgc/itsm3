@@ -1595,7 +1595,13 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 // Auto-create ITSM incidents from tickets
                 if (createIncidents) {
                   const existing = await db.getOne("incidents", `INC-ZD${t.id}`);
+                  // Also scan by zdTicketId to catch frontend-created incidents with random IDs
+                  let existsByZd = false;
                   if (!existing) {
+                    const allInc = await db.getAll("incidents");
+                    existsByZd = allInc.some(row => { try { return String(JSON.parse(row.data).zdTicketId) === String(t.id); } catch { return false; } });
+                  }
+                  if (!existing && !existsByZd) {
                     const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                     const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
                     const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
