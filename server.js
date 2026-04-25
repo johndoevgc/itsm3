@@ -1,4 +1,4 @@
-﻿const http = require("http");
+const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
@@ -549,6 +549,9 @@ const VALID_COLLECTIONS = new Set([
   "cmdb_relationships",
   "runbook_executions",
   "report_schedules",
+  "email_rejections",
+  "email_templates",
+  "advisories",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -737,17 +740,32 @@ async function graphSendMail({ to, subject, body, from, isCustomerEmail }) {
 
 // ─── Email-to-Ticket: Inbound Email Processing ─────────────────────────
 // Reads unread emails from the ITSM mailbox via Graph API and creates incidents
+// Only emails from registered customer domains or VGC internal domains create tickets.
 async function processInboundEmails() {
   try {
     const token = await getManagedIdentityToken();
     const sender = HELPDESK_MAILBOX;
+
+    // ── Build customer domain whitelist ──────────────────────────────────
+    const allowedDomains = new Set(["vgctechnology.com", "vgcsg.com"]); // internal always allowed
+    try {
+      const allCustomers = await db.getAll("customers");
+      for (const row of allCustomers) {
+        try {
+          const cust = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          const domain = (cust.email || "").split("@")[1]?.toLowerCase();
+          if (domain) allowedDomains.add(domain);
+        } catch {}
+      }
+    } catch (e) { console.warn("[Email-to-Ticket] Could not load customers for whitelist:", e.message); }
+    console.log(`[Email-to-Ticket] Allowed domains: ${[...allowedDomains].join(", ")}`);
 
     // Fetch unread emails (top 10, newest first)
     const filterParams = new URLSearchParams({
       "$filter": "isRead eq false",
       "$top": "10",
       "$orderby": "receivedDateTime desc",
-      "$select": "id,subject,bodyPreview,from,receivedDateTime,body",
+      "$select": "id,subject,bodyPreview,from,receivedDateTime,body,internetMessageHeaders",
     });
     const graphData = await new Promise((resolve, reject) => {
       const graphReq = https.request({
@@ -774,20 +792,105 @@ async function processInboundEmails() {
     const messages = graphData.value || [];
     if (messages.length === 0) {
       console.log("[Email-to-Ticket] No unread emails found");
-      return { processed: 0, incidents: [] };
+      return { processed: 0, rejected: 0, incidents: [] };
     }
 
     const createdIncidents = [];
+    let rejectedCount = 0;
+
+    // Helper: log rejected email to email_rejections collection
+    const _logRejection = async (from, subject, reason) => {
+      try {
+        const rejId = `REJ-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.upsert("email_rejections", rejId, JSON.stringify({
+          id: rejId, from, subject: (subject || "").substring(0, 200), reason,
+          processedAt: new Date().toISOString(),
+        }));
+      } catch {}
+      rejectedCount++;
+    };
 
     for (const msg of messages) {
       try {
-        // Skip auto-generated, no-reply, and ITSM notification emails
         const fromAddr = (msg.from?.emailAddress?.address || "").toLowerCase();
         const subject = msg.subject || "(No Subject)";
+
+        // ── Gate 1: Skip auto-generated, no-reply, and ITSM notification emails ──
         if (fromAddr.includes("noreply") || fromAddr.includes("no-reply") || fromAddr.includes("mailer-daemon") ||
             subject.startsWith("[VGC ITSM]") || subject.startsWith("[TEST →")) {
-          // Mark as read but don't create ticket
           await _markEmailRead(token, sender, msg.id);
+          await _logRejection(fromAddr, subject, "auto-generated");
+          console.log(`[Email-to-Ticket] Skipped auto-generated: ${fromAddr}`);
+          continue;
+        }
+
+        // ── Gate 2: Skip newsletters, marketing, bulk mail ──
+        const noisePatterns = ["newsletter", "marketing", "promo", "digest", "updates@", "info@", "notification@", "campaign", "unsubscribe"];
+        const isNoise = noisePatterns.some(p => fromAddr.includes(p) || subject.toLowerCase().includes(p));
+        const headers = msg.internetMessageHeaders || [];
+        const hasBulkHeader = headers.some(h => h.name?.toLowerCase() === "list-unsubscribe" || (h.name?.toLowerCase() === "precedence" && h.value?.toLowerCase() === "bulk"));
+        if (isNoise || hasBulkHeader) {
+          await _markEmailRead(token, sender, msg.id);
+          await _logRejection(fromAddr, subject, hasBulkHeader ? "bulk-mail-header" : "newsletter-pattern");
+          console.log(`[Email-to-Ticket] Skipped newsletter/bulk: ${fromAddr} "${subject.substring(0, 60)}"`);
+          continue;
+        }
+
+        // ── Gate 3: Skip auto-replies / out-of-office ──
+        const autoReplyPatterns = ["out of office", "automatic reply", "auto-reply", "autoreply", "automatische antwort"];
+        if (autoReplyPatterns.some(p => subject.toLowerCase().includes(p))) {
+          await _markEmailRead(token, sender, msg.id);
+          await _logRejection(fromAddr, subject, "auto-reply");
+          console.log(`[Email-to-Ticket] Skipped auto-reply: ${fromAddr}`);
+          continue;
+        }
+
+        // ── Gate 4: Customer domain whitelist — ONLY registered customers create tickets ──
+        const senderDomain = fromAddr.split("@")[1] || "";
+        if (!allowedDomains.has(senderDomain)) {
+          await _markEmailRead(token, sender, msg.id);
+          await _logRejection(fromAddr, subject, "non-customer-domain");
+          console.log(`[Email-to-Ticket] Rejected non-customer: ${fromAddr} (domain "${senderDomain}" not in whitelist)`);
+
+          // Send formal rejection notice to the sender
+          graphSendMail({
+            to: [fromAddr],
+            subject: `[VGC ITSM] Your request could not be processed — ${subject.substring(0, 60)}`,
+            isCustomerEmail: true,
+            body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+              <div style="background:linear-gradient(135deg,#6B7280,#374151);padding:16px 20px;border-radius:8px 8px 0 0;">
+                <h2 style="margin:0;color:#fff;font-size:18px;">📨 Email Received — Action Required</h2>
+              </div>
+              <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+                <p style="margin:0 0 12px;color:#333;">Dear <strong>${(msg.from?.emailAddress?.name || fromAddr).replace(/</g, "&lt;")}</strong>,</p>
+                <p style="margin:0 0 12px;color:#333;">Thank you for contacting VGC Technology IT Service Management.</p>
+                <p style="margin:0 0 12px;color:#333;">Unfortunately, we are unable to process your request as your email domain (<code>${senderDomain}</code>) is not registered as an active customer in our system.</p>
+                <div style="background:#FFF3CD;border:1px solid #FFD700;border-radius:6px;padding:12px 16px;margin:16px 0;">
+                  <p style="margin:0;color:#856404;font-size:13px;"><strong>Interested in IT Managed Services?</strong></p>
+                  <p style="margin:6px 0 0;color:#856404;font-size:13px;">For IT maintenance contract enquiries, please contact our sales team:</p>
+                  <p style="margin:6px 0 0;color:#856404;font-size:14px;">📧 <a href="mailto:sales@vgctechnology.com" style="color:#0066CC;font-weight:bold;">sales@vgctechnology.com</a></p>
+                </div>
+                <p style="margin:16px 0 8px;color:#333;font-size:13px;">If you believe this is an error, please ask your company administrator to contact us to verify your service agreement.</p>
+                <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+                <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management<br/>This is an automated message. Please do not reply directly to this email.</p>
+              </div>
+            </div>`,
+          }).catch(e => console.warn(`[Email-to-Ticket] Rejection notice failed for ${fromAddr}:`, e.message));
+
+          continue;
+        }
+
+        // ── Gate 5: Duplicate detection — skip if same emailMessageId already exists ──
+        const existingIncidents = await db.getAll("incidents");
+        const isDuplicate = existingIncidents.some(row => {
+          try {
+            const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            return inc.emailMessageId === msg.id;
+          } catch { return false; }
+        });
+        if (isDuplicate) {
+          await _markEmailRead(token, sender, msg.id);
+          console.log(`[Email-to-Ticket] Skipped duplicate email: ${msg.id}`);
           continue;
         }
 
@@ -852,14 +955,29 @@ async function processInboundEmails() {
           </div>`,
         }).catch(e => console.warn(`[Email-to-Ticket] Confirmation email failed for ${incId}:`, e.message));
 
+        // Fire AI auto-triage + assignment pipeline (fire-and-forget)
+        if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
+          try {
+            const triagePayload = JSON.stringify({ ticket: incident, requestedBy: "Email-to-Ticket Auto-Triage" });
+            const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) } }, (triageRes) => {
+              let d = ""; triageRes.on("data", c => d += c);
+              triageRes.on("end", () => { console.log(`[Email-to-Ticket] AI auto-triage for ${incId}: ${d.substring(0, 200)}`); });
+            });
+            triageReq.on("error", e => console.warn(`[Email-to-Ticket] AI triage failed for ${incId}:`, e.message));
+            triageReq.setTimeout(35000, () => { triageReq.destroy(); });
+            triageReq.write(triagePayload);
+            triageReq.end();
+          } catch (triageErr) { console.warn("[Email-to-Ticket] AI triage error:", triageErr.message); }
+        }
+
         console.log(`[Email-to-Ticket] Created ${incId} from email by ${fromAddr}: "${subject.substring(0, 80)}"`);
       } catch (msgErr) {
         console.warn("[Email-to-Ticket] Failed to process message:", msgErr.message);
       }
     }
 
-    console.log(`[Email-to-Ticket] Processed ${createdIncidents.length} emails → incidents`);
-    return { processed: createdIncidents.length, incidents: createdIncidents };
+    console.log(`[Email-to-Ticket] Processed ${createdIncidents.length} emails → incidents, rejected ${rejectedCount}`);
+    return { processed: createdIncidents.length, rejected: rejectedCount, incidents: createdIncidents };
   } catch (err) {
     console.error("[Email-to-Ticket] Pipeline error:", err.message);
     // Distinguish permission errors from other failures
@@ -6106,6 +6224,550 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
     }
   }
 
+  // ─── AI Auto Follow-Up & Resolution Engine ─────────────────────────────
+  // POST /api/ai/auto-followup — AI reviews all open incidents, syncs Zendesk statuses,
+  // generates customer response emails, and closes resolved tickets.
+  // Customer emails use HTML templates with case-appropriate tone and official references.
+  if (pathname === "/api/ai/auto-followup" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+    try {
+      const body = await parseBody(req);
+      const requestedBy = body.requestedBy || "AI Auto Follow-Up";
+      const dryRun = body.dryRun === true; // preview without sending emails or updating DB
+      const maxItems = Math.min(body.maxItems || 5, 20); // limit to prevent Azure proxy timeout (230s)
+
+      // ── 1. Load all incidents and Zendesk tickets ──
+      const incRows = await db.getAll("incidents");
+      const allIncidents = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean).slice(0, maxItems);
+
+      const zdRows = await db.getAll("zendesk_tickets");
+      const zdTickets = {};
+      for (const r of zdRows) {
+        try {
+          const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (t && t.id) zdTickets[t.id] = t;
+        } catch {}
+      }
+
+      // ── 2. Separate incidents by state ──
+      const zdStatusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+      const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold"]);
+      const results = { synced: [], followedUp: [], closed: [], errors: [], skipped: [] };
+
+      for (const inc of allIncidents) {
+        try {
+          const incStatus = (inc.status || "").trim();
+
+          // ── 2a. Sync ITSM status with Zendesk (if linked) ──
+          if (inc.zdTicketId && zdTickets[inc.zdTicketId]) {
+            const zdTicket = zdTickets[inc.zdTicketId];
+            const zdStatus = (zdTicket.status || "").toLowerCase();
+            const mappedStatus = zdStatusMap[zdStatus] || incStatus;
+
+            // If Zendesk is solved/closed but ITSM is still open → sync
+            if ((zdStatus === "solved" || zdStatus === "closed") && openStatuses.has(incStatus)) {
+              if (!dryRun) {
+                inc.status = mappedStatus;
+                inc.updatedAt = new Date().toISOString();
+                if (mappedStatus === "Resolved" && !inc.resolvedAt) inc.resolvedAt = new Date().toISOString();
+                if (mappedStatus === "Closed" && !inc.closedAt) inc.closedAt = new Date().toISOString();
+                inc.activityLog = inc.activityLog || [];
+                inc.activityLog.push({
+                  id: `AL-SYNC-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+                  type: "status", user: "AI Auto Follow-Up (Zendesk Sync)",
+                  time: new Date().toISOString(),
+                  detail: `Status synced from Zendesk #${inc.zdTicketId}: ${incStatus} → ${mappedStatus}`,
+                });
+                await db.upsert("incidents", inc.id, JSON.stringify(inc));
+              }
+              results.synced.push({ id: inc.id, zdTicketId: inc.zdTicketId, from: incStatus, to: mappedStatus });
+              continue; // already resolved via Zendesk, no AI follow-up needed
+            }
+
+            // If Zendesk is open/pending, keep ITSM matching — skip AI close
+            if (zdStatus === "open" || zdStatus === "pending") {
+              results.skipped.push({ id: inc.id, reason: `Zendesk #${inc.zdTicketId} is still ${zdStatus}` });
+              continue;
+            }
+          }
+
+          // ── 2b. Skip already resolved/closed ──
+          if (!openStatuses.has(incStatus)) continue;
+
+          // ── 3. AI generates customer response + resolution ──
+          const customerName = inc.reporterName || inc.reporter || (inc.reporterEmail || "Customer").split("@")[0];
+          const safeTitle = (inc.title || "").replace(/</g, "&lt;");
+          const safeDesc = (inc.description || "").substring(0, 600).replace(/</g, "&lt;");
+
+          const aiPrompt = `You are VGC Technology's senior IT support engineer responding to a customer incident.
+
+INCIDENT:
+- ID: ${inc.id}
+- Title: ${inc.title}
+- Description: ${(inc.description || "").substring(0, 800)}
+- Category: ${inc.category || "General"}
+- Priority: ${inc.priority || "Sev-C"}
+- Reporter: ${customerName}
+- Created: ${inc.createdAt || "Unknown"}
+
+TASK: Generate a professional customer response email that:
+1. Addresses the customer by name in a warm, professional tone matching the nature of the case
+2. Provides a clear resolution or next steps for their specific issue
+3. If the issue is related to Microsoft products (Outlook, Teams, Windows, M365, Azure AD, Exchange, OneDrive, SharePoint, Intune), include 1-2 relevant Microsoft official support article links (use real Microsoft Learn URLs like https://learn.microsoft.com/... or https://support.microsoft.com/...)
+4. If the issue is related to Cisco/network products (switches, routers, Meraki, VPN, firewall), include 1-2 relevant Cisco support article links (use real Cisco URLs like https://www.cisco.com/c/en/us/support/... or https://community.cisco.com/...)
+5. Include a brief summary of what was done to resolve the issue
+6. Close with a professional sign-off from VGC Technology IT Support
+
+TONE GUIDELINES:
+- For critical/urgent issues: empathetic, action-oriented, reassuring
+- For standard issues: friendly, clear, helpful
+- For simple requests: concise, efficient, professional
+
+Respond in JSON ONLY:
+{
+  "subject": "Re: [original subject] — Resolution",
+  "greeting": "Dear [name],",
+  "body": "Main response body (can include HTML formatting like <br>, <strong>, <ul><li>)",
+  "resolution": "Brief resolution summary for internal record",
+  "references": [{"title": "Article title", "url": "https://..."}],
+  "tone": "empathetic|professional|concise",
+  "closingAction": "resolve|pending_customer|monitor",
+  "confidence": 0-100
+}`;
+
+          const payload = {
+            model: getAIModel("primary"),
+            input: [
+              { role: "system", content: "You are a senior IT support engineer at VGC Technology Pte Ltd. Generate professional customer email responses with relevant official vendor documentation links. Respond ONLY in valid JSON." },
+              { role: "user", content: aiPrompt },
+            ],
+            max_output_tokens: 1200,
+          };
+
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({
+              hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+              method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+            }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => {
+                if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+                else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+              });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const aiText = extractAIText(aiResult);
+          let aiResponse;
+          try {
+            aiResponse = JSON.parse(aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+          } catch {
+            results.errors.push({ id: inc.id, error: "AI returned invalid JSON" });
+            continue;
+          }
+
+          // ── 4. Build HTML email from AI response using template ──
+          const refLinks = (aiResponse.references || [])
+            .filter(r => r.url && r.title)
+            .map(r => `<tr><td style="padding:4px 12px;">📎 <a href="${r.url.replace(/"/g, "&quot;")}" style="color:#3B82F6;text-decoration:none;">${r.title.replace(/</g, "&lt;")}</a></td></tr>`)
+            .join("");
+
+          const priorityColors = { "Sev-A": "#EF4444", "Sev-B": "#F59E0B", "Sev-C": "#3B82F6", "Sev-D": "#6B7280" };
+          const headerColor = priorityColors[inc.priority] || "#3B82F6";
+          const headerGradient = aiResponse.closingAction === "resolve"
+            ? `linear-gradient(135deg, #4CAF50, #06B6D4)`
+            : `linear-gradient(135deg, ${headerColor}, #6366F1)`;
+          const headerIcon = aiResponse.closingAction === "resolve" ? "✅" : "📧";
+          const headerTitle = aiResponse.closingAction === "resolve"
+            ? `Incident ${inc.id} — Resolved`
+            : `Update: Incident ${inc.id}`;
+
+          const emailHtml = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:640px;margin:0 auto;">
+  <div style="background:${headerGradient};padding:18px 24px;border-radius:10px 10px 0 0;">
+    <h2 style="margin:0;color:#fff;font-size:18px;">${headerIcon} ${headerTitle}</h2>
+    <p style="margin:4px 0 0;color:rgba(255,255,255,0.85);font-size:12px;">Ref: ${inc.id} | Priority: ${inc.priority || "Sev-C"} | Category: ${(inc.category || "General").replace(/</g, "&lt;")}</p>
+  </div>
+  <div style="background:#ffffff;padding:24px;border:1px solid #e5e7eb;border-top:none;">
+    <p style="margin:0 0 16px;color:#1F2937;font-size:14px;line-height:1.6;">${(aiResponse.greeting || "Dear Customer,").replace(/</g, "&lt;")}</p>
+    <div style="margin:0 0 20px;color:#374151;font-size:14px;line-height:1.7;">${aiResponse.body || ""}</div>
+    ${refLinks ? `<div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;padding:12px;margin:16px 0;">
+      <p style="margin:0 0 8px;font-weight:600;color:#0369A1;font-size:13px;">📚 Helpful Resources</p>
+      <table style="border-collapse:collapse;width:100%;font-size:13px;">${refLinks}</table>
+    </div>` : ""}
+    <div style="margin:20px 0 0;padding:16px;background:#F9FAFB;border-radius:6px;border:1px solid #E5E7EB;">
+      <table style="border-collapse:collapse;width:100%;font-size:13px;">
+        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;width:120px;">Incident ID</td><td style="padding:4px 8px;color:#1F2937;">${inc.id}</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Status</td><td style="padding:4px 8px;color:#1F2937;">${aiResponse.closingAction === "resolve" ? "✅ Resolved" : "🔄 In Progress"}</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Category</td><td style="padding:4px 8px;color:#1F2937;">${(inc.category || "General").replace(/</g, "&lt;")}</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Priority</td><td style="padding:4px 8px;color:#1F2937;">${inc.priority || "Sev-C"}</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Handled By</td><td style="padding:4px 8px;color:#1F2937;">${(inc.assignee || inc.assignmentGroup || "VGC IT Support").replace(/</g, "&lt;")}</td></tr>
+      </table>
+    </div>
+  </div>
+  <div style="background:#F9FAFB;padding:16px 24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;">
+    <p style="margin:0 0 4px;color:#374151;font-size:13px;">If you need further assistance, please reply to this email or contact our helpdesk.</p>
+    <p style="margin:8px 0 0;color:#6B7280;font-size:12px;">Best regards,<br/><strong>VGC Technology IT Support Team</strong><br/>📧 helpdesk@vgctechnology.com | 📞 +65 6000 0000</p>
+    <hr style="border:none;border-top:1px solid #E5E7EB;margin:12px 0 8px;"/>
+    <p style="color:#9CA3AF;font-size:10px;margin:0;">VGC Technology Pte Ltd — IT Service Management Platform<br/>This email was generated by the VGC ITSM AI Support Engine. Please do not reply directly to automated notifications.</p>
+  </div>
+</div>`;
+
+          // ── 5. Send email to customer ──
+          const emailSubject = aiResponse.subject || `[VGC ITSM] Re: ${(inc.title || "Your request").substring(0, 60)} — ${aiResponse.closingAction === "resolve" ? "Resolved" : "Update"}`;
+          if (!dryRun) {
+            graphSendMail({
+              to: [inc.reporterEmail || "customer@example.com"],
+              subject: emailSubject,
+              isCustomerEmail: true,
+              body: emailHtml,
+            }).catch(e => console.warn(`[AI Follow-Up] Email failed for ${inc.id}:`, e.message));
+          }
+
+          // ── 6. Update incident status + activity log ──
+          const newStatus = aiResponse.closingAction === "resolve" ? "Resolved" : inc.status === "New" ? "Open" : inc.status;
+          if (!dryRun) {
+            inc.status = newStatus;
+            inc.updatedAt = new Date().toISOString();
+            if (newStatus === "Resolved") {
+              inc.resolvedAt = inc.resolvedAt || new Date().toISOString();
+              inc.resolution = aiResponse.resolution || "Resolved by AI Follow-Up Engine";
+            }
+            inc.activityLog = inc.activityLog || [];
+            inc.activityLog.push({
+              id: `AL-AIFU-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+              type: aiResponse.closingAction === "resolve" ? "resolved" : "followup",
+              user: "AI Auto Follow-Up Engine",
+              time: new Date().toISOString(),
+              detail: `AI ${aiResponse.closingAction === "resolve" ? "resolved" : "followed up"}: ${(aiResponse.resolution || aiResponse.body || "").substring(0, 200)}`,
+            });
+            inc.aiFollowedUp = true;
+            inc.aiFollowUpAt = new Date().toISOString();
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            await db.audit("incidents", inc.id, "ai_followup", JSON.stringify({ action: aiResponse.closingAction, confidence: aiResponse.confidence }), requestedBy);
+          }
+
+          if (aiResponse.closingAction === "resolve") {
+            results.closed.push({ id: inc.id, title: inc.title, resolution: aiResponse.resolution, confidence: aiResponse.confidence });
+          } else {
+            results.followedUp.push({ id: inc.id, title: inc.title, action: aiResponse.closingAction, confidence: aiResponse.confidence });
+          }
+
+          console.log(`[AI Follow-Up] ${inc.id} → ${aiResponse.closingAction} (${aiResponse.confidence}% confidence) email sent to ${inc.reporterEmail || "customer"}`);
+        } catch (incErr) {
+          results.errors.push({ id: inc.id, error: incErr.message });
+          console.warn(`[AI Follow-Up] Error for ${inc.id}:`, incErr.message);
+        }
+      }
+
+      console.log(`[AI Follow-Up] Complete: synced=${results.synced.length} closed=${results.closed.length} followedUp=${results.followedUp.length} skipped=${results.skipped.length} errors=${results.errors.length}`);
+      return json(res, 200, {
+        success: true, dryRun,
+        summary: {
+          totalIncidents: allIncidents.length,
+          synced: results.synced.length,
+          closed: results.closed.length,
+          followedUp: results.followedUp.length,
+          skipped: results.skipped.length,
+          errors: results.errors.length,
+        },
+        details: results,
+      });
+    } catch (err) {
+      console.error("[AI Follow-Up]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── GET /api/ai/email-templates — customizable email response templates ──
+  if (pathname === "/api/ai/email-templates" && req.method === "GET") {
+    const templates = {
+      incident_acknowledgement: {
+        name: "Incident Acknowledgement",
+        description: "Sent when a new incident is created from email or portal",
+        subject: "[VGC ITSM] Incident {{incidentId}} created — {{title}}",
+        headerGradient: "linear-gradient(135deg, #3B82F6, #06B6D4)",
+        headerIcon: "📧",
+        bodyTemplate: `<p>Dear {{customerName}},</p>
+<p>Thank you for contacting VGC Technology IT Support. We have received your request and created a support ticket.</p>
+<p><strong>What happens next:</strong></p>
+<ul>
+  <li>Our team will review your request within the SLA timeframe</li>
+  <li>You will receive updates as your ticket progresses</li>
+  <li>For urgent matters, please call our helpdesk at +65 6000 0000</li>
+</ul>`,
+        footerNote: "Our team will review your request and respond as soon as possible.",
+      },
+      incident_resolution: {
+        name: "Incident Resolution",
+        description: "Sent when an incident is resolved by AI or engineer",
+        subject: "[VGC ITSM] Incident {{incidentId}} — Resolved",
+        headerGradient: "linear-gradient(135deg, #4CAF50, #06B6D4)",
+        headerIcon: "✅",
+        bodyTemplate: `<p>Dear {{customerName}},</p>
+<p>We are pleased to inform you that your support ticket has been resolved.</p>
+<p><strong>Resolution Summary:</strong><br/>{{resolution}}</p>
+<p>If you experience the same issue again or need further assistance, please don't hesitate to contact us.</p>`,
+        footerNote: "If this issue persists, please open a new ticket or reply to this email.",
+      },
+      incident_update: {
+        name: "Incident Update / Follow-Up",
+        description: "Sent when there's a progress update on an open incident",
+        subject: "[VGC ITSM] Update: {{incidentId}} — {{title}}",
+        headerGradient: "linear-gradient(135deg, #6366F1, #8B5CF6)",
+        headerIcon: "🔄",
+        bodyTemplate: `<p>Dear {{customerName}},</p>
+<p>We wanted to provide you with an update on your support ticket.</p>
+<p><strong>Current Status:</strong> {{status}}<br/>
+<strong>Update:</strong> {{updateBody}}</p>
+<p>We are actively working on this and will keep you informed of any further progress.</p>`,
+        footerNote: "Our team is actively working on your request.",
+      },
+      incident_escalation: {
+        name: "Incident Escalation Notice",
+        description: "Sent when an incident is escalated to a higher tier",
+        subject: "[VGC ITSM] Escalation: {{incidentId}} — {{title}}",
+        headerGradient: "linear-gradient(135deg, #EF4444, #F59E0B)",
+        headerIcon: "⚡",
+        bodyTemplate: `<p>Dear {{customerName}},</p>
+<p>Your support ticket has been escalated to our specialist team for priority attention.</p>
+<p><strong>Why escalated:</strong> {{escalationReason}}</p>
+<p>A senior engineer will be reviewing your case and you can expect an update shortly.</p>`,
+        footerNote: "Your case has been prioritised. A senior engineer will contact you soon.",
+      },
+      incident_pending_info: {
+        name: "Pending Customer Information",
+        description: "Sent when additional information is needed from the customer",
+        subject: "[VGC ITSM] Action Required: {{incidentId}} — {{title}}",
+        headerGradient: "linear-gradient(135deg, #F59E0B, #EAB308)",
+        headerIcon: "⏳",
+        bodyTemplate: `<p>Dear {{customerName}},</p>
+<p>We are currently working on your support request and require some additional information to proceed.</p>
+<p><strong>Information needed:</strong><br/>{{infoNeeded}}</p>
+<p>Please reply to this email with the requested details so we can continue resolving your issue promptly.</p>`,
+        footerNote: "Please respond with the requested information to help us resolve your issue faster.",
+      },
+      rejection_non_customer: {
+        name: "Non-Customer Rejection",
+        description: "Sent when an email is received from a non-registered customer domain",
+        subject: "[VGC ITSM] Your request could not be processed",
+        headerGradient: "linear-gradient(135deg, #6B7280, #374151)",
+        headerIcon: "📨",
+        bodyTemplate: `<p>Dear {{senderName}},</p>
+<p>Thank you for contacting VGC Technology IT Service Management.</p>
+<p>Unfortunately, we are unable to process your request as your email domain (<code>{{senderDomain}}</code>) is not registered as an active customer in our system.</p>
+<div style="background:#FFF3CD;border:1px solid #FFD700;border-radius:6px;padding:12px 16px;margin:16px 0;">
+  <p style="margin:0;font-size:13px;"><strong>Interested in IT Managed Services?</strong></p>
+  <p style="margin:6px 0 0;font-size:13px;">For IT maintenance contract enquiries, please contact our sales team:</p>
+  <p style="margin:6px 0 0;font-size:14px;">📧 <a href="mailto:sales@vgctechnology.com" style="color:#0066CC;font-weight:bold;">sales@vgctechnology.com</a></p>
+</div>`,
+        footerNote: "If you believe this is an error, please ask your company administrator to contact us.",
+      },
+    };
+    return json(res, 200, { templates });
+  }
+
+  // ─── PUT /api/ai/email-templates/:id — update a template ──
+  if (pathname.startsWith("/api/ai/email-templates/") && req.method === "PUT") {
+    try {
+      const templateId = pathname.split("/").pop();
+      const body = await parseBody(req);
+      await db.upsert("email_templates", templateId, JSON.stringify({ id: templateId, ...body, updatedAt: new Date().toISOString() }));
+      return json(res, 200, { success: true, templateId });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI News Advisory — Auto-Draft & Send Internal IT Advisory ─────────
+  // POST /api/ai/news-advisory — AI generates enterprise-class advisory email
+  // from IT news headlines and auto-sends to itsupport@vgctechnology.com
+  if (pathname === "/api/ai/news-advisory" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+    try {
+      const body = await parseBody(req);
+      const headline = body.headline || body.title || "";
+      const articleBody = body.body || body.content || body.summary || "";
+      const source = body.source || "IT News Feed";
+      if (!headline) return json(res, 400, { error: "headline is required" });
+
+      const aiPrompt = `You are VGC Technology's Chief IT Advisor drafting an internal advisory email for the IT Support team.
+
+NEWS HEADLINE: ${headline}
+SOURCE: ${source}
+${articleBody ? `ARTICLE SUMMARY: ${articleBody.substring(0, 1200)}` : ""}
+
+Generate a professional enterprise-class internal IT advisory email. This is for itsupport@vgctechnology.com — the internal IT team, NOT customers.
+
+The email MUST include these sections:
+1. **Executive Summary** — 2-3 sentences on what happened and why it matters
+2. **Technical Impact Assessment** — How this affects our managed customers (Windows endpoints, M365 tenants, network infrastructure)
+3. **ITSM Actions Taken** — What our AI ITSM system has automatically done (e.g., created KB article, updated runbook, flagged affected assets, created change request for testing)
+4. **Recommended Next Actions** — Numbered list of specific actions the IT team should take (e.g., test in staging, update GPO, notify affected customers, schedule maintenance window)
+5. **AI Automation Improvement Suggestions** — 3-5 concrete suggestions for future ITSM AI automation improvements (e.g., auto-scan RSS feeds for relevant news, auto-create change requests for patch testing, proactive customer alerts, auto-update KB articles, predictive impact analysis)
+6. **Official References** — 2-3 relevant Microsoft/Cisco/vendor documentation links
+
+TONE: Authoritative, actionable, enterprise-grade. Written as if from a senior IT advisory team.
+FORMAT: Use HTML for email formatting (<h3>, <p>, <ul><li>, <strong>, <a href>).
+
+Respond in JSON ONLY:
+{
+  "subject": "Advisory subject line",
+  "executiveSummary": "HTML content",
+  "impactAssessment": "HTML content",
+  "itsmActions": "HTML content",
+  "nextActions": "HTML content",
+  "aiSuggestions": "HTML content",
+  "references": [{"title": "...", "url": "https://..."}],
+  "severity": "critical|high|medium|low|informational",
+  "affectedSystems": ["Windows", "M365", etc],
+  "confidence": 0-100
+}`;
+
+      const payload = {
+        model: getAIModel("primary"),
+        input: [
+          { role: "system", content: "You are a senior IT advisory specialist at VGC Technology Pte Ltd. Generate professional enterprise-class internal IT advisory emails. Respond ONLY in valid JSON." },
+          { role: "user", content: aiPrompt },
+        ],
+        max_output_tokens: 2000,
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(60000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const aiText = extractAIText(aiResult);
+      let advisory;
+      try {
+        advisory = JSON.parse(aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        return json(res, 500, { error: "AI returned invalid JSON", raw: aiText.substring(0, 500) });
+      }
+
+      // Build severity badge colors
+      const sevColors = { critical: "#DC2626", high: "#EA580C", medium: "#D97706", low: "#2563EB", informational: "#7C3AED" };
+      const sevColor = sevColors[advisory.severity] || "#7C3AED";
+      const sevLabel = (advisory.severity || "informational").toUpperCase();
+
+      // Build references HTML
+      const refsHtml = (advisory.references || []).filter(r => r.url && r.title)
+        .map(r => `<li><a href="${r.url.replace(/"/g, "&quot;")}" style="color:#2563EB;text-decoration:none;font-weight:500;">${r.title.replace(/</g, "&lt;")}</a></li>`)
+        .join("");
+
+      const affectedBadges = (advisory.affectedSystems || [])
+        .map(s => `<span style="display:inline-block;padding:3px 10px;border-radius:4px;background:#1E293B;color:#94A3B8;font-size:12px;margin:2px 4px 2px 0;border:1px solid #334155;">${s.replace(/</g, "&lt;")}</span>`)
+        .join("");
+
+      const advisoryHtml = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:720px;margin:0 auto;background:#ffffff;">
+  <!-- Header Banner -->
+  <div style="background:linear-gradient(135deg, #0F172A, #1E293B);padding:24px 28px;border-radius:10px 10px 0 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;">VGC TECHNOLOGY — IT ADVISORY</div>
+        <h1 style="margin:0;color:#F8FAFC;font-size:20px;line-height:1.3;">${(advisory.subject || headline).replace(/</g, "&lt;")}</h1>
+      </div>
+      <div style="text-align:right;">
+        <div style="display:inline-block;padding:5px 14px;border-radius:6px;background:${sevColor};color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;">${sevLabel}</div>
+        <div style="font-size:10px;color:#64748B;margin-top:6px;">${new Date().toLocaleDateString("en-SG", { day: "numeric", month: "long", year: "numeric" })}</div>
+      </div>
+    </div>
+    ${affectedBadges ? `<div style="margin-top:12px;">${affectedBadges}</div>` : ""}
+  </div>
+
+  <div style="padding:28px;border:1px solid #E2E8F0;border-top:none;">
+    <!-- Executive Summary -->
+    <div style="margin-bottom:24px;">
+      <h3 style="margin:0 0 10px;color:#0F172A;font-size:15px;border-bottom:2px solid #3B82F6;padding-bottom:6px;">📋 Executive Summary</h3>
+      <div style="color:#334155;font-size:14px;line-height:1.7;">${advisory.executiveSummary || ""}</div>
+    </div>
+
+    <!-- Technical Impact -->
+    <div style="margin-bottom:24px;padding:16px;background:#FFF7ED;border-radius:8px;border-left:4px solid #F59E0B;">
+      <h3 style="margin:0 0 10px;color:#92400E;font-size:14px;">⚠️ Technical Impact Assessment</h3>
+      <div style="color:#78350F;font-size:13px;line-height:1.7;">${advisory.impactAssessment || ""}</div>
+    </div>
+
+    <!-- ITSM Actions Taken -->
+    <div style="margin-bottom:24px;padding:16px;background:#F0FDF4;border-radius:8px;border-left:4px solid #22C55E;">
+      <h3 style="margin:0 0 10px;color:#166534;font-size:14px;">✅ ITSM Actions Taken (Automated)</h3>
+      <div style="color:#15803D;font-size:13px;line-height:1.7;">${advisory.itsmActions || ""}</div>
+    </div>
+
+    <!-- Recommended Next Actions -->
+    <div style="margin-bottom:24px;padding:16px;background:#EFF6FF;border-radius:8px;border-left:4px solid #3B82F6;">
+      <h3 style="margin:0 0 10px;color:#1E40AF;font-size:14px;">🎯 Recommended Next Actions</h3>
+      <div style="color:#1E3A5F;font-size:13px;line-height:1.7;">${advisory.nextActions || ""}</div>
+    </div>
+
+    <!-- AI Automation Suggestions -->
+    <div style="margin-bottom:24px;padding:16px;background:linear-gradient(135deg, #F5F3FF, #EDE9FE);border-radius:8px;border-left:4px solid #8B5CF6;">
+      <h3 style="margin:0 0 10px;color:#5B21B6;font-size:14px;">🤖 AI Automation Improvement Suggestions</h3>
+      <div style="color:#4C1D95;font-size:13px;line-height:1.7;">${advisory.aiSuggestions || ""}</div>
+    </div>
+
+    <!-- Official References -->
+    ${refsHtml ? `<div style="margin-bottom:16px;">
+      <h3 style="margin:0 0 10px;color:#0F172A;font-size:14px;">📚 Official References</h3>
+      <ul style="margin:0;padding-left:20px;color:#334155;font-size:13px;line-height:1.8;">${refsHtml}</ul>
+    </div>` : ""}
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#F8FAFC;padding:16px 28px;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 10px 10px;">
+    <p style="margin:0 0 4px;color:#64748B;font-size:12px;"><strong>VGC Technology IT Advisory Team</strong> — AI-Generated Internal Advisory</p>
+    <p style="margin:0;color:#94A3B8;font-size:10px;">This advisory was auto-generated by the VGC ITSM AI Engine. No human approval was required. For questions, contact the IT Operations team.</p>
+  </div>
+</div>`;
+
+      const emailSubject = advisory.subject || `[VGC ITSM Advisory] ${headline.substring(0, 80)}`;
+
+      // Auto-send to internal IT support — no human approval needed
+      await graphSendMail({
+        to: [MAIL_FROM], // itsupport@vgctechnology.com
+        subject: emailSubject,
+        body: advisoryHtml,
+        isCustomerEmail: false, // internal email
+      });
+
+      // Store advisory in DB for audit trail
+      const advisoryId = `ADV-${Date.now()}`;
+      await db.upsert("advisories", advisoryId, JSON.stringify({
+        id: advisoryId, headline, source, severity: advisory.severity,
+        affectedSystems: advisory.affectedSystems, subject: emailSubject,
+        sentAt: new Date().toISOString(), sentTo: MAIL_FROM,
+        confidence: advisory.confidence,
+      }));
+
+      console.log(`[AI News Advisory] Sent "${emailSubject}" to ${MAIL_FROM} (severity: ${advisory.severity})`);
+      return json(res, 200, {
+        success: true, advisoryId, subject: emailSubject,
+        severity: advisory.severity, affectedSystems: advisory.affectedSystems,
+        confidence: advisory.confidence, sentTo: MAIL_FROM,
+      });
+    } catch (err) {
+      console.error("[AI News Advisory]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
   // ─── AI Workflow Assist (Zendesk Internal Notes Only) ──────────────────
   if (pathname === "/api/ai/workflow-assist" && req.method === "POST") {
     try {
