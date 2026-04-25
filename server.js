@@ -1594,7 +1594,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
                 // Auto-create ITSM incidents from tickets
                 if (createIncidents) {
-                  const existing = await db.getOne("incidents", `ZD-${t.id}`);
+                  const existing = await db.getOne("incidents", `INC-ZD${t.id}`);
                   if (!existing) {
                     const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                     const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
@@ -1699,7 +1699,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 for (const row of itsmRows) {
                   try {
                     const inc = JSON.parse(row.data);
-                    if (inc.zdTicketId === t.id) {
+                    if (String(inc.zdTicketId) === String(t.id)) {
                       hasLinkedIncident = true;
                       const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                       const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
@@ -1720,6 +1720,12 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                       break;
                     }
                   } catch {}
+                }
+
+                // Fast-path dedup: check by known key before creating
+                if (!hasLinkedIncident) {
+                  const existsByKey = await db.getOne("incidents", `INC-ZD${t.id}`);
+                  if (existsByKey) hasLinkedIncident = true;
                 }
 
                 // Auto-create ITSM incident if no linked incident exists (Production Live)
@@ -1888,7 +1894,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
               for (const row of incRows) {
                 try {
                   const inc = JSON.parse(row.data);
-                  if (inc.zdTicketId === t.id) {
+                  if (String(inc.zdTicketId) === String(t.id)) {
                     const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                     const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
                     let changed = false;
@@ -1911,10 +1917,13 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
               // If new ticket and no ITSM incident exists, auto-create one
               if (eventType === "ticket_created" || eventType === "zen:event-type:ticket.created") {
-                let hasIncident = false;
-                const allInc = await db.getAll("incidents");
-                for (const row of allInc) {
-                  try { if (JSON.parse(row.data).zdTicketId === t.id) { hasIncident = true; break; } } catch {}
+                // Fast-path dedup: check by known key first
+                let hasIncident = !!(await db.getOne("incidents", `INC-ZD${t.id}`));
+                if (!hasIncident) {
+                  const allInc = await db.getAll("incidents");
+                  for (const row of allInc) {
+                    try { if (String(JSON.parse(row.data).zdTicketId) === String(t.id)) { hasIncident = true; break; } } catch {}
+                  }
                 }
                 if (!hasIncident) {
                   const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };

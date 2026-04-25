@@ -18,6 +18,7 @@ applog.zip
 docker*.log
 dist/
 .env
+.playwright-profile/
 *.pfx
 *.cer
 *.pem
