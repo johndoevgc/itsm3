@@ -254,6 +254,24 @@ async function authMiddleware(req, res, pathname, tenantId, clientId) {
   }
 
   const token = authHeader.slice(7);
+
+  // Local admin token: "Bearer local-hash:<sha256-hash>" — validated against LOCAL_ADMIN_PASSWORD_HASH
+  if (token.startsWith("local-hash:")) {
+    const providedHash = token.slice(11);
+    const localHash = process.env.LOCAL_ADMIN_PASSWORD_HASH;
+    if (localHash && providedHash.length === 64) {
+      try {
+        if (crypto.timingSafeEqual(Buffer.from(providedHash, "hex"), Buffer.from(localHash, "hex"))) {
+          return {
+            authenticated: true,
+            user: { email: process.env.LOCAL_ADMIN_EMAIL || "admin@localhost", name: process.env.LOCAL_ADMIN_NAME || "VGC Dev Admin", id: "LOCAL-vgcdevadmin" },
+            role: "VGC Dev Admin",
+          };
+        }
+      } catch {}
+    }
+    return { authenticated: false, user: null, role: "Read Only", skipped: false };
+  }
   if (!tenantId || !clientId) {
     // Entra not configured — decode token but skip full validation
     const decoded = decodeJWT(token);

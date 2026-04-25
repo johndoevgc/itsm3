@@ -1433,8 +1433,8 @@ const server = http.createServer(async (req, res) => {
       const collection = urlObj.searchParams.get("collection");
       const actionFilter = urlObj.searchParams.get("action");
       let rows = await db.getAllAudit(5000);
-      if (from) rows = rows.filter(r => r.timestamp >= from);
-      if (to) rows = rows.filter(r => r.timestamp <= to);
+      if (from) rows = rows.filter(r => { const ts = r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp); return ts >= from; });
+      if (to) rows = rows.filter(r => { const ts = r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp); return ts <= (to.length === 10 ? to + "T23:59:59Z" : to); });
       if (collection) rows = rows.filter(r => r.collection === collection);
       if (actionFilter) rows = rows.filter(r => r.action === actionFilter);
       const summary = {};
