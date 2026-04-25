@@ -6655,12 +6655,12 @@ Respond in JSON ONLY:
 }`;
 
       const payload = {
-        model: getAIModel("primary"),
+        model: getAIModel("secondary"),
         input: [
           { role: "system", content: "You are a senior IT advisory specialist at VGC Technology Pte Ltd. Generate professional enterprise-class internal IT advisory emails. Respond ONLY in valid JSON." },
           { role: "user", content: aiPrompt },
         ],
-        max_output_tokens: 4000,
+        max_completion_tokens: 4000,
       };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
@@ -6676,7 +6676,7 @@ Respond in JSON ONLY:
           });
         });
         aiReq.on("error", reject);
-        aiReq.setTimeout(60000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.setTimeout(120000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
         aiReq.write(JSON.stringify(payload));
         aiReq.end();
       });
