@@ -6,12 +6,12 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.11.0",
-  build: "kp-ui-redesign",
+  version: "3.12.0",
+  build: "kp-multi-model-ai",
   date: "2026-04-25",
   channel: "Production",
   name: "VGC-ITSM",
-  engine: "VGC-AI v3.8 (GPT-5.4-Pro)",
+  engine: "VGC-AI v4.0 (Multi-Model: Pro/Mini/Nano)",
   platform: "Azure App Service (Linux Node 20)",
   region: "AP-Southeast (Singapore)",
   license: "Enterprise — Per User Subscription",
@@ -10467,6 +10467,33 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   </div>
                 </FormField>
                 </>)}
+
+                {/* Multi-Model Tier Architecture */}
+                <div style={{ marginTop: 16, padding: 16, borderRadius: 10, background: "linear-gradient(135deg, #818CF808, #22D3EE08)", border: "1px solid #27272A" }}>
+                  <div style={{ color: COLORS.textPrimary, fontSize: 12, fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16 }}>🧠</span> Multi-Model AI Architecture
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    {[
+                      { tier: "Primary", model: "gpt-5.4-pro", color: "#818CF8", icon: "🎯", desc: "Critical decisions — triage, SLA, patterns, docs" },
+                      { tier: "Secondary", model: "gpt-5.4-mini", color: "#22D3EE", icon: "💬", desc: "Interactive — chat, guides, error resolution" },
+                      { tier: "Tertiary", model: "gpt-5.4-nano", color: "#4ADE80", icon: "⚡", desc: "Bulk ops — test, batch KB, auto-drafts" },
+                    ].map(t => (
+                      <div key={t.tier} style={{
+                        padding: "10px 12px", borderRadius: 8, background: `${t.color}08`,
+                        border: `1px solid ${t.color}33`, textAlign: "center"
+                      }}>
+                        <div style={{ fontSize: 18, marginBottom: 4 }}>{t.icon}</div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: t.color, fontFamily: "'JetBrains Mono', monospace" }}>{t.model}</div>
+                        <div style={{ fontSize: 9, color: "#A1A1AA", marginTop: 2, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>{t.tier}</div>
+                        <div style={{ fontSize: 9, color: "#71717A", marginTop: 4, lineHeight: 1.3 }}>{t.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 9, color: "#52525B", fontFamily: "'JetBrains Mono', monospace", textAlign: "center" }}>
+                    Sweden Central · Same resource · Responses API · Tiered by task complexity
+                  </div>
+                </div>
 
                 {/* Feature Integration Map */}
                 <div style={{ marginTop: 16 }}>

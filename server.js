@@ -64,10 +64,17 @@ function buildClientAssertion() {
 }
 
 // Azure OpenAI config (server-side only — avoids CORS and protects API key)
-// Primary: gpt-5.4-pro (East US 2) — Responses API (supports streaming)
-let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
+// Multi-model tiered architecture — Sweden Central resource, Responses API
+let AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://hlain-mod12m44-swedencentral.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview";
 let AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "";
-let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-nano";
+let AZURE_OPENAI_MODEL = process.env.AZURE_OPENAI_MODEL || "gpt-5.4-pro";
+// Tiered AI models: primary (critical decisions), secondary (interactive), tertiary (bulk/simple)
+const AI_MODELS = {
+  primary: process.env.AZURE_OPENAI_MODEL_PRIMARY || "gpt-5.4-pro",
+  secondary: process.env.AZURE_OPENAI_MODEL_SECONDARY || "gpt-5.4-mini",
+  tertiary: process.env.AZURE_OPENAI_MODEL_TERTIARY || "gpt-5.4-nano",
+};
+function getAIModel(tier) { return AI_MODELS[tier] || AI_MODELS.primary; }
 
 // Zendesk API config (server-side only — protects API token)
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
@@ -2670,7 +2677,7 @@ IMPORTANT: Reference real ticket data and resolutions from the Zendesk history a
 
       const userPrompt = `Generate a complete professional guide on: ${topic}`;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 4000 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 4000 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2858,7 +2865,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const userPrompt = `Resolve this error: ${errorType || "Error"} — ${errorMessage}`;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
@@ -2881,7 +2888,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from AI" });
-      return json(res, 200, { resolution: text, model: AZURE_OPENAI_MODEL });
+      return json(res, 200, { resolution: text, model: getAIModel("secondary") });
     } catch (err) {
       console.error("[AI Error Resolver]", err.message);
       return json(res, 502, { error: err.message });
@@ -3043,7 +3050,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const enrichedSystemPrompt = systemPrompt + kbContext;
 
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: enrichedSystemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1500 };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiReqOptions = {
@@ -3070,7 +3077,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
-      return json(res, 200, { text, model: AZURE_OPENAI_MODEL });
+      return json(res, 200, { text, model: getAIModel("secondary") });
     } catch (err) {
       console.error("[Azure OpenAI Proxy]", err.message);
       return json(res, 502, { error: err.message });
@@ -3115,7 +3122,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       // Build Chat Completions payload with stream: true
       const payload = {
-        model: AZURE_OPENAI_MODEL,
+        model: getAIModel("secondary"),
         input: [
           { role: "system", content: enrichedSystemPrompt },
           { role: "user", content: userPrompt }
@@ -3161,7 +3168,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
             if (!trimmed || !trimmed.startsWith("data: ")) continue;
             const data = trimmed.slice(6);
             if (data === "[DONE]") {
-              res.write(`data: ${JSON.stringify({ done: true, model: AZURE_OPENAI_MODEL })}\n\n`);
+              res.write(`data: ${JSON.stringify({ done: true, model: getAIModel("secondary") })}\n\n`);
               res.end();
               return;
             }
@@ -3183,7 +3190,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
               }
               // Responses API: response.completed marks the end
               if (parsed.type === "response.completed") {
-                res.write(`data: ${JSON.stringify({ done: true, model: AZURE_OPENAI_MODEL })}\n\n`);
+                res.write(`data: ${JSON.stringify({ done: true, model: getAIModel("secondary") })}\n\n`);
                 res.end();
                 return;
               }
@@ -3204,7 +3211,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
             }
           }
           if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ done: true, model: AZURE_OPENAI_MODEL })}\n\n`);
+            res.write(`data: ${JSON.stringify({ done: true, model: getAIModel("secondary") })}\n\n`);
             res.end();
           }
         });
@@ -3250,7 +3257,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       return json(res, 503, { error: "Azure OpenAI not configured", configured: false });
     }
     try {
-      const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "user", content: "Reply with exactly: OK" }], max_output_tokens: 16 };
+      const payload = { model: getAIModel("tertiary"), input: [{ role: "user", content: "Reply with exactly: OK" }], max_output_tokens: 16 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
       const aiResult = await new Promise((resolve, reject) => {
         const aiReq = https.request({
@@ -3269,7 +3276,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         aiReq.end();
       });
       const text = extractAIText(aiResult);
-      return json(res, 200, { status: "connected", model: AZURE_OPENAI_MODEL, response: text.trim(), configured: true });
+      return json(res, 200, { status: "connected", model: getAIModel("tertiary"), response: text.trim(), configured: true });
     } catch (err) {
       return json(res, 502, { error: err.message, configured: true });
     }
@@ -3408,13 +3415,14 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     if (apiKey) AZURE_OPENAI_KEY = apiKey;
     if (model) AZURE_OPENAI_MODEL = model;
     console.log(`[OPENAI] Settings updated. Model=${AZURE_OPENAI_MODEL}, Endpoint=${AZURE_OPENAI_ENDPOINT.substring(0, 60)}...`);
-    return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, message: "Azure OpenAI settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
+    return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, models: AI_MODELS, message: "Azure OpenAI settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
   }
 
   // ─── Azure OpenAI — Get Current Config: GET /api/settings/openai ────
   if (pathname === "/api/settings/openai" && req.method === "GET") {
     return json(res, 200, {
       model: AZURE_OPENAI_MODEL,
+      models: AI_MODELS,
       endpoint: AZURE_OPENAI_ENDPOINT.replace(/api-key=[^&]+/, "api-key=***"),
       configured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
     });
@@ -5023,6 +5031,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       zendeskConfigured: !!(ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN),
       aiConfigured: !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT),
       aiModel: AZURE_OPENAI_MODEL,
+      aiModels: AI_MODELS,
       merakiConfigured: MERAKI_API_KEYS.length > 0,
       solarwindsConfigured: !!SOLARWINDS_API_KEY,
       sophosConfigured: !!(SOPHOS_CLIENT_ID && SOPHOS_CLIENT_SECRET),
@@ -5104,7 +5113,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
 Keep resolutions concise and professional. Do NOT mention AI or automation in the resolution text.`;
 
         const payload = {
-          model: AZURE_OPENAI_MODEL,
+          model: getAIModel("tertiary"),
           input: [
             { role: "system", content: systemPrompt },
             { role: "user", content: `Close these ${batch.length} historical incidents (created before ${cutoff.toISOString()}):\n\n${summaries}` }
@@ -5224,7 +5233,7 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
 Incident: ${JSON.stringify({ id: inc.id, title: inc.title, description: inc.description, priority: inc.priority, category: inc.category, status: inc.status, assignee: inc.assignee, createdAt: inc.createdAt })}
 Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "Resolved", "confidence": 0-100, "customerEmail": "short message to customer about resolution"}`;
 
-          const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: "You are an expert IT support analyst. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 800 };
+          const payload = { model: getAIModel("tertiary"), input: [{ role: "system", content: "You are an expert IT support analyst. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 800 };
           const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
           const aiResult = await new Promise((resolve, reject) => {
             const aiReq = https.request({
@@ -5410,7 +5419,7 @@ Incident: ${JSON.stringify({ id: inc.id, title: inc.title, description: (inc.des
 Respond in JSON ONLY:
 {"action": "one of: escalate|reassign|add_workaround|add_internal_note|monitor|request_info", "reasoning": "why this action", "internalNote": "exact text for internal note to add (NO customer emails, NO email addresses)", "suggestedAssignee": "team or person if reassigning", "urgency": "high|medium|low", "confidence": 0-100}`;
 
-          const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: "You are an expert IT workflow advisor. Respond ONLY in valid JSON. NEVER include email addresses in your response." }, { role: "user", content: prompt }], max_output_tokens: 600 };
+          const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: "You are an expert IT workflow advisor. Respond ONLY in valid JSON. NEVER include email addresses in your response." }, { role: "user", content: prompt }], max_output_tokens: 600 };
           const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
           const aiResult = await new Promise((resolve, reject) => {
             const aiReq = https.request({
@@ -5651,7 +5660,7 @@ Create a professional KB article. Respond in JSON ONLY:
   "quickFix": ["Step 1 quick fix", "Step 2 quick fix", "Step 3 quick fix"]
 }`;
 
-          const payload = { model: AZURE_OPENAI_MODEL, input: [{ role: "system", content: "You are an expert IT knowledge base author. Create professional, actionable KB articles. Respond ONLY in valid JSON." }, { role: "user", content: prompt }], max_output_tokens: 1200 };
+          const payload = { model: getAIModel("tertiary"), input: [{ role: "system", content: "You are an expert IT knowledge base author. Create professional, actionable KB articles. Respond ONLY in valid JSON." }, { role: "user", content: prompt }], max_output_tokens: 1200 };
           const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
           const aiResult = await new Promise((resolve, reject) => {
             const aiReq = https.request({
@@ -5772,7 +5781,7 @@ Priority: ${incident.priority || "N/A"}
 Assignee: ${incident.assignee || "N/A"}`;
 
   const payload = {
-    model: AZURE_OPENAI_MODEL,
+    model: getAIModel("tertiary"),
     input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
     max_output_tokens: 600,
   };
