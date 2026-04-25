@@ -92,7 +92,7 @@ const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 // When true, ALL outbound emails are redirected to PROD_TEST_EMAIL
 // Flip to false when ready to send to real customers
 const PROD_TEST_MODE = true;
-const PROD_TEST_EMAIL = "itsupport@vgctechnology.com";
+const PROD_TEST_EMAIL = "hlaing@vgctechnology.com";
 
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
@@ -5292,7 +5292,7 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
               // Send engineer review email for AI auto-resolved incidents
               try {
                 await graphSendMail({
-                  to: ["itsupport@vgctechnology.com"],
+                  to: ["hlaing@vgctechnology.com"],
                   subject: `[ITSM AI Review] ${inc.id} auto-resolved — please verify`,
                   body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
                     <h2 style="color:#7C3AED;">🤖 AI Auto-Resolve Review</h2>
