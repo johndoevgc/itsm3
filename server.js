@@ -102,6 +102,8 @@ const PROD_TEST_MODE = true;
 const PROD_TEST_EMAIL = "hlaing@vgctechnology.com";
 // Customer-facing emails go here (never to real customers until go-live)
 const CUSTOMER_TEST_EMAIL = "johndoe@vgsg.com";
+// Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
+const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
 
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
@@ -681,13 +683,19 @@ async function graphSendMail({ to, subject, body, from, isCustomerEmail }) {
 async function processInboundEmails() {
   try {
     const token = await getManagedIdentityToken();
-    const sender = MAIL_FROM;
+    const sender = HELPDESK_MAILBOX;
 
     // Fetch unread emails (top 10, newest first)
+    const filterParams = new URLSearchParams({
+      "$filter": "isRead eq false",
+      "$top": "10",
+      "$orderby": "receivedDateTime desc",
+      "$select": "id,subject,bodyPreview,from,receivedDateTime,body",
+    });
     const graphData = await new Promise((resolve, reject) => {
       const graphReq = https.request({
         hostname: "graph.microsoft.com",
-        path: `/v1.0/users/${encodeURIComponent(sender)}/messages?$filter=isRead eq false&$top=10&$orderby=receivedDateTime desc&$select=id,subject,bodyPreview,from,receivedDateTime,body`,
+        path: `/v1.0/users/${encodeURIComponent(sender)}/messages?${filterParams.toString()}`,
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       }, (resp) => {
@@ -797,6 +805,10 @@ async function processInboundEmails() {
     return { processed: createdIncidents.length, incidents: createdIncidents };
   } catch (err) {
     console.error("[Email-to-Ticket] Pipeline error:", err.message);
+    // Distinguish permission errors from other failures
+    if (err.message.includes("403") || err.message.includes("AccessDenied")) {
+      return { processed: 0, incidents: [], error: "Mail.Read permission not granted to Managed Identity — contact Azure AD admin to enable" };
+    }
     return { processed: 0, incidents: [], error: err.message };
   }
 }
