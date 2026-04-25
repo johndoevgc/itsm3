@@ -7607,12 +7607,57 @@ async function start() {
         }
       } catch (e) { console.warn("[Scheduled Cleanup] Error:", e.message); }
     }, CLEANUP_INTERVAL);
+
+    // ─── Scheduled Log Purge (every 6 hours, after queue cleanup) ───
+    const LOG_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
+    const logPurgeInterval = setInterval(async () => {
+      try {
+        const keepDays = 2;
+        const cutoff = new Date(Date.now() - keepDays * 86400000);
+        const logColls = ["escalation_log", "notifications", "email_rejections"];
+        for (const coll of logColls) {
+          const rows = await db.getAll(coll);
+          let deleted = 0;
+          for (const r of rows) {
+            try {
+              const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+              const tsRaw = item.timestamp || item.createdAt || item.time || item.created || item.escalatedAt || item.date || item.sentAt || item.rejectedAt || "";
+              let isOld = false;
+              if (tsRaw) { const d = new Date(tsRaw); isOld = isNaN(d.getTime()) || d < cutoff; }
+              else { isOld = true; }
+              if (isOld) { await db.deleteOne(coll, r.id || item.id); deleted++; }
+            } catch {}
+          }
+          if (deleted > 0) console.log(`[Scheduled Purge] ${coll}: deleted ${deleted}/${rows.length} old records`);
+        }
+        // Also permanently delete dismissed ai_actions/ai_workflow_queue
+        for (const coll of ["ai_actions", "ai_workflow_queue", "ai_resolve_queue"]) {
+          const rows = await db.getAll(coll);
+          let deleted = 0;
+          for (const r of rows) {
+            try {
+              const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+              if (item && item.status === "dismissed") { await db.deleteOne(coll, r.id || item.id); deleted++; }
+            } catch {}
+          }
+          if (deleted > 0) console.log(`[Scheduled Purge] ${coll}: deleted ${deleted} dismissed records`);
+        }
+        if (cacheLayer) { ["escalation_log", "notifications", "email_rejections", "ai_actions", "ai_workflow_queue", "ai_resolve_queue"].forEach(c => cacheLayer.invalidatePrefix(c)); }
+      } catch (e) { console.warn("[Scheduled Purge] Error:", e.message); }
+    }, LOG_PURGE_INTERVAL);
+
     // Run once on startup after 60s delay
     setTimeout(() => {
       console.log("[Scheduled Cleanup] Running initial cleanup...");
       queueCleanupInterval._onTimeout && queueCleanupInterval._onTimeout();
     }, 60000);
+    // Run log purge 90s after startup (after queue cleanup finishes)
+    setTimeout(() => {
+      console.log("[Scheduled Purge] Running initial log purge...");
+      logPurgeInterval._onTimeout && logPurgeInterval._onTimeout();
+    }, 90000);
     console.log("[Scheduled Cleanup] Queue auto-cleanup every 6 hours");
+    console.log("[Scheduled Purge] Log auto-purge every 6 hours (keep 2 days)");
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
