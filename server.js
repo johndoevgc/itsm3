@@ -7138,6 +7138,81 @@ Respond in JSON ONLY:
     }
   }
 
+  // POST /api/ai/purge-dismissed — permanently DELETE dismissed ai_actions, ai_workflow_queue, ai_resolve_queue records
+  if (pathname === "/api/ai/purge-dismissed" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const dryRun = body.dryRun !== false;
+      const collections = ["ai_actions", "ai_workflow_queue", "ai_resolve_queue"];
+      const result = {};
+      for (const coll of collections) {
+        const rows = await db.getAll(coll);
+        let deleted = 0;
+        for (const r of rows) {
+          try {
+            const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (item && item.status === "dismissed") {
+              if (!dryRun) await db.deleteOne(coll, r.id || item.id);
+              deleted++;
+            }
+          } catch {}
+        }
+        result[coll] = { total: rows.length, dismissed: deleted, remaining: rows.length - deleted };
+      }
+      if (!dryRun && cacheLayer) { collections.forEach(c => cacheLayer.invalidatePrefix(c)); }
+      console.log(`[Purge Dismissed] ${dryRun ? "DRY RUN" : "EXECUTED"} — ${JSON.stringify(result)}`);
+      return json(res, 200, { success: true, dryRun, ...result });
+    } catch (err) {
+      console.error("[Purge Dismissed]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/db/purge-logs — bulk delete old escalation_log, notifications, email_rejections
+  if (pathname === "/api/db/purge-logs" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const dryRun = body.dryRun !== false;
+      const keepDays = body.keepDays || 7;
+      const limit = body.limit || 5000;
+      const targetColl = body.collection || null;
+      const cutoff = new Date(Date.now() - keepDays * 86400000);
+      const allTargets = ["escalation_log", "notifications", "email_rejections"];
+      const targets = targetColl && allTargets.includes(targetColl) ? [targetColl] : allTargets;
+      const result = {};
+      for (const coll of targets) {
+        const rows = await db.getAll(coll);
+        let deleted = 0;
+        for (const r of rows) {
+          if (deleted >= limit) break;
+          try {
+            const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            const tsRaw = item.timestamp || item.createdAt || item.time || item.created || item.escalatedAt || item.date || item.sentAt || item.rejectedAt || "";
+            let isOld = false;
+            if (tsRaw) {
+              const d = new Date(tsRaw);
+              if (!isNaN(d.getTime())) isOld = d < cutoff;
+              else isOld = true;
+            } else {
+              isOld = true;
+            }
+            if (isOld) {
+              if (!dryRun) await db.deleteOne(coll, r.id || item.id);
+              deleted++;
+            }
+          } catch {}
+        }
+        result[coll] = { total: rows.length, purged: deleted, remaining: rows.length - deleted };
+      }
+      if (!dryRun && cacheLayer) { targets.forEach(c => cacheLayer.invalidatePrefix(c)); }
+      console.log(`[Purge Logs] ${dryRun ? "DRY RUN" : "EXECUTED"} keepDays=${keepDays} limit=${limit} cutoff=${cutoff.toISOString()} — ${JSON.stringify(result)}`);
+      return json(res, 200, { success: true, dryRun, keepDays, limit, cutoff: cutoff.toISOString(), ...result });
+    } catch (err) {
+      console.error("[Purge Logs]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── AI Learn from Incidents → KB Articles ────────────────────────────
   if (pathname === "/api/ai/learn-incidents-kb" && req.method === "POST") {
     try {
