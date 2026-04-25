@@ -11,12 +11,17 @@ class WorkflowEngine {
     this.interval = options.interval || 5 * 60 * 1000; // 5 min default
     this.timer = null;
     this.lastRun = null;
+    this._lastDataHash = null; // change-detection: skip cycle if no data changed
+    this._cachedRules = null;
+    this._cachedRulesExpiry = 0;
+    this._cycleTimeMs = 0; // last cycle duration
     this.stats = {
       rulesEvaluated: 0,
       actionsExecuted: 0,
       autoClosedTickets: 0,
       autoEscalated: 0,
       errors: 0,
+      cyclesSkipped: 0,
     };
     this.executionLog = []; // last 200 entries
   }
@@ -35,8 +40,27 @@ class WorkflowEngine {
 
   // ─── Main evaluation cycle ────────────────────────────────────────────
   async runCycle() {
+    const cycleStart = Date.now();
     try {
       this.lastRun = new Date().toISOString();
+
+      // Change-detection: skip if no incidents modified since last cycle
+      if (this.db.getMaxUpdatedAt) {
+        try {
+          const maxUpd = await this.db.getMaxUpdatedAt("incidents");
+          const hash = String(maxUpd);
+          if (hash === this._lastDataHash) {
+            this.stats.cyclesSkipped++;
+            return; // no changes — skip entire cycle
+          }
+          this._lastDataHash = hash;
+        } catch {}
+      }
+
+      // Load ALL open incidents ONCE for the entire cycle
+      const incidentRows = this.db.getOpen ? await this.db.getOpen("incidents") : await this.db.getAll("incidents");
+      this._cycleIncidents = incidentRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(i => i && !i._deleted);
+
       const rules = await this._loadRules();
       const activeRules = rules.filter(r => r.status === "Active" && !r._deleted);
 
@@ -76,9 +100,16 @@ class WorkflowEngine {
           this._log("error", "EMAIL_TO_TICKET", `Inbox scan failed: ${inErr.message}`);
         }
       }
+
+      // Clean up cycle-scoped data
+      this._cycleIncidents = null;
     } catch (err) {
       this.stats.errors++;
       console.error("[WorkflowEngine] Cycle error:", err.message);
+    }
+    this._cycleTimeMs = Date.now() - cycleStart;
+    if (this._cycleTimeMs > 10000) {
+      console.warn(`[WorkflowEngine] Slow cycle: ${this._cycleTimeMs}ms`);
     }
   }
 
@@ -86,14 +117,12 @@ class WorkflowEngine {
   async _triggerAutoResolveForIdle() {
     try {
       const http = require("http");
-      const rows = await this.db.getAll("incidents");
+      const incidents = this._cycleIncidents || [];
       const now = Date.now();
       const IDLE_THRESHOLD = 2 * 60 * 60 * 1000; // 2 hours idle
 
-      for (const row of rows) {
+      for (const inc of incidents) {
         try {
-          const inc = JSON.parse(row.data);
-          if (inc._deleted) continue;
           const status = (inc.status || "").toLowerCase();
           if (["closed", "resolved"].includes(status)) continue;
           if (inc._autoResolveAttempted) continue;
@@ -143,12 +172,16 @@ class WorkflowEngine {
     }
   }
 
-  // ─── Load rules from DB ───────────────────────────────────────────────
+  // ─── Load rules from DB (cached 5min) ──────────────────────────────────
   async _loadRules() {
     try {
+      const now = Date.now();
+      if (this._cachedRules && now < this._cachedRulesExpiry) return this._cachedRules;
       const rows = await this.db.getAll("workflow_rules");
-      return rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-    } catch { return []; }
+      this._cachedRules = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      this._cachedRulesExpiry = now + 5 * 60 * 1000; // 5min cache
+      return this._cachedRules;
+    } catch { return this._cachedRules || []; }
   }
 
   // ─── Evaluate time-based rules ────────────────────────────────────────
@@ -177,13 +210,14 @@ class WorkflowEngine {
   // ─── Auto-close resolved tickets after 72 hours ──────────────────────
   async _autoCloseResolved(rule) {
     try {
-      const rows = await this.db.getAll("incidents");
+      // Also load resolved incidents (not in _cycleIncidents which is open-only)
+      const rows = this.db.getByField ? await this.db.getByField("incidents", "status", "Resolved") : await this.db.getAll("incidents");
       const now = Date.now();
       const THRESHOLD = 72 * 60 * 60 * 1000; // 72 hours
 
       for (const row of rows) {
         try {
-          const inc = JSON.parse(row.data);
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
           if (inc._deleted) continue;
           if ((inc.status || "").toLowerCase() !== "resolved") continue;
           const resolvedAt = inc.resolvedAt || inc.updatedAt || inc.lastModified;
@@ -224,14 +258,12 @@ class WorkflowEngine {
   // ─── Auto-escalate critical incidents without response ────────────────
   async _autoEscalateCritical(rule) {
     try {
-      const rows = await this.db.getAll("incidents");
+      const incidents = this._cycleIncidents || [];
       const now = Date.now();
       const THRESHOLD = 15 * 60 * 1000; // 15 minutes
 
-      for (const row of rows) {
+      for (const inc of incidents) {
         try {
-          const inc = JSON.parse(row.data);
-          if (inc._deleted) continue;
           const status = (inc.status || "").toLowerCase();
           if (status === "closed" || status === "resolved") continue;
           if (inc.priority !== "Sev-A") continue;
@@ -383,17 +415,16 @@ class WorkflowEngine {
   // ─── Duplicate detection logic ────────────────────────────────────────
   async _checkDuplicates(rule, newIncident) {
     try {
-      const rows = await this.db.getAll("incidents");
+      const incidents = this._cycleIncidents || [];
       const title = (newIncident.title || "").toLowerCase();
       if (!title || title.length < 5) return;
 
       const words = title.split(/\s+/).filter(w => w.length > 3);
       if (words.length === 0) return;
 
-      for (const row of rows) {
+      for (const existing of incidents) {
         try {
-          const existing = JSON.parse(row.data);
-          if (existing._deleted || existing.id === newIncident.id) continue;
+          if (existing.id === newIncident.id) continue;
           const status = (existing.status || "").toLowerCase();
           if (status === "closed" || status === "resolved") continue;
 
@@ -432,6 +463,7 @@ class WorkflowEngine {
       running: !!this.timer,
       lastRun: this.lastRun,
       lastDailySummary: this.lastDailySummary || null,
+      lastCycleTimeMs: this._cycleTimeMs,
       ...this.stats,
       logSize: this.executionLog.length,
     };

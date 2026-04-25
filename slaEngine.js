@@ -131,9 +131,10 @@ class SlaEngine {
     this.timer = null;
     this.policy = { ...DEFAULT_SLA_POLICY, ...(options.policy || {}) };
     this.lastRun = null;
-    this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0 };
+    this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0, cyclesSkipped: 0, lastCycleMs: 0 };
     this.onBreach = options.onBreach || null; // callback(escalation) for notification
     this._notifiedBreaches = new Set(); // dedup: track incident IDs already notified this session
+    this._lastDataHash = null; // change-detection
   }
 
   async start() {
@@ -178,9 +179,23 @@ class SlaEngine {
   }
 
   async runCycle() {
+    const cycleStart = Date.now();
     try {
       const now = new Date();
       this.lastRun = now.toISOString();
+
+      // Change-detection: skip if no incidents modified since last cycle
+      if (this.db.getMaxUpdatedAt) {
+        try {
+          const maxUpd = await this.db.getMaxUpdatedAt("incidents");
+          const hash = String(maxUpd);
+          if (hash === this._lastDataHash) {
+            this.stats.cyclesSkipped++;
+            return; // no changes
+          }
+          this._lastDataHash = hash;
+        } catch {}
+      }
 
       // Get open incidents (use optimized query if available)
       const incidentRows = this.db.getOpen ? await this.db.getOpen("incidents") : await this.db.getAll("incidents");
@@ -191,21 +206,28 @@ class SlaEngine {
       const openStatuses = new Set(["Open", "In Progress", "Pending", "Assigned", "open", "in_progress", "pending", "assigned", "new"]);
       const openIncidents = incidents.filter(i => openStatuses.has(i.status));
 
+      // Clean up _notifiedBreaches for incidents that are no longer open
+      const openIds = new Set(openIncidents.map(i => i.id));
+      for (const notifiedId of this._notifiedBreaches) {
+        if (!openIds.has(notifiedId)) this._notifiedBreaches.delete(notifiedId);
+      }
+
       let atRisk = 0, breached = 0, escalated = 0;
       const escalations = [];
+      const slaUpdates = []; // batch SLA tracking upserts
 
       for (const inc of openIncidents) {
         const sla = computeSlaStatus(inc, this.policy);
 
-        // Track SLA state in a separate collection
-        await this.db.upsert("sla_tracking", inc.id, JSON.stringify({
+        // Collect SLA tracking update (batch later)
+        slaUpdates.push({ id: inc.id, data: {
           ...sla,
           title: inc.title,
           assignee: inc.assignee,
           assignmentGroup: inc.assignmentGroup,
           category: inc.category,
           customer: inc.customer,
-        }));
+        }});
 
         if (sla.status === "at_risk") atRisk++;
         if (sla.status === "critical") { atRisk++; }
@@ -229,6 +251,23 @@ class SlaEngine {
         }
       }
 
+      // Batch write all SLA tracking records
+      if (this.db.bulkUpsert && slaUpdates.length > 0) {
+        try {
+          const items = slaUpdates.map(u => ({ ...u.data, id: u.id }));
+          await this.db.bulkUpsert("sla_tracking", items);
+        } catch {
+          // Fallback to individual upserts
+          for (const u of slaUpdates) {
+            await this.db.upsert("sla_tracking", u.id, JSON.stringify(u.data));
+          }
+        }
+      } else {
+        for (const u of slaUpdates) {
+          await this.db.upsert("sla_tracking", u.id, JSON.stringify(u.data));
+        }
+      }
+
       // Store escalations
       for (const esc of escalations) {
         await this.db.upsert("escalation_log", esc.id, JSON.stringify(esc));
@@ -238,13 +277,17 @@ class SlaEngine {
         }
       }
 
-      this.stats = { totalChecked: openIncidents.length, atRisk, breached, escalated, lastRun: this.lastRun };
+      this.stats = { totalChecked: openIncidents.length, atRisk, breached, escalated, cyclesSkipped: this.stats.cyclesSkipped, lastRun: this.lastRun };
 
       if (atRisk > 0 || breached > 0) {
         console.log(`[SLA Engine] Checked ${openIncidents.length} incidents — ${atRisk} at-risk, ${breached} breached, ${escalated} escalated`);
       }
     } catch (err) {
       console.error("[SLA Engine] Cycle failed:", err.message);
+    }
+    this.stats.lastCycleMs = Date.now() - cycleStart;
+    if (this.stats.lastCycleMs > 10000) {
+      console.warn(`[SLA Engine] Slow cycle: ${this.stats.lastCycleMs}ms`);
     }
   }
 

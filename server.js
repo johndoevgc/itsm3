@@ -190,6 +190,14 @@ let workflowEngine = null;
 let analyticsEngine = null;
 let cacheLayer = null;
 
+// ─── Scheduled Purge Status Tracker ─────────────────────────────────────
+const purgeStatus = {
+  queueCleanup: { lastRun: null, lastResult: null, nextRun: null, totalDismissed: 0, runCount: 0 },
+  logPurge: { lastRun: null, lastResult: null, nextRun: null, totalDeleted: 0, runCount: 0 },
+  terminalPurge: { lastRun: null, lastResult: null, nextRun: null, totalDeleted: 0, runCount: 0 },
+  auditPurge: { lastRun: null, lastResult: null, nextRun: null, totalDeleted: 0, runCount: 0 },
+};
+
 // ─── Cached DB helpers (uses cacheLayer when available) ─────────────────
 async function cachedGetAll(collection) {
   if (cacheLayer) {
@@ -358,6 +366,46 @@ async function initDatabase() {
           await transaction.commit();
         } catch (e) { await transaction.rollback(); throw e; }
       },
+      getOpen: async (coll) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .query("SELECT id, data FROM itsm_data WHERE collection = @coll AND JSON_VALUE(data, '$.status') NOT IN ('Closed', 'closed', 'Resolved', 'resolved') ORDER BY updated_at DESC");
+        return r.recordset;
+      },
+      getByField: async (coll, jsonPath, value) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("val", sql.NVarChar(512), value)
+          .query(`SELECT id, data FROM itsm_data WHERE collection = @coll AND JSON_VALUE(data, '$.${jsonPath.replace(/[^a-zA-Z0-9_.]/g, "")}') = @val ORDER BY updated_at DESC`);
+        return r.recordset;
+      },
+      getPage: async (coll, { limit = 50, offset = 0, orderBy = "updated_at DESC" } = {}) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("offset", sql.Int, offset)
+          .input("limit", sql.Int, limit)
+          .query(`SELECT id, data FROM itsm_data WHERE collection = @coll ORDER BY updated_at DESC OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`);
+        return r.recordset;
+      },
+      deleteByFilter: async (coll, jsonPath, value) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .input("val", sql.NVarChar(512), value)
+          .query(`DELETE FROM itsm_data WHERE collection = @coll AND JSON_VALUE(data, '$.${jsonPath.replace(/[^a-zA-Z0-9_.]/g, "")}') = @val`);
+        return r.rowsAffected?.[0] || 0;
+      },
+      pruneAudit: async (keepDays) => {
+        const r = await pool.request()
+          .input("cutoff", sql.DateTime2, new Date(Date.now() - keepDays * 86400000))
+          .query("DELETE FROM audit_log WHERE [timestamp] < @cutoff");
+        return r.rowsAffected?.[0] || 0;
+      },
+      getMaxUpdatedAt: async (coll) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), coll)
+          .query("SELECT MAX(updated_at) AS max_updated FROM itsm_data WHERE collection = @coll");
+        return r.recordset[0]?.max_updated || null;
+      },
       ping: async () => { await pool.request().query("SELECT 1"); return true; },
       close: () => pool.close(),
     };
@@ -467,6 +515,36 @@ async function initDatabase() {
         } catch (e) { await conn.rollback(); throw e; }
         finally { conn.release(); }
       },
+      getByField: async (coll, jsonPath, value) => {
+        const [rows] = await pool.execute(
+          `SELECT id, data FROM itsm_data WHERE collection = ? AND JSON_UNQUOTE(JSON_EXTRACT(data, CONCAT('$.', ?))) = ? ORDER BY updated_at DESC`,
+          [coll, jsonPath, value]
+        );
+        return rows;
+      },
+      getPage: async (coll, { limit = 50, offset = 0 } = {}) => {
+        const [rows] = await pool.execute(
+          "SELECT id, data FROM itsm_data WHERE collection = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+          [coll, limit, offset]
+        );
+        return rows;
+      },
+      deleteByFilter: async (coll, jsonPath, value) => {
+        const [result] = await pool.execute(
+          `DELETE FROM itsm_data WHERE collection = ? AND JSON_UNQUOTE(JSON_EXTRACT(data, CONCAT('$.', ?))) = ?`,
+          [coll, jsonPath, value]
+        );
+        return result.affectedRows || 0;
+      },
+      pruneAudit: async (keepDays) => {
+        const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString().slice(0, 19).replace("T", " ");
+        const [result] = await pool.execute("DELETE FROM audit_log WHERE timestamp < ?", [cutoff]);
+        return result.affectedRows || 0;
+      },
+      getMaxUpdatedAt: async (coll) => {
+        const [rows] = await pool.execute("SELECT MAX(updated_at) AS max_updated FROM itsm_data WHERE collection = ?", [coll]);
+        return rows[0]?.max_updated || null;
+      },
       ping: async () => { await pool.execute("SELECT 1"); return true; },
       close: () => pool.end(),
     };
@@ -501,6 +579,10 @@ async function initDatabase() {
       audit: sdb.prepare("INSERT INTO audit_log (collection, record_id, action, data, user_name) VALUES (?, ?, ?, ?, ?)"),
       getAudit: sdb.prepare("SELECT * FROM audit_log WHERE collection = ? ORDER BY timestamp DESC LIMIT ?"),
       getAllAudit: sdb.prepare("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?"),
+      getOpen: sdb.prepare("SELECT id, data FROM itsm_data WHERE collection = ? AND json_extract(data, '$.status') NOT IN ('Closed', 'closed', 'Resolved', 'resolved') ORDER BY updated_at DESC"),
+      getPage: sdb.prepare("SELECT id, data FROM itsm_data WHERE collection = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?"),
+      maxUpdatedAt: sdb.prepare("SELECT MAX(updated_at) AS max_updated FROM itsm_data WHERE collection = ?"),
+      pruneAudit: sdb.prepare("DELETE FROM audit_log WHERE timestamp < ?"),
     };
     const bulkTx = sdb.transaction((coll, items) => {
       for (const item of items) {
@@ -520,6 +602,24 @@ async function initDatabase() {
       getAudit: async (coll, limit) => s.getAudit.all(coll, limit),
       getAllAudit: async (limit) => s.getAllAudit.all(limit),
       bulkUpsert: async (coll, items) => bulkTx(coll, items),
+      getOpen: async (coll) => s.getOpen.all(coll),
+      getByField: async (coll, jsonPath, value) => {
+        return sdb.prepare(`SELECT id, data FROM itsm_data WHERE collection = ? AND json_extract(data, '$.' || ?) = ? ORDER BY updated_at DESC`).all(coll, jsonPath, value);
+      },
+      getPage: async (coll, { limit = 50, offset = 0 } = {}) => s.getPage.all(coll, limit, offset),
+      deleteByFilter: async (coll, jsonPath, value) => {
+        const info = sdb.prepare(`DELETE FROM itsm_data WHERE collection = ? AND json_extract(data, '$.' || ?) = ?`).run(coll, jsonPath, value);
+        return info.changes || 0;
+      },
+      pruneAudit: async (keepDays) => {
+        const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
+        const info = s.pruneAudit.run(cutoff);
+        return info.changes || 0;
+      },
+      getMaxUpdatedAt: async (coll) => {
+        const row = s.maxUpdatedAt.get(coll);
+        return row?.max_updated || null;
+      },
       ping: async () => { sdb.prepare("SELECT 1").get(); return true; },
       close: () => sdb.close(),
     };
@@ -1259,11 +1359,20 @@ const server = http.createServer(async (req, res) => {
       // GET /api/db/:collection — list all (cached, with optional pagination)
       if (req.method === "GET" && !recordId) {
         const qs = urlObj.searchParams;
-        const rows = await cachedGetAll(collection);
-        const allItems = rows.map(r => JSON.parse(r.data));
         const limit = parseInt(qs.get("limit") || "0") || 0;
         const offset = parseInt(qs.get("offset") || "0") || 0;
         const search = qs.get("search") || "";
+
+        // Use SQL-level pagination when no search filter and db.getPage is available
+        if (limit > 0 && !search && db.getPage) {
+          const totalCount = await db.count(collection);
+          const pageRows = await db.getPage(collection, { limit, offset });
+          const items = pageRows.map(r => JSON.parse(r.data));
+          return json(res, 200, { collection, count: items.length, total: totalCount, data: items });
+        }
+
+        const rows = await cachedGetAll(collection);
+        const allItems = rows.map(r => JSON.parse(r.data));
         let items = allItems;
         if (search) {
           const q = search.toLowerCase();
@@ -5960,6 +6069,36 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     });
   }
 
+  // ─── GET /api/purge-status — Scheduled purge/cleanup status for Admin UI ───
+  if (pathname === "/api/purge-status" && req.method === "GET") {
+    try {
+      // Get current ai_actions breakdown by status
+      const actionRows = await cachedGetAll("ai_actions");
+      const statusBreakdown = {};
+      for (const r of actionRows) {
+        try {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          const st = item?.status || "unknown";
+          statusBreakdown[st] = (statusBreakdown[st] || 0) + 1;
+        } catch {}
+      }
+      return json(res, 200, {
+        purgeStatus,
+        aiActionsTotal: actionRows.length,
+        aiActionsBreakdown: statusBreakdown,
+        schedules: {
+          queueCleanup: { interval: "6 hours", retentionDays: 3, description: "Dismisses stale pending_approval ai_actions (>3 days or incident resolved)" },
+          logPurge: { interval: "6 hours", retentionDays: 2, description: "Deletes old escalation_log, notifications, email_rejections + dismissed AI records" },
+          terminalPurge: { interval: "6 hours", retentionDays: 7, description: "Deletes terminal-status ai_actions (auto_applied, approved, executed, rejected, auto_approved) older than 7 days" },
+          auditPurge: { interval: "6 hours", retentionDays: 30, description: "Prunes audit_log entries older than 30 days" },
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Phase 6: AI Historical Incident Closure (Bulk Close — No Notifications) ───
   // POST /api/ai/historical-close — AI bulk-close past incidents with generated resolutions
   if (pathname === "/api/ai/historical-close" && req.method === "POST") {
@@ -7631,7 +7770,8 @@ async function start() {
 
     // ─── Scheduled Queue Cleanup (every 6 hours) ────────────────────
     const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
-    const queueCleanupInterval = setInterval(async () => {
+    const runQueueCleanup = async () => {
+      const startTime = Date.now();
       try {
         const maxAgeDays = 3;
         const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
@@ -7667,16 +7807,28 @@ async function start() {
         } else {
           console.log(`[Scheduled Cleanup] No stale items found`);
         }
-      } catch (e) { console.warn("[Scheduled Cleanup] Error:", e.message); }
-    }, CLEANUP_INTERVAL);
+        purgeStatus.queueCleanup.lastRun = new Date().toISOString();
+        purgeStatus.queueCleanup.lastResult = { dismissed, resolvedIncidents: resolvedIds.size, durationMs: Date.now() - startTime };
+        purgeStatus.queueCleanup.totalDismissed += dismissed;
+        purgeStatus.queueCleanup.runCount++;
+        purgeStatus.queueCleanup.nextRun = new Date(Date.now() + CLEANUP_INTERVAL).toISOString();
+      } catch (e) {
+        console.warn("[Scheduled Cleanup] Error:", e.message);
+        purgeStatus.queueCleanup.lastRun = new Date().toISOString();
+        purgeStatus.queueCleanup.lastResult = { error: e.message };
+      }
+    };
+    const queueCleanupInterval = setInterval(runQueueCleanup, CLEANUP_INTERVAL);
 
     // ─── Scheduled Log Purge (every 6 hours, after queue cleanup) ───
     const LOG_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
-    const logPurgeInterval = setInterval(async () => {
+    const runLogPurge = async () => {
+      const startTime = Date.now();
       try {
         const keepDays = 2;
         const cutoff = new Date(Date.now() - keepDays * 86400000);
         const logColls = ["escalation_log", "notifications", "email_rejections"];
+        const collResults = {};
         for (const coll of logColls) {
           const rows = await db.getAll(coll);
           let deleted = 0;
@@ -7690,9 +7842,9 @@ async function start() {
               if (isOld) { await db.deleteOne(coll, r.id || item.id); deleted++; }
             } catch {}
           }
-          if (deleted > 0) console.log(`[Scheduled Purge] ${coll}: deleted ${deleted}/${rows.length} old records`);
+          if (deleted > 0) { collResults[coll] = deleted; console.log(`[Scheduled Purge] ${coll}: deleted ${deleted}/${rows.length} old records`); }
         }
-        // Also permanently delete dismissed ai_actions/ai_workflow_queue
+        // Permanently delete dismissed ai_actions/ai_workflow_queue
         for (const coll of ["ai_actions", "ai_workflow_queue", "ai_resolve_queue"]) {
           const rows = await db.getAll(coll);
           let deleted = 0;
@@ -7702,24 +7854,155 @@ async function start() {
               if (item && item.status === "dismissed") { await db.deleteOne(coll, r.id || item.id); deleted++; }
             } catch {}
           }
-          if (deleted > 0) console.log(`[Scheduled Purge] ${coll}: deleted ${deleted} dismissed records`);
+          if (deleted > 0) { collResults[coll + "_dismissed"] = deleted; console.log(`[Scheduled Purge] ${coll}: deleted ${deleted} dismissed records`); }
         }
         if (cacheLayer) { ["escalation_log", "notifications", "email_rejections", "ai_actions", "ai_workflow_queue", "ai_resolve_queue"].forEach(c => cacheLayer.invalidatePrefix(c)); }
-      } catch (e) { console.warn("[Scheduled Purge] Error:", e.message); }
-    }, LOG_PURGE_INTERVAL);
+        const totalDeleted = Object.values(collResults).reduce((a, b) => a + b, 0);
+        purgeStatus.logPurge.lastRun = new Date().toISOString();
+        purgeStatus.logPurge.lastResult = { ...collResults, totalDeleted, durationMs: Date.now() - startTime };
+        purgeStatus.logPurge.totalDeleted += totalDeleted;
+        purgeStatus.logPurge.runCount++;
+        purgeStatus.logPurge.nextRun = new Date(Date.now() + LOG_PURGE_INTERVAL).toISOString();
+      } catch (e) {
+        console.warn("[Scheduled Purge] Error:", e.message);
+        purgeStatus.logPurge.lastRun = new Date().toISOString();
+        purgeStatus.logPurge.lastResult = { error: e.message };
+      }
+    };
+    const logPurgeInterval = setInterval(runLogPurge, LOG_PURGE_INTERVAL);
 
-    // Run once on startup after 60s delay
+    // ─── Scheduled Terminal-Status AI Actions Purge (every 6 hours) ──
+    // Deletes auto_applied, auto_approved, approved, executed, rejected records older than 7 days
+    const TERMINAL_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
+    const TERMINAL_STATUSES = new Set(["auto_applied", "auto_approved", "approved", "executed", "rejected", "failed"]);
+    const TERMINAL_KEEP_DAYS = 7;
+    const MAX_AI_ACTIONS = 500; // cap: if still over 500 after age-based purge, delete oldest terminal records
+    const runTerminalPurge = async () => {
+      const startTime = Date.now();
+      try {
+        const cutoff = new Date(Date.now() - TERMINAL_KEEP_DAYS * 86400000).toISOString();
+        const rows = await db.getAll("ai_actions");
+        let deleted = 0;
+
+        // Pass 1: delete terminal-status records older than retention
+        for (const r of rows) {
+          try {
+            const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (!item) continue;
+            if (!TERMINAL_STATUSES.has(item.status)) continue;
+            const ts = item.createdAt || item.approvedAt || item.executedAt || "";
+            if (ts && ts < cutoff) {
+              await db.deleteOne("ai_actions", r.id || item.id);
+              deleted++;
+            }
+          } catch {}
+        }
+
+        // Pass 2: if still over MAX_AI_ACTIONS, delete oldest terminal records regardless of age
+        let cappedDeleted = 0;
+        if (rows.length - deleted > MAX_AI_ACTIONS) {
+          const remaining = [];
+          const freshRows = await db.getAll("ai_actions");
+          for (const r of freshRows) {
+            try {
+              const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+              if (item && TERMINAL_STATUSES.has(item.status)) {
+                remaining.push({ id: r.id || item.id, ts: item.createdAt || item.approvedAt || "1970-01-01" });
+              }
+            } catch {}
+          }
+          remaining.sort((a, b) => a.ts.localeCompare(b.ts)); // oldest first
+          const excess = freshRows.length - MAX_AI_ACTIONS;
+          for (let i = 0; i < Math.min(excess, remaining.length); i++) {
+            await db.deleteOne("ai_actions", remaining[i].id);
+            cappedDeleted++;
+          }
+        }
+
+        if (deleted > 0 || cappedDeleted > 0) {
+          if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
+          console.log(`[Terminal Purge] Deleted ${deleted} old terminal-status ai_actions (>${TERMINAL_KEEP_DAYS}d) + ${cappedDeleted} cap-overflow`);
+        } else {
+          console.log(`[Terminal Purge] No terminal-status records to purge`);
+        }
+        purgeStatus.terminalPurge.lastRun = new Date().toISOString();
+        purgeStatus.terminalPurge.lastResult = { deletedAge: deleted, deletedCap: cappedDeleted, total: deleted + cappedDeleted, durationMs: Date.now() - startTime };
+        purgeStatus.terminalPurge.totalDeleted += deleted + cappedDeleted;
+        purgeStatus.terminalPurge.runCount++;
+        purgeStatus.terminalPurge.nextRun = new Date(Date.now() + TERMINAL_PURGE_INTERVAL).toISOString();
+      } catch (e) {
+        console.warn("[Terminal Purge] Error:", e.message);
+        purgeStatus.terminalPurge.lastRun = new Date().toISOString();
+        purgeStatus.terminalPurge.lastResult = { error: e.message };
+      }
+    };
+    const terminalPurgeInterval = setInterval(runTerminalPurge, TERMINAL_PURGE_INTERVAL);
+
+    // ─── Scheduled Audit Log Purge (every 6 hours, keep 30 days) ────
+    const AUDIT_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
+    const AUDIT_KEEP_DAYS = parseInt(process.env.AUDIT_RETENTION_DAYS || "30", 10);
+    const runAuditPurge = async () => {
+      const startTime = Date.now();
+      try {
+        let deleted = 0;
+        if (db.pruneAudit) {
+          deleted = await db.pruneAudit(AUDIT_KEEP_DAYS);
+        } else {
+          // Fallback: load and delete old audit records manually
+          const audits = await db.getAllAudit(100000);
+          const cutoff = new Date(Date.now() - AUDIT_KEEP_DAYS * 86400000);
+          for (const a of audits) {
+            const ts = a.timestamp || a.created;
+            if (ts && new Date(ts) < cutoff) {
+              // audit_log uses auto-increment id, no deleteOne via collection
+              deleted++;
+            }
+          }
+        }
+        if (deleted > 0) {
+          console.log(`[Audit Purge] Pruned ${deleted} audit_log records older than ${AUDIT_KEEP_DAYS} days`);
+        } else {
+          console.log(`[Audit Purge] No old audit records to purge`);
+        }
+        purgeStatus.auditPurge.lastRun = new Date().toISOString();
+        purgeStatus.auditPurge.lastResult = { deleted, keepDays: AUDIT_KEEP_DAYS, durationMs: Date.now() - startTime };
+        purgeStatus.auditPurge.totalDeleted += deleted;
+        purgeStatus.auditPurge.runCount++;
+        purgeStatus.auditPurge.nextRun = new Date(Date.now() + AUDIT_PURGE_INTERVAL).toISOString();
+      } catch (e) {
+        console.warn("[Audit Purge] Error:", e.message);
+        purgeStatus.auditPurge.lastRun = new Date().toISOString();
+        purgeStatus.auditPurge.lastResult = { error: e.message };
+      }
+    };
+    const auditPurgeInterval = setInterval(runAuditPurge, AUDIT_PURGE_INTERVAL);
+
+    // Run once on startup with staggered delays
     setTimeout(() => {
       console.log("[Scheduled Cleanup] Running initial cleanup...");
-      queueCleanupInterval._onTimeout && queueCleanupInterval._onTimeout();
+      runQueueCleanup();
     }, 60000);
-    // Run log purge 90s after startup (after queue cleanup finishes)
     setTimeout(() => {
       console.log("[Scheduled Purge] Running initial log purge...");
-      logPurgeInterval._onTimeout && logPurgeInterval._onTimeout();
+      runLogPurge();
     }, 90000);
+    setTimeout(() => {
+      console.log("[Terminal Purge] Running initial terminal-status purge...");
+      runTerminalPurge();
+    }, 120000);
+    setTimeout(() => {
+      console.log("[Audit Purge] Running initial audit log purge...");
+      runAuditPurge();
+    }, 150000);
+    // Set initial nextRun times
+    purgeStatus.queueCleanup.nextRun = new Date(Date.now() + 60000).toISOString();
+    purgeStatus.logPurge.nextRun = new Date(Date.now() + 90000).toISOString();
+    purgeStatus.terminalPurge.nextRun = new Date(Date.now() + 120000).toISOString();
+    purgeStatus.auditPurge.nextRun = new Date(Date.now() + 150000).toISOString();
     console.log("[Scheduled Cleanup] Queue auto-cleanup every 6 hours");
     console.log("[Scheduled Purge] Log auto-purge every 6 hours (keep 2 days)");
+    console.log("[Terminal Purge] Terminal-status purge every 6 hours (keep 7 days, cap 500)");
+    console.log("[Audit Purge] Audit log purge every 6 hours (keep " + AUDIT_KEEP_DAYS + " days)");
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });

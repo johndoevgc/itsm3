@@ -10253,6 +10253,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       { id: "templates", label: "Templates", icon: "📋" },
       { id: "approvalChains", label: "Approval Chains", icon: "✅" },
       { id: "reportSchedules", label: "Scheduled Reports", icon: "📅" },
+      { id: "dataMaintenance", label: "Data Maintenance", icon: "🧹", devOnly: true },
     ];
     const tabs = isTenantAdmin ? allTabs.filter(t => !t.devOnly) : allTabs;
     const activeTab = (isTenantAdmin && allTabs.find(t => t.id === adminTab)?.devOnly) ? "workflows" : adminTab;
@@ -14244,6 +14245,127 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             </div>
           </div>
         )}
+
+        {/* Data Maintenance */}
+        {activeTab === "dataMaintenance" && (() => {
+          const [purgeData, setPurgeData] = React.useState(null);
+          const [purgeLoading, setPurgeLoading] = React.useState(false);
+          const [purgeError, setPurgeError] = React.useState(null);
+
+          const fetchPurgeStatus = React.useCallback(() => {
+            setPurgeLoading(true);
+            fetch("/api/purge-status").then(r => r.json()).then(d => { setPurgeData(d); setPurgeError(null); }).catch(e => setPurgeError(e.message)).finally(() => setPurgeLoading(false));
+          }, []);
+
+          React.useEffect(() => { fetchPurgeStatus(); const iv = setInterval(fetchPurgeStatus, 30000); return () => clearInterval(iv); }, []);
+
+          const fmtDate = (iso) => { if (!iso) return "Never"; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+          const fmtDuration = (ms) => { if (!ms && ms !== 0) return "-"; if (ms < 1000) return ms + "ms"; return (ms / 1000).toFixed(1) + "s"; };
+
+          const purgeJobs = purgeData ? [
+            { key: "queueCleanup", label: "Queue Cleanup", icon: "🧹", desc: purgeData.schedules?.queueCleanup?.description || "", ...purgeData.purgeStatus?.queueCleanup },
+            { key: "logPurge", label: "Log Purge", icon: "📜", desc: purgeData.schedules?.logPurge?.description || "", ...purgeData.purgeStatus?.logPurge },
+            { key: "terminalPurge", label: "Terminal AI Purge", icon: "🤖", desc: purgeData.schedules?.terminalPurge?.description || "", ...purgeData.purgeStatus?.terminalPurge },
+            { key: "auditPurge", label: "Audit Purge", icon: "📋", desc: purgeData.schedules?.auditPurge?.description || "", ...purgeData.purgeStatus?.auditPurge },
+          ] : [];
+
+          const breakdown = purgeData?.aiActionsBreakdown || {};
+          const breakdownColors = { pending_approval: "#FFB347", auto_applied: "#06B6D4", auto_approved: "#81C784", approved: "#10B981", executed: "#6366F1", rejected: "#FF6B6B", dismissed: "#5A6178", failed: "#EF4444" };
+
+          return (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🧹 Data Maintenance & Scheduled Purges</h3>
+                <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Monitor automated cleanup jobs · AI action lifecycle · Database hygiene</div>
+              </div>
+              <button onClick={fetchPurgeStatus} disabled={purgeLoading} style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px", opacity: purgeLoading ? 0.5 : 1 }}>
+                {purgeLoading ? "⏳ Loading..." : "🔄 Refresh"}
+              </button>
+            </div>
+
+            {purgeError && <div style={{ background: "#2D0A0A", border: "1px solid #FF6B6B33", borderRadius: 8, padding: 12, marginBottom: 16, color: "#FF6B6B", fontSize: 11 }}>⚠️ Error fetching purge status: {purgeError}</div>}
+
+            {/* AI Actions Breakdown */}
+            {purgeData && (
+              <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4" }}>🤖 AI Actions Breakdown</h4>
+                  <Badge color={{ bg: "#1A1D2E", text: "#6366F1" }}>Total: {purgeData.aiActionsTotal || 0}</Badge>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {Object.entries(breakdown).sort((a, b) => b[1] - a[1]).map(([status, count]) => (
+                    <div key={status} style={{ background: "#0A0C14", borderRadius: 6, padding: "8px 14px", border: "1px solid #1E2130", minWidth: 100 }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: breakdownColors[status] || "#A0AEC0", fontFamily: "'JetBrains Mono', monospace" }}>{count}</div>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: "0.5px" }}>{status.replace(/_/g, " ")}</div>
+                    </div>
+                  ))}
+                </div>
+                {purgeData.aiActionsTotal > 500 && (
+                  <div style={{ marginTop: 8, fontSize: 10, color: "#FFB347", background: "#FFB34711", borderRadius: 4, padding: "4px 8px" }}>
+                    ⚠️ AI actions count exceeds 500 cap — terminal records will be trimmed at next scheduled purge
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Scheduled Purge Jobs */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {purgeJobs.map(job => (
+                <div key={job.key} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 16 }}>{job.icon}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{job.label}</span>
+                    </div>
+                    <Badge color={job.runCount > 0 ? { bg: "#0D2D1A", text: "#81C784" } : { bg: "#1A1D2E", text: "#5A6178" }}>
+                      {job.runCount > 0 ? `${job.runCount} runs` : "Pending"}
+                    </Badge>
+                  </div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginBottom: 10 }}>{job.desc}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                    <div>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Last Run</div>
+                      <div style={{ fontSize: 10, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>{fmtDate(job.lastRun)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Next Run</div>
+                      <div style={{ fontSize: 10, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>{fmtDate(job.nextRun)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Total Processed</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>{job.totalDismissed ?? job.totalDeleted ?? 0}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase" }}>Last Duration</div>
+                      <div style={{ fontSize: 10, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>{fmtDuration(job.lastResult?.durationMs)}</div>
+                    </div>
+                  </div>
+                  {job.lastResult?.error && (
+                    <div style={{ marginTop: 6, fontSize: 9, color: "#FF6B6B", background: "#FF6B6B11", borderRadius: 4, padding: "3px 6px" }}>⚠️ {job.lastResult.error}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Retention Policy Summary */}
+            {purgeData && (
+              <div style={{ background: "linear-gradient(135deg, #06B6D408, #6366F108)", borderRadius: 8, border: "1px solid #06B6D422", padding: 14, marginTop: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#06B6D4", marginBottom: 8 }}>📐 Retention Policy</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                  {Object.entries(purgeData.schedules || {}).map(([key, sched]) => (
+                    <div key={key} style={{ textAlign: "center", padding: 8, borderRadius: 6, background: "#0F1117" }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "#6366F1", marginBottom: 4 }}>{sched.retentionDays}d</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: "#E8ECF4" }}>{key.replace(/([A-Z])/g, " $1").trim()}</div>
+                      <div style={{ fontSize: 8, color: "#5A6178" }}>Every {sched.interval}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          );
+        })()}
 
         {/* Survey Templates */}
         {activeTab === "surveys" && (
