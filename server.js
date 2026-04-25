@@ -100,6 +100,8 @@ const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 // Flip to false when ready to send to real customers
 const PROD_TEST_MODE = true;
 const PROD_TEST_EMAIL = "hlaing@vgctechnology.com";
+// Customer-facing emails go here (never to real customers until go-live)
+const CUSTOMER_TEST_EMAIL = "johndoe@vgsg.com";
 
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
@@ -615,7 +617,7 @@ function graphAppCallBinary(endpoint) {
 }
 
 // Send email via Microsoft Graph API using Managed Identity
-async function graphSendMail({ to, subject, body, from }) {
+async function graphSendMail({ to, subject, body, from, isCustomerEmail }) {
   const token = await getManagedIdentityToken();
   const sender = from || MAIL_FROM;
 
@@ -625,13 +627,14 @@ async function graphSendMail({ to, subject, body, from }) {
   let finalBody = body;
   if (PROD_TEST_MODE) {
     const originalRecipients = finalTo.join(", ");
+    const testTarget = isCustomerEmail ? CUSTOMER_TEST_EMAIL : PROD_TEST_EMAIL;
     finalSubject = `[TEST → ${originalRecipients}] ${subject}`;
     finalBody = `<div style="background:#FFF3CD;border:1px solid #FFD700;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-family:Arial,sans-serif;">
-      <strong style="color:#856404;">⚠️ PRODUCTION TEST MODE</strong><br/>
+      <strong style="color:#856404;">⚠️ PRODUCTION TEST MODE${isCustomerEmail ? " (CUSTOMER EMAIL)" : ""}</strong><br/>
       <span style="color:#856404;font-size:13px;">Original recipient(s): <code>${originalRecipients}</code></span>
     </div>\n${body}`;
-    finalTo = [PROD_TEST_EMAIL];
-    console.log(`[M365 Mail] PROD_TEST_MODE: Redirected email from [${originalRecipients}] → ${PROD_TEST_EMAIL}`);
+    finalTo = [testTarget];
+    console.log(`[M365 Mail] PROD_TEST_MODE: Redirected email from [${originalRecipients}] → ${testTarget}`);
   }
 
   const mailPayload = JSON.stringify({
@@ -670,6 +673,155 @@ async function graphSendMail({ to, subject, body, from }) {
     graphReq.setTimeout(20000, () => { graphReq.destroy(); reject(new Error("Graph sendMail timeout")); });
     graphReq.write(mailPayload);
     graphReq.end();
+  });
+}
+
+// ─── Email-to-Ticket: Inbound Email Processing ─────────────────────────
+// Reads unread emails from the ITSM mailbox via Graph API and creates incidents
+async function processInboundEmails() {
+  try {
+    const token = await getManagedIdentityToken();
+    const sender = MAIL_FROM;
+
+    // Fetch unread emails (top 10, newest first)
+    const graphData = await new Promise((resolve, reject) => {
+      const graphReq = https.request({
+        hostname: "graph.microsoft.com",
+        path: `/v1.0/users/${encodeURIComponent(sender)}/messages?$filter=isRead eq false&$top=10&$orderby=receivedDateTime desc&$select=id,subject,bodyPreview,from,receivedDateTime,body`,
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      }, (resp) => {
+        let data = "";
+        resp.on("data", c => data += c);
+        resp.on("end", () => {
+          if (resp.statusCode === 200) {
+            try { resolve(JSON.parse(data)); } catch { reject(new Error("Failed to parse inbox response")); }
+          } else {
+            reject(new Error(`Graph inbox read failed ${resp.statusCode}: ${data.substring(0, 300)}`));
+          }
+        });
+      });
+      graphReq.on("error", reject);
+      graphReq.setTimeout(20000, () => { graphReq.destroy(); reject(new Error("Graph inbox timeout")); });
+      graphReq.end();
+    });
+
+    const messages = graphData.value || [];
+    if (messages.length === 0) {
+      console.log("[Email-to-Ticket] No unread emails found");
+      return { processed: 0, incidents: [] };
+    }
+
+    const createdIncidents = [];
+
+    for (const msg of messages) {
+      try {
+        // Skip auto-generated, no-reply, and ITSM notification emails
+        const fromAddr = (msg.from?.emailAddress?.address || "").toLowerCase();
+        const subject = msg.subject || "(No Subject)";
+        if (fromAddr.includes("noreply") || fromAddr.includes("no-reply") || fromAddr.includes("mailer-daemon") ||
+            subject.startsWith("[VGC ITSM]") || subject.startsWith("[TEST →")) {
+          // Mark as read but don't create ticket
+          await _markEmailRead(token, sender, msg.id);
+          continue;
+        }
+
+        // Strip HTML from body to get plain text description
+        const rawBody = (msg.body?.content || msg.bodyPreview || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+        const description = rawBody.substring(0, 2000);
+
+        // Create incident
+        const incId = `INC-EMAIL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const incident = {
+          id: incId,
+          title: subject.substring(0, 200),
+          description,
+          status: "New",
+          priority: "Sev-C",
+          category: "General",
+          source: "email",
+          reporterName: msg.from?.emailAddress?.name || fromAddr,
+          reporterEmail: fromAddr,
+          assignedTeam: "Service Desk",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          emailMessageId: msg.id,
+          activityLog: [{
+            id: `AL-EMAIL-${Date.now()}`,
+            type: "created",
+            user: "Email-to-Ticket Pipeline",
+            time: new Date().toISOString(),
+            detail: `Auto-created from email: "${subject.substring(0, 100)}" from ${fromAddr}`,
+          }],
+        };
+
+        await db.upsert("incidents", incId, JSON.stringify(incident));
+        await db.audit("incidents", incId, "email_create", JSON.stringify({ from: fromAddr, subject }), "email-pipeline");
+        if (wsServer) wsServer.broadcast("incidents", { action: "upsert", collection: "incidents", id: incId, summary: incident.title });
+        createdIncidents.push(incId);
+
+        // Mark email as read
+        await _markEmailRead(token, sender, msg.id);
+
+        // Send confirmation to customer
+        graphSendMail({
+          to: [fromAddr],
+          subject: `[VGC ITSM] Incident ${incId} created — ${subject.substring(0, 60)}`,
+          isCustomerEmail: true,
+          body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+            <div style="background:linear-gradient(135deg,#3B82F6,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
+              <h2 style="margin:0;color:#fff;font-size:18px;">📧 Incident Created from Your Email</h2>
+            </div>
+            <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+              <p style="margin:0 0 12px;color:#333;">We've received your email and created a support ticket:</p>
+              <table style="border-collapse:collapse;width:100%;">
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident ID</td><td style="padding:8px 12px;">${incId}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Subject</td><td style="padding:8px 12px;">${subject.substring(0, 100).replace(/</g, "&lt;")}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:8px 12px;">Sev-C (Medium)</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Assigned Team</td><td style="padding:8px 12px;">Service Desk</td></tr>
+              </table>
+              <p style="color:#666;font-size:13px;margin-top:16px;">Our team will review your request and respond as soon as possible.</p>
+              <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+              <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+            </div>
+          </div>`,
+        }).catch(e => console.warn(`[Email-to-Ticket] Confirmation email failed for ${incId}:`, e.message));
+
+        console.log(`[Email-to-Ticket] Created ${incId} from email by ${fromAddr}: "${subject.substring(0, 80)}"`);
+      } catch (msgErr) {
+        console.warn("[Email-to-Ticket] Failed to process message:", msgErr.message);
+      }
+    }
+
+    console.log(`[Email-to-Ticket] Processed ${createdIncidents.length} emails → incidents`);
+    return { processed: createdIncidents.length, incidents: createdIncidents };
+  } catch (err) {
+    console.error("[Email-to-Ticket] Pipeline error:", err.message);
+    return { processed: 0, incidents: [], error: err.message };
+  }
+}
+
+// Helper: Mark an email as read via Graph API
+async function _markEmailRead(token, sender, messageId) {
+  return new Promise((resolve) => {
+    const patchBody = JSON.stringify({ isRead: true });
+    const req = https.request({
+      hostname: "graph.microsoft.com",
+      path: `/v1.0/users/${encodeURIComponent(sender)}/messages/${messageId}`,
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(patchBody),
+      },
+    }, (resp) => {
+      let d = ""; resp.on("data", c => d += c);
+      resp.on("end", () => resolve(resp.statusCode === 200));
+    });
+    req.on("error", () => resolve(false));
+    req.setTimeout(10000, () => { req.destroy(); resolve(false); });
+    req.write(patchBody);
+    req.end();
   });
 }
 
@@ -804,6 +956,26 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, wsServer ? wsServer.getStats() : { error: "WebSocket server not initialized" });
   }
 
+  // ─── Daily Summary Email (manual trigger) ─────────────────────────────────
+  if (pathname === "/api/notifications/daily-summary" && req.method === "POST") {
+    if (!workflowEngine) return json(res, 503, { error: "Workflow engine not initialized" });
+    try {
+      const summary = await workflowEngine.sendDailySummary();
+      return json(res, 200, { success: !summary.error, summary });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Email-to-Ticket: Process Inbound Emails ─────────────────────────────
+  if (pathname === "/api/email/process-inbox" && req.method === "POST") {
+    try {
+      const result = await processInboundEmails();
+      return json(res, 200, result);
+    } catch (err) {
+      console.error("[Email-to-Ticket]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── REST API: /api/db/:collection ─────────────────────────────────
   const dbMatch = pathname.match(/^\/api\/db\/([a-z_]+)(?:\/([^/]+))?$/);
   if (dbMatch) {
@@ -851,6 +1023,33 @@ const server = http.createServer(async (req, res) => {
           if (wsServer) wsServer.broadcast(collection, { action: "upsert", collection, id, summary: body.title || body.name || id });
           if (workflowEngine) workflowEngine.onEvent("upsert", collection, body).catch(() => {});
           if (cacheLayer) cacheLayer.invalidatePrefix(collection);
+
+          // ─── Email: New Incident Created ──────────────────────────────
+          if (collection === "incidents" && body.title) {
+            graphSendMail({
+              to: [body.reporterEmail || body.requesterEmail || "customer@example.com"],
+              subject: `[VGC ITSM] Incident ${id} created — ${(body.title || "").substring(0, 80)}`,
+              isCustomerEmail: true,
+              body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+                <div style="background:linear-gradient(135deg,#3B82F6,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
+                  <h2 style="margin:0;color:#fff;font-size:18px;">📋 New Incident Created</h2>
+                </div>
+                <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+                  <table style="border-collapse:collapse;width:100%;">
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident ID</td><td style="padding:8px 12px;">${String(id).replace(/</g, "&lt;")}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${(body.title || "").replace(/</g, "&lt;")}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:8px 12px;">${body.priority || "Pending Triage"}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Category</td><td style="padding:8px 12px;">${body.category || "General"}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Assigned Team</td><td style="padding:8px 12px;">${body.assignedTeam || body.team || "Service Desk"}</td></tr>
+                  </table>
+                  <p style="color:#333;font-size:13px;margin-top:16px;">Our team has received your request and will begin working on it shortly. You will receive updates as the incident progresses.</p>
+                  <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+                  <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+                </div>
+              </div>`,
+            }).catch(e => console.warn("[Incident Create] Confirmation email failed:", e.message));
+          }
+
           return json(res, 200, { ok: true, id });
         }
       }
@@ -859,6 +1058,19 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "PUT" && recordId) {
         const body = await readBody(req);
         body.id = recordId;
+
+        // ─── Detect assignment change for incidents (before saving) ─────
+        let previousAssignee = null;
+        if (collection === "incidents") {
+          try {
+            const existingRow = await db.getOne(collection, recordId);
+            if (existingRow) {
+              const existing = typeof existingRow.data === "string" ? JSON.parse(existingRow.data) : existingRow.data;
+              previousAssignee = existing.assignedTo || existing.assignee || null;
+            }
+          } catch {}
+        }
+
         await db.upsert(collection, recordId, JSON.stringify(body));
         await db.audit(collection, recordId, "update", JSON.stringify(body), authResult.user?.email || body._user || "system");
         if (wsServer) wsServer.broadcast(collection, { action: "update", collection, id: recordId, summary: body.title || body.name || recordId });
@@ -868,6 +1080,58 @@ const server = http.createServer(async (req, res) => {
         // Auto KB Draft: generate KB article when incident is Resolved/Closed
         if (collection === "incidents" && (body.status === "Resolved" || body.status === "Closed")) {
           generateKBDraft(body).catch(e => console.warn("[Auto KB Draft]", e.message));
+
+          // ─── Email: Customer resolution notice ──────────────────────
+          graphSendMail({
+            to: [body.reporterEmail || body.requesterEmail || "customer@example.com"],
+            subject: `[VGC ITSM] Incident ${recordId} — ${body.status}`,
+            isCustomerEmail: true,
+            body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+              <div style="background:linear-gradient(135deg,${body.status === "Resolved" ? "#4CAF50,#06B6D4" : "#6B7280,#374151"});padding:16px 20px;border-radius:8px 8px 0 0;">
+                <h2 style="margin:0;color:#fff;font-size:18px;">${body.status === "Resolved" ? "✅ Incident Resolved" : "📁 Incident Closed"}</h2>
+              </div>
+              <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+                <table style="border-collapse:collapse;width:100%;">
+                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:8px 12px;">${String(recordId).replace(/</g, "&lt;")}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${(body.title || "").replace(/</g, "&lt;")}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Status</td><td style="padding:8px 12px;">${body.status}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolution</td><td style="padding:8px 12px;">${(body.resolution || "N/A").substring(0, 500).replace(/</g, "&lt;")}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolved By</td><td style="padding:8px 12px;">${(body.resolvedBy || body.assignedTo || "IT Support").replace(/</g, "&lt;")}</td></tr>
+                </table>
+                <p style="color:#666;font-size:13px;margin-top:16px;">If this issue persists, please open a new ticket or reply to this email.</p>
+                <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+                <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+              </div>
+            </div>`,
+          }).catch(e => console.warn("[Incident Resolve] Customer email failed:", e.message));
+        }
+
+        // ─── Email: Assignment change notification ────────────────────
+        if (collection === "incidents") {
+          const newAssignee = body.assignedTo || body.assignee || null;
+          if (newAssignee && newAssignee !== previousAssignee) {
+            graphSendMail({
+              to: [newAssignee.includes("@") ? newAssignee : "itsupport@vgctechnology.com"],
+              subject: `[VGC ITSM] You've been assigned: ${recordId} — ${(body.title || "").substring(0, 60)}`,
+              body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+                <div style="background:linear-gradient(135deg,#F59E0B,#EF4444);padding:16px 20px;border-radius:8px 8px 0 0;">
+                  <h2 style="margin:0;color:#fff;font-size:18px;">🔔 Incident Assigned to You</h2>
+                </div>
+                <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+                  <table style="border-collapse:collapse;width:100%;">
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:8px 12px;">${String(recordId).replace(/</g, "&lt;")}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${(body.title || "").replace(/</g, "&lt;")}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:8px 12px;">${body.priority || "N/A"}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Status</td><td style="padding:8px 12px;">${body.status || "Open"}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Description</td><td style="padding:8px 12px;">${(body.description || "").substring(0, 300).replace(/</g, "&lt;")}</td></tr>
+                  </table>
+                  <p style="color:#333;font-size:13px;margin-top:16px;">Please review and take action on this incident at your earliest convenience.</p>
+                  <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+                  <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+                </div>
+              </div>`,
+            }).catch(e => console.warn("[Incident Assign] Assignment email failed:", e.message));
+          }
         }
 
         return json(res, 200, { ok: true, id: recordId });
@@ -2462,9 +2726,9 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       const scored = entries.map(e => {
         let score = 0;
         const words = query.split(/\s+/).filter(w => w.length > 2);
-        const haystack = `${e.title} ${e.content} ${e.category} ${(e.tags || []).join(" ")}`.toLowerCase();
+        const haystack = `${e.title || ""} ${e.content || ""} ${e.category || ""} ${(e.tags || []).join(" ")}`.toLowerCase();
         words.forEach(w => { if (haystack.includes(w)) score += 10; });
-        if (e.title.toLowerCase().includes(query)) score += 50;
+        if ((e.title || "").toLowerCase().includes(query)) score += 50;
         if (e.tags && e.tags.some(t => query.includes(t))) score += 30;
         return { ...e, score };
       }).filter(e => e.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
@@ -5398,6 +5662,60 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
 
       await db.upsert("ai_resolve_queue", suggestionId, suggestion);
       if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+
+      // ─── Send email notifications on approve/reject ──────────────────
+      if (action === "approve") {
+        const incTitle = suggestion.incidentTitle || suggestion.incidentId || suggestionId;
+        const resolution = (suggestion.resolution || "").substring(0, 500).replace(/</g, "&lt;");
+        const rootCause = (suggestion.rootCause || "N/A").replace(/</g, "&lt;");
+
+        // 1. Customer resolution notice → CUSTOMER_TEST_EMAIL
+        graphSendMail({
+          to: [suggestion.reporterEmail || "customer@example.com"],
+          subject: `[VGC ITSM] Your incident ${suggestion.incidentId} has been resolved`,
+          isCustomerEmail: true,
+          body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+            <div style="background:linear-gradient(135deg,#4CAF50,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
+              <h2 style="margin:0;color:#fff;font-size:18px;">✅ Incident Resolved</h2>
+            </div>
+            <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+              <table style="border-collapse:collapse;width:100%;">
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:8px 12px;">${(suggestion.incidentId || "").replace(/</g, "&lt;")}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${String(incTitle).replace(/</g, "&lt;")}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolution</td><td style="padding:8px 12px;">${resolution}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Root Cause</td><td style="padding:8px 12px;">${rootCause}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolved At</td><td style="padding:8px 12px;">${suggestion.approvedAt || new Date().toISOString()}</td></tr>
+              </table>
+              <p style="color:#666;font-size:13px;margin-top:16px;">If this issue persists, please open a new ticket or reply to this email.</p>
+              <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+              <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+            </div>
+          </div>`,
+        }).catch(e => console.warn("[AI Resolve Approve] Customer email failed:", e.message));
+
+        // 2. Approver confirmation → internal email
+        graphSendMail({
+          to: [approvedBy.includes("@") ? approvedBy : "itsupport@vgctechnology.com"],
+          subject: `[VGC AI Assist] Resolution approved: ${suggestion.incidentId}`,
+          body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
+            <div style="background:linear-gradient(135deg,#7C3AED,#3B82F6);padding:16px 20px;border-radius:8px 8px 0 0;">
+              <h2 style="margin:0;color:#fff;font-size:18px;">🤖 AI Resolution Approved</h2>
+            </div>
+            <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+              <p style="margin:0 0 12px;color:#333;"><strong>Incident:</strong> ${(suggestion.incidentId || "").replace(/</g, "&lt;")}</p>
+              <p style="margin:0 0 12px;color:#333;"><strong>Title:</strong> ${String(incTitle).replace(/</g, "&lt;")}</p>
+              <p style="margin:0 0 12px;color:#333;"><strong>Approved by:</strong> ${String(approvedBy).replace(/</g, "&lt;")}</p>
+              <p style="margin:0 0 12px;color:#333;"><strong>Confidence:</strong> ${suggestion.confidence || "N/A"}%</p>
+              <p style="margin:0 0 12px;color:#333;"><strong>Resolution:</strong> ${resolution}</p>
+              <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+              <p style="color:#888;font-size:11px;">VGC AI Assist — All actions are logged and auditable.<br/>Suggestion ID: ${suggestionId}</p>
+            </div>
+          </div>`,
+        }).catch(e => console.warn("[AI Resolve Approve] Approver email failed:", e.message));
+
+        console.log(`[AI Resolve Queue] Emails sent for approved suggestion ${suggestionId}`);
+      }
+
       return json(res, 200, { success: true, suggestion });
     } catch (err) {
       console.error("[AI Resolve Queue Action]", err.message);
@@ -5854,6 +6172,7 @@ async function start() {
 
   // Initialize Workflow Automation Engine
   workflowEngine = new WorkflowEngine(db, { notifyEngine, wsServer, graphSendMail, interval: 5 * 60 * 1000 });
+  workflowEngine._processInboundEmails = processInboundEmails;
 
   // Initialize SLA Engine with breach notifications
   slaEngine = new SlaEngine(db, {

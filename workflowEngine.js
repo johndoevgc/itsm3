@@ -52,6 +52,30 @@ class WorkflowEngine {
 
       // ─── AI Auto-Resolve for idle incidents (Production Pipeline) ─────
       await this._triggerAutoResolveForIdle();
+
+      // ─── Daily Summary Email (6 PM SGT / 10:00 UTC) ──────────────────
+      try {
+        const nowSGT = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" }));
+        const hour = nowSGT.getHours();
+        const todayKey = nowSGT.toISOString().slice(0, 10);
+        if (hour >= 18 && (!this.lastDailySummary || !this.lastDailySummary.startsWith(todayKey))) {
+          await this.sendDailySummary();
+        }
+      } catch (dsErr) {
+        this._log("error", "DAILY_SUMMARY", `Schedule check failed: ${dsErr.message}`);
+      }
+
+      // ─── Email-to-Ticket: poll inbound emails ────────────────────────
+      if (this._processInboundEmails) {
+        try {
+          const result = await this._processInboundEmails();
+          if (result.processed > 0) {
+            this._log("action", "EMAIL_TO_TICKET", `Processed ${result.processed} inbound emails → ${result.incidents.join(", ")}`);
+          }
+        } catch (inErr) {
+          this._log("error", "EMAIL_TO_TICKET", `Inbox scan failed: ${inErr.message}`);
+        }
+      }
     } catch (err) {
       this.stats.errors++;
       console.error("[WorkflowEngine] Cycle error:", err.message);
@@ -407,6 +431,7 @@ class WorkflowEngine {
     return {
       running: !!this.timer,
       lastRun: this.lastRun,
+      lastDailySummary: this.lastDailySummary || null,
       ...this.stats,
       logSize: this.executionLog.length,
     };
@@ -414,6 +439,88 @@ class WorkflowEngine {
 
   getLog(limit = 50) {
     return this.executionLog.slice(-limit);
+  }
+
+  // ─── Daily Summary Email ──────────────────────────────────────────────
+  async sendDailySummary() {
+    if (!this.graphSendMail) { this._log("warn", "DAILY_SUMMARY", "graphSendMail not available"); return { error: "Mail not configured" }; }
+    try {
+      const incRows = await this.db.getAll("incidents");
+      const allInc = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(i => i && !i._deleted);
+
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const open = allInc.filter(i => !["Resolved", "Closed"].includes(i.status));
+      const resolvedToday = allInc.filter(i => i.status === "Resolved" && (i.resolvedAt || "").startsWith(todayStr));
+      const createdToday = allInc.filter(i => (i.createdAt || i.created_at || "").startsWith(todayStr));
+      const sevA = open.filter(i => i.priority === "Sev-A");
+      const sevB = open.filter(i => i.priority === "Sev-B");
+
+      // Check SLA breaches
+      let slaBreaches = 0;
+      try {
+        const slaRows = await this.db.getAll("sla_tracking");
+        slaBreaches = slaRows.filter(r => { try { const s = JSON.parse(r.data); return s.status === "breached" && !s._deleted; } catch { return false; } }).length;
+      } catch {}
+
+      // Pending AI approvals
+      let pendingAI = 0;
+      try {
+        const aiRows = await this.db.getAll("ai_resolve_queue");
+        pendingAI = aiRows.filter(r => { try { const s = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return s.status === "pending"; } catch { return false; } }).length;
+      } catch {}
+
+      const summary = {
+        date: todayStr,
+        openIncidents: open.length,
+        createdToday: createdToday.length,
+        resolvedToday: resolvedToday.length,
+        sevAOpen: sevA.length,
+        sevBOpen: sevB.length,
+        slaBreaches,
+        pendingAIApprovals: pendingAI,
+      };
+
+      const html = `<div style="font-family:Arial,sans-serif;max-width:650px;">
+        <div style="background:linear-gradient(135deg,#1E3A5F,#3B82F6);padding:20px 24px;border-radius:8px 8px 0 0;">
+          <h2 style="margin:0;color:#fff;font-size:20px;">📊 ITSM Daily Summary — ${todayStr}</h2>
+          <p style="margin:6px 0 0;color:#93C5FD;font-size:13px;">Generated at ${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false })}</p>
+        </div>
+        <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+          <table style="border-collapse:collapse;width:100%;margin-bottom:16px;">
+            <tr style="background:#E5E7EB;"><th style="padding:10px 14px;text-align:left;color:#374151;" colspan="2">Incident Overview</th></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;border-bottom:1px solid #eee;">Open Incidents</td><td style="padding:8px 14px;font-size:18px;font-weight:bold;color:#EF4444;border-bottom:1px solid #eee;">${open.length}</td></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;border-bottom:1px solid #eee;">Created Today</td><td style="padding:8px 14px;border-bottom:1px solid #eee;">${createdToday.length}</td></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;border-bottom:1px solid #eee;">Resolved Today</td><td style="padding:8px 14px;color:#10B981;font-weight:bold;border-bottom:1px solid #eee;">${resolvedToday.length}</td></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;border-bottom:1px solid #eee;">Sev-A (Critical) Open</td><td style="padding:8px 14px;color:${sevA.length > 0 ? "#EF4444" : "#10B981"};font-weight:bold;border-bottom:1px solid #eee;">${sevA.length}</td></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;border-bottom:1px solid #eee;">Sev-B (High) Open</td><td style="padding:8px 14px;border-bottom:1px solid #eee;">${sevB.length}</td></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;border-bottom:1px solid #eee;">SLA Breaches</td><td style="padding:8px 14px;color:${slaBreaches > 0 ? "#EF4444" : "#10B981"};font-weight:bold;border-bottom:1px solid #eee;">${slaBreaches}</td></tr>
+            <tr><td style="padding:8px 14px;font-weight:bold;color:#6B7280;">Pending AI Approvals</td><td style="padding:8px 14px;color:${pendingAI > 0 ? "#F59E0B" : "#10B981"};font-weight:bold;">${pendingAI}</td></tr>
+          </table>
+          ${sevA.length > 0 ? `<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:12px;margin-bottom:16px;">
+            <strong style="color:#DC2626;">⚠️ Critical Incidents Requiring Attention:</strong>
+            <ul style="margin:8px 0 0;padding-left:20px;color:#991B1B;">${sevA.slice(0, 5).map(i => `<li>${(i.id || "").replace(/</g, "&lt;")} — ${(i.title || "").substring(0, 60).replace(/</g, "&lt;")}</li>`).join("")}</ul>
+          </div>` : ""}
+          <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
+          <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management<br/>This is an automated daily summary from the ITSM Workflow Engine.</p>
+        </div>
+      </div>`;
+
+      await this.graphSendMail({
+        to: ["management@vgctechnology.com"],
+        subject: `[VGC ITSM] Daily Summary — ${todayStr} | ${open.length} open, ${resolvedToday.length} resolved`,
+        body: html,
+        isCustomerEmail: true,
+      });
+
+      this.lastDailySummary = now.toISOString();
+      this._log("action", "DAILY_SUMMARY", `Sent daily summary: ${open.length} open, ${createdToday.length} new, ${resolvedToday.length} resolved`);
+      return summary;
+    } catch (err) {
+      this.stats.errors++;
+      this._log("error", "DAILY_SUMMARY", `Failed to send daily summary: ${err.message}`);
+      return { error: err.message };
+    }
   }
 }
 
