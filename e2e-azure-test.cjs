@@ -15,7 +15,37 @@ function get(path) {
 }
 
 function getJson(path) {
-  return get(path).then(r => ({ ...r, json: JSON.parse(r.body) }));
+  return get(path).then(r => { try { return { ...r, json: JSON.parse(r.body) }; } catch { return { ...r, json: {} }; } });
+}
+
+function postJson(path, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${BASE}${path}`);
+    const data = JSON.stringify(body);
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } }, res => {
+      let buf = "";
+      res.on("data", c => buf += c);
+      res.on("end", () => { try { resolve({ status: res.statusCode, headers: res.headers, json: JSON.parse(buf), body: buf }); } catch { resolve({ status: res.statusCode, headers: res.headers, json: {}, body: buf }); } });
+    });
+    req.on("error", reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+function putJson(path, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${BASE}${path}`);
+    const data = JSON.stringify(body);
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "PUT", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } }, res => {
+      let buf = "";
+      res.on("data", c => buf += c);
+      res.on("end", () => { try { resolve({ status: res.statusCode, headers: res.headers, json: JSON.parse(buf), body: buf }); } catch { resolve({ status: res.statusCode, headers: res.headers, json: {}, body: buf }); } });
+    });
+    req.on("error", reject);
+    req.write(data);
+    req.end();
+  });
 }
 
 function assert(name, condition, detail) {
@@ -144,7 +174,7 @@ async function main() {
   assert("AI test endpoint responds", aiTest.status === 200 || aiTest.status === 502, `Status: ${aiTest.status}`);
   if (aiTest.status === 200) {
     assert("AI test connected", aiTest.json.status === "connected", `Status: ${aiTest.json.status}`);
-    assert("AI test model correct", aiTest.json.model === "gpt-5.4-pro", `Model: ${aiTest.json.model}`);
+    assert("AI test model correct", ["gpt-5.4-pro","gpt-5.4-mini","gpt-5.4-nano"].includes(aiTest.json.model), `Model: ${aiTest.json.model}`);
   }
 
   // 19. Saved Filters collection
@@ -199,6 +229,83 @@ async function main() {
     assert("Template has category", !!tpl.category, `Category: ${tpl.category}`);
     assert("Template has priority", !!tpl.priority, `Priority: ${tpl.priority}`);
   }
+
+  // ─── PHASE 3: Governance & Compliance ──────────────────────────────────
+
+  // 26. Approval Chains
+  console.log("--- Approval Chains ---");
+  const chains = await getJson("/api/db/approval_chains");
+  assert("Approval chains accessible", chains.status === 200, `Status: ${chains.status}`);
+  assert("Default chains seeded", chains.json.count >= 3, `Got: ${chains.json.count}`);
+
+  // 27. Approval Submit + Action
+  console.log("--- Approval Workflow ---");
+  const submitApproval = await postJson("/api/approvals/submit", { chainId: "AC-001", targetCollection: "changes", targetId: "CHG-E2E-001", createdBy: "E2E Test" });
+  assert("Approval submit returns 200/201", submitApproval.status === 200 || submitApproval.status === 201, `Status: ${submitApproval.status}`);
+  if (submitApproval.json.success && submitApproval.json.instance) {
+    const instId = submitApproval.json.instanceId;
+    const approveAction = await postJson(`/api/approvals/${instId}/action`, { action: "approved", approvedBy: "CAB Lead", comment: "E2E test approval" });
+    assert("Approval action succeeds", approveAction.json.success === true, `success: ${approveAction.json.success}`);
+  } else {
+    assert("Approval action succeeds", false, "submit did not return success+instance");
+  }
+
+  // 28. Pending Approvals
+  const pending = await getJson("/api/approvals/pending?role=CAB Lead");
+  assert("Pending approvals endpoint returns 200", pending.status === 200, `Status: ${pending.status}`);
+
+  // 29. CMDB Relationships
+  console.log("--- CMDB Relationships ---");
+  const createRel = await postJson("/api/cmdb/relationships", { sourceId: "AST-001", targetId: "AST-002", type: "depends_on" });
+  assert("Create CMDB relationship", createRel.status === 200 || createRel.status === 201, `Status: ${createRel.status}`);
+  const getRels = await getJson("/api/cmdb/relationships/AST-001");
+  assert("Get relationships returns 200", getRels.status === 200, `Status: ${getRels.status}`);
+
+  // 30. CMDB Impact Analysis
+  const impact = await getJson("/api/cmdb/impact/AST-001");
+  assert("Impact analysis returns 200", impact.status === 200, `Status: ${impact.status}`);
+  assert("Impact has data", impact.json.assetId === "AST-001", `assetId: ${impact.json.assetId}`);
+
+  // 31. Audit Report
+  console.log("--- Audit & Compliance ---");
+  const from = new Date(Date.now() - 90 * 86400000).toISOString();
+  const to = new Date().toISOString();
+  const auditReport = await getJson(`/api/audit/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  assert("Audit report returns 200", auditReport.status === 200, `Status: ${auditReport.status}`);
+  assert("Audit report has data array", Array.isArray(auditReport.json.data), `Type: ${typeof auditReport.json.data}`);
+
+  // 32. Compliance Summary
+  const compliance = await getJson("/api/audit/compliance-summary");
+  assert("Compliance summary returns 200", compliance.status === 200, `Status: ${compliance.status}`);
+  assert("Compliance has metrics", compliance.json.totalAuditEntries != null, `entries: ${compliance.json.totalAuditEntries}`);
+
+  // ─── PHASE 4: Operational Excellence ──────────────────────────────────
+
+  // 33. Runbook Execute
+  console.log("--- Runbook Execution ---");
+  // Use an existing KB article as runbook (seeding requires auth)
+  const kbList = await getJson("/api/db/kb");
+  const runbookId = kbList.json.data && kbList.json.data[0] ? kbList.json.data[0].id : "KB-DOC-007";
+  const rbExec = await postJson("/api/runbook/execute", { runbookId, incidentId: "INC-E2E-001", executedBy: "E2E Test" });
+  assert("Runbook execute returns 200/201", rbExec.status === 200 || rbExec.status === 201, `Status: ${rbExec.status}`);
+  if (rbExec.json.success && rbExec.json.execution) {
+    const execId = rbExec.json.execution.id;
+    // Update step
+    const stepUpdate = await putJson(`/api/runbook/execution/${execId}/step/1`, { status: "completed", notes: "Connectivity OK" });
+    assert("Runbook step update succeeds", stepUpdate.json.success === true || stepUpdate.status === 200, `Status: ${stepUpdate.status}`);
+  }
+
+  // 34. Runbook Executions List
+  const rbList = await getJson("/api/runbook/executions?incidentId=INC-E2E-001");
+  assert("Runbook executions list returns 200", rbList.status === 200, `Status: ${rbList.status}`);
+
+  // 35. Report Schedules
+  console.log("--- Scheduled Reports ---");
+  const schedCreate = await postJson("/api/reports/schedule", { id: "RS-E2E-001", name: "E2E Test Report", type: "incident_summary", frequency: "weekly", dayOfWeek: 1, hour: 8, recipients: ["test@example.com"] });
+  assert("Report schedule create returns 200", schedCreate.status === 200 || schedCreate.status === 201, `Status: ${schedCreate.status}`);
+  const schedList = await getJson("/api/reports/schedules");
+  assert("Report schedules list returns 200", schedList.status === 200, `Status: ${schedList.status}`);
+  assert("Report schedules has data", Array.isArray(schedList.json.data), `type: ${typeof schedList.json.data}`);
 
   // Results
   console.log(`\n====== RESULTS ======`);

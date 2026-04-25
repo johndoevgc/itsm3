@@ -1280,6 +1280,262 @@ const server = http.createServer(async (req, res) => {
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
+  // ─── Helper: parse db row data ─────────────────────────────────────
+  const dbParse = (row) => { if (!row) return null; try { return typeof row.data === "string" ? JSON.parse(row.data) : row; } catch { return null; } };
+  const dbParseAll = (rows) => (Array.isArray(rows) ? rows : []).map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r; } catch { return null; } }).filter(Boolean);
+
+  // ─── Multi-Level Approval Chain API ───────────────────────────────────
+  // Submit an item for approval — creates an approval_instance
+  if (pathname === "/api/approvals/submit" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { chainId, targetCollection, targetId } = body;
+      if (!chainId || !targetCollection || !targetId) return json(res, 400, { error: "Missing chainId, targetCollection, or targetId" });
+      const chain = dbParse(await db.getOne("approval_chains", chainId));
+      if (!chain) return json(res, 404, { error: "Approval chain not found" });
+      const instanceId = `AI-${Date.now().toString(36)}`;
+      const instance = {
+        id: instanceId, chainId, targetCollection, targetId,
+        currentLevel: 1, status: "pending", approvals: [],
+        createdAt: new Date().toISOString(), completedAt: null, createdBy: body.createdBy || "system"
+      };
+      await db.upsert("approval_instances", instanceId, JSON.stringify(instance));
+      // Update target record
+      const target = dbParse(await db.getOne(targetCollection, targetId));
+      if (target) { target.approvalInstanceId = instanceId; target.status = "Awaiting Approval"; await db.upsert(targetCollection, targetId, JSON.stringify(target)); }
+      await db.audit(targetCollection, "approval_submitted", targetId, JSON.stringify({ chainId, instanceId }), body.createdBy || "system");
+      return json(res, 200, { success: true, instanceId, instance });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // Approve or reject at current level
+  if (pathname.startsWith("/api/approvals/") && pathname.endsWith("/action") && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const instanceId = pathname.split("/")[3];
+      const { action, comment, approvedBy } = body;
+      if (!["approved", "rejected"].includes(action)) return json(res, 400, { error: "Action must be 'approved' or 'rejected'" });
+      const instance = dbParse(await db.getOne("approval_instances", instanceId));
+      if (!instance) return json(res, 404, { error: "Approval instance not found" });
+      if (instance.status !== "pending") return json(res, 400, { error: "Instance not pending" });
+      const chain = dbParse(await db.getOne("approval_chains", instance.chainId));
+      if (!chain) return json(res, 404, { error: "Approval chain not found" });
+
+      instance.approvals.push({ level: instance.currentLevel, approvedBy: approvedBy || "unknown", at: new Date().toISOString(), action, comment: comment || "" });
+
+      if (action === "rejected") {
+        instance.status = "rejected"; instance.completedAt = new Date().toISOString();
+        const target = dbParse(await db.getOne(instance.targetCollection, instance.targetId));
+        if (target) { target.status = "Rejected"; await db.upsert(instance.targetCollection, instance.targetId, JSON.stringify(target)); }
+      } else {
+        const nextLevel = instance.currentLevel + 1;
+        const hasNextLevel = chain.levels && chain.levels.some(l => l.level === nextLevel);
+        if (hasNextLevel) {
+          instance.currentLevel = nextLevel;
+        } else {
+          instance.status = "approved"; instance.completedAt = new Date().toISOString();
+          const target = dbParse(await db.getOne(instance.targetCollection, instance.targetId));
+          if (target) { target.status = "Approved"; await db.upsert(instance.targetCollection, instance.targetId, JSON.stringify(target)); }
+        }
+      }
+      await db.upsert("approval_instances", instanceId, JSON.stringify(instance));
+      await db.audit("approval_instances", `approval_${action}`, instanceId, JSON.stringify({ level: instance.approvals.length, action, approvedBy }), approvedBy || "system");
+      return json(res, 200, { success: true, instance });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // List pending approvals for a role
+  if (pathname === "/api/approvals/pending" && req.method === "GET") {
+    try {
+      const role = urlObj.searchParams.get("role") || "";
+      const allInstances = dbParseAll(await db.getAll("approval_instances"));
+      const pending = allInstances.filter(i => i.status === "pending");
+      // Enrich with chain and target info
+      const enriched = [];
+      for (const inst of pending) {
+        const chain = dbParse(await db.getOne("approval_chains", inst.chainId));
+        const currentLevelDef = chain?.levels?.find(l => l.level === inst.currentLevel);
+        if (role && currentLevelDef && currentLevelDef.role !== role) continue;
+        const target = dbParse(await db.getOne(inst.targetCollection, inst.targetId));
+        enriched.push({ ...inst, chainName: chain?.name, currentLevelDef, target: target ? { id: target.id, title: target.title || target.service || target.id, status: target.status } : null });
+      }
+      return json(res, 200, { data: enriched, count: enriched.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── CMDB Relationship API ────────────────────────────────────────────
+  if (pathname.startsWith("/api/cmdb/relationships") && req.method === "GET") {
+    try {
+      const parts = pathname.split("/");
+      const assetId = parts[4];
+      if (assetId) {
+        const rels = dbParseAll(await db.getAll("cmdb_relationships"));
+        const filtered = rels.filter(r => r.sourceId === assetId || r.targetId === assetId);
+        return json(res, 200, { data: filtered, count: filtered.length });
+      }
+      const rels = dbParseAll(await db.getAll("cmdb_relationships"));
+      return json(res, 200, { data: rels, count: rels.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/cmdb/relationships" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { sourceId, targetId, type } = body;
+      if (!sourceId || !targetId || !type) return json(res, 400, { error: "Missing sourceId, targetId, or type" });
+      const relId = `REL-${Date.now().toString(36)}`;
+      const rel = { id: relId, sourceId, targetId, type, direction: "forward", createdBy: body.createdBy || "system", createdAt: new Date().toISOString() };
+      await db.upsert("cmdb_relationships", relId, JSON.stringify(rel));
+      await db.audit("cmdb_relationships", "create", relId, JSON.stringify(rel), body.createdBy || "system");
+      return json(res, 200, { success: true, relationship: rel });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname.startsWith("/api/cmdb/relationships/") && req.method === "DELETE") {
+    try {
+      const body = await readBody(req);
+      const relId = pathname.split("/")[4];
+      await db.delete("cmdb_relationships", relId);
+      await db.audit("cmdb_relationships", "delete", relId, JSON.stringify({}), body.deletedBy || "system");
+      return json(res, 200, { success: true });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // CMDB Impact Analysis
+  if (pathname.startsWith("/api/cmdb/impact/") && req.method === "GET") {
+    try {
+      const assetId = pathname.split("/")[4];
+      const rels = dbParseAll(await db.getAll("cmdb_relationships"));
+      const visited = new Set();
+      const impacted = [];
+      const queue = [{ id: assetId, depth: 0, path: [assetId] }];
+      while (queue.length > 0) {
+        const { id, depth, path } = queue.shift();
+        if (visited.has(id) || depth > 5) continue;
+        visited.add(id);
+        if (id !== assetId) {
+          const asset = dbParse(await db.getOne("assets", id));
+          impacted.push({ id, depth, path, name: asset?.name || asset?.hostname || id, type: asset?.type || "Unknown" });
+        }
+        const connected = rels.filter(r => r.sourceId === id || r.targetId === id);
+        for (const r of connected) {
+          const nextId = r.sourceId === id ? r.targetId : r.sourceId;
+          if (!visited.has(nextId)) queue.push({ id: nextId, depth: depth + 1, path: [...path, nextId] });
+        }
+      }
+      return json(res, 200, { assetId, impacted, count: impacted.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Audit Report API ────────────────────────────────────────────────
+  if (pathname === "/api/audit/report" && req.method === "GET") {
+    try {
+      const from = urlObj.searchParams.get("from");
+      const to = urlObj.searchParams.get("to");
+      const collection = urlObj.searchParams.get("collection");
+      const actionFilter = urlObj.searchParams.get("action");
+      let rows = await db.getAllAudit(5000);
+      if (from) rows = rows.filter(r => r.timestamp >= from);
+      if (to) rows = rows.filter(r => r.timestamp <= to);
+      if (collection) rows = rows.filter(r => r.collection === collection);
+      if (actionFilter) rows = rows.filter(r => r.action === actionFilter);
+      const summary = {};
+      rows.forEach(r => { summary[r.action] = (summary[r.action] || 0) + 1; });
+      return json(res, 200, { data: rows, count: rows.length, summary });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  if (pathname === "/api/audit/compliance-summary" && req.method === "GET") {
+    try {
+      const changes = dbParseAll(await db.getAll("changes"));
+      const withApproval = changes.filter(c => c.approvalInstanceId || c.status === "Approved" || c.status === "Completed").length;
+      const totalChanges = changes.length;
+      const incs = dbParseAll(await db.getAll("incidents"));
+      const resolved = incs.filter(i => i.status === "Resolved" || i.status === "Closed");
+      const slaMet = resolved.filter(i => !i.slaBreach).length;
+      const auditRows = await db.getAllAudit(10000);
+      return json(res, 200, {
+        totalChanges, changesWithApproval: withApproval,
+        approvalRate: totalChanges > 0 ? Math.round((withApproval / totalChanges) * 100) : 100,
+        totalIncidents: incs.length, resolvedIncidents: resolved.length,
+        slaComplianceRate: resolved.length > 0 ? Math.round((slaMet / resolved.length) * 100) : 100,
+        totalAuditEntries: auditRows.length,
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Runbook Execution API ────────────────────────────────────────────
+  if (pathname === "/api/runbook/execute" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { runbookId, incidentId, executedBy } = body;
+      if (!runbookId) return json(res, 400, { error: "Missing runbookId" });
+      const runbook = dbParse(await db.getOne("kb", runbookId));
+      if (!runbook) return json(res, 404, { error: "Runbook not found" });
+      const steps = (runbook.steps || runbook.content?.split(/\n(?=\d+\.)/) || ["Step 1: Execute"]).map((s, i) => ({
+        stepNum: i + 1, title: typeof s === "string" ? s.replace(/^\d+\.\s*/, "").substring(0, 100) : (s.title || `Step ${i+1}`),
+        status: "pending", completedAt: null, notes: ""
+      }));
+      const execId = `RB-${Date.now().toString(36)}`;
+      const execution = { id: execId, runbookId, incidentId: incidentId || null, executedBy: executedBy || "system", startedAt: new Date().toISOString(), steps, status: "in_progress", completedAt: null };
+      await db.upsert("runbook_executions", execId, JSON.stringify(execution));
+      if (incidentId) {
+        const inc = dbParse(await db.getOne("incidents", incidentId));
+        if (inc) { inc.runbookExecutionId = execId; await db.upsert("incidents", incidentId, JSON.stringify(inc)); }
+      }
+      await db.audit("runbook_executions", "started", execId, JSON.stringify({ runbookId, incidentId }), executedBy || "system");
+      return json(res, 200, { success: true, execution });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  if (pathname.match(/^\/api\/runbook\/execution\/[^/]+\/step\/\d+$/) && req.method === "PUT") {
+    try {
+      const body = await readBody(req);
+      const parts = pathname.split("/");
+      const execId = parts[4], stepNum = parseInt(parts[6], 10);
+      const { status, notes } = body;
+      if (!["completed", "skipped", "failed"].includes(status)) return json(res, 400, { error: "Status must be completed, skipped, or failed" });
+      const execution = dbParse(await db.getOne("runbook_executions", execId));
+      if (!execution) return json(res, 404, { error: "Execution not found" });
+      const step = execution.steps.find(s => s.stepNum === stepNum);
+      if (!step) return json(res, 404, { error: "Step not found" });
+      step.status = status; step.completedAt = new Date().toISOString(); step.notes = notes || "";
+      const allDone = execution.steps.every(s => ["completed", "skipped", "failed"].includes(s.status));
+      if (allDone) { execution.status = "completed"; execution.completedAt = new Date().toISOString(); }
+      await db.upsert("runbook_executions", execId, JSON.stringify(execution));
+      await db.audit("runbook_executions", "step_updated", execId, JSON.stringify({ stepNum, status }), body.updatedBy || "system");
+      return json(res, 200, { success: true, execution });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  if (pathname === "/api/runbook/executions" && req.method === "GET") {
+    try {
+      const incidentId = urlObj.searchParams.get("incidentId");
+      const data = dbParseAll(await db.getAll("runbook_executions"));
+      const filtered = incidentId ? data.filter(e => e.incidentId === incidentId) : data;
+      return json(res, 200, { data: filtered, count: filtered.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Scheduled Report API ────────────────────────────────────────────
+  if (pathname === "/api/reports/schedules" && req.method === "GET") {
+    try {
+      const data = dbParseAll(await db.getAll("report_schedules"));
+      return json(res, 200, { data, count: data.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  if (pathname === "/api/reports/schedule" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { name, type, frequency, recipients, format } = body;
+      if (!name || !type) return json(res, 400, { error: "Missing name or type" });
+      const schedId = body.id || `RS-${Date.now().toString(36)}`;
+      const schedule = { id: schedId, name, type, frequency: frequency || "weekly", dayOfWeek: body.dayOfWeek || 1, hour: body.hour || 9, recipients: recipients || [], format: format || "csv", filters: body.filters || {}, active: body.active !== false, createdAt: new Date().toISOString() };
+      await db.upsert("report_schedules", schedId, JSON.stringify(schedule));
+      await db.audit("report_schedules", "create", schedId, JSON.stringify(schedule), body.createdBy || "system");
+      return json(res, 200, { success: true, schedule });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // ─── Audit Log API ────────────────────────────────────────────────────
   if (pathname === "/api/audit" && req.method === "GET") {
     try {
@@ -6354,6 +6610,19 @@ async function start() {
         await db.upsert("incident_templates", tpl.id, JSON.stringify(tpl));
       }
       console.log(`[Seed] Created ${defaultTemplates.length} default incident templates`);
+    }
+
+    // Seed default approval chains if none exist
+    if (!stats.approval_chains || stats.approval_chains === 0) {
+      const defaultChains = [
+        { id: "AC-001", name: "Standard Change Approval", trigger: { collection: "changes", condition: "riskLevel !== 'Low'" }, levels: [{ level: 1, role: "Service Desk Lead", type: "any", timeout: 24 }, { level: 2, role: "Change Manager", type: "all", timeout: 48 }], onTimeout: "escalate", active: true },
+        { id: "AC-002", name: "Emergency Change Approval", trigger: { collection: "changes", condition: "type === 'Emergency'" }, levels: [{ level: 1, role: "Change Manager", type: "any", timeout: 4 }], onTimeout: "escalate", active: true },
+        { id: "AC-003", name: "High-Value Request Approval", trigger: { collection: "requests", condition: "priority === 'Sev-A' || priority === 'Sev-B'" }, levels: [{ level: 1, role: "Service Desk Lead", type: "any", timeout: 24 }, { level: 2, role: "Tenant Admin", type: "any", timeout: 48 }], onTimeout: "escalate", active: true },
+      ];
+      for (const chain of defaultChains) {
+        await db.upsert("approval_chains", chain.id, JSON.stringify(chain));
+      }
+      console.log(`[Seed] Created ${defaultChains.length} default approval chains`);
     }
 
     // ─── Daily AI Knowledge Sync (every 24h) ────────────────────────

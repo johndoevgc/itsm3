@@ -14,17 +14,54 @@ const DEFAULT_SLA_POLICY = {
 };
 
 // ─── Business Hours Elapsed Calculator (server-side mirror) ─────────────
-function getBusinessHoursElapsed(createdAt, now) {
+function getBusinessHoursElapsed(createdAt, now, options = {}) {
   if (!createdAt) return 0;
   const start = new Date(createdAt);
   const end = now || new Date();
   if (isNaN(start.getTime())) return 0;
-  const BH_START = 9, BH_END = 18;
+  const BH_START = options.start || 9;
+  const BH_END = options.end || 18;
+  const daysStr = options.days || "Mon-Fri";
+  const holidays = options.holidays || [];
+  const holidaySet = new Set(holidays.map(h => typeof h === "string" ? h : h.date));
+
+  // Parse working days
+  let workingDays;
+  if (daysStr === "24/7") {
+    workingDays = new Set([0,1,2,3,4,5,6]);
+  } else {
+    const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const parts = daysStr.split("-");
+    if (parts.length === 2) {
+      const s = dayMap[parts[0]] ?? 1, e = dayMap[parts[1]] ?? 5;
+      workingDays = new Set();
+      for (let d = s; d !== (e + 1) % 7; d = (d + 1) % 7) workingDays.add(d);
+      workingDays.add(e);
+    } else {
+      workingDays = new Set([1,2,3,4,5]);
+    }
+  }
+
   let elapsed = 0;
   let cursor = new Date(start);
-  while (cursor < end) {
+  const maxIter = 366 * 24; // safety limit
+  let iter = 0;
+  while (cursor < end && iter++ < maxIter) {
     const day = cursor.getDay();
-    if (day >= 1 && day <= 5) {
+    const dateStr = cursor.toISOString().slice(0, 10);
+    const isWorkDay = workingDays.has(day) && !holidaySet.has(dateStr);
+
+    if (daysStr === "24/7") {
+      // 24/7 mode — all hours count, skip holidays only
+      if (holidaySet.has(dateStr)) {
+        cursor.setDate(cursor.getDate() + 1); cursor.setHours(0, 0, 0, 0);
+      } else {
+        const endOfDay = new Date(cursor); endOfDay.setDate(endOfDay.getDate() + 1); endOfDay.setHours(0, 0, 0, 0);
+        const chunkEnd = endOfDay < end ? endOfDay : end;
+        elapsed += (chunkEnd - cursor) / 3600000;
+        cursor = new Date(chunkEnd);
+      }
+    } else if (isWorkDay) {
       const hrs = cursor.getHours() + cursor.getMinutes() / 60;
       if (hrs >= BH_START && hrs < BH_END) {
         const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
@@ -37,8 +74,7 @@ function getBusinessHoursElapsed(createdAt, now) {
         cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
       }
     } else {
-      const daysToMon = day === 0 ? 1 : 8 - day;
-      cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+      cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
     }
     if (cursor >= end) break;
   }
@@ -56,7 +92,8 @@ function computeSlaStatus(incident, policy) {
   if (typeof createdAt === "number") {
     hoursElapsed = createdAt;
   } else {
-    hoursElapsed = getBusinessHoursElapsed(createdAt, now);
+    const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [] } : {};
+    hoursElapsed = getBusinessHoursElapsed(createdAt, now, bhOptions);
   }
 
   const firstResponseTarget = sev.firstResponse;
