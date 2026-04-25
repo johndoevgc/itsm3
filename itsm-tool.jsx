@@ -6,8 +6,8 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.12.0",
-  build: "kp-multi-model-ai",
+  version: "3.12.2",
+  build: "kp-code-review",
   date: "2026-04-25",
   channel: "Production",
   name: "VGC-ITSM",
@@ -15,7 +15,7 @@ const APP_VERSION = {
   platform: "Azure App Service (Linux Node 20)",
   region: "AP-Southeast (Singapore)",
   license: "Enterprise — Per User Subscription",
-  framework: "React 19 + Vite 6",
+  framework: "React 19 + Vite 8",
   auth: "Microsoft Entra ID + Local Auth",
   compliance: "ISO 27001, PDPA, CSA Cybertrust",
 };
@@ -19052,6 +19052,17 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       color: "#FAFAFA", fontFamily: "'DM Sans', -apple-system, sans-serif",
       overflow: "hidden"
     }}>
+      {/* Skip link — keyboard users can Tab to jump past the sidebar */}
+      <a href="#main-content" style={{
+        position: "absolute", left: "-9999px", top: "auto",
+        width: "1px", height: "1px", overflow: "hidden",
+        zIndex: 9999, background: "#6366F1", color: "#fff",
+        padding: "8px 16px", borderRadius: 4, fontSize: 13,
+        fontWeight: 600, textDecoration: "none"
+      }}
+      onFocus={e => { e.currentTarget.style.position = "fixed"; e.currentTarget.style.left = "16px"; e.currentTarget.style.top = "16px"; e.currentTarget.style.width = "auto"; e.currentTarget.style.height = "auto"; }}
+      onBlur={e => { e.currentTarget.style.position = "absolute"; e.currentTarget.style.left = "-9999px"; e.currentTarget.style.width = "1px"; e.currentTarget.style.height = "1px"; }}
+      >Skip to main content</a>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; margin: 0; }
@@ -19166,6 +19177,19 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           .vgc-kpi-grid-6 { grid-template-columns: 1fr !important; }
           .vgc-kpi-grid-5 { grid-template-columns: 1fr !important; }
           .vgc-donut-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+        /* Respect user preference to reduce motion (accessibility) */
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+          }
+        }
+        /* Print styles */
+        @media print {
+          .vgc-sidebar, .vgc-mobile-toggle, .sidebar-collapse-btn { display: none !important; }
+          body { background: #fff !important; }
         }
       `}</style>
 
@@ -19307,10 +19331,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           }}
           onMouseEnter={e => { e.currentTarget.style.background = "linear-gradient(135deg, #6366F144, #06B6D422)"; e.currentTarget.style.transform = "scale(1.15)"; e.currentTarget.style.boxShadow = "0 4px 16px #6366F133"; }}
           onMouseLeave={e => { e.currentTarget.style.background = "linear-gradient(135deg, #6366F122, #06B6D411)"; e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 2px 8px #6366F111"; }}
+          aria-label={sideCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >{sideCollapsed ? "▸" : "◂"}</button>
         </div>
 
-        <nav style={{ flex: 1, padding: "8px 0", overflowY: "auto" }}>
+        <nav role="navigation" aria-label="Main navigation" style={{ flex: 1, padding: "8px 0", overflowY: "auto" }}>
           {NAV.map((item, idx) => {
             if (item.section) {
               return !sideCollapsed ? (
@@ -19366,7 +19391,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
         {!sideCollapsed && (
           <div style={{ padding: "14px 16px", borderTop: "1px solid #1E213066", background: "linear-gradient(180deg, transparent, rgba(99,102,241,0.03))" }}>
-            <div onClick={() => setShowProfileModal(true)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.08)", backdropFilter: "blur(8px)", cursor: "pointer", transition: "all 0.2s" }}
+            <div onClick={() => setShowProfileModal(true)} role="button" tabIndex={0} aria-label="Open user profile"
+              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowProfileModal(true); } }}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.08)", backdropFilter: "blur(8px)", cursor: "pointer", transition: "all 0.2s" }}
               onMouseEnter={e => { e.currentTarget.style.background = "rgba(99,102,241,0.12)"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.2)"; }}
               onMouseLeave={e => { e.currentTarget.style.background = "rgba(99,102,241,0.06)"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.08)"; }}>
               <div style={{
@@ -19390,7 +19417,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               </div>
             </div>
             {/* Sign Out */}
-            <button onClick={() => {
+            <button aria-label="Sign out" onClick={() => {
               setIsLoggedIn(false); setCurrentUser(null); _save("vgc_current_user", null);
               setMsalUser(null); setMsalPhoto(null); setProfilePhoto(null); setGraphEmails(null); setGraphCalendar(null);
               setGraphChats(null); setGraphTeams(null); setGraphPresence(null); setGraphUnread(0);
@@ -19420,7 +19447,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       </div>
 
       {/* Main Content */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <main id="main-content" role="main" aria-label="Main content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {/* Header */}
         <div style={{
           padding: "12px 28px", borderBottom: "1px solid #1E2130",
@@ -19428,6 +19455,13 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           background: "#0A0C14", position: "relative"
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {/* Mobile hamburger toggle — only visible below 768px */}
+            <button className="vgc-mobile-toggle" aria-label="Toggle navigation menu" onClick={() => setSideCollapsed(!sideCollapsed)} style={{
+              display: "none", alignItems: "center", justifyContent: "center",
+              width: 36, height: 36, borderRadius: 8,
+              background: "#6366F118", border: "1px solid #6366F133",
+              color: "#818CF8", cursor: "pointer", fontSize: 18, flexShrink: 0
+            }}>☰</button>
             <h1 style={{
               fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: "-0.5px",
               fontFamily: "'Space Grotesk', sans-serif",
@@ -19760,9 +19794,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           < Footer */}
         <div style={{ padding: "6px 28px", borderTop: "1px solid #1E213033", background: "#0A0C14", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 9, color: "#5A617855", fontFamily: "'JetBrains Mono', monospace" }}>© {new Date().getFullYear()} VGC Technology Pte Ltd — All rights reserved</span>
-          <span style={{ fontSize: 9, color: "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>VGC-ITSM v2.0 · Enterprise Service Management</span>
+          <span style={{ fontSize: 9, color: "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>VGC-ITSM v{APP_VERSION.version} · Enterprise Service Management</span>
         </div>
-      </div>
+      </main>
       </div>{/* End Main Layout Row */}
 
       {/* Modals */}
