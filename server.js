@@ -6654,34 +6654,13 @@ Respond in JSON ONLY:
   "confidence": 0-100
 }`;
 
-      const payload = {
-        model: getAIModel("secondary"),
-        input: [
-          { role: "system", content: "You are a senior IT advisory specialist at VGC Technology Pte Ltd. Generate professional enterprise-class internal IT advisory emails. Respond ONLY in valid JSON." },
-          { role: "user", content: aiPrompt },
-        ],
-        max_completion_tokens: 4000,
-      };
+      const aiResult = await callAI(
+        "You are a senior IT advisory specialist at VGC Technology Pte Ltd. Generate professional enterprise-class internal IT advisory emails. Respond ONLY in valid JSON.",
+        aiPrompt,
+        { tier: "secondary", maxTokens: 4000, timeout: 90000 }
+      );
 
-      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({
-          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
-          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
-        }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => {
-            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
-            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
-          });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(120000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const aiText = extractAIText(aiResult);
+      const aiText = aiResult.text;
       let advisory;
       try {
         let cleaned = aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
