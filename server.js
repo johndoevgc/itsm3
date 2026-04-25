@@ -140,7 +140,7 @@ const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 const PROD_TEST_MODE = true;
 const PROD_TEST_EMAIL = "hlaing@vgctechnology.com";
 // Customer-facing emails go here (never to real customers until go-live)
-const CUSTOMER_TEST_EMAIL = "johndoe@vgsg.com";
+const CUSTOMER_TEST_EMAIL = "johndoe@vgcsg.com";
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
 const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
 
@@ -186,6 +186,19 @@ let notifyEngine = null;
 let workflowEngine = null;
 let analyticsEngine = null;
 let cacheLayer = null;
+
+// ─── Dynamic SLA Map helper (reads from slaEngine policy, falls back to defaults) ──
+function getSlaMap() {
+  if (slaEngine && slaEngine.currentPolicy) {
+    return Object.fromEntries(Object.entries(slaEngine.currentPolicy.severities).map(([k, v]) => [k, v.worstResponse]));
+  }
+  return { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+}
+
+function getSlaDescription() {
+  const m = getSlaMap();
+  return `Sev-A (CRITICAL): ${m["Sev-A"]}h, Sev-B (HIGH): ${m["Sev-B"]}h, Sev-C (MEDIUM): ${m["Sev-C"]}h, Sev-D (LOW): ${m["Sev-D"]}h`;
+}
 
 async function initDatabase() {
   if (USE_MSSQL) {
@@ -531,6 +544,11 @@ const VALID_COLLECTIONS = new Set([
   "notifications",
   "workflow_executions",
   "saved_filters",
+  "incident_templates",
+  "approval_chains", "approval_instances",
+  "cmdb_relationships",
+  "runbook_executions",
+  "report_schedules",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -923,6 +941,28 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, stats: slaEngine ? slaEngine.getStats() : null });
   }
 
+  // ─── SLA Config API (persist policy to DB) ─────────────────────────────
+  if (pathname === "/api/sla/config" && req.method === "GET") {
+    try {
+      const row = await db.getOne("sla_config", "active_policy");
+      if (row) return json(res, 200, JSON.parse(row.data));
+      return json(res, 200, slaEngine ? slaEngine.currentPolicy : {});
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/sla/config" && req.method === "POST") {
+    if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin" && authResult.role !== "Tenant Admin") {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const body = await readBody(req);
+      if (!body.severities) return json(res, 400, { error: "severities object required" });
+      await db.upsert("sla_config", "active_policy", JSON.stringify(body));
+      await db.audit("sla_config", "active_policy", "update", JSON.stringify(body), authResult.user?.email || "system");
+      if (slaEngine) await slaEngine.loadPolicy();
+      return json(res, 200, { ok: true, policy: body });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // ─── Analytics Engine API ─────────────────────────────────────────────────
   if (pathname === "/api/analytics/kpis" && req.method === "GET") {
     if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
@@ -1202,6 +1242,42 @@ const server = http.createServer(async (req, res) => {
       console.error(`DB API error [${collection}]:`, err.message);
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // ─── CSV Export API ───────────────────────────────────────────────────
+  const exportMatch = pathname.match(/^\/api\/export\/([a-z_]+)$/);
+  if (exportMatch && req.method === "GET") {
+    const exportCol = exportMatch[1];
+    if (!VALID_COLLECTIONS.has(exportCol)) return json(res, 400, { error: "Invalid collection" });
+    try {
+      const rows = await db.getAll(exportCol);
+      const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      if (items.length === 0) {
+        res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${exportCol}_export.csv"` });
+        return res.end("No data");
+      }
+      // Collect all unique keys across all items
+      const keySet = new Set();
+      items.forEach(item => Object.keys(item).forEach(k => keySet.add(k)));
+      const headers = Array.from(keySet);
+      const escapeCsv = (val) => {
+        if (val == null) return "";
+        const s = typeof val === "object" ? JSON.stringify(val) : String(val);
+        if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      };
+      const csvLines = [headers.map(escapeCsv).join(",")];
+      items.forEach(item => csvLines.push(headers.map(h => escapeCsv(item[h])).join(",")));
+      const csv = csvLines.join("\r\n");
+      res.writeHead(200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${exportCol}_${new Date().toISOString().slice(0,10)}.csv"`,
+        "Content-Length": Buffer.byteLength(csv, "utf-8"),
+      });
+      return res.end(csv);
+    } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
   // ─── Audit Log API ────────────────────────────────────────────────────
@@ -1556,7 +1632,7 @@ Analyze the support ticket and return a JSON object with:
 7. suggested_assignee — one of: L1 Support, L2 Support, Network Engineering, Security Team, based on complexity
 8. auto_sendable — true if confidence >= 85 AND the response is safe to send without human review
 9. itsm_category — ITIL category mapping
-10. sla_priority — Sev-A (Critical, 4hr), Sev-B (High, 4hr), Sev-C (Medium, 9hr), Sev-D (Low, 27hr)
+10. sla_priority — ${getSlaDescription()}
 
 IMPORTANT: Set auto_sendable=true ONLY for routine issues (password resets, basic how-to, status inquiries, simple troubleshooting). 
 Set auto_sendable=false for: security incidents, data loss, system outages, escalations, angry customers, complex issues.
@@ -1919,7 +1995,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   if (!existing && !existsByZd) {
                     const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                     const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-                    const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+                    const slaMap = getSlaMap();
                     const itsmPriority = priorityMap[t.priority] || "Sev-C";
                     const incident = {
                       id: `INC-ZD${t.id}`, title: t.subject || "Untitled",
@@ -2052,7 +2128,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 // Auto-create ITSM incident if no linked incident exists (Production Live)
                 if (!hasLinkedIncident && !["closed", "solved"].includes(t.status)) {
                   const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-                  const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+                  const slaMap = getSlaMap();
                   const itsmPriority = priorityMap[t.priority] || "Sev-C";
                   const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold" };
                   const newInc = {
@@ -2248,7 +2324,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 }
                 if (!hasIncident) {
                   const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-                  const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+                  const slaMap = getSlaMap();
                   const itsmPriority = priorityMap[t.priority] || "Sev-C";
                   const newInc = {
                     id: `INC-ZD${t.id}`, title: t.subject || "Untitled",
@@ -4073,10 +4149,10 @@ Analyze the incoming ticket and determine the best category, priority, assignee,
 AVAILABLE CATEGORIES: ${kbCategories.join(", ")}, Network, Hardware, Software, Security, Email, Access Management, General, VPN, Printing, Telephony, Cloud Services, Database, Backup, Monitoring
 
 PRIORITY LEVELS (VGC SLA Policy):
-- Sev-A (CRITICAL): Complete service outage, business-critical systems unavailable. SLA: 0.5h first response, 4h resolution.
-- Sev-B (HIGH): Major impact, VIP issues, >50% users affected. SLA: 1h first response, 4h resolution.
-- Sev-C (MEDIUM/DEFAULT): Standard IT issues. SLA: 4h first response, 9h resolution.
-- Sev-D (LOW): Non-actionable questions, informational. SLA: 9h first response, 27h resolution.
+- Sev-A (CRITICAL): Complete service outage, business-critical systems unavailable. SLA: ${(slaEngine?.currentPolicy?.severities?.['Sev-A']?.firstResponse || 0.5)}h first response, ${(slaEngine?.currentPolicy?.severities?.['Sev-A']?.worstResponse || 4)}h resolution.
+- Sev-B (HIGH): Major impact, VIP issues, >50% users affected. SLA: ${(slaEngine?.currentPolicy?.severities?.['Sev-B']?.firstResponse || 1)}h first response, ${(slaEngine?.currentPolicy?.severities?.['Sev-B']?.worstResponse || 4)}h resolution.
+- Sev-C (MEDIUM/DEFAULT): Standard IT issues. SLA: ${(slaEngine?.currentPolicy?.severities?.['Sev-C']?.firstResponse || 4)}h first response, ${(slaEngine?.currentPolicy?.severities?.['Sev-C']?.worstResponse || 9)}h resolution.
+- Sev-D (LOW): Non-actionable questions, informational. SLA: ${(slaEngine?.currentPolicy?.severities?.['Sev-D']?.firstResponse || 9)}h first response, ${(slaEngine?.currentPolicy?.severities?.['Sev-D']?.worstResponse || 27)}h resolution.
 
 ASSIGNMENT GROUPS: Service Desk, Network Team, Security Team, Cloud Team, Desktop Support, Application Support, Infrastructure
 
@@ -4153,7 +4229,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const now = new Date().toISOString();
       const confidence = triage.confidence || 50;
-      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+      const slaMap = getSlaMap();
 
       // High confidence: auto-apply triage directly (70% in PROD_TEST_MODE, 85% normal)
       const autoApplyThreshold = PROD_TEST_MODE ? 70 : 85;
@@ -4261,7 +4337,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const now = new Date().toISOString();
       const triage = action.triage;
-      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+      const slaMap = getSlaMap();
 
       // Update the incident
       if (action.incidentId) {
@@ -4399,7 +4475,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       const openIncidents = (clientIncidents || []).filter(i => !["Resolved", "Closed"].includes(i.status));
       if (openIncidents.length === 0) return json(res, 200, { predictions: [], message: "No open tickets" });
 
-      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+      const slaMap = getSlaMap();
 
       // Calculate SLA metrics for each open ticket
       const ticketSummaries = openIncidents.map(inc => {
@@ -4424,7 +4500,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         return `${cat}: avg ${avg}h (${times.length} resolved)`;
       }).join(", ");
 
-      const systemPrompt = `You are VGC Technology's SLA prediction engine. Analyze open tickets and predict which ones will breach their SLA targets. VGC SLA Policy: Sev-A=4h response/4h worst-case, Sev-B=1h/4h, Sev-C=4h/9h, Sev-D=9h/27h. Business hours: Mon-Fri 9AM-6PM SGT. Consider: time elapsed vs SLA target, ticket velocity (activity count), historical MTTR for category, assignee workload, priority severity. Return JSON array ONLY (no markdown): [{ "ticketId": "INC-XXX", "breachProbability": 0-100, "predictedBreachIn": "Xh Ym", "suggestedAction": "reassign|escalate|add_resources|notify_manager", "escalationTarget": "name or role", "reasoning": "brief explanation", "emailDraft": "escalation email body if needed" }]. Only include tickets with breachProbability >= 50. Sort by breach probability descending.`;
+      const systemPrompt = `You are VGC Technology's SLA prediction engine. Analyze open tickets and predict which ones will breach their SLA targets. VGC SLA Policy: ${getSlaDescription()}. Business hours: Mon-Fri 9AM-6PM SGT. Consider: time elapsed vs SLA target, ticket velocity (activity count), historical MTTR for category, assignee workload, priority severity. Return JSON array ONLY (no markdown): [{ "ticketId": "INC-XXX", "breachProbability": 0-100, "predictedBreachIn": "Xh Ym", "suggestedAction": "reassign|escalate|add_resources|notify_manager", "escalationTarget": "name or role", "reasoning": "brief explanation", "emailDraft": "escalation email body if needed" }]. Only include tickets with breachProbability >= 50. Sort by breach probability descending.`;
 
       const userPrompt = `Open tickets:\n${ticketSummaries}\n\nHistorical MTTR: ${mttrSummary || "No historical data yet"}\n\nPredict SLA breaches and suggest preventive actions.`;
 
@@ -6263,6 +6339,21 @@ async function start() {
         await db.upsert("kb", kb.id, JSON.stringify(kb));
       }
       console.log(`[Seed] Created ${defaultKB.length} default KB articles`);
+    }
+
+    // Seed default incident templates if none exist
+    if (!stats.incident_templates || stats.incident_templates === 0) {
+      const defaultTemplates = [
+        { id: "TPL-001", name: "Password Reset", title: "Password Reset Request", category: "Access", priority: "Sev-C", description: "User requires a password reset for their account.", assignee: "", assignmentGroup: "Service Desk" },
+        { id: "TPL-002", name: "VPN Connectivity Issue", title: "VPN Connection Failure", category: "Network", priority: "Sev-B", description: "User is unable to connect to the corporate VPN.", assignee: "", assignmentGroup: "Network Team" },
+        { id: "TPL-003", name: "New Employee Onboarding", title: "IT Onboarding — New Hire Setup", category: "General", priority: "Sev-D", description: "Set up laptop, email, VPN, and required software for new employee.", assignee: "", assignmentGroup: "Service Desk" },
+        { id: "TPL-004", name: "Email / Outlook Issue", title: "Email Not Working — Outlook", category: "Email", priority: "Sev-C", description: "User reports issues with sending or receiving email in Outlook.", assignee: "", assignmentGroup: "Service Desk" },
+        { id: "TPL-005", name: "Hardware Failure", title: "Hardware Malfunction Report", category: "Hardware", priority: "Sev-B", description: "A hardware device (laptop, monitor, peripheral) is malfunctioning or not working.", assignee: "", assignmentGroup: "Desktop Support" },
+      ];
+      for (const tpl of defaultTemplates) {
+        await db.upsert("incident_templates", tpl.id, JSON.stringify(tpl));
+      }
+      console.log(`[Seed] Created ${defaultTemplates.length} default incident templates`);
     }
 
     // ─── Daily AI Knowledge Sync (every 24h) ────────────────────────

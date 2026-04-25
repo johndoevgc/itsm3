@@ -34,7 +34,7 @@ async function main() {
   assert("Database connected", health.json.database === "connected");
   assert("DB type is mysql", health.json.dbType === "mysql");
   assert("AI configured", health.json.aiConfigured === true);
-  assert("AI model is gpt-5.4-nano", health.json.aiModel === "gpt-5.4-nano", `Got: ${health.json.aiModel}`);
+  assert("AI model is gpt-5.4-pro", health.json.aiModel === "gpt-5.4-pro", `Got: ${health.json.aiModel}`);
 
   // 2. DB Stats
   console.log("--- DB Stats ---");
@@ -135,7 +135,7 @@ async function main() {
   console.log("--- AI Settings API ---");
   const aiSettings = await getJson("/api/settings/openai");
   assert("AI settings endpoint returns 200", aiSettings.status === 200);
-  assert("AI model is gpt-5.4-nano", aiSettings.json.model === "gpt-5.4-nano", `Got: ${aiSettings.json.model}`);
+  assert("AI model is gpt-5.4-pro", aiSettings.json.model === "gpt-5.4-pro", `Got: ${aiSettings.json.model}`);
   assert("AI endpoint configured", aiSettings.json.configured === true);
 
   // 18. AI Test connection
@@ -144,7 +144,7 @@ async function main() {
   assert("AI test endpoint responds", aiTest.status === 200 || aiTest.status === 502, `Status: ${aiTest.status}`);
   if (aiTest.status === 200) {
     assert("AI test connected", aiTest.json.status === "connected", `Status: ${aiTest.json.status}`);
-    assert("AI test model correct", aiTest.json.model === "gpt-5.4-nano", `Model: ${aiTest.json.model}`);
+    assert("AI test model correct", aiTest.json.model === "gpt-5.4-pro", `Model: ${aiTest.json.model}`);
   }
 
   // 19. Saved Filters collection
@@ -166,6 +166,39 @@ async function main() {
   const kbAll = await getJson("/api/db/kb");
   assert("KB collection accessible", kbAll.status === 200, `Status: ${kbAll.status}`);
   assert("KB has articles", kbAll.json.count >= 1, `Got: ${kbAll.json.count}`);
+
+  // ─── PHASE 2: Customer Experience ─────────────────────────────────────
+
+  // 23. SLA Config API
+  console.log("--- SLA Config API ---");
+  const slaConfig = await getJson("/api/sla/config");
+  assert("SLA config endpoint returns 200", slaConfig.status === 200, `Status: ${slaConfig.status}`);
+  assert("SLA config has severities", slaConfig.json.severities != null || slaConfig.json.policy != null, "No severities or policy");
+
+  // 24. CSV Export
+  console.log("--- CSV Export ---");
+  const csvInc = await get("/api/export/incidents?format=csv");
+  assert("CSV export returns 200", csvInc.status === 200, `Status: ${csvInc.status}`);
+  assert("CSV content-type", (csvInc.headers["content-type"] || "").includes("text/csv"), `CT: ${csvInc.headers["content-type"]}`);
+  assert("CSV has header row", csvInc.body.split("\n").length >= 1);
+  const csvAssets = await get("/api/export/assets?format=csv");
+  assert("Asset CSV export returns 200", csvAssets.status === 200, `Status: ${csvAssets.status}`);
+  const csvKb = await get("/api/export/kb?format=csv");
+  assert("KB CSV export returns 200", csvKb.status === 200, `Status: ${csvKb.status}`);
+  const csvBad = await get("/api/export/invalid_collection?format=csv");
+  assert("Invalid collection CSV returns 400", csvBad.status === 400, `Status: ${csvBad.status}`);
+
+  // 25. Incident Templates
+  console.log("--- Incident Templates ---");
+  const templates = await getJson("/api/db/incident_templates");
+  assert("Templates collection accessible", templates.status === 200, `Status: ${templates.status}`);
+  assert("Templates exist (seeded)", templates.json.count >= 1, `Got: ${templates.json.count}`);
+  if (templates.json.data && templates.json.data.length > 0) {
+    const tpl = templates.json.data[0];
+    assert("Template has name", !!tpl.name, `Name: ${tpl.name}`);
+    assert("Template has category", !!tpl.category, `Category: ${tpl.category}`);
+    assert("Template has priority", !!tpl.priority, `Priority: ${tpl.priority}`);
+  }
 
   // Results
   console.log(`\n====== RESULTS ======`);

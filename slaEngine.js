@@ -122,10 +122,22 @@ class SlaEngine {
         if (saved.severities) {
           this.policy.severities = { ...this.policy.severities, ...saved.severities };
         }
+        if (saved.supportHours) {
+          this.policy.supportHours = { ...this.policy.supportHours, ...saved.supportHours };
+        }
+        if (saved.holidays) {
+          this.policy.holidays = saved.holidays;
+        }
       }
     } catch (err) {
       console.warn("[SLA Engine] Could not load policy:", err.message);
     }
+    this.currentPolicy = this.policy;
+  }
+
+  getSlaMap() {
+    const p = this.currentPolicy || this.policy;
+    return Object.fromEntries(Object.entries(p.severities).map(([k, v]) => [k, v.worstResponse]));
   }
 
   async runCycle() {
