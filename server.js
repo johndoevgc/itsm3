@@ -817,7 +817,8 @@ async function processInboundEmails() {
 
         // ── Gate 1: Skip auto-generated, no-reply, and ITSM notification emails ──
         if (fromAddr.includes("noreply") || fromAddr.includes("no-reply") || fromAddr.includes("mailer-daemon") ||
-            subject.startsWith("[VGC ITSM]") || subject.startsWith("[TEST →")) {
+            subject.startsWith("[VGC ITSM]") || subject.startsWith("[TEST →") ||
+            subject.startsWith("[VGC Technology Pte Ltd]")) {
           await _markEmailRead(token, sender, msg.id);
           await _logRejection(fromAddr, subject, "auto-generated");
           console.log(`[Email-to-Ticket] Skipped auto-generated: ${fromAddr}`);
@@ -882,15 +883,40 @@ async function processInboundEmails() {
 
         // ── Gate 5: Duplicate detection — skip if same emailMessageId already exists ──
         const existingIncidents = await db.getAll("incidents");
-        const isDuplicate = existingIncidents.some(row => {
-          try {
-            const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-            return inc.emailMessageId === msg.id;
-          } catch { return false; }
-        });
+        const parsedIncidents = existingIncidents.map(row => {
+          try { return typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { return null; }
+        }).filter(Boolean);
+
+        const isDuplicate = parsedIncidents.some(inc => inc.emailMessageId === msg.id);
         if (isDuplicate) {
           await _markEmailRead(token, sender, msg.id);
           console.log(`[Email-to-Ticket] Skipped duplicate email: ${msg.id}`);
+          continue;
+        }
+
+        // ── Gate 6: Thread-aware dedup — replies to same thread append to existing incident ──
+        const normalizeSubject = (s) => s.replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").replace(/^\[.*?\]\s*/g, "").trim().toLowerCase();
+        const normalizedSubject = normalizeSubject(subject);
+        const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold"]);
+        const threadMatch = parsedIncidents.find(inc =>
+          inc.source === "email" && openStatuses.has(inc.status) &&
+          normalizeSubject(inc.title || "") === normalizedSubject
+        );
+        if (threadMatch) {
+          // Append reply as activity to existing incident instead of creating new one
+          const rawReply = (msg.body?.content || msg.bodyPreview || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+          if (!threadMatch.activityLog) threadMatch.activityLog = [];
+          threadMatch.activityLog.push({
+            id: `AL-REPLY-${Date.now()}`,
+            type: "email_reply",
+            user: msg.from?.emailAddress?.name || fromAddr,
+            time: new Date().toISOString(),
+            detail: `Email reply from ${fromAddr}: ${rawReply.substring(0, 500)}`,
+          });
+          threadMatch.updatedAt = new Date().toISOString();
+          await db.upsert("incidents", threadMatch.id, JSON.stringify(threadMatch));
+          await _markEmailRead(token, sender, msg.id);
+          console.log(`[Email-to-Ticket] Thread reply appended to ${threadMatch.id}: "${subject.substring(0, 60)}"`);
           continue;
         }
 
@@ -6634,7 +6660,7 @@ Respond in JSON ONLY:
           { role: "system", content: "You are a senior IT advisory specialist at VGC Technology Pte Ltd. Generate professional enterprise-class internal IT advisory emails. Respond ONLY in valid JSON." },
           { role: "user", content: aiPrompt },
         ],
-        max_output_tokens: 2000,
+        max_output_tokens: 4000,
       };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
@@ -6658,9 +6684,14 @@ Respond in JSON ONLY:
       const aiText = extractAIText(aiResult);
       let advisory;
       try {
-        advisory = JSON.parse(aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
-      } catch {
-        return json(res, 500, { error: "AI returned invalid JSON", raw: aiText.substring(0, 500) });
+        let cleaned = aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        // Extract JSON object between first { and last }
+        const firstBrace = cleaned.indexOf("{");
+        const lastBrace = cleaned.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace > firstBrace) cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+        advisory = JSON.parse(cleaned);
+      } catch (parseErr) {
+        return json(res, 500, { error: "AI returned invalid JSON: " + parseErr.message, raw: aiText.substring(0, 500) });
       }
 
       // Build severity badge colors
