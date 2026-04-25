@@ -6,9 +6,9 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "3.10.4",
-  build: "kp-workflow-dashboard",
-  date: "2026-04-24",
+  version: "3.11.0",
+  build: "kp-ui-redesign",
+  date: "2026-04-25",
   channel: "Production",
   name: "VGC-ITSM",
   engine: "VGC-AI v3.8 (GPT-5.4-Pro)",
@@ -23,9 +23,10 @@ const APP_VERSION = {
 // ─── Theme: Named Color & Style Constants ───────────────────────────────
 const COLORS = {
   // Primary palette
-  primary:       "#6366F1",  // Indigo — brand accent, active states, links
-  primaryDark:   "#4F46E5",  // Deeper indigo for hover states
-  accent:        "#06B6D4",  // Cyan — secondary accent, info badges
+  primary:       "#818CF8",  // Indigo 400 — brand accent, active states, links
+  primaryDark:   "#6366F1",  // Indigo 500 — hover states
+  primaryMuted:  "#6366F120", // Translucent indigo for backgrounds
+  accent:        "#22D3EE",  // Cyan 400 — secondary accent, info badges
   // Severity / status
   critical:      "#FF4444",  // Sev-A, errors, breaches
   high:          "#FF6B6B",  // Sev-B, warnings
@@ -36,20 +37,22 @@ const COLORS = {
   pink:          "#EC4899",  // Pink — admin, approvals
   purple:        "#CE93D8",  // Purple — problem management
   // Surface / background
-  bgDeep:        "#0A0C14",  // Deepest background
-  bgDark:        "#0F1117",  // Dark background
-  bgCard:        "#1A1A2E",  // Card background
-  bgPanel:       "#1E2130",  // Panel / sidebar background
-  bgInput:       "#12141E",  // Input field background
+  bgDeep:        "#09090B",  // Zinc 950 — deepest background
+  bgDark:        "#0C0D12",  // Slightly lifted dark background
+  bgCard:        "#141419",  // Card background
+  bgPanel:       "#18181B",  // Zinc 900 — panel / sidebar background
+  bgInput:       "#111114",  // Input field background
+  bgHover:       "#1C1C22",  // Hover state background
   // Text
-  textPrimary:   "#E8ECF4",  // Primary text (light)
-  textSecondary: "#5A6178",  // Secondary / muted text
-  textDim:       "#8B8FA3",  // Dimmer text
-  textSubtle:    "#A0AEC0",  // Subtle / placeholder text
-  textMuted:     "#C4CAD6",  // Medium-emphasis text
+  textPrimary:   "#FAFAFA",  // Zinc 50 — primary text
+  textSecondary: "#A1A1AA",  // Zinc 400 — secondary / muted text
+  textDim:       "#71717A",  // Zinc 500 — dimmer text
+  textSubtle:    "#D4D4D8",  // Zinc 300 — subtle / placeholder text
+  textMuted:     "#D4D4D8",  // Medium-emphasis text
   // Borders
-  border:        "#1E2130",  // Default border
-  borderLight:   "#5A617833", // Semi-transparent border
+  border:        "#27272A",  // Zinc 800 — default border
+  borderLight:   "#3F3F4622", // Semi-transparent border
+  borderAccent:  "#6366F133", // Accent border for focus states
   // External brand colors
   microsoft:     "#0078D4",  // Microsoft blue
   teams:         "#6264A7",  // Teams purple
@@ -1218,23 +1221,23 @@ const PriorityDot = ({ priority }) => (
 
 const StatCard = ({ label, value, trend, icon, accent, onClick }) => (
   <div onClick={onClick} style={{
-    background: "#0F1117", borderRadius: "8px", padding: "18px 20px",
-    border: "1px solid #1E2130", position: "relative", overflow: "hidden",
+    background: "linear-gradient(135deg, #0C0D12, #141419)", borderRadius: "10px", padding: "18px 20px",
+    border: "1px solid #27272A", position: "relative", overflow: "hidden",
     flex: 1, minWidth: 160, cursor: onClick ? "pointer" : "default",
-    transition: "transform 0.15s, border-color 0.2s",
+    transition: "transform 0.2s, border-color 0.2s, box-shadow 0.2s",
   }}
-    onMouseEnter={e => { if (onClick) { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = (accent || "#64B5F6") + "55"; } }}
-    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = "#1E2130"; }}>
+    onMouseEnter={e => { if (onClick) { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.borderColor = (accent || "#64B5F6") + "66"; e.currentTarget.style.boxShadow = `0 8px 24px ${(accent || "#64B5F6")}15`; } }}
+    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = "#27272A"; e.currentTarget.style.boxShadow = "none"; }}>
     <div style={{
-      position: "absolute", top: 0, left: 0, right: 0, height: "2px",
-      background: accent || "#64B5F6"
+      position: "absolute", top: 0, left: 0, right: 0, height: "3px",
+      background: `linear-gradient(90deg, ${accent || "#64B5F6"}, ${accent || "#64B5F6"}88)`
     }} />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
       <div>
-        <div style={{ fontSize: "11px", color: "#5A6178", fontWeight: 600, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>{label}</div>
-        <div style={{ fontSize: "28px", fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{value}</div>
+        <div style={{ fontSize: "11px", color: "#A1A1AA", fontWeight: 500, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>{label}</div>
+        <div style={{ fontSize: "28px", fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>{value}</div>
       </div>
-      <span style={{ fontSize: "22px", opacity: 0.6 }}>{icon}</span>
+      <span style={{ fontSize: "22px", opacity: 0.5 }}>{icon}</span>
     </div>
     {trend && <div style={{ fontSize: "11px", color: trend > 0 ? "#FF6B6B" : "#81C784", marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
       {trend > 0 ? "▲" : "▼"} {Math.abs(trend)}% vs last week
@@ -1243,15 +1246,15 @@ const StatCard = ({ label, value, trend, icon, accent, onClick }) => (
 );
 
 const DataTable = ({ columns, data, onRowClick }) => (
-  <div style={{ overflowX: "auto", borderRadius: "8px", border: "1px solid #1E2130" }}>
+  <div style={{ overflowX: "auto", borderRadius: "10px", border: "1px solid #27272A" }}>
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", tableLayout: "auto" }}>
       <thead>
-        <tr style={{ background: "#0A0C14" }}>
+        <tr style={{ background: "#09090B" }}>
           {columns.map((col, i) => (
             <th key={i} style={{
-              padding: "10px 14px", textAlign: "left", color: "#5A6178",
-              fontWeight: 600, fontSize: "10px", textTransform: "uppercase",
-              letterSpacing: "1px", borderBottom: "1px solid #1E2130",
+              padding: "10px 14px", textAlign: "left", color: "#A1A1AA",
+              fontWeight: 500, fontSize: "10px", textTransform: "uppercase",
+              letterSpacing: "1px", borderBottom: "1px solid #27272A",
               fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap",
               width: col.width || "auto", minWidth: col.minWidth || "auto",
               maxWidth: col.maxWidth || "none",
@@ -1264,17 +1267,17 @@ const DataTable = ({ columns, data, onRowClick }) => (
           <tr key={row.id || row.Id || i}
             onClick={() => onRowClick?.(row)}
             style={{
-              background: i % 2 === 0 ? "#0F1117" : "#0C0E16",
+              background: i % 2 === 0 ? "#0C0D12" : "#09090B",
               cursor: onRowClick ? "pointer" : "default",
               transition: "background 0.15s"
             }}
-            onMouseEnter={e => { if (onRowClick) e.currentTarget.style.background = "#161A26" }}
-            onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? "#0F1117" : "#0C0E16"}
+            onMouseEnter={e => { if (onRowClick) e.currentTarget.style.background = "#1C1C22" }}
+            onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? "#0C0D12" : "#09090B"}
           >
             {columns.map((col, j) => (
               <td key={j} style={{
-                padding: "10px 14px", color: "#C4CAD6",
-                borderBottom: "1px solid #1E213022",
+                padding: "10px 14px", color: "#D4D4D8",
+                borderBottom: "1px solid #27272A22",
                 whiteSpace: col.wrap ? "normal" : "nowrap",
                 fontFamily: col.mono ? "'JetBrains Mono', monospace" : "inherit",
                 fontSize: col.mono ? "12px" : "13px",
@@ -1289,7 +1292,7 @@ const DataTable = ({ columns, data, onRowClick }) => (
           </tr>
         ))}
         {data.length === 0 && (
-          <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "#5A6178" }}>No records found</td></tr>
+          <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "#A1A1AA" }}>No records found</td></tr>
         )}
       </tbody>
     </table>
@@ -1399,25 +1402,27 @@ const WorkflowHeader = ({ module, version }) => {
 
 const Modal = ({ title, onClose, children, wide }) => (
   <div style={{
-    position: "fixed", inset: 0, background: "#00000088", zIndex: 1000,
+    position: "fixed", inset: 0, background: "#000000AA", zIndex: 1000,
     display: "flex", alignItems: "center", justifyContent: "center",
-    backdropFilter: "blur(4px)", padding: 20,
+    backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", padding: 20,
   }} onClick={onClose}>
     <div style={{
-      background: "#12141E", borderRadius: "12px", border: "1px solid #1E2130",
+      background: "#141419", borderRadius: "16px", border: "1px solid #27272A",
       width: wide ? 700 : 520, maxWidth: "95vw", maxHeight: "85vh",
-      overflow: "auto", boxShadow: "0 24px 48px #00000066"
+      overflow: "auto", boxShadow: "0 24px 64px #000000AA, 0 0 0 1px #27272A",
+      position: "relative"
     }} onClick={e => e.stopPropagation()}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #818CF8, #22D3EE)", borderRadius: "16px 16px 0 0" }} />
       <div style={{
-        padding: "18px 24px", borderBottom: "1px solid #1E2130",
+        padding: "18px 24px", borderBottom: "1px solid #27272A",
         display: "flex", justifyContent: "space-between", alignItems: "center",
-        position: "sticky", top: 0, background: "#12141E", zIndex: 1
+        position: "sticky", top: 0, background: "#141419", zIndex: 1
       }}>
-        <h3 style={{ margin: 0, color: "#E8ECF4", fontSize: 16, fontFamily: "'Space Grotesk', sans-serif" }}>{title}</h3>
+        <h3 style={{ margin: 0, color: "#FAFAFA", fontSize: 16, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>{title}</h3>
         <button onClick={onClose} style={{
-          background: "none", border: "none", color: "#5A6178", cursor: "pointer",
-          fontSize: 20, lineHeight: 1, padding: "4px 8px"
-        }}>✕</button>
+          background: "none", border: "none", color: "#71717A", cursor: "pointer",
+          fontSize: 20, lineHeight: 1, padding: "4px 8px", transition: "color 0.15s"
+        }} onMouseEnter={e => e.currentTarget.style.color = "#FAFAFA"} onMouseLeave={e => e.currentTarget.style.color = "#71717A"}>✕</button>
       </div>
       <div style={{ padding: "20px 24px" }}>{children}</div>
     </div>
@@ -1436,16 +1441,18 @@ const FormField = ({ label, children }) => (
 );
 
 const inputStyle = {
-  width: "100%", padding: "9px 12px", background: "#0A0C14",
-  border: "1px solid #1E2130", borderRadius: "6px", color: "#E8ECF4",
-  fontSize: "13px", outline: "none", fontFamily: "inherit", boxSizing: "border-box"
+  width: "100%", padding: "9px 12px", background: "#09090B",
+  border: "1px solid #27272A", borderRadius: "8px", color: "#FAFAFA",
+  fontSize: "13px", outline: "none", fontFamily: "inherit", boxSizing: "border-box",
+  transition: "border-color 0.15s"
 };
 
-const btnStyle = (accent = "#3B82F6") => ({
+const btnStyle = (accent = "#818CF8") => ({
   padding: "9px 20px", background: accent, color: "#fff",
-  border: "none", borderRadius: "6px", cursor: "pointer",
+  border: "none", borderRadius: "8px", cursor: "pointer",
   fontSize: "13px", fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif",
-  transition: "opacity 0.15s"
+  transition: "opacity 0.15s, transform 0.15s, box-shadow 0.15s",
+  boxShadow: `0 2px 8px ${accent}33`,
 });
 
 const SearchBar = ({ value, onChange, placeholder }) => (
@@ -1848,6 +1855,7 @@ export default function ITSMApp() {
     systemHealth:    { on: true, important: true,  label: "System Health",          roles: ["management"] },
     changeCalendar:  { on: true, important: false, label: "Change Calendar",        roles: ["management"] },
     workflowGuide:   { on: true, important: false, label: "Workflow Pipeline Guide", roles: ["all"] },
+    workflowArch:    { on: true, important: false, label: "System Architecture",    roles: ["all"] },
   });
   const [billingConfig, setBillingConfig] = useState({
     pricePerUser: 20, currency: "SGD", gstRate: 9, billingCycle: "Monthly",
@@ -4366,43 +4374,43 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         )}
 
         {/* ═══ HOW ITSM WORKS — WORKFLOW PIPELINE GUIDE ═══ */}
-        {cardVisibility.workflowGuide.on && <DashCard id="workflowGuide"><div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 22, position: "relative", overflow: "hidden" }}>
-          {/* Rainbow gradient top accent */}
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #06B6D4, #EC4899, #FFB347, #6366F1, #4CAF50, #CE93D8, #81C784)" }} />
+        {cardVisibility.workflowGuide.on && <DashCard id="workflowGuide"><div style={{ background: "linear-gradient(135deg, #0C0D12 0%, #141419 50%, #0C0D12 100%)", borderRadius: 12, border: "1px solid #27272A", padding: 28, position: "relative", overflow: "hidden" }}>
+          {/* Animated gradient top accent */}
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #22D3EE, #818CF8, #EC4899, #FFB347, #4CAF50, #CE93D8, #22D3EE)", backgroundSize: "200% 100%", animation: "gradientSlide 4s linear infinite" }} />
 
           {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 20, animation: "wfIconPulse 2s ease-in-out infinite" }}>🔄</span>
-              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>How ITSM Works</h3>
-              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 5, background: "linear-gradient(135deg, #6366F122, #06B6D422)", color: "#64B5F6", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #6366F133" }}>Interactive Guide</span>
+              <span style={{ fontSize: 22, animation: "wfIconPulse 2s ease-in-out infinite" }}>🔄</span>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>How ITSM Works</h3>
+              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, background: "linear-gradient(135deg, #818CF820, #22D3EE20)", color: "#22D3EE", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #22D3EE33" }}>Interactive Guide</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", animation: "wfPulseLive 1.5s ease-in-out infinite" }} />
-                <span style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>ALL ENGINES ACTIVE</span>
+                <span style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}>ALL ENGINES ACTIVE</span>
               </div>
-              <span style={{ fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>v{APP_VERSION.version}</span>
+              <span style={{ fontSize: 9, color: "#71717A66", fontFamily: "'JetBrains Mono', monospace" }}>v{APP_VERSION.version}</span>
             </div>
           </div>
 
           {/* Pipeline Description */}
-          <div style={{ fontSize: 11, color: "#8B8FA3", lineHeight: 1.6, marginBottom: 18, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
-            <span style={{ color: "#6366F1", fontWeight: 700 }}>End-to-end automation pipeline:</span> Zendesk tickets automatically sync into ITSM, get AI-triaged for category & priority, monitored against SLA targets, processed by workflow rules, auto-resolved by AI when idle, and auto-closed after 72 hours. Click any step below to navigate.
+          <div style={{ fontSize: 12, color: "#A1A1AA", lineHeight: 1.7, marginBottom: 20, padding: "12px 16px", background: "#09090B", borderRadius: 10, border: "1px solid #27272A44" }}>
+            <span style={{ color: "#818CF8", fontWeight: 700 }}>End-to-end automation pipeline:</span> Zendesk tickets automatically sync into ITSM, get AI-triaged for category & priority, monitored against SLA targets, processed by workflow rules, auto-resolved by AI when idle, and auto-closed after 72 hours. Click any step below to navigate.
           </div>
 
           {/* ── Animated 7-Step Pipeline Flow ── */}
-          <div style={{ padding: "20px 8px", background: "#0A0C14", borderRadius: 10, border: "1px solid #1E213044", marginBottom: 18 }}>
-            <div style={{ fontSize: 9, color: "#5A617888", textAlign: "center", marginBottom: 16, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.5 }}>AUTOMATION PIPELINE — CLICK ANY STEP TO NAVIGATE</div>
+          <div style={{ padding: "24px 12px", background: "linear-gradient(135deg, #09090B, #0C0D12)", borderRadius: 12, border: "1px solid #27272A44", marginBottom: 20 }}>
+            <div style={{ fontSize: 9, color: "#71717A88", textAlign: "center", marginBottom: 18, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.5 }}>AUTOMATION PIPELINE — CLICK ANY STEP TO NAVIGATE</div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0, flexWrap: "wrap" }}>
               {[
-                { label: "Zendesk Sync", icon: "📨", color: "#06B6D4", desc: "Auto-sync every 5min", metric: zdLinkedCount, metricLabel: "linked", target: "zendesk", delay: "0s" },
+                { label: "Zendesk Sync", icon: "📨", color: "#22D3EE", desc: "Auto-sync every 5min", metric: zdLinkedCount, metricLabel: "linked", target: "zendesk", delay: "0s" },
                 null,
                 { label: "AI Triage", icon: "🤖", color: "#EC4899", desc: "Category & priority", metric: aiTriagedCount, metricLabel: "triaged", target: "ai", delay: "0.4s" },
                 null,
                 { label: "SLA Monitor", icon: "⏱️", color: "#FFB347", desc: "Breach alerts at 75%", metric: `${slaCompliance}%`, metricLabel: "compliance", target: "slaApprovals", delay: "0.8s" },
                 null,
-                { label: "Workflow Rules", icon: "⚙️", color: "#6366F1", desc: "Escalate & auto-close", metric: 132, metricLabel: "rules", target: "admin", delay: "1.2s" },
+                { label: "Workflow Rules", icon: "⚙️", color: "#818CF8", desc: "Escalate & auto-close", metric: 132, metricLabel: "rules", target: "admin", delay: "1.2s" },
                 null,
                 { label: "AI Resolve", icon: "🧠", color: "#4CAF50", desc: "GPT resolves idle >2hrs", metric: zdAiQueue.filter(q => q.status === "pending_approval").length, metricLabel: "pending", target: "humanReview", delay: "1.6s" },
                 null,
@@ -4410,52 +4418,54 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 null,
                 { label: "Auto-Close", icon: "✅", color: "#81C784", desc: "Resolved → Closed 72h", metric: resolvedIncs.length, metricLabel: "closed", target: "tickets", delay: "2.4s" },
               ].map((step, i) => step === null ? (
-                <div key={`wf-arrow-${i}`} style={{ display: "flex", alignItems: "center", padding: "0 1px" }}>
-                  <div style={{ width: 20, height: 2, background: "linear-gradient(90deg, #3A3F5500, #6366F1, #3A3F5500)", position: "relative" }}>
-                    <div style={{ position: "absolute", right: -3, top: -3, width: 0, height: 0, borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "6px solid #6366F1" }} />
-                    <div style={{ position: "absolute", left: 0, top: -1, width: 4, height: 4, borderRadius: "50%", background: "#6366F1", animation: `flowDot ${1.8 + i * 0.2}s ease-in-out infinite` }} />
+                <div key={`wf-arrow-${i}`} style={{ display: "flex", alignItems: "center", padding: "0 2px" }}>
+                  <div style={{ width: 28, height: 2, background: "linear-gradient(90deg, #27272A00, #818CF8, #27272A00)", position: "relative" }}>
+                    <div style={{ position: "absolute", right: -4, top: -3, width: 0, height: 0, borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "7px solid #818CF8" }} />
+                    <div style={{ position: "absolute", left: 0, top: -1, width: 4, height: 4, borderRadius: "50%", background: "#818CF8", animation: `flowDot ${1.8 + i * 0.2}s ease-in-out infinite` }} />
                   </div>
                 </div>
               ) : (
                 <div key={step.label} onClick={() => setActiveModule(step.target)}
                   style={{
-                    textAlign: "center", padding: "12px 10px", borderRadius: 10, background: `${step.color}08`,
-                    border: `1px solid ${step.color}25`, cursor: "pointer", minWidth: 95, maxWidth: 110,
+                    textAlign: "center", padding: "14px 12px", borderRadius: 12, background: `linear-gradient(135deg, ${step.color}0A, ${step.color}05)`,
+                    border: `1px solid ${step.color}25`, cursor: "pointer", minWidth: 100, maxWidth: 115,
                     transition: "all 0.25s ease", position: "relative",
                     animation: `wfCardFloat 3s ease-in-out ${step.delay} infinite`,
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-4px) scale(1.03)"; e.currentTarget.style.boxShadow = `0 8px 24px ${step.color}22`; e.currentTarget.style.borderColor = `${step.color}55`; }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-5px) scale(1.04)"; e.currentTarget.style.boxShadow = `0 12px 32px ${step.color}22`; e.currentTarget.style.borderColor = `${step.color}55`; }}
                   onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = `${step.color}25`; }}>
+                  {/* Step number */}
+                  <div style={{ position: "absolute", top: 5, left: 7, fontSize: 8, color: `${step.color}55`, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>{Math.floor(i/2)+1}</div>
                   {/* Live pulse dot */}
                   <div style={{ position: "absolute", top: 6, right: 6, width: 5, height: 5, borderRadius: "50%", background: "#4CAF50", animation: "wfPulseLive 1.5s ease-in-out infinite" }} />
-                  {/* Animated icon */}
-                  <div style={{ fontSize: 24, marginBottom: 6, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.3))" }}>{step.icon}</div>
+                  {/* Animated icon with glow */}
+                  <div style={{ fontSize: 26, marginBottom: 6, filter: `drop-shadow(0 2px 6px ${step.color}33)` }}>{step.icon}</div>
                   {/* Label */}
-                  <div style={{ fontSize: 11, fontWeight: 700, color: step.color, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 3, lineHeight: 1.2 }}>{step.label}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: step.color, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 3, lineHeight: 1.2, letterSpacing: "-0.01em" }}>{step.label}</div>
                   {/* Description */}
-                  <div style={{ fontSize: 8, color: "#5A6178", lineHeight: 1.3, marginBottom: 6 }}>{step.desc}</div>
+                  <div style={{ fontSize: 8, color: "#71717A", lineHeight: 1.3, marginBottom: 6 }}>{step.desc}</div>
                   {/* Live metric badge */}
-                  <div style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: `${step.color}18`, border: `1px solid ${step.color}33` }}>
+                  <div style={{ display: "inline-block", padding: "3px 10px", borderRadius: 6, background: `${step.color}15`, border: `1px solid ${step.color}33` }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: step.color, fontFamily: "'JetBrains Mono', monospace" }}>{step.metric}</span>
                     {step.metricLabel && <span style={{ fontSize: 7, color: `${step.color}99`, marginLeft: 3, textTransform: "uppercase" }}>{step.metricLabel}</span>}
                   </div>
                 </div>
               ))}
             </div>
-            <div style={{ textAlign: "center", marginTop: 12, fontSize: 9, color: "#5A617855", fontFamily: "'JetBrains Mono', monospace" }}>
+            <div style={{ textAlign: "center", marginTop: 14, fontSize: 9, color: "#71717A55", fontFamily: "'JetBrains Mono', monospace" }}>
               ← Click any step to navigate · Arrows show automated data flow →
             </div>
           </div>
 
           {/* ── Quick Start Actions ── */}
           <div style={{ marginBottom: 4 }}>
-            <div style={{ fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ fontSize: 11, color: "#A1A1AA", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 12 }}>⚡</span> Quick Start
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               {[
                 { icon: "🎫", title: "Create Ticket", desc: "Open a new incident", color: "#FF6B6B", hoverAnim: "iconBounce", action: () => { setActiveModule("incidents"); setModal("newIncident"); } },
-                { icon: "🔄", title: "Sync Zendesk", desc: "Align all statuses now", color: "#06B6D4", hoverAnim: "iconSpin", action: async () => {
+                { icon: "🔄", title: "Sync Zendesk", desc: "Align all statuses now", color: "#22D3EE", hoverAnim: "iconSpin", action: async () => {
                   try {
                     const resp = await fetch("/api/zendesk/sync-all-statuses", { method: "POST" });
                     const data = await resp.json();
@@ -4464,25 +4474,179 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                     if (Array.isArray(inc)) setIncidents(inc.filter(i => !i._deleted));
                   } catch (err) { setToast({ message: "❌ Sync failed: " + err.message, type: "error" }); }
                 } },
-                { icon: "📊", title: "View Analytics", desc: "Reports & dashboards", color: "#6366F1", hoverAnim: "iconBounce", action: () => setActiveModule("analytics") },
+                { icon: "📊", title: "View Analytics", desc: "Reports & dashboards", color: "#818CF8", hoverAnim: "iconBounce", action: () => setActiveModule("analytics") },
               ].map((card, i) => (
                 <div key={i} onClick={card.action}
                   style={{
-                    padding: "14px 16px", borderRadius: 8, background: "#0A0C14",
+                    padding: "14px 16px", borderRadius: 10, background: "#09090B",
                     border: `1px solid ${card.color}22`, borderLeft: `3px solid ${card.color}`,
                     cursor: "pointer", transition: "all 0.2s ease", display: "flex", alignItems: "center", gap: 12,
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = `${card.color}44`; e.currentTarget.style.boxShadow = `0 4px 12px ${card.color}15`; const icon = e.currentTarget.querySelector('.qs-icon'); if (icon) icon.style.animation = `${card.hoverAnim} 0.5s ease`; }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = `${card.color}44`; e.currentTarget.style.boxShadow = `0 4px 16px ${card.color}15`; const icon = e.currentTarget.querySelector('.qs-icon'); if (icon) icon.style.animation = `${card.hoverAnim} 0.5s ease`; }}
                   onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.borderColor = `${card.color}22`; e.currentTarget.style.boxShadow = "none"; const icon = e.currentTarget.querySelector('.qs-icon'); if (icon) icon.style.animation = "none"; }}>
                   <span className="qs-icon" style={{ fontSize: 22, flexShrink: 0 }}>{card.icon}</span>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 2 }}>{card.title}</div>
-                    <div style={{ fontSize: 10, color: "#5A6178" }}>{card.desc}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 2 }}>{card.title}</div>
+                    <div style={{ fontSize: 10, color: "#71717A" }}>{card.desc}</div>
                   </div>
-                  <span style={{ marginLeft: "auto", fontSize: 10, color: `${card.color}66` }}>→</span>
+                  <span style={{ marginLeft: "auto", fontSize: 12, color: `${card.color}66`, transition: "transform 0.2s" }}>→</span>
                 </div>
               ))}
             </div>
+          </div>
+        </div></DashCard>}
+
+        {/* ═══ SYSTEM ARCHITECTURE DIAGRAM ═══ */}
+        {cardVisibility.workflowArch.on && <DashCard id="workflowArch"><div style={{ background: "linear-gradient(135deg, #0C0D12 0%, #141419 50%, #0C0D12 100%)", borderRadius: 12, border: "1px solid #27272A", padding: 28, position: "relative", overflow: "hidden" }}>
+          {/* Animated accent */}
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #818CF8, #22D3EE, #818CF8)", backgroundSize: "200% 100%", animation: "gradientSlide 6s linear infinite" }} />
+
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 22, animation: "subtleFloat 3s ease-in-out infinite" }}>🏗️</span>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>System Architecture</h3>
+              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, background: "#818CF815", color: "#818CF8", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #818CF833" }}>Live View</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", animation: "wfPulseLive 1.5s ease-in-out infinite" }} />
+              <span style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}>CONNECTED</span>
+            </div>
+          </div>
+
+          {/* 3-Layer Architecture */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1.5fr auto 1fr", alignItems: "center", gap: 0, padding: "16px 0" }}>
+            {/* INPUT LAYER */}
+            <div>
+              <div style={{ fontSize: 9, color: "#22D3EE", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12, textAlign: "center", fontWeight: 600 }}>INPUT SOURCES</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {[
+                  { icon: "🎫", label: "Zendesk", desc: "Ticket sync", color: "#22D3EE", metric: zdLinkedCount, click: () => setActiveModule("zendesk") },
+                  { icon: "📧", label: "Email", desc: "Inbound parse", color: "#818CF8", metric: "Auto", click: () => setActiveModule("admin") },
+                  { icon: "🌐", label: "Portal", desc: "Self-service", color: "#EC4899", metric: "Active", click: () => setActiveModule("incidents") },
+                ].map((src, i) => (
+                  <div key={i} onClick={src.click} style={{
+                    padding: "10px 12px", borderRadius: 10, background: `${src.color}08`,
+                    border: `1px solid ${src.color}20`, cursor: "pointer", transition: "all 0.2s",
+                    display: "flex", alignItems: "center", gap: 8, animation: `subtleFloat ${3 + i * 0.5}s ease-in-out infinite`,
+                  }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = `${src.color}55`; e.currentTarget.style.boxShadow = `0 4px 16px ${src.color}15`; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = `${src.color}20`; e.currentTarget.style.boxShadow = "none"; }}>
+                    <span style={{ fontSize: 18 }}>{src.icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: src.color, fontFamily: "'Space Grotesk', sans-serif" }}>{src.label}</div>
+                      <div style={{ fontSize: 8, color: "#71717A" }}>{src.desc}</div>
+                    </div>
+                    <span style={{ fontSize: 10, color: src.color, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, background: `${src.color}15`, padding: "2px 6px", borderRadius: 4 }}>{src.metric}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* LEFT CONNECTOR */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "0 8px" }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{ width: 40, height: 2, background: "linear-gradient(90deg, #22D3EE44, #818CF8)", position: "relative" }}>
+                  <div style={{ position: "absolute", right: -3, top: -3, width: 0, height: 0, borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "6px solid #818CF8" }} />
+                  <div style={{ position: "absolute", left: 0, top: -1.5, width: 5, height: 5, borderRadius: "50%", background: "#22D3EE", animation: `archDataFlow ${2 + i * 0.3}s ease-in-out infinite` }} />
+                </div>
+              ))}
+            </div>
+
+            {/* PROCESSING HUB */}
+            <div style={{ position: "relative" }}>
+              <div style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12, textAlign: "center", fontWeight: 600 }}>PROCESSING ENGINE</div>
+              {/* Central hub */}
+              <div style={{
+                position: "relative", padding: 16, borderRadius: 14,
+                background: "linear-gradient(135deg, #141419, #18181B)",
+                border: "1px solid #27272A", boxShadow: "0 8px 32px #00000044",
+              }}>
+                {/* Orbiting ring */}
+                <div style={{ position: "absolute", inset: -4, borderRadius: 18, border: "1px dashed #818CF822", animation: "archHubOrbit 12s linear infinite" }} />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {[
+                    { icon: "🤖", label: "AI Triage", color: "#EC4899", stat: `${aiTriagedCount}`, click: () => setActiveModule("ai") },
+                    { icon: "⏱️", label: "SLA Engine", color: "#FFB347", stat: `${slaCompliance}%`, click: () => setActiveModule("slaApprovals") },
+                    { icon: "⚙️", label: "Workflow", color: "#818CF8", stat: "132", click: () => setActiveModule("admin") },
+                    { icon: "🔔", label: "Notify", color: "#CE93D8", stat: "Active", click: () => setActiveModule("admin") },
+                  ].map((eng, i) => (
+                    <div key={i} onClick={eng.click} style={{
+                      padding: "10px 8px", borderRadius: 10, background: `${eng.color}08`,
+                      border: `1px solid ${eng.color}18`, textAlign: "center", cursor: "pointer",
+                      transition: "all 0.2s", position: "relative",
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = `${eng.color}44`; e.currentTarget.style.boxShadow = `0 0 20px ${eng.color}15`; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = `${eng.color}18`; e.currentTarget.style.boxShadow = "none"; }}>
+                      <div style={{ fontSize: 20, marginBottom: 4, filter: `drop-shadow(0 0 6px ${eng.color}33)` }}>{eng.icon}</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: eng.color, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 2 }}>{eng.label}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: eng.color, fontFamily: "'JetBrains Mono', monospace" }}>{eng.stat}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Central AI brain */}
+                <div style={{
+                  position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                  width: 32, height: 32, borderRadius: "50%",
+                  background: "linear-gradient(135deg, #818CF8, #22D3EE)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: "0 0 20px #818CF844, 0 0 40px #22D3EE22",
+                  animation: "archNodeGlow 3s ease-in-out infinite", fontSize: 14, zIndex: 2,
+                }}>🧠</div>
+              </div>
+            </div>
+
+            {/* RIGHT CONNECTOR */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "0 8px" }}>
+              {[0,1,2,3].map(i => (
+                <div key={i} style={{ width: 40, height: 2, background: "linear-gradient(90deg, #818CF8, #4CAF5044)", position: "relative" }}>
+                  <div style={{ position: "absolute", right: -3, top: -3, width: 0, height: 0, borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "6px solid #4CAF50" }} />
+                  <div style={{ position: "absolute", left: 0, top: -1.5, width: 5, height: 5, borderRadius: "50%", background: "#818CF8", animation: `archDataFlow ${2.2 + i * 0.25}s ease-in-out infinite` }} />
+                </div>
+              ))}
+            </div>
+
+            {/* OUTPUT LAYER */}
+            <div>
+              <div style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12, textAlign: "center", fontWeight: 600 }}>OUTPUT CHANNELS</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {[
+                  { icon: "📧", label: "Email", desc: "Notifications", color: "#4CAF50" },
+                  { icon: "💬", label: "Teams", desc: "Channel alerts", color: "#6264A7" },
+                  { icon: "🔔", label: "In-App", desc: "Live updates", color: "#FFB347" },
+                  { icon: "📊", label: "Dashboard", desc: "Real-time KPIs", color: "#818CF8", click: () => setActiveModule("dashboard") },
+                ].map((out, i) => (
+                  <div key={i} onClick={out.click} style={{
+                    padding: "8px 12px", borderRadius: 10, background: `${out.color}08`,
+                    border: `1px solid ${out.color}20`, cursor: out.click ? "pointer" : "default", transition: "all 0.2s",
+                    display: "flex", alignItems: "center", gap: 8, animation: `subtleFloat ${3.2 + i * 0.4}s ease-in-out infinite`,
+                  }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = `${out.color}55`; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = `${out.color}20`; }}>
+                    <span style={{ fontSize: 16 }}>{out.icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: out.color, fontFamily: "'Space Grotesk', sans-serif" }}>{out.label}</div>
+                      <div style={{ fontSize: 8, color: "#71717A" }}>{out.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer stats */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginTop: 16, padding: "10px 0", borderTop: "1px solid #27272A33" }}>
+            {[
+              { label: "Uptime", value: "99.9%", color: "#4CAF50" },
+              { label: "Avg Response", value: "<2s", color: "#22D3EE" },
+              { label: "AI Accuracy", value: `${aiTriagedPct}%`, color: "#EC4899" },
+              { label: "Auto-Rate", value: `${computedFCR}%`, color: "#818CF8" },
+            ].map((s, i) => (
+              <div key={i} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>{s.value}</div>
+                <div style={{ fontSize: 8, color: "#71717A", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.5 }}>{s.label}</div>
+              </div>
+            ))}
           </div>
         </div></DashCard>}
 
@@ -18853,8 +19017,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   return (
     <div style={{
-      display: "flex", flexDirection: "column", height: "100vh", background: "#080A12",
-      color: "#E8ECF4", fontFamily: "'DM Sans', -apple-system, sans-serif",
+      display: "flex", flexDirection: "column", height: "100vh", background: "#09090B",
+      color: "#FAFAFA", fontFamily: "'DM Sans', -apple-system, sans-serif",
       overflow: "hidden"
     }}>
       <style>{`
@@ -18862,8 +19026,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         * { box-sizing: border-box; margin: 0; }
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #1E2130; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #2A2F45; }
+        ::-webkit-scrollbar-thumb { background: #27272A; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3F3F46; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         @keyframes flowDot { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 20px; opacity: 0; } }
         @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
@@ -18915,6 +19079,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         @keyframes wfIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.85; } }
         @keyframes wfCardFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
         @keyframes wfPulseLive { 0%, 100% { transform: scale(1); opacity: 0.7; } 50% { transform: scale(1.5); opacity: 1; } }
+        @keyframes gradientSlide { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+        @keyframes subtleFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+        @keyframes archNodeGlow { 0%, 100% { box-shadow: 0 0 16px #818CF844, 0 0 32px #22D3EE22; } 50% { box-shadow: 0 0 24px #818CF866, 0 0 48px #22D3EE44; } }
+        @keyframes archDataFlow { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 40px; opacity: 0; } }
+        @keyframes archHubOrbit { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         @keyframes weatherSunPulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.08); filter: brightness(1.15); } }
         @keyframes weatherRayPulse { 0%, 100% { opacity: 0.6; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.3); } }
         @keyframes weatherMoonGlow { 0%, 100% { filter: brightness(1) drop-shadow(0 0 4px rgba(200,210,255,0.3)); } 50% { filter: brightness(1.15) drop-shadow(0 0 10px rgba(200,210,255,0.6)); } }
@@ -18934,8 +19103,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         .vgc-logo-text { background: linear-gradient(90deg, #6366F1, #06B6D4, #EC4899, #F59E0B, #6366F1); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 4s linear infinite; }
         .vgc-logo-collapsed { animation: logoGlow 3s ease-in-out infinite; }
         .vgc-logo-collapsed:hover { transform: scale(1.12); transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); }
-        select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235A6178' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
-        option { background: #0A0C14; color: #E8ECF4; }
+        select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
+        option { background: #09090B; color: #FAFAFA; }
 
         /* ─── Sidebar Glassy Nav Items ─── */
         .vgc-nav-btn { position: relative; overflow: hidden; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)) !important; border: 1px solid rgba(255,255,255,0.04) !important; border-left: 2px solid var(--nav-accent, transparent) !important; margin-bottom: 2px !important; }
@@ -18989,8 +19158,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
       {/* Sidebar */}
       <div className={`vgc-sidebar${sideCollapsed ? ' collapsed' : ''}`} style={{
-        width: sideCollapsed ? 56 : 240, background: "linear-gradient(180deg, #0A0C14 0%, #0D0F18 50%, #0A0C14 100%)",
-        borderRight: "1px solid #1E213066", display: "flex", flexDirection: "column",
+        width: sideCollapsed ? 56 : 240, background: "linear-gradient(180deg, #09090B 0%, #0C0D12 50%, #09090B 100%)",
+        borderRight: "1px solid #27272A66", display: "flex", flexDirection: "column",
         transition: "width 0.25s cubic-bezier(0.4, 0, 0.2, 1)", flexShrink: 0, overflow: "hidden",
         backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
         boxShadow: "1px 0 16px rgba(0,0,0,0.3), inset -1px 0 0 rgba(255,255,255,0.02)"
