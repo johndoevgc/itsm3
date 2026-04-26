@@ -19263,8 +19263,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </button>
         </div>
         {ticketsSubTab === "incidents" && (<IncidentsModule />)}
-        {ticketsSubTab === "zendesk" && ZendeskModule()}
-        {ticketsSubTab === "operations" && OperationsModule()}
+        {ticketsSubTab === "zendesk" && (<ZendeskModule />)}
+        {ticketsSubTab === "operations" && (<OperationsModule />)}
       </div>
     );
   };
@@ -19769,33 +19769,33 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   const renderModule = () => {
     // End Users always get the self-service portal
-    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return SelfServicePortal();
+    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal />);
     switch (activeModule) {
-      case "selfService": return SelfServicePortal();
-      case "dashboard": return Dashboard();
-      case "tickets": return TicketsModule();
-      case "incidents": return TicketsModule();
-      case "zendesk": return TicketsModule();
-      case "operations": return OperationsModule();
-      case "problems": return OperationsModule();
-      case "changes": return OperationsModule();
-      case "requests": return OperationsModule();
-      case "slaApprovals": return SLAApprovalsModule();
-      case "sla": return SLAApprovalsModule();
-      case "approvals": return SLAApprovalsModule();
-      case "humanReview": return HumanReviewHub();
-      case "catalog": return CatalogModule();
-      case "knowledge": return KnowledgeModule();
-      case "assets": return AssetsModule();
+      case "selfService": return (<SelfServicePortal />);
+      case "dashboard": return (<Dashboard />);
+      case "tickets": return (<TicketsModule />);
+      case "incidents": return (<TicketsModule />);
+      case "zendesk": return (<TicketsModule />);
+      case "operations": return (<OperationsModule />);
+      case "problems": return (<OperationsModule />);
+      case "changes": return (<OperationsModule />);
+      case "requests": return (<OperationsModule />);
+      case "slaApprovals": return (<SLAApprovalsModule />);
+      case "sla": return (<SLAApprovalsModule />);
+      case "approvals": return (<SLAApprovalsModule />);
+      case "humanReview": return (<HumanReviewHub />);
+      case "catalog": return (<CatalogModule />);
+      case "knowledge": return (<KnowledgeModule />);
+      case "assets": return (<AssetsModule />);
       case "customers": return (<CustomersModule />);
-      case "ai": return AIAssistModule();
-      case "analytics": return AnalyticsModule();
-      case "reports": return AnalyticsModule();
-      case "cybernews": return AnalyticsModule();
-      case "architecture": return AnalyticsModule();
-      case "admin": return AdminSettingsModule();
+      case "ai": return (<AIAssistModule />);
+      case "analytics": return (<AnalyticsModule />);
+      case "reports": return (<AnalyticsModule />);
+      case "cybernews": return (<AnalyticsModule />);
+      case "architecture": return (<AnalyticsModule />);
+      case "admin": return (<AdminSettingsModule />);
       case "productivity": return (<ProductivityDashboard />);
-      default: return Dashboard();
+      default: return (<Dashboard />);
     }
   };
 
