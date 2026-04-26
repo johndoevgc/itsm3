@@ -6171,6 +6171,47 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     return json(res, 200, { thresholds: AI_THRESHOLDS, timestamp: new Date().toISOString() });
   }
 
+  // ─── POST /api/ai/cleanup-now — Manual trigger for AI queue cleanup ───
+  if (pathname === "/api/ai/cleanup-now" && req.method === "POST") {
+    try {
+      const maxAgeDays = AI_THRESHOLDS.staleDays;
+      const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+      const incRows = await db.getAll("incidents");
+      const resolvedIds = new Set();
+      for (const r of incRows) {
+        try { const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id); } catch {}
+      }
+      const actionRows = await db.getAll("ai_actions");
+      let deleted = 0, cappedDel = 0;
+      const pendingItems = [];
+      for (const r of actionRows) {
+        try {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!item || item.status !== "pending_approval") continue;
+          const isStale = (item.createdAt && item.createdAt < cutoff);
+          const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
+          if (isStale || incResolved) {
+            await db.delete("ai_actions", item.id);
+            deleted++;
+          } else {
+            pendingItems.push(item);
+          }
+        } catch {}
+      }
+      if (pendingItems.length > AI_THRESHOLDS.maxPendingTotal) {
+        pendingItems.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+        const excess = pendingItems.length - AI_THRESHOLDS.maxPendingTotal;
+        for (let i = 0; i < excess; i++) { await db.delete("ai_actions", pendingItems[i].id); cappedDel++; }
+      }
+      if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
+      const remaining = pendingItems.length - cappedDel;
+      console.log(`[Manual Cleanup] Deleted ${deleted} stale + ${cappedDel} over-cap. Remaining pending: ${remaining}`);
+      return json(res, 200, { deleted, cappedDel, totalRemoved: deleted + cappedDel, remaining, resolvedIncidents: resolvedIds.size, staleDays: maxAgeDays, maxPendingTotal: AI_THRESHOLDS.maxPendingTotal });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Phase 6: AI Historical Incident Closure (Bulk Close — No Notifications) ───
   // POST /api/ai/historical-close — AI bulk-close past incidents with generated resolutions
   if (pathname === "/api/ai/historical-close" && req.method === "POST") {
