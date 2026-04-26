@@ -1766,7 +1766,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readBody(req);
       const relId = pathname.split("/")[4];
-      await db.delete("cmdb_relationships", relId);
+      await db.deleteOne("cmdb_relationships", relId);
       await db.audit("cmdb_relationships", "delete", relId, JSON.stringify({}), body.deletedBy || "system");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: err.message }); }
@@ -6191,7 +6191,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
           const isStale = (item.createdAt && item.createdAt < cutoff);
           const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
           if (isStale || incResolved) {
-            await db.delete("ai_actions", item.id);
+            await db.deleteOne("ai_actions", item.id);
             deleted++;
           } else {
             pendingItems.push(item);
@@ -6201,7 +6201,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       if (pendingItems.length > AI_THRESHOLDS.maxPendingTotal) {
         pendingItems.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
         const excess = pendingItems.length - AI_THRESHOLDS.maxPendingTotal;
-        for (let i = 0; i < excess; i++) { await db.delete("ai_actions", pendingItems[i].id); cappedDel++; }
+        for (let i = 0; i < excess; i++) { await db.deleteOne("ai_actions", pendingItems[i].id); cappedDel++; }
       }
       if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
       const remaining = pendingItems.length - cappedDel;
@@ -6221,16 +6221,20 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       if (!allowedStatuses.includes(statusFilter)) {
         return json(res, 400, { error: `Invalid status filter. Allowed: ${allowedStatuses.join(", ")}` });
       }
-      const actionRows = await db.getAll("ai_actions");
       let deleted = 0;
-      for (const r of actionRows) {
-        try {
-          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
-          if (item && item.status === statusFilter) {
-            await db.delete("ai_actions", item.id);
-            deleted++;
-          }
-        } catch {}
+      if (db.deleteByFilter) {
+        deleted = await db.deleteByFilter("ai_actions", "status", statusFilter);
+      } else {
+        const actionRows = await db.getAll("ai_actions");
+        for (const r of actionRows) {
+          try {
+            const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (item && item.status === statusFilter) {
+              await db.deleteOne("ai_actions", item.id);
+              deleted++;
+            }
+          } catch {}
+        }
       }
       if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
       console.log(`[Bulk Purge] Deleted ${deleted} ${statusFilter} ai_actions`);
@@ -6244,7 +6248,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   if (/^\/api\/ai\/actions\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     try {
       const actionId = pathname.split("/").pop();
-      await db.delete("ai_actions", actionId);
+      await db.deleteOne("ai_actions", actionId);
       if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
       return json(res, 200, { deleted: true, id: actionId });
     } catch (err) {
@@ -7949,7 +7953,7 @@ async function start() {
             const incResolved = item.incidentId && resolvedIds.has(item.incidentId);
             if (isStale || incResolved) {
               // Direct delete instead of dismiss→delete cycle
-              await db.delete("ai_actions", item.id);
+              await db.deleteOne("ai_actions", item.id);
               deleted++;
             } else {
               pendingItems.push(item);
@@ -7961,7 +7965,7 @@ async function start() {
           pendingItems.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
           const excess = pendingItems.length - AI_THRESHOLDS.maxPendingTotal;
           for (let i = 0; i < excess; i++) {
-            await db.delete("ai_actions", pendingItems[i].id);
+            await db.deleteOne("ai_actions", pendingItems[i].id);
             cappedDel++;
           }
         }
