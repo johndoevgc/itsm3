@@ -114,14 +114,18 @@ const ADMIN_EMAILS = [
 ];
 
 const USERS = [
-  { id: "DEMO-001", name: "Dev Admin", role: "Platform Super Admin", avatar: "DA", team: "VGC Engineering", gender: "unspecified", rbacRole: "VGC Dev Admin", email: "devadmin@vgctechnology.com", phone: "+65 9000 0001", location: "Singapore", department: "Engineering", pcName: "VGC-DEV-01", employeeId: "VGC001" },
-  { id: "DEMO-002", name: "VGC Helpdesk", role: "Tenant Administrator", avatar: "VH", team: "IT Operations", gender: "unspecified", rbacRole: "Administrator", email: "helpdesk@vgctechnology.com", phone: "+65 9000 0002", location: "Singapore", department: "IT", pcName: "VGC-ADM-01", employeeId: "VGC002" },
-  { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@vgctechnology.com", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
+  { id: "DEMO-001", name: "Dev Admin", role: "Platform Super Admin", avatar: "DA", team: "VGC Engineering", gender: "unspecified", rbacRole: "VGC Dev Admin", email: "devadmin@demo-itsm.local", phone: "+65 9000 0001", location: "Singapore", department: "Engineering", pcName: "VGC-DEV-01", employeeId: "VGC001" },
+  { id: "DEMO-002", name: "VGC Helpdesk", role: "Tenant Administrator", avatar: "VH", team: "IT Operations", gender: "unspecified", rbacRole: "Administrator", email: "helpdesk@demo-itsm.local", phone: "+65 9000 0002", location: "Singapore", department: "IT", pcName: "VGC-ADM-01", employeeId: "VGC002" },
+  { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@demo-itsm.local", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
 ];
 
 // ─── Initial Customer Data ────────────────────────────────────────────
 const INITIAL_CUSTOMERS = [
   { id: "DCUS-001", name: "Demo Corp Pte Ltd", category: "CSP", contactPerson: "Sarah Lim", email: "sarah.lim@democorp.local", phone: "+65 6100 0001", address: "1 Raffles Place, Tower One, Singapore 048616", status: "Active", contractStart: "2025-01-01", contractEnd: "2026-12-31", services: ["Managed IT", "Cloud Hosting", "Security"], notes: "Tier-1 CSP customer — 120 endpoints", createdBy: "Demo Seed", createdAt: "2025-01-01" },
+  { id: "DCUS-002", name: "TechFlow Solutions Pte Ltd", category: "CSP", contactPerson: "Marcus Tan", email: "marcus.tan@techflow.local", phone: "+65 6200 0002", address: "10 Anson Road, International Plaza, Singapore 079903", status: "Active", contractStart: "2025-03-01", contractEnd: "2027-02-28", services: ["Managed IT", "Network Security", "Cloud Hosting", "Endpoint Management"], notes: "Tier-1 CSP customer — 85 endpoints, FortiGate managed", createdBy: "Demo Seed", createdAt: "2025-03-01" },
+  { id: "DCUS-003", name: "Skyline Industries Pte Ltd", category: "Enterprise", contactPerson: "Daniel Lim", email: "daniel.lim@skyline.local", phone: "+65 6300 0003", address: "8 Marina View, Asia Square Tower 1, Singapore 018960", status: "Active", contractStart: "2025-06-01", contractEnd: "2026-05-31", services: ["Cloud Hosting", "Backup & DR", "M365 Management"], notes: "Enterprise customer — 45 endpoints, Azure-primary", createdBy: "Demo Seed", createdAt: "2025-06-01" },
+  { id: "DCUS-004", name: "Pacific Digital Pte Ltd", category: "SMB", contactPerson: "Priya Nair", email: "priya.nair@pacificdigital.local", phone: "+65 6400 0004", address: "71 Robinson Road, Singapore 068895", status: "Active", contractStart: "2025-09-01", contractEnd: "2026-08-31", services: ["Managed IT", "Email Security"], notes: "SMB customer — 25 endpoints, basic managed services", createdBy: "Demo Seed", createdAt: "2025-09-01" },
+  { id: "DCUS-005", name: "GreenField Engineering Pte Ltd", category: "Enterprise", contactPerson: "Kevin Ong", email: "kevin.ong@greenfield.local", phone: "+65 6500 0005", address: "3 Church Street, Samsung Hub, Singapore 049483", status: "Active", contractStart: "2024-11-01", contractEnd: "2026-10-31", services: ["Network Security", "Endpoint Management", "Cloud Hosting", "SOC Monitoring"], notes: "Enterprise customer — 200 endpoints, SOC managed, Sophos WAF", createdBy: "Demo Seed", createdAt: "2024-11-01" },
 ];
 
 // ─── RBAC Enterprise Roles & Permissions ─────────────────────────────────
@@ -253,26 +257,26 @@ const AI_FEATURE_EXPLAINERS = {
 };
 
 const ASSETS = [
-  { id: "AST-001", name: "FortiGate 200F Primary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000123", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.1", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "Primary VPN gateway" },
-  { id: "AST-002", name: "FortiGate 200F Secondary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000124", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.2", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "HA failover node" },
-  { id: "AST-003", name: "Core Switch Cisco C9300", type: "Switch", status: "In Use", serialNumber: "FOC2645Y0AB", manufacturer: "Cisco", model: "Catalyst 9300-48P", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.0.1", location: "SG-DC1", warranty: "2027-03-10", purchaseDate: "2024-03-10", purchaseCost: 18200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "SW-CORE-01 — core network switch" },
-  { id: "AST-004", name: "Exchange Server 2019", type: "Server", status: "In Use", serialNumber: "MXF03926HV", manufacturer: "Dell", model: "PowerEdge R740", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.1.50", location: "SG-DC1", warranty: "2026-09-20", purchaseDate: "2023-09-20", purchaseCost: 22000, category: "Server", linkedIncidents: [], customer: "VGC Technology", notes: "On-prem Exchange — patching required per GTHR-001 CVE-2026-21413" },
-  { id: "AST-005", name: "Dell Latitude 5540 — Daniel Lim", type: "Laptop", status: "In Use", serialNumber: "DL5540SG001", manufacturer: "Dell", model: "Latitude 5540", assignee: "Daniel Lim", department: "Executive", ipAddress: "DHCP", location: "SG-HQ-Floor4", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "Kellington Group Pte Ltd", notes: "CTO laptop" },
-  { id: "AST-006", name: "Dell Latitude 5540 — Marcus Chen", type: "Laptop", status: "In Use", serialNumber: "DL5540SG002", manufacturer: "Dell", model: "Latitude 5540", assignee: "Marcus Chen", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor2", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "L1 Support Engineer workstation" },
-  { id: "AST-007", name: "Azure VM — ITSM Production", type: "Virtual Machine", status: "Running", serialNumber: "N/A", manufacturer: "Microsoft", model: "Azure B2s", assignee: "Cloud Engineering", department: "IT Infrastructure", ipAddress: "10.20.0.10", location: "Azure-SEA", warranty: "N/A", purchaseDate: "2025-11-01", purchaseCost: 0, category: "Cloud", linkedIncidents: [], customer: "VGC Technology", notes: "Hosts vgc-itsm1-app — Node.js 20 runtime" },
-  { id: "AST-008", name: "Cisco Meraki MR46 — Floor 1", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1001", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.11", location: "SG-HQ-Floor1", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "WiFi 6 access point" },
-  { id: "AST-009", name: "Cisco Meraki MR46 — Floor 2", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1002", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.12", location: "SG-HQ-Floor2", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "WiFi 6 access point" },
-  { id: "AST-010", name: "HP LaserJet Pro M428fdw", type: "Printer", status: "In Use", serialNumber: "VNB4C12345", manufacturer: "HP", model: "LaserJet Pro M428fdw", assignee: "Facilities", department: "Admin", ipAddress: "10.0.5.20", location: "SG-HQ-Floor2", warranty: "2026-08-10", purchaseDate: "2024-08-10", purchaseCost: 650, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "Shared printer — Floor 2" },
-  { id: "AST-011", name: "Microsoft 365 E3 Licenses (x120)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Microsoft", model: "M365 E3", assignee: "IT Admin", department: "All", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-04-01", purchaseCost: 43200, category: "Software", linkedIncidents: [], customer: "VGC Technology", notes: "120 E3 seats — annual renewal Apr 2026" },
-  { id: "AST-012", name: "Sophos XGS 3300", type: "Firewall", status: "In Use", serialNumber: "C44012345678", manufacturer: "Sophos", model: "XGS 3300", assignee: "Security Team", department: "IT Security", ipAddress: "10.0.1.10", location: "SG-DC1", warranty: "2027-11-01", purchaseDate: "2024-11-01", purchaseCost: 15800, category: "Security", linkedIncidents: [], customer: "VGC Technology", notes: "Web application firewall — WAF rules active" },
-  { id: "AST-013", name: "Dell PowerEdge R750 — DB Server", type: "Server", status: "In Use", serialNumber: "SVR-DB-001", manufacturer: "Dell", model: "PowerEdge R750", assignee: "Database Team", department: "IT Infrastructure", ipAddress: "10.10.2.30", location: "SG-DC1", warranty: "2027-05-20", purchaseDate: "2024-05-20", purchaseCost: 28000, category: "Server", linkedIncidents: [], customer: "VGC Technology", notes: "MSSQL production database server" },
-  { id: "AST-014", name: "Lenovo ThinkPad X1 Carbon — Priya Sharma", type: "Laptop", status: "In Use", serialNumber: "PF3KXXXX", manufacturer: "Lenovo", model: "ThinkPad X1 Carbon Gen 11", assignee: "Priya Sharma", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor3", warranty: "2027-03-01", purchaseDate: "2025-03-01", purchaseCost: 2400, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "Service Desk Lead workstation" },
-  { id: "AST-015", name: "UPS APC Smart-UPS 3000VA", type: "UPS", status: "In Use", serialNumber: "AS2430123456", manufacturer: "APC", model: "Smart-UPS SRT3000", assignee: "Facilities", department: "IT Infrastructure", ipAddress: "10.0.1.250", location: "SG-DC1", warranty: "2026-12-01", purchaseDate: "2023-12-01", purchaseCost: 4500, category: "Infrastructure", linkedIncidents: [], customer: "VGC Technology", notes: "Protects core switches and firewalls — 30min runtime" },
-  { id: "AST-016", name: "Zoom Rooms License (x10)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Zoom", model: "Zoom Rooms", assignee: "IT Admin", department: "All", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-06-01", purchaseCost: 6000, category: "Software", linkedIncidents: [], customer: "VGC Technology", notes: "Conference room licenses — 10 rooms" },
-  { id: "AST-017", name: "Dell Monitor U2723QE — Spare", type: "Monitor", status: "In Stock", serialNumber: "CN0XXXXX001", manufacturer: "Dell", model: "U2723QE 27\" 4K", assignee: "IT Store", department: "IT Support", ipAddress: "N/A", location: "SG-HQ-Floor1", warranty: "2028-01-10", purchaseDate: "2025-01-10", purchaseCost: 850, category: "Hardware", linkedIncidents: [], customer: "VGC Technology", notes: "Spare monitor — ready for deployment" },
-  { id: "AST-018", name: "Synology NAS DS1621+", type: "NAS", status: "In Use", serialNumber: "2150SYN123456", manufacturer: "Synology", model: "DS1621+", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.3.10", location: "SG-DC1", warranty: "2027-07-01", purchaseDate: "2024-07-01", purchaseCost: 3200, category: "Storage", linkedIncidents: [], customer: "VGC Technology", notes: "Backup NAS — 48TB RAID6" },
-  { id: "AST-019", name: "SonicWall TZ470 — Branch Office", type: "Firewall", status: "Retired", serialNumber: "0017C5XXXXXX", manufacturer: "SonicWall", model: "TZ470", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "—", location: "SG-Branch", warranty: "2025-03-01", purchaseDate: "2022-03-01", purchaseCost: 3500, category: "Network", linkedIncidents: [], customer: "VGC Technology", notes: "Decommissioned — replaced by Sophos XGS" },
-  { id: "AST-020", name: "Adobe Creative Cloud Licenses (x5)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Adobe", model: "Creative Cloud All Apps", assignee: "Marketing", department: "Marketing", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-09-01", purchaseCost: 4200, category: "Software", linkedIncidents: [], customer: "VGC Technology", notes: "5 named-user licenses — annual renewal Sep 2026" },
+  { id: "AST-001", name: "FortiGate 200F Primary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000123", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.1", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Primary VPN gateway" },
+  { id: "AST-002", name: "FortiGate 200F Secondary", type: "Firewall", status: "In Use", serialNumber: "FG200FT926000124", manufacturer: "Fortinet", model: "FortiGate 200F", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.1.2", location: "SG-DC1", warranty: "2027-06-15", purchaseDate: "2024-06-15", purchaseCost: 12500, category: "Network", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "HA failover node" },
+  { id: "AST-003", name: "Core Switch Cisco C9300", type: "Switch", status: "In Use", serialNumber: "FOC2645Y0AB", manufacturer: "Cisco", model: "Catalyst 9300-48P", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.0.1", location: "SG-DC1", warranty: "2027-03-10", purchaseDate: "2024-03-10", purchaseCost: 18200, category: "Network", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "SW-CORE-01 — core network switch" },
+  { id: "AST-004", name: "Exchange Server 2019", type: "Server", status: "In Use", serialNumber: "MXF03926HV", manufacturer: "Dell", model: "PowerEdge R740", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.1.50", location: "SG-DC1", warranty: "2026-09-20", purchaseDate: "2023-09-20", purchaseCost: 22000, category: "Server", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "On-prem Exchange — patching required per GTHR-001 CVE-2026-21413" },
+  { id: "AST-005", name: "Dell Latitude 5540 — Daniel Lim", type: "Laptop", status: "In Use", serialNumber: "DL5540SG001", manufacturer: "Dell", model: "Latitude 5540", assignee: "Daniel Lim", department: "Executive", ipAddress: "DHCP", location: "SG-HQ-Floor4", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "Skyline Industries Pte Ltd", notes: "CTO laptop" },
+  { id: "AST-006", name: "Dell Latitude 5540 — Marcus Chen", type: "Laptop", status: "In Use", serialNumber: "DL5540SG002", manufacturer: "Dell", model: "Latitude 5540", assignee: "Marcus Chen", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor2", warranty: "2027-01-15", purchaseDate: "2025-01-15", purchaseCost: 2100, category: "Hardware", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "L1 Support Engineer workstation" },
+  { id: "AST-007", name: "Azure VM — ITSM Production", type: "Virtual Machine", status: "Running", serialNumber: "N/A", manufacturer: "Microsoft", model: "Azure B2s", assignee: "Cloud Engineering", department: "IT Infrastructure", ipAddress: "10.20.0.10", location: "Azure-SEA", warranty: "N/A", purchaseDate: "2025-11-01", purchaseCost: 0, category: "Cloud", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Hosts vgc-itsm1-app — Node.js 20 runtime" },
+  { id: "AST-008", name: "Cisco Meraki MR46 — Floor 1", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1001", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.11", location: "SG-HQ-Floor1", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "WiFi 6 access point" },
+  { id: "AST-009", name: "Cisco Meraki MR46 — Floor 2", type: "Access Point", status: "In Use", serialNumber: "Q3AC-XXXX-1002", manufacturer: "Cisco Meraki", model: "MR46", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "10.0.3.12", location: "SG-HQ-Floor2", warranty: "2028-02-01", purchaseDate: "2025-02-01", purchaseCost: 1200, category: "Network", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "WiFi 6 access point" },
+  { id: "AST-010", name: "HP LaserJet Pro M428fdw", type: "Printer", status: "In Use", serialNumber: "VNB4C12345", manufacturer: "HP", model: "LaserJet Pro M428fdw", assignee: "Facilities", department: "Admin", ipAddress: "10.0.5.20", location: "SG-HQ-Floor2", warranty: "2026-08-10", purchaseDate: "2024-08-10", purchaseCost: 650, category: "Hardware", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Shared printer — Floor 2" },
+  { id: "AST-011", name: "Microsoft 365 E3 Licenses (x120)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Microsoft", model: "M365 E3", assignee: "IT Admin", department: "All", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-04-01", purchaseCost: 43200, category: "Software", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "120 E3 seats — annual renewal Apr 2026" },
+  { id: "AST-012", name: "Sophos XGS 3300", type: "Firewall", status: "In Use", serialNumber: "C44012345678", manufacturer: "Sophos", model: "XGS 3300", assignee: "Security Team", department: "IT Security", ipAddress: "10.0.1.10", location: "SG-DC1", warranty: "2027-11-01", purchaseDate: "2024-11-01", purchaseCost: 15800, category: "Security", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Web application firewall — WAF rules active" },
+  { id: "AST-013", name: "Dell PowerEdge R750 — DB Server", type: "Server", status: "In Use", serialNumber: "SVR-DB-001", manufacturer: "Dell", model: "PowerEdge R750", assignee: "Database Team", department: "IT Infrastructure", ipAddress: "10.10.2.30", location: "SG-DC1", warranty: "2027-05-20", purchaseDate: "2024-05-20", purchaseCost: 28000, category: "Server", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "MSSQL production database server" },
+  { id: "AST-014", name: "Lenovo ThinkPad X1 Carbon — Priya Sharma", type: "Laptop", status: "In Use", serialNumber: "PF3KXXXX", manufacturer: "Lenovo", model: "ThinkPad X1 Carbon Gen 11", assignee: "Priya Sharma", department: "IT Support", ipAddress: "DHCP", location: "SG-HQ-Floor3", warranty: "2027-03-01", purchaseDate: "2025-03-01", purchaseCost: 2400, category: "Hardware", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Service Desk Lead workstation" },
+  { id: "AST-015", name: "UPS APC Smart-UPS 3000VA", type: "UPS", status: "In Use", serialNumber: "AS2430123456", manufacturer: "APC", model: "Smart-UPS SRT3000", assignee: "Facilities", department: "IT Infrastructure", ipAddress: "10.0.1.250", location: "SG-DC1", warranty: "2026-12-01", purchaseDate: "2023-12-01", purchaseCost: 4500, category: "Infrastructure", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Protects core switches and firewalls — 30min runtime" },
+  { id: "AST-016", name: "Zoom Rooms License (x10)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Zoom", model: "Zoom Rooms", assignee: "IT Admin", department: "All", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-06-01", purchaseCost: 6000, category: "Software", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Conference room licenses — 10 rooms" },
+  { id: "AST-017", name: "Dell Monitor U2723QE — Spare", type: "Monitor", status: "In Stock", serialNumber: "CN0XXXXX001", manufacturer: "Dell", model: "U2723QE 27\" 4K", assignee: "IT Store", department: "IT Support", ipAddress: "N/A", location: "SG-HQ-Floor1", warranty: "2028-01-10", purchaseDate: "2025-01-10", purchaseCost: 850, category: "Hardware", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Spare monitor — ready for deployment" },
+  { id: "AST-018", name: "Synology NAS DS1621+", type: "NAS", status: "In Use", serialNumber: "2150SYN123456", manufacturer: "Synology", model: "DS1621+", assignee: "Server Team", department: "IT Infrastructure", ipAddress: "10.10.3.10", location: "SG-DC1", warranty: "2027-07-01", purchaseDate: "2024-07-01", purchaseCost: 3200, category: "Storage", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Backup NAS — 48TB RAID6" },
+  { id: "AST-019", name: "SonicWall TZ470 — Branch Office", type: "Firewall", status: "Retired", serialNumber: "0017C5XXXXXX", manufacturer: "SonicWall", model: "TZ470", assignee: "Network Engineering", department: "IT Infrastructure", ipAddress: "—", location: "SG-Branch", warranty: "2025-03-01", purchaseDate: "2022-03-01", purchaseCost: 3500, category: "Network", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "Decommissioned — replaced by Sophos XGS" },
+  { id: "AST-020", name: "Adobe Creative Cloud Licenses (x5)", type: "License", status: "Active", serialNumber: "N/A", manufacturer: "Adobe", model: "Creative Cloud All Apps", assignee: "Marketing", department: "Marketing", ipAddress: "N/A", location: "Cloud", warranty: "N/A", purchaseDate: "2025-09-01", purchaseCost: 4200, category: "Software", linkedIncidents: [], customer: "TechFlow Solutions Pte Ltd", notes: "5 named-user licenses — annual renewal Sep 2026" },
 ];
 
 // ─── SharePoint Knowledge Portal Config ─────────────────────────────
@@ -1069,24 +1073,24 @@ const INITIAL_INCIDENTS = [
   { id: "INC-D006", title: "Password reset request — locked AD account", status: "Closed", priority: "Sev-D", category: "Access", subcategory: "Password", urgency: "Low", impact: "Single User", assignee: "Service Desk", assignmentGroup: "Service Desk", reporter: "Michael Ng", reporterEmail: "michael.ng@democorp.local", customer: "Demo Corp Pte Ltd", description: "User locked out after 5 failed login attempts. Needs AD password reset and MFA re-enrollment.", contactMethod: "Phone", created: 72, createdAt: "2026-04-19T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 99, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D006a", type: "status", user: "System", time: "19/04/2026, 09:00:00", detail: "Ticket created via Phone" }, { id: "AL-D006b", type: "status", user: "Service Desk", time: "19/04/2026, 09:15:00", detail: "Password reset completed. MFA re-enrolled." }, { id: "AL-D006c", type: "status", user: "System", time: "19/04/2026, 09:20:00", detail: "Status changed: Open → Closed" }] },
 ];
 const INITIAL_PROBLEMS = [
-  { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", zdTicketId: null },
-  { id: "PRB0004", title: "Printer spooler crashes on shared print server", status: "Known Error", priority: "Sev-D", category: "Hardware", assignee: "Server Team", reporter: "Facilities", created: 240, linkedIncidents: [], rootCause: "HP Universal Print Driver v7.1 incompatible with Windows Server 2022 spooler service", workaround: "Restart Print Spooler service — automated via Task Scheduler every 6 hours", description: "Print spooler crashes 2-3 times daily affecting Floor 2 shared printer. HP driver update pending.", affectedAssets: ["AST-010"], customer: "VGC Technology", zdTicketId: null },
+  { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "TechFlow Solutions Pte Ltd", zdTicketId: null },
+  { id: "PRB0004", title: "Printer spooler crashes on shared print server", status: "Known Error", priority: "Sev-D", category: "Hardware", assignee: "Server Team", reporter: "Facilities", created: 240, linkedIncidents: [], rootCause: "HP Universal Print Driver v7.1 incompatible with Windows Server 2022 spooler service", workaround: "Restart Print Spooler service — automated via Task Scheduler every 6 hours", description: "Print spooler crashes 2-3 times daily affecting Floor 2 shared printer. HP driver update pending.", affectedAssets: ["AST-010"], customer: "TechFlow Solutions Pte Ltd", zdTicketId: null },
 ];
 const INITIAL_CHANGES = [
-  { id: "CHG0001", title: "Emergency patch Exchange Server — CVE-2026-21413 (Critical RCE)", type: "Emergency", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Security", description: "Apply Microsoft emergency security patch for Exchange Server 2019 to mitigate CVE-2026-21413 remote code execution vulnerability. CVSS 9.8. Active exploitation detected in the wild. Requires 30-minute maintenance window.", assignee: "Server Team", requester: "Security Team", scheduledStart: "2026-04-19 22:00", scheduledEnd: "2026-04-19 23:00", backoutPlan: "Restore from pre-patch snapshot if patch causes service disruption", linkedIncident: "", linkedProblem: "PRB0002", affectedAssets: ["AST-004"], customer: "VGC Technology", approvers: [{ name: "Daniel Lim", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 2 },
-  { id: "CHG0003", title: "Deploy phishing-resistant MFA (FIDO2 keys) for admin accounts", type: "Normal", status: "Awaiting Approval", risk: "Medium", impact: "Department", category: "Security", description: "Replace SMS-based MFA with FIDO2 security keys for all administrator and privileged accounts (15 users). Part of Cybertrust Mark CSA compliance roadmap.", assignee: "Security Team", requester: "CISO", scheduledStart: "2026-04-22 14:00", scheduledEnd: "2026-04-22 17:00", backoutPlan: "Revert to SMS MFA if FIDO2 enrollment fails — conditional access policy rollback", linkedIncident: "", linkedProblem: "", affectedAssets: [], customer: "VGC Technology", approvers: [{ name: "IT Manager", status: "Pending" }, { name: "CISO", status: "Approved" }], zdTicketId: null, created: 48 },
-  { id: "CHG0005", title: "Migrate ITSM database to Azure SQL Managed Instance", type: "Normal", status: "Implementing", risk: "Medium", impact: "Enterprise", category: "Cloud", description: "Migrate ITSM MSSQL database from on-prem PowerEdge R750 to Azure SQL Managed Instance for improved HA, auto-patching, and geo-redundancy. Includes data migration, connection string updates, and validation.", assignee: "Cloud Engineering", requester: "Cloud Engineering", scheduledStart: "2026-04-18 22:00", scheduledEnd: "2026-04-19 04:00", backoutPlan: "Revert connection strings to on-prem server — data sync back if needed", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-007", "AST-013"], customer: "VGC Technology", approvers: [{ name: "IT Manager", status: "Approved" }, { name: "DBA Lead", status: "Approved" }], zdTicketId: null, created: 18 },
-  { id: "CHG0006", title: "Replace SonicWall TZ470 with Sophos XGS at branch", type: "Normal", status: "Closed", risk: "Medium", impact: "Department", category: "Network", description: "Decommission legacy SonicWall TZ470 at branch office. Replace with Sophos XGS 3300 — already procured and pre-configured.", assignee: "Network Engineering", requester: "IT Manager", scheduledStart: "2026-04-10 09:00", scheduledEnd: "2026-04-10 17:00", backoutPlan: "Re-install SonicWall if Sophos config has issues", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-019", "AST-012"], customer: "VGC Technology", approvers: [{ name: "Change Manager", status: "Approved" }], zdTicketId: null, created: 216 },
+  { id: "CHG0001", title: "Emergency patch Exchange Server — CVE-2026-21413 (Critical RCE)", type: "Emergency", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Security", description: "Apply Microsoft emergency security patch for Exchange Server 2019 to mitigate CVE-2026-21413 remote code execution vulnerability. CVSS 9.8. Active exploitation detected in the wild. Requires 30-minute maintenance window.", assignee: "Server Team", requester: "Security Team", scheduledStart: "2026-04-19 22:00", scheduledEnd: "2026-04-19 23:00", backoutPlan: "Restore from pre-patch snapshot if patch causes service disruption", linkedIncident: "", linkedProblem: "PRB0002", affectedAssets: ["AST-004"], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "Daniel Lim", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 2 },
+  { id: "CHG0003", title: "Deploy phishing-resistant MFA (FIDO2 keys) for admin accounts", type: "Normal", status: "Awaiting Approval", risk: "Medium", impact: "Department", category: "Security", description: "Replace SMS-based MFA with FIDO2 security keys for all administrator and privileged accounts (15 users). Part of Cybertrust Mark CSA compliance roadmap.", assignee: "Security Team", requester: "CISO", scheduledStart: "2026-04-22 14:00", scheduledEnd: "2026-04-22 17:00", backoutPlan: "Revert to SMS MFA if FIDO2 enrollment fails — conditional access policy rollback", linkedIncident: "", linkedProblem: "", affectedAssets: [], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "IT Manager", status: "Pending" }, { name: "CISO", status: "Approved" }], zdTicketId: null, created: 48 },
+  { id: "CHG0005", title: "Migrate ITSM database to Azure SQL Managed Instance", type: "Normal", status: "Implementing", risk: "Medium", impact: "Enterprise", category: "Cloud", description: "Migrate ITSM MSSQL database from on-prem PowerEdge R750 to Azure SQL Managed Instance for improved HA, auto-patching, and geo-redundancy. Includes data migration, connection string updates, and validation.", assignee: "Cloud Engineering", requester: "Cloud Engineering", scheduledStart: "2026-04-18 22:00", scheduledEnd: "2026-04-19 04:00", backoutPlan: "Revert connection strings to on-prem server — data sync back if needed", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-007", "AST-013"], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "IT Manager", status: "Approved" }, { name: "DBA Lead", status: "Approved" }], zdTicketId: null, created: 18 },
+  { id: "CHG0006", title: "Replace SonicWall TZ470 with Sophos XGS at branch", type: "Normal", status: "Closed", risk: "Medium", impact: "Department", category: "Network", description: "Decommission legacy SonicWall TZ470 at branch office. Replace with Sophos XGS 3300 — already procured and pre-configured.", assignee: "Network Engineering", requester: "IT Manager", scheduledStart: "2026-04-10 09:00", scheduledEnd: "2026-04-10 17:00", backoutPlan: "Re-install SonicWall if Sophos config has issues", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-019", "AST-012"], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "Change Manager", status: "Approved" }], zdTicketId: null, created: 216 },
 ];
 const INITIAL_REQUESTS = [
-  { id: "REQ0001", service: "New Laptop Setup — Marketing Team Hire", status: "Pending Approval", priority: "Sev-C", category: "Hardware", requester: "HR Manager", requesterEmail: "hr@vgctechnology.com", assignee: "IT Support", assignmentGroup: "End User Computing", description: "New Dell Latitude 5540 needed for marketing hire starting 2026-04-22. Requires M365 E3, Adobe CC, VPN access, and standard security policy.", customer: "VGC Technology", created: 12, slaTarget: 24, zdTicketId: null },
+  { id: "REQ0001", service: "New Laptop Setup — Marketing Team Hire", status: "Pending Approval", priority: "Sev-C", category: "Hardware", requester: "HR Manager", requesterEmail: "hr@techflow.local", assignee: "IT Support", assignmentGroup: "End User Computing", description: "New Dell Latitude 5540 needed for marketing hire starting 2026-04-22. Requires M365 E3, Adobe CC, VPN access, and standard security policy.", customer: "TechFlow Solutions Pte Ltd", created: 12, slaTarget: 24, zdTicketId: null },
   { id: "REQ0002", service: "VPN Access Request — Remote Worker", status: "Pending Approval", priority: "Sev-C", category: "Access", requester: "Daniel Lim", requesterEmail: "daniel.lim@democorp.local", assignee: "", assignmentGroup: "Network Engineering", description: "Request permanent VPN access for new remote staff member. Requires FortiClient setup with MFA enrollment.", customer: "Demo Corp Pte Ltd", created: 6, slaTarget: 8, zdTicketId: null },
-  { id: "REQ0003", service: "Microsoft 365 License Upgrade — E3 to E5", status: "Pending Approval", priority: "Sev-D", category: "Software", requester: "CISO", requesterEmail: "security@vgctechnology.com", assignee: "IT Admin", assignmentGroup: "License Management", description: "Upgrade 15 security team M365 licenses from E3 to E5 for Microsoft Defender for Endpoint P2, eDiscovery Premium, and Information Protection.", customer: "VGC Technology", created: 48, slaTarget: 72, zdTicketId: null },
-  { id: "REQ0004", service: "Conference Room AV Setup — Floor 3", status: "In Progress", priority: "Sev-D", category: "Hardware", requester: "Facilities Manager", requesterEmail: "facilities@vgctechnology.com", assignee: "IT Support", assignmentGroup: "End User Computing", description: "Install Zoom Rooms setup in Floor 3 conference room B. Includes Poly Studio X30 bar, Logitech Tap controller, and Dell 55\" display.", customer: "VGC Technology", created: 96, slaTarget: 120, zdTicketId: null },
+  { id: "REQ0003", service: "Microsoft 365 License Upgrade — E3 to E5", status: "Pending Approval", priority: "Sev-D", category: "Software", requester: "CISO", requesterEmail: "security@techflow.local", assignee: "IT Admin", assignmentGroup: "License Management", description: "Upgrade 15 security team M365 licenses from E3 to E5 for Microsoft Defender for Endpoint P2, eDiscovery Premium, and Information Protection.", customer: "TechFlow Solutions Pte Ltd", created: 48, slaTarget: 72, zdTicketId: null },
+  { id: "REQ0004", service: "Conference Room AV Setup — Floor 3", status: "In Progress", priority: "Sev-D", category: "Hardware", requester: "Facilities Manager", requesterEmail: "facilities@techflow.local", assignee: "IT Support", assignmentGroup: "End User Computing", description: "Install Zoom Rooms setup in Floor 3 conference room B. Includes Poly Studio X30 bar, Logitech Tap controller, and Dell 55\" display.", customer: "TechFlow Solutions Pte Ltd", created: 96, slaTarget: 120, zdTicketId: null },
   { id: "REQ0005", service: "Password Reset — Staff", status: "Fulfilled", priority: "Sev-D", category: "Access", requester: "Sarah Tan", requesterEmail: "sarah.tan@democorp.local", assignee: "Marcus Chen", assignmentGroup: "Service Desk", description: "Password reset for Active Directory and M365 account. User locked out after 5 failed attempts.", customer: "Demo Corp Pte Ltd", created: 168, slaTarget: 4, zdTicketId: null },
-  { id: "REQ0006", service: "Firewall Rule Change — Allow SaaS App", status: "Pending Approval", priority: "Sev-C", category: "Network", requester: "Application Team", requesterEmail: "apps@vgctechnology.com", assignee: "Network Engineering", assignmentGroup: "Network Engineering", description: "Open outbound HTTPS (443) to api.newcrm.io and cdn.newcrm.io on FortiGate for new CRM SaaS evaluation. Security review completed.", customer: "VGC Technology", created: 24, slaTarget: 48, zdTicketId: null },
-  { id: "REQ0007", service: "User Offboarding — Ex-Employee", status: "In Progress", priority: "Sev-B", category: "Access", requester: "HR Manager", requesterEmail: "hr@vgctechnology.com", assignee: "IT Admin", assignmentGroup: "Identity & Access", description: "Full offboarding for departed employee: disable AD account, revoke MFA, forward email to manager, backup OneDrive, collect laptop (AST-019 area), revoke all app access.", customer: "VGC Technology", created: 4, slaTarget: 8, zdTicketId: null },
-  { id: "REQ0008", service: "Database Backup Verification", status: "Open", priority: "Sev-C", category: "Database", requester: "DBA Lead", requesterEmail: "dba@vgctechnology.com", assignee: "Database Team", assignmentGroup: "Database", description: "Verify all production database backups from the past 7 days are restorable. Part of quarterly DR testing procedure.", customer: "VGC Technology", created: 2, slaTarget: 24, zdTicketId: null },
+  { id: "REQ0006", service: "Firewall Rule Change — Allow SaaS App", status: "Pending Approval", priority: "Sev-C", category: "Network", requester: "Application Team", requesterEmail: "apps@techflow.local", assignee: "Network Engineering", assignmentGroup: "Network Engineering", description: "Open outbound HTTPS (443) to api.newcrm.io and cdn.newcrm.io on FortiGate for new CRM SaaS evaluation. Security review completed.", customer: "TechFlow Solutions Pte Ltd", created: 24, slaTarget: 48, zdTicketId: null },
+  { id: "REQ0007", service: "User Offboarding — Ex-Employee", status: "In Progress", priority: "Sev-B", category: "Access", requester: "HR Manager", requesterEmail: "hr@techflow.local", assignee: "IT Admin", assignmentGroup: "Identity & Access", description: "Full offboarding for departed employee: disable AD account, revoke MFA, forward email to manager, backup OneDrive, collect laptop (AST-019 area), revoke all app access.", customer: "TechFlow Solutions Pte Ltd", created: 4, slaTarget: 8, zdTicketId: null },
+  { id: "REQ0008", service: "Database Backup Verification", status: "Open", priority: "Sev-C", category: "Database", requester: "DBA Lead", requesterEmail: "dba@techflow.local", assignee: "Database Team", assignmentGroup: "Database", description: "Verify all production database backups from the past 7 days are restorable. Part of quarterly DR testing procedure.", customer: "TechFlow Solutions Pte Ltd", created: 2, slaTarget: 24, zdTicketId: null },
 ];
 
 // ─── Style Constants ─────────────────────────────────────────────────────
@@ -1332,13 +1336,12 @@ const WORKFLOW_STEPS = {
   ],
 };
 
-const WorkflowHeader = ({ module, version }) => {
+const WorkflowHeader = ({ module, version, stepCounts }) => {
   const steps = WORKFLOW_STEPS[module] || WORKFLOW_STEPS.incidents;
-  const [activeStep, setActiveStep] = React.useState(0);
-  React.useEffect(() => {
-    const timer = setInterval(() => setActiveStep(p => (p + 1) % steps.length), 3000);
-    return () => clearInterval(timer);
-  }, [steps.length]);
+  // Compute active step from real data: the step with the most items (excluding last/completed step)
+  const activeStep = stepCounts && stepCounts.length > 0
+    ? stepCounts.slice(0, -1).reduce((maxIdx, v, i, arr) => v > arr[maxIdx] ? i : maxIdx, 0)
+    : 0;
 
   return (
     <div style={{
@@ -1371,7 +1374,7 @@ const WorkflowHeader = ({ module, version }) => {
               <div style={{
                 fontSize: 8, color: i === activeStep ? "#A0A8B8" : "#5A617855",
                 transition: "color 0.5s", whiteSpace: "nowrap",
-              }}>{step.desc}</div>
+              }}>{stepCounts && stepCounts[i] > 0 ? `${stepCounts[i]} items` : step.desc}</div>
             </div>
           </div>
           {i < steps.length - 1 && (
@@ -1807,6 +1810,8 @@ export default function ITSMApp() {
   const [cyberNewsLog, setCyberNewsLog] = useState([]);
   const [threatEmailDraft, setThreatEmailDraft] = useState(null);
   const [dashboardThreats, setDashboardThreats] = useState([]);
+  const [workflowHubTab, setWorkflowHubTab] = useState("pipeline");
+  const [networkSecTab, setNetworkSecTab] = useState("meraki");
   const [merakiData, setMerakiData] = useState(null);
   const [merakiLoading, setMerakiLoading] = useState(false);
   const [solarwindsData, setSolarwindsData] = useState(null);
@@ -1836,9 +1841,7 @@ export default function ITSMApp() {
     businessImpact:  { on: false, important: false, label: "Business Impact & Cost", roles: ["management"] },
     pendingApprovals:{ on: true, important: false, label: "Pending Approvals",      roles: ["management"] },
     opsHub:          { on: true, important: false, label: "Operations Hub",         roles: ["all"] },
-    merakiFirewall:  { on: true, important: false, label: "Cisco Meraki Firewall",  roles: ["all"] },
-    solarwindsRmm:   { on: true, important: false, label: "SolarWinds RMM",        roles: ["all"] },
-    sophosFirewall:  { on: true, important: false, label: "Sophos Firewall",        roles: ["all"] },
+    networkSecurity:  { on: true, important: false, label: "Network & Security Hub",  roles: ["all"] },
     personalKpis:    { on: true, important: false, label: "Personal KPIs",          roles: ["engineer"] },
     ticketQueue:     { on: true, important: false, label: "My Ticket Queue",        roles: ["engineer"] },
     quickActions:    { on: true, important: false, label: "Quick Actions",          roles: ["engineer"] },
@@ -1850,9 +1853,7 @@ export default function ITSMApp() {
     pdpaCompliance:  { on: true, important: true,  label: "PDPA Compliance",        roles: ["management"] },
     systemHealth:    { on: true, important: true,  label: "System Health",          roles: ["management"] },
     changeCalendar:  { on: true, important: false, label: "Change Calendar",        roles: ["management"] },
-    workflowGuide:   { on: true, important: false, label: "Workflow Pipeline Guide", roles: ["all"] },
-    workflowDetail:  { on: true, important: false, label: "Detailed Email-to-Resolution Flow", roles: ["all"] },
-    workflowArch:    { on: true, important: false, label: "System Architecture",    roles: ["all"] },
+    workflowHub:     { on: true, important: false, label: "Workflow & Architecture Hub", roles: ["all"] },
   });
   const [billingConfig, setBillingConfig] = useState({
     pricePerUser: 20, currency: "SGD", gstRate: 9, billingCycle: "Monthly",
@@ -2151,7 +2152,10 @@ export default function ITSMApp() {
     if (!isDemoMode) return;
     // Clear any cached production data from localStorage so seed defaults take effect
     ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_customers",
-     "vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
+     "vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats",
+     "vgc_azure_openai","vgc_zd_queue_v2","vgc_managed_users","vgc_service_reports",
+     "vgc_current_user","vgc_ai_feedback","vgc_zd_triaged_ids","vgc_rbac_audit",
+     "vgc_recycle_bin","vgc_integrations"].forEach(k => localStorage.removeItem(k));
     // Force-reset ITSM data to demo seed values (overrides any production data from prior Entra session)
     setIncidents(INITIAL_INCIDENTS.filter(i => i.id !== "INC0001"));
     setProblems(INITIAL_PROBLEMS.filter(p => p.id !== "PRB0001" && !p.title?.includes("Problem from INC000")));
@@ -3783,7 +3787,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
       { timestamp: "2026-03-22 11:00", action: "Data Classification Scan", user: "AI Engine", detail: "Scanned 1,247 records — 3 PII flags raised" },
     ]
   });
-  const [infraConfig] = useState({
+  const INFRA_DEFAULTS = {
     database: { type: "Azure MySQL Flexible Server", region: "Southeast Asia (Singapore)", server: "vgc-itsm1-mysql.mysql.database.azure.com", database: "itsmdb", tier: "Burstable", sku: "Standard_B1ms", version: "8.0.21", storage: "20 GB", ha: "Disabled", backupRetention: "7 days", status: "Ready" },
     webApp: { name: "vgc-itsm1-app", region: "Southeast Asia (Singapore)", plan: "B1 (Basic)", runtime: "Node.js 20 LTS", status: "Running", url: "vgc-itsm1-app.azurewebsites.net", ssl: "Azure Managed", scaling: "Manual (1 instance)", deployment: "ZIP Deploy (az webapp deploy)" },
     openAI: { name: "hlain-mo2f4i57", region: "East US 2", sku: "S0", endpoint: "https://hlain-mo2f4i57-eastus2.cognitiveservices.azure.com/", model: "gpt-5.4-pro", rg: "AI-Models-RG1", status: "Active" },
@@ -3802,7 +3806,70 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         { level: "info", text: "Total hosting cost is well under $35/mo — excellent for a full ITSM + AI platform." },
       ]
     }
-  });
+  };
+  const [infraConfig, setInfraConfig] = useState(INFRA_DEFAULTS);
+  const [infraLive, setInfraLive] = useState(false);
+  const [infraLoading, setInfraLoading] = useState(false);
+  const [infraResources, setInfraResources] = useState([]);
+
+  // Live fetch Azure infrastructure data
+  useEffect(() => {
+    const fetchInfra = async () => {
+      setInfraLoading(true);
+      try {
+        const r = await fetch("/api/azure/resources");
+        const data = await r.json();
+        if (data.live && !data.error) {
+          setInfraLive(true);
+          setInfraResources(data.resources || []);
+          setInfraConfig(prev => {
+            const updated = { ...prev };
+            if (data.appServicePlan) {
+              const p = data.appServicePlan;
+              updated.webApp = { ...prev.webApp,
+                plan: `${p.size || p.sku?.size || "?"} (${p.tier || "?"})`,
+                status: p.status || prev.webApp.status,
+                scaling: `${p.capacity || 1} instance(s)`,
+              };
+              updated.cost = { ...prev.cost,
+                appService: { ...prev.cost.appService, name: `App Service ${p.tier} ${p.size || ""}`.trim() },
+              };
+            }
+            if (data.webApp) {
+              const w = data.webApp;
+              updated.webApp = { ...updated.webApp,
+                name: w.name || updated.webApp.name,
+                status: w.state || updated.webApp.status,
+                runtime: w.linuxFxVersion ? w.linuxFxVersion.replace("|", " ") : updated.webApp.runtime,
+                url: w.defaultHostName || updated.webApp.url,
+                ssl: w.httpsOnly ? "HTTPS Enforced" : "HTTP",
+              };
+            }
+            if (data.mysqlServer) {
+              const m = data.mysqlServer;
+              updated.database = { ...prev.database,
+                tier: m.tier || prev.database.tier,
+                sku: m.sku?.name || prev.database.sku,
+                status: m.state || prev.database.status,
+                version: m.version || prev.database.version,
+                storage: m.storageSizeGB ? `${m.storageSizeGB} GB` : prev.database.storage,
+                ha: m.haEnabled ? "Enabled" : "Disabled",
+                backupRetention: m.backupRetentionDays ? `${m.backupRetentionDays} days` : prev.database.backupRetention,
+              };
+              updated.cost = { ...updated.cost,
+                mysql: { ...updated.cost.mysql, name: `MySQL Flexible ${m.sku?.name || "?"}` },
+              };
+            }
+            return updated;
+          });
+        }
+      } catch (e) { console.warn("[Infra] Live fetch failed:", e.message); }
+      finally { setInfraLoading(false); }
+    };
+    fetchInfra();
+    const interval = setInterval(fetchInfra, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // ─── Persist to localStorage + SQLite Database ─────────────────────────
   const DB_API = "/api/db";
@@ -5177,19 +5244,43 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         })()}
 
 
-        {/* ═══ CISCO MERAKI FIREWALL (Live API) ═══ */}
-        {cardVisibility.merakiFirewall.on && <DashCard id="merakiFirewall"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #00BF6F, #006D36, #00BF6F)" }} />
-          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>🔥</span> Cisco Meraki Firewall
+        {/* ═══ NETWORK & SECURITY HUB ═══ */}
+        {cardVisibility.networkSecurity.on && <DashCard id="networkSecurity"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #00BF6F, #FF8C00, #0050C8)" }} />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 16 }}>🔒</span> Network & Security
+            </h3>
+          </div>
+          {/* Tab Selector */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", padding: 3, borderRadius: 8 }}>
+            {[
+              { id: "meraki", label: "Cisco Meraki", icon: "🔥", color: "#00BF6F" },
+              { id: "solarwinds", label: "SolarWinds RMM", icon: "🖥️", color: "#FF8C00" },
+              { id: "sophos", label: "Sophos Firewall", icon: "🛡️", color: "#0050C8" },
+            ].map(t => (
+              <button key={t.id} onClick={() => setNetworkSecTab(t.id)}
+                style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  background: networkSecTab === t.id ? `${t.color}15` : "transparent",
+                  color: networkSecTab === t.id ? t.color : "#5A6178",
+                  borderBottom: networkSecTab === t.id ? `2px solid ${t.color}` : "2px solid transparent",
+                }}>
+                <span style={{ fontSize: 12 }}>{t.icon}</span> {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Meraki Tab ── */}
+          {networkSecTab === "meraki" && <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {merakiData && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{merakiData.summary?.totalOrgs || 0} Orgs</span>}
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button onClick={() => fetch("/api/meraki?refresh=true").then(r => r.json()).then(d => { if (!d.error) setMerakiData(d); })} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
               <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Meraki Dashboard API</span>
             </span>
-          </h3>
+          </div>
           {merakiLoading ? (
             <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
@@ -5318,14 +5409,12 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               )}
             </>);
           })()}
-        </div></DashCard>}
+        </>}
 
-        {/* ═══ SOLARWINDS RMM (Live API) ═══ */}
-        {cardVisibility.solarwindsRmm.on && <DashCard id="solarwindsRmm"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #FF8C00, #FF6347, #FF8C00)" }} />
-          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>🖥️</span> SolarWinds RMM
+          {/* ── SolarWinds Tab ── */}
+          {networkSecTab === "solarwinds" && <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {solarwindsData && solarwindsData.authenticated && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#00BF6F22", color: "#00BF6F", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>Connected</span>}
               {solarwindsData && !solarwindsData.authenticated && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#FF444422", color: "#FF6B6B", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>Auth Issue</span>}
             </span>
@@ -5333,7 +5422,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               <button onClick={() => fetch("/api/solarwinds?refresh=true").then(r => r.json()).then(d => setSolarwindsData(d))} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
               <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>N-able RMM API</span>
             </span>
-          </h3>
+          </div>
           {solarwindsLoading ? (
             <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
@@ -5404,21 +5493,19 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               </div>
             </>);
           })()}
-        </div></DashCard>}
+        </>}
 
-        {/* ═══ SOPHOS FIREWALL (Live API) ═══ */}
-        {cardVisibility.sophosFirewall.on && <DashCard id="sophosFirewall"><div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #0050C8, #003380, #0050C8)" }} />
-          <h3 style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>🛡️</span> Sophos Firewall
+          {/* ── Sophos Tab ── */}
+          {networkSecTab === "sophos" && <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {sophosData && !sophosData.error && <span style={{ padding: "2px 8px", borderRadius: 4, background: "#0050C822", color: "#64B5F6", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{(sophosData.firewalls || []).length} Firewalls</span>}
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button onClick={() => fetch("/api/sophos?refresh=true").then(r => r.json()).then(d => { if (!d.error) setSophosData(d); })} style={{ background: "none", border: "1px solid #1E2130", borderRadius: 4, padding: "2px 8px", fontSize: 9, color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>↻ Refresh</button>
               <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Sophos Central API</span>
             </span>
-          </h3>
+          </div>
           {sophosLoading ? (
             <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>
               <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
@@ -5486,6 +5573,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               </div>
             </>);
           })()}
+        </>}
         </div></DashCard>}
 
         {/* ═══ SECURITY ALERTS (Both views) ═══ */}
@@ -5584,7 +5672,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             { id: "GTHR-005", severity: "Low", title: "Updated IoC list for SolarWinds Serv-U FTP vulnerability", source: "CISA", sourceUrl: "https://www.cisa.gov/news-events/cybersecurity-advisories", region: "Global", time: "12 hr ago", isNew: false,
               aiSummary: "We do not use SolarWinds Serv-U. No action required. IoC list archived for reference.",
               affectsUs: false },
-          ]).map((threat, i) => (
+          ]).slice(0, 3).map((threat, i) => (
             <div key={threat.id} style={{
               padding: "12px 14px", marginBottom: 8, background: threat.isNew ? "#FF444408" : "#0A0C14",
               borderRadius: 8, border: `1px solid ${threat.isNew ? sevColors[threat.severity] + '33' : '#1E213044'}`,
@@ -5619,19 +5707,22 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               </div>
             </div>
           ))}
+          <div onClick={() => setActiveModule("cybernews")} style={{ textAlign: "center", padding: "8px 0", cursor: "pointer", fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", borderTop: "1px solid #1E213044", marginTop: 4 }}
+            onMouseEnter={e => e.currentTarget.style.color = "#90CAF9"} onMouseLeave={e => e.currentTarget.style.color = "#64B5F6"}>
+            View all threats in Cyber News →
+          </div>
         </div>}
 
-        {/* ═══ HOW ITSM WORKS — WORKFLOW PIPELINE GUIDE ═══ */}
-        {cardVisibility.workflowGuide.on && <DashCard id="workflowGuide"><div style={{ background: "linear-gradient(135deg, #0C0D12 0%, #141419 50%, #0C0D12 100%)", borderRadius: 12, border: "1px solid #27272A", padding: 28, position: "relative", overflow: "hidden" }}>
+        {/* ═══ WORKFLOW & ARCHITECTURE HUB ═══ */}
+        {cardVisibility.workflowHub.on && <DashCard id="workflowHub"><div style={{ background: "linear-gradient(135deg, #0C0D12 0%, #141419 50%, #0C0D12 100%)", borderRadius: 12, border: "1px solid #27272A", padding: 28, position: "relative", overflow: "hidden" }}>
           {/* Animated gradient top accent */}
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #22D3EE, #818CF8, #EC4899, #FFB347, #4CAF50, #CE93D8, #22D3EE)", backgroundSize: "200% 100%", animation: "gradientSlide 4s linear infinite" }} />
 
           {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 22, animation: "wfIconPulse 2s ease-in-out infinite" }}>🔄</span>
               <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>How ITSM Works</h3>
-              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, background: "linear-gradient(135deg, #818CF820, #22D3EE20)", color: "#22D3EE", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #22D3EE33" }}>Interactive Guide</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -5642,6 +5733,26 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             </div>
           </div>
 
+          {/* Tab Selector */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#09090B", padding: 4, borderRadius: 10, border: "1px solid #27272A44" }}>
+            {[
+              { id: "pipeline", label: "Pipeline Guide", icon: "🔄" },
+              { id: "detail", label: "Email-to-Resolution", icon: "📬" },
+              { id: "arch", label: "Architecture", icon: "🏗️" },
+            ].map(t => (
+              <button key={t.id} onClick={() => setWorkflowHubTab(t.id)}
+                style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                  background: workflowHubTab === t.id ? "linear-gradient(135deg, #818CF820, #22D3EE15)" : "transparent",
+                  color: workflowHubTab === t.id ? "#22D3EE" : "#71717A",
+                  borderBottom: workflowHubTab === t.id ? "2px solid #22D3EE" : "2px solid transparent",
+                }}>
+                <span style={{ fontSize: 14 }}>{t.icon}</span> {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Pipeline Guide Tab ── */}
+          {workflowHubTab === "pipeline" && <>
           {/* Pipeline Description */}
           <div style={{ fontSize: 12, color: "#A1A1AA", lineHeight: 1.7, marginBottom: 20, padding: "12px 16px", background: "#09090B", borderRadius: 10, border: "1px solid #27272A44" }}>
             <span style={{ color: "#818CF8", fontWeight: 700 }}>End-to-end automation pipeline:</span> Zendesk tickets automatically sync into ITSM, get AI-triaged for category & priority, monitored against SLA targets, processed by workflow rules, auto-resolved by AI when idle, and auto-closed after 72 hours. Click any step below to navigate.
@@ -5714,6 +5825,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               {[
                 { icon: "🎫", title: "Create Ticket", desc: "Open a new incident", color: "#FF6B6B", hoverAnim: "iconBounce", action: () => { setActiveModule("incidents"); setModal("newIncident"); } },
                 { icon: "🔄", title: "Sync Zendesk", desc: "Align all statuses now", color: "#22D3EE", hoverAnim: "iconSpin", action: async () => {
+                  if (isDemoModeRef.current) { setToast({ message: "🎭 Demo mode — Zendesk sync disabled", type: "info" }); return; }
                   try {
                     const resp = await fetch("/api/zendesk/sync-all-statuses", { method: "POST" });
                     const data = await resp.json();
@@ -5742,26 +5854,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               ))}
             </div>
           </div>
-        </div></DashCard>}
+        </>}
 
-        {/* ═══ DETAILED EMAIL-TO-RESOLUTION WORKFLOW ═══ */}
-        {cardVisibility.workflowDetail.on && <DashCard id="workflowDetail"><div style={{ background: "linear-gradient(135deg, #0C0D12 0%, #141419 50%, #0C0D12 100%)", borderRadius: 12, border: "1px solid #27272A", padding: 28, position: "relative", overflow: "hidden" }}>
-          {/* Animated gradient accent */}
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #4CAF50, #22D3EE, #818CF8, #EC4899, #FFB347, #4CAF50)", backgroundSize: "300% 100%", animation: "gradientSlide 6s linear infinite" }} />
-
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 22, animation: "wfIconPulse 2s ease-in-out infinite" }}>📬</span>
-              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>Email-to-Resolution Workflow</h3>
-              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, background: "linear-gradient(135deg, #4CAF5020, #22D3EE20)", color: "#4CAF50", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #4CAF5033" }}>Detailed View</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", animation: "wfPulseLive 1.5s ease-in-out infinite" }} />
-              <span style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}>LIVE PIPELINE</span>
-            </div>
-          </div>
-
+          {/* ── Email-to-Resolution Tab ── */}
+          {workflowHubTab === "detail" && <>
           {/* Description */}
           <div style={{ fontSize: 12, color: "#A1A1AA", lineHeight: 1.7, marginBottom: 20, padding: "12px 16px", background: "#09090B", borderRadius: 10, border: "1px solid #27272A44" }}>
             <span style={{ color: "#4CAF50", fontWeight: 700 }}>Complete incident lifecycle:</span> When a user sends an email to <span style={{ color: "#22D3EE", fontFamily: "'JetBrains Mono', monospace" }}>helpdesk@vgctechnology.com</span>, the system processes it through a 10-step automated pipeline — from email filtering through AI-powered resolution to automatic closure. Every step is audited and tracked.
@@ -5892,26 +5988,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               </div>
             ))}
           </div>
-        </div></DashCard>}
+        </>}
 
-        {/* ═══ SYSTEM ARCHITECTURE DIAGRAM ═══ */}
-        {cardVisibility.workflowArch.on && <DashCard id="workflowArch"><div style={{ background: "linear-gradient(135deg, #0C0D12 0%, #141419 50%, #0C0D12 100%)", borderRadius: 12, border: "1px solid #27272A", padding: 28, position: "relative", overflow: "hidden" }}>
-          {/* Animated accent */}
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #818CF8, #22D3EE, #818CF8)", backgroundSize: "200% 100%", animation: "gradientSlide 6s linear infinite" }} />
-
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 22, animation: "subtleFloat 3s ease-in-out infinite" }}>🏗️</span>
-              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#FAFAFA", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.02em" }}>System Architecture</h3>
-              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, background: "#818CF815", color: "#818CF8", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #818CF833" }}>Live View</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", animation: "wfPulseLive 1.5s ease-in-out infinite" }} />
-              <span style={{ fontSize: 9, color: "#4CAF50", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}>CONNECTED</span>
-            </div>
-          </div>
-
+          {/* ── Architecture Tab ── */}
+          {workflowHubTab === "arch" && <>
           {/* 3-Layer Architecture */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1.5fr auto 1fr", alignItems: "center", gap: 0, padding: "16px 0" }}>
             {/* INPUT LAYER */}
@@ -6046,6 +6126,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               </div>
             ))}
           </div>
+        </>}
         </div></DashCard>}
 
         {/* ═══ COMPLIANCE & SYSTEM HEALTH (Management only) ═══ */}
@@ -6170,7 +6251,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     }, [incidents, search]);
     return (
       <div>
-        <WorkflowHeader module="incidents" version={APP_VERSION.version} />
+        <WorkflowHeader module="incidents" version={APP_VERSION.version} stepCounts={[incidents.filter(i => i.status === "Open" && !i.aiTriaged).length, incidents.filter(i => i.aiTriaged && i.status === "Open").length, incidents.filter(i => i.assignee && ["Open","Assigned"].includes(i.status)).length, incidents.filter(i => i.status === "In Progress").length, incidents.filter(i => i.status === "Resolved" || i.status === "Closed").length]} />
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search incidents..." />
           <button style={btnStyle()} onClick={() => setModal("newIncident")}>+ New Incident</button>
@@ -6210,6 +6291,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             }).catch(() => {});
           }}>🎫 Import from Zendesk</button>
           <button style={{ ...btnStyle("#4CAF50"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={async () => {
+            if (isDemoModeRef.current) { showToast("🎭 Demo mode — Zendesk sync disabled", "info"); return; }
             showToast("⏳ Syncing all statuses with Zendesk...", "info");
             try {
               const resp = await fetch("/api/zendesk/sync-all-statuses", { method: "POST" });
@@ -6389,7 +6471,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // ─── Problems Module ──────────────────────────────────────────────────
   const ProblemsModule = () => (
     <div>
-      <WorkflowHeader module="problems" version={APP_VERSION.version} />
+      <WorkflowHeader module="problems" version={APP_VERSION.version} stepCounts={[problems.filter(p => p.status === "Open").length, problems.filter(p => p.status === "Investigating").length, problems.filter(p => p.status === "Known Error").length, problems.filter(p => p.status === "In Progress").length, problems.filter(p => p.status === "Resolved" || p.status === "Closed").length]} />
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search problems..." />
         <button style={btnStyle()} onClick={() => setModal("newProblem")}>+ New Problem</button>
@@ -6418,7 +6500,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // ─── Changes Module ───────────────────────────────────────────────────
   const ChangesModule = () => (
     <div>
-      <WorkflowHeader module="changes" version={APP_VERSION.version} />
+      <WorkflowHeader module="changes" version={APP_VERSION.version} stepCounts={[changes.filter(c => c.status === "New").length, changes.filter(c => c.status === "Awaiting Approval").length, changes.filter(c => c.status === "Approved").length, changes.filter(c => ["In Progress","Implementing"].includes(c.status)).length, changes.filter(c => c.status === "Completed" || c.status === "Closed").length]} />
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search changes..." />
         <button style={btnStyle()} onClick={() => setModal("newChange")}>+ New Change Request</button>
@@ -6445,7 +6527,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // ─── Service Requests Module ──────────────────────────────────────────
   const RequestsModule = () => (
     <div>
-      <WorkflowHeader module="requests" version={APP_VERSION.version} />
+      <WorkflowHeader module="requests" version={APP_VERSION.version} stepCounts={[requests.filter(r => r.status === "Open").length, requests.filter(r => r.status === "Pending Approval").length, requests.filter(r => r.status === "In Progress").length, requests.filter(r => r.status === "Fulfilled").length, requests.filter(r => r.status === "Closed").length]} />
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search requests..." />
         <button style={btnStyle()} onClick={() => setActiveModule("catalog")}>Browse Catalog →</button>
@@ -6631,7 +6713,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
     return (
     <div>
-      <WorkflowHeader module="knowledge" version={APP_VERSION.version} />
+      <WorkflowHeader module="knowledge" version={APP_VERSION.version} stepCounts={[kbArticles.filter(a => a.status === "Draft").length, kbArticles.filter(a => a.aiEnriched).length, kbArticles.filter(a => a.status === "Review").length, kbArticles.filter(a => a.status === "Published").length, kbArticles.length]} />
       {/* SharePoint Connection Banner */}
       <div style={{ background: "linear-gradient(135deg, #0078D408, #0089D618)", borderRadius: 10, border: "1px solid #0078D433", padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -7969,10 +8051,12 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
               ]
             };
             setIncidents(prev => [newInc, ...prev]);
-            // Persist to DB
-            try {
-              await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
-            } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
+            // Persist to DB (skip in demo mode to prevent demo data writing to production)
+            if (!isDemoModeRef.current) {
+              try {
+                await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
+              } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
+            }
             // AI Auto-Triage: if no AI suggestion was applied during creation, trigger server-side auto-triage
             if (!aiSuggestion) {
               autoTriageTicket(newInc).catch(() => {});
@@ -10733,34 +10817,40 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   const AdminSettingsModule = () => {
     const isTenantAdmin = currentUser.rbacRole === "Tenant Admin";
     const allTabs = [
-      { id: "ai", label: "AI Configuration", icon: "🤖", devOnly: true },
+      { section: "AUTOMATION" },
+      { id: "ai", label: "AI Config", icon: "🤖", devOnly: true },
+      { id: "workflows", label: "Workflows", icon: "⟳" },
+      { id: "templates", label: "Templates", icon: "📋" },
+      { id: "approvalChains", label: "Approvals", icon: "✅" },
+      { section: "INTEGRATIONS" },
       { id: "integrations", label: "Integrations", icon: "🔗", devOnly: true },
-      { id: "workflows", label: "Workflow Rules", icon: "⟳" },
-      { id: "slaPolicy", label: "SLA Policies", icon: "⏱️" },
       { id: "api", label: "API & Webhooks", icon: "🌐", devOnly: true },
-      { id: "migration", label: "Import & Migration", icon: "📦", devOnly: true },
+      { section: "ACCESS & SECURITY" },
       { id: "users", label: "Users & RBAC", icon: "👥" },
       { id: "entraId", label: "Entra ID SSO", icon: "🔐", devOnly: true },
-      { id: "compliance", label: "Compliance Center", icon: "🛡️" },
-      { id: "audit", label: "Audit & History", icon: "📜" },
-      { id: "uat", label: "UAT Testing", icon: "🧪" },
-      { id: "infrastructure", label: "Infrastructure", icon: "☁️", devOnly: true },
-      { id: "azure", label: "Azure & Deployments", icon: "🔷", devOnly: true },
+      { id: "compliance", label: "Compliance", icon: "🛡️" },
+      { id: "audit", label: "Audit Log", icon: "📜" },
+      { section: "POLICIES" },
+      { id: "slaPolicy", label: "SLA Policy", icon: "⏱️" },
+      { id: "businessImpact", label: "Impact", icon: "💰" },
+      { id: "escalation", label: "Escalation", icon: "📞", devOnly: true },
+      { section: "COMMUNICATIONS" },
       { id: "notifications", label: "Notifications", icon: "🔔" },
-      { id: "escalation", label: "Escalation & Auto-Call", icon: "📞", devOnly: true },
       { id: "smtp", label: "Email / SMTP", icon: "📧", devOnly: true },
-      { id: "emailWhitelist", label: "Email Whitelist", icon: "📨", devOnly: true },
-      { id: "billing", label: "Licensing & Billing", icon: "💳", devOnly: true },
-      { id: "vendors", label: "Vendor Contacts", icon: "📇" },
-      { id: "surveys", label: "Survey Templates", icon: "📊" },
-      { id: "businessImpact", label: "Business Impact", icon: "💰" },
+      { id: "emailWhitelist", label: "Whitelist", icon: "📨", devOnly: true },
+      { section: "DATA & OPS" },
+      { id: "migration", label: "Import", icon: "📦", devOnly: true },
+      { id: "dataMaintenance", label: "Maintenance", icon: "🧹", devOnly: true },
+      { id: "reportSchedules", label: "Reports", icon: "📅" },
+      { section: "SYSTEM" },
+      { id: "infrastructure", label: "Infrastructure & Cloud", icon: "☁️", devOnly: true },
+      { id: "vendors", label: "Vendors", icon: "📇" },
+      { id: "surveys", label: "Surveys", icon: "📊" },
+      { id: "billing", label: "Billing", icon: "💳", devOnly: true },
       { id: "general", label: "General", icon: "⚙️" },
-      { id: "templates", label: "Templates", icon: "📋" },
-      { id: "approvalChains", label: "Approval Chains", icon: "✅" },
-      { id: "reportSchedules", label: "Scheduled Reports", icon: "📅" },
-      { id: "dataMaintenance", label: "Data Maintenance", icon: "🧹", devOnly: true },
+      { id: "uat", label: "UAT", icon: "🧪" },
     ];
-    const tabs = isTenantAdmin ? allTabs.filter(t => !t.devOnly) : allTabs;
+    const tabs = isTenantAdmin ? allTabs.filter(t => t.section || !t.devOnly) : allTabs;
     const activeTab = (isTenantAdmin && allTabs.find(t => t.id === adminTab)?.devOnly) ? "workflows" : adminTab;
 
     const toggleIntegration = (intId) => {
@@ -10771,7 +10861,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       <div>
         {/* Admin Tabs */}
         <div style={{ display: "flex", gap: 4, marginBottom: 24, flexWrap: "wrap", background: "#0A0C14", padding: 4, borderRadius: 8 }}>
-          {tabs.map(tab => (
+          {tabs.map((tab, idx) => tab.section ? (
+            <div key={`s-${idx}`} style={{ width: "100%", padding: "6px 10px 2px", fontSize: 9, fontWeight: 700, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1, textTransform: "uppercase", borderTop: idx > 0 ? "1px solid #1E213033" : "none", marginTop: idx > 0 ? 4 : 0 }}>{tab.section}</div>
+          ) : (
             <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={{
               padding: "8px 14px", borderRadius: 6, border: "none", cursor: "pointer",
               background: activeTab === tab.id ? "#1E2130" : "transparent",
@@ -13359,12 +13451,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           );
         })()}
 
-        {/* Infrastructure — Azure Topology & Cost */}
+        {/* Infrastructure & Cloud — Merged Azure Topology, Cost & Operations */}
         {activeTab === "infrastructure" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-                ☁️ Azure Infrastructure — Southeast Asia
+                ☁️ Azure Infrastructure & Cloud Operations
               </h3>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>All Systems Healthy</Badge>
@@ -13548,45 +13640,104 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               </div>
             </div>
 
-            {/* ── Architecture Topology Diagram ─────────────────── */}
-            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-              <h4 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-                🗺️ Azure Topology — Actual Resources
-              </h4>
-              <div style={{ padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "#64B5F6", lineHeight: 1.8, whiteSpace: "pre" }}>{`  ┌───────────────────────────────────────────────────────────────────┐
-  │                    🌐 Internet / Users                           │
-  └────────────────────────────┬──────────────────────────────────────┘
-                               │ HTTPS
-  ┌────────────────────────────▼──────────────────────────────────────┐
-  │  Azure App Service (B1 Linux)              $13.14/mo             │
-  │  vgc-itsm1-app · Node.js 20 LTS                                 │
-  │  vgc-itsm1-app.azurewebsites.net                                │
-  │  RG: vgc-itsm-1-RG · Southeast Asia                             │
-  └──────┬──────────────┬──────────────┬─────────────────────────────┘
-         │              │              │
-  ┌──────▼──────┐ ┌─────▼──────┐ ┌────▼─────────────────────────────┐
-  │ MySQL       │ │ OpenAI     │ │ Zendesk                          │
-  │ Flexible    │ │ Service    │ │ vgctech.zendesk.com              │
-  │ Server      │ │ vgc-ai-    │ │ Tickets · Auto-Triage            │
-  │ B1ms        │ │ model-1    │ │ Auto-Respond · AI Routing        │
-  │ $14.71/mo   │ │ S0         │ │ (External — no Azure cost)       │
-  │ 8.0.21      │ │ ~$3.00/mo  │ │                                  │
-  │ 20 GB       │ │ SEA        │ │                                  │
-  └─────────────┘ └────────────┘ └──────────────────────────────────┘
-         │
-  ┌──────▼──────────────────────────────────────────────────────────┐
-  │  Managed Identity: oidc-msi-b517 (User Assigned)               │
-  │  Microsoft Entra ID · MSAL SSO                                  │
-  └─────────────────────────────────────────────────────────────────┘
+            {/* ── Animated Architecture Topology ─────────────────── */}
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+                  🗺️ Azure Topology — Live Resources
+                </h4>
+                {infraLive && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, background: "#4CAF5018", color: "#4CAF50", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", animation: "statusPulse 2s ease-in-out infinite" }}>● LIVE</span>}
+                {infraLoading && <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>⏳ Refreshing...</span>}
+              </div>
+              <div style={{ padding: 12, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", overflow: "hidden" }}>
+                <svg viewBox="0 0 800 420" style={{ width: "100%", height: "auto" }}>
+                  <defs>
+                    <linearGradient id="flowGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="#6366F1" stopOpacity="0" /><stop offset="50%" stopColor="#6366F1" stopOpacity="1" /><stop offset="100%" stopColor="#6366F1" stopOpacity="0" /></linearGradient>
+                    <linearGradient id="appGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#0078D4" /><stop offset="100%" stopColor="#50E6FF" /></linearGradient>
+                    <linearGradient id="dbGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#FF9800" /><stop offset="100%" stopColor="#FFB74D" /></linearGradient>
+                    <linearGradient id="aiGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#AB47BC" /><stop offset="100%" stopColor="#CE93D8" /></linearGradient>
+                    <linearGradient id="zdGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#03363D" /><stop offset="100%" stopColor="#17494D" /></linearGradient>
+                    <linearGradient id="idGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#EC4899" /><stop offset="100%" stopColor="#F472B6" /></linearGradient>
+                    <filter id="glow"><feGaussianBlur stdDeviation="3" result="g" /><feMerge><feMergeNode in="g" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                  </defs>
 
-  TOTAL ESTIMATED COST: ~$30.85 USD/month`}</div>
+                  {/* Connection lines */}
+                  <line x1="400" y1="65" x2="400" y2="130" stroke="#1E2130" strokeWidth="2" strokeDasharray="6,4" />
+                  <line x1="400" y1="210" x2="200" y2="280" stroke="#1E2130" strokeWidth="2" strokeDasharray="6,4" />
+                  <line x1="400" y1="210" x2="400" y2="280" stroke="#1E2130" strokeWidth="2" strokeDasharray="6,4" />
+                  <line x1="400" y1="210" x2="600" y2="280" stroke="#1E2130" strokeWidth="2" strokeDasharray="6,4" />
+                  <line x1="400" y1="210" x2="400" y2="380" stroke="#1E2130" strokeWidth="1.5" strokeDasharray="4,6" />
+
+                  {/* Animated flow dots */}
+                  {[
+                    { x1: 400, y1: 65, x2: 400, y2: 130, dur: "1.5s", delay: "0s" },
+                    { x1: 400, y1: 210, x2: 200, y2: 280, dur: "1.2s", delay: "0.3s" },
+                    { x1: 400, y1: 210, x2: 400, y2: 280, dur: "1.2s", delay: "0.6s" },
+                    { x1: 400, y1: 210, x2: 600, y2: 280, dur: "1.2s", delay: "0.9s" },
+                    { x1: 400, y1: 210, x2: 400, y2: 380, dur: "2s", delay: "0.4s" },
+                  ].map((l, i) => (
+                    <circle key={`dot-${i}`} r="3" fill="#6366F1" filter="url(#glow)">
+                      <animateMotion dur={l.dur} begin={l.delay} repeatCount="indefinite" path={`M${l.x1},${l.y1} L${l.x2},${l.y2}`} />
+                    </circle>
+                  ))}
+
+                  {/* Internet Node */}
+                  <rect x="300" y="20" width="200" height="45" rx="8" fill="#0F1117" stroke="#50E6FF" strokeWidth="1.5" />
+                  <text x="400" y="42" textAnchor="middle" fill="#50E6FF" fontSize="11" fontFamily="Space Grotesk, sans-serif" fontWeight="600">🌐 Internet / Users</text>
+                  <text x="400" y="56" textAnchor="middle" fill="#5A6178" fontSize="8" fontFamily="JetBrains Mono, monospace">HTTPS / TLS 1.3</text>
+
+                  {/* App Service Node */}
+                  <rect x="280" y="130" width="240" height="80" rx="10" fill="#0F1117" stroke="url(#appGrad)" strokeWidth="2">
+                    <animate attributeName="stroke-opacity" values="0.6;1;0.6" dur="3s" repeatCount="indefinite" />
+                  </rect>
+                  <circle cx="295" cy="145" r="5" fill={infraConfig.webApp.status === "Running" ? "#4CAF50" : "#FF6B6B"}>
+                    <animate attributeName="r" values="4;5.5;4" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                  <text x="310" y="149" fill="#50E6FF" fontSize="11" fontFamily="Space Grotesk, sans-serif" fontWeight="700">Azure App Service</text>
+                  <text x="290" y="166" fill="#C4CAD6" fontSize="9" fontFamily="JetBrains Mono, monospace">{infraConfig.webApp.name} · {infraConfig.webApp.plan}</text>
+                  <text x="290" y="180" fill="#5A6178" fontSize="8" fontFamily="JetBrains Mono, monospace">{infraConfig.webApp.runtime} · {infraConfig.webApp.url}</text>
+                  <text x="290" y="200" fill="#81C784" fontSize="8" fontFamily="JetBrains Mono, monospace">{infraConfig.webApp.status} · {infraConfig.webApp.scaling}</text>
+
+                  {/* MySQL Node */}
+                  <rect x="100" y="280" width="200" height="75" rx="10" fill="#0F1117" stroke="url(#dbGrad)" strokeWidth="1.5" />
+                  <circle cx="115" cy="295" r="4" fill={infraConfig.database.status === "Ready" ? "#4CAF50" : "#FF6B6B"}>
+                    <animate attributeName="r" values="3;4.5;3" dur="2.5s" repeatCount="indefinite" />
+                  </circle>
+                  <text x="130" y="299" fill="#FF9800" fontSize="10" fontFamily="Space Grotesk, sans-serif" fontWeight="700">MySQL Flexible</text>
+                  <text x="110" y="315" fill="#C4CAD6" fontSize="8" fontFamily="JetBrains Mono, monospace">{infraConfig.database.sku} · {infraConfig.database.tier}</text>
+                  <text x="110" y="328" fill="#5A6178" fontSize="8" fontFamily="JetBrains Mono, monospace">v{infraConfig.database.version} · {infraConfig.database.storage}</text>
+                  <text x="110" y="341" fill="#5A6178" fontSize="7" fontFamily="JetBrains Mono, monospace">HA: {infraConfig.database.ha} · Backup: {infraConfig.database.backupRetention}</text>
+
+                  {/* OpenAI Node */}
+                  <rect x="310" y="280" width="180" height="65" rx="10" fill="#0F1117" stroke="url(#aiGrad)" strokeWidth="1.5" />
+                  <circle cx="325" cy="295" r="4" fill={infraConfig.openAI.status === "Active" ? "#4CAF50" : "#FF6B6B"}>
+                    <animate attributeName="r" values="3;4.5;3" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                  <text x="340" y="299" fill="#AB47BC" fontSize="10" fontFamily="Space Grotesk, sans-serif" fontWeight="700">VGC-AI Engine</text>
+                  <text x="320" y="315" fill="#C4CAD6" fontSize="8" fontFamily="JetBrains Mono, monospace">{infraConfig.openAI.name} · {infraConfig.openAI.sku}</text>
+                  <text x="320" y="328" fill="#5A6178" fontSize="8" fontFamily="JetBrains Mono, monospace">{infraConfig.openAI.region} · Pay-per-token</text>
+
+                  {/* Zendesk Node */}
+                  <rect x="500" y="280" width="200" height="65" rx="10" fill="#0F1117" stroke="url(#zdGrad)" strokeWidth="1.5" />
+                  <circle cx="515" cy="295" r="4" fill={infraConfig.zendesk.status === "Connected" ? "#4CAF50" : "#FF6B6B"}>
+                    <animate attributeName="r" values="3;4.5;3" dur="2.2s" repeatCount="indefinite" />
+                  </circle>
+                  <text x="530" y="299" fill="#17494D" fontSize="10" fontFamily="Space Grotesk, sans-serif" fontWeight="700">Zendesk</text>
+                  <text x="510" y="315" fill="#C4CAD6" fontSize="8" fontFamily="JetBrains Mono, monospace">{infraConfig.zendesk.domain}</text>
+                  <text x="510" y="328" fill="#5A6178" fontSize="8" fontFamily="JetBrains Mono, monospace">Tickets · Auto-Triage · AI Routing</text>
+
+                  {/* Managed Identity Node */}
+                  <rect x="260" y="370" width="280" height="40" rx="8" fill="#0F1117" stroke="url(#idGrad)" strokeWidth="1.5" />
+                  <text x="400" y="391" textAnchor="middle" fill="#EC4899" fontSize="9" fontFamily="Space Grotesk, sans-serif" fontWeight="600">🛡️ Managed Identity: {infraConfig.identity.name}</text>
+                  <text x="400" y="404" textAnchor="middle" fill="#5A6178" fontSize="7" fontFamily="JetBrains Mono, monospace">Microsoft Entra ID · MSAL SSO</text>
+
+                  {/* Cost badge */}
+                  <rect x="620" y="15" width="160" height="30" rx="6" fill="#0078D411" stroke="#0078D433" strokeWidth="1" />
+                  <text x="700" y="35" textAnchor="middle" fill="#50E6FF" fontSize="10" fontFamily="JetBrains Mono, monospace" fontWeight="700">Est. ${infraConfig.cost.total.toFixed(2)}/mo</text>
+                </svg>
+              </div>
             </div>
-          </div>
-        )}
-
-        {/* Azure & Deployments — moved from Dashboard */}
-        {activeTab === "azure" && (
-          <div>
+            {/* ── Azure Services & AI Operations ─────────────────── */}
             <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FF6B6B22", padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #FF6B6B, #6366F1, #06B6D4, #F59E0B)" }} />
             <h3 style={{ margin: "0 0 18px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 10 }}>
@@ -13825,7 +13976,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 ))}
               </div>
             </div>
-          </div>
+            </div>
           </div>
         )}
 
@@ -18018,12 +18169,14 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         // Refresh sync status
         const statusR = await fetch("/api/zendesk/sync-status");
         if (statusR.ok) setZdSyncStatus(await statusR.json());
-        // Refresh incidents
-        const incR = await fetch("/api/db/incidents");
-        if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
-        // Refresh customers
-        const custR = await fetch("/api/db/customers");
-        if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); }
+        // Refresh incidents (skip in demo mode to preserve seed data)
+        if (!isDemoModeRef.current) {
+          const incR = await fetch("/api/db/incidents");
+          if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
+          // Refresh customers
+          const custR = await fetch("/api/db/customers");
+          if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); }
+        }
         zdFetchTickets(); zdFetchStats();
       } catch (e) {
         setZdSyncProgress({ phase: "Error", message: e.message });
@@ -19036,6 +19189,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                     🧠 Train AI from Resolved Zendesk Tickets
                   </button>
                   <button onClick={async () => {
+                    if (isDemoModeRef.current) { addAutoLog({ type: "info", message: "🎭 Demo mode — org sync disabled" }); return; }
                     try {
                       const r = await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
                       if (r.ok) { const data = await r.json(); addAutoLog({ type: "info", message: `Orgs synced: ${data.synced} updated, ${data.created} new customers created` }); const custR = await fetch("/api/db/customers"); if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); } }

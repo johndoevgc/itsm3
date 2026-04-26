@@ -12,6 +12,8 @@ const { AnalyticsEngine } = require("./analyticsEngine");
 const { CacheLayer } = require("./cacheLayer");
 
 const PORT = process.env.PORT || 8080;
+const AZURE_SUBSCRIPTION_ID = process.env.AZURE_SUBSCRIPTION_ID || "";
+const AZURE_RESOURCE_GROUP = process.env.AZURE_RESOURCE_GROUP || "vgc-itsm-1-RG";
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
 const USE_MYSQL = !USE_MSSQL && !!(process.env.MYSQL_HOST);
 
@@ -6137,6 +6139,89 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) {
       console.error("[AI Monitor]", err.message);
       return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── Azure Infrastructure Resources (Live from ARM API) ───────────────
+  if (pathname === "/api/azure/resources") {
+    try {
+      const token = await getManagedIdentityToken("https://management.azure.com");
+      const subId = AZURE_SUBSCRIPTION_ID;
+      const rg = AZURE_RESOURCE_GROUP;
+      if (!subId) return json(res, 200, { live: false, error: "AZURE_SUBSCRIPTION_ID not configured", resources: [] });
+
+      const armGet = (urlPath) => new Promise((resolve, reject) => {
+        const url = `https://management.azure.com${urlPath}`;
+        const req = https.get(url, { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }, (resp) => {
+          let data = "";
+          resp.on("data", c => data += c);
+          resp.on("end", () => { try { resolve(JSON.parse(data)); } catch { reject(new Error("ARM parse error")); } });
+        });
+        req.on("error", reject);
+        req.setTimeout(15000, () => { req.destroy(); reject(new Error("ARM timeout")); });
+      });
+
+      // Fetch resources in the resource group
+      const rgResources = await armGet(`/subscriptions/${subId}/resourceGroups/${rg}/resources?api-version=2021-04-01`);
+      const resources = (rgResources.value || []).map(r => ({
+        id: r.id, name: r.name, type: r.type, location: r.location, kind: r.kind,
+        sku: r.sku, tags: r.tags,
+      }));
+
+      // Try to get App Service Plan details
+      let appServicePlan = null;
+      const plans = resources.filter(r => r.type === "Microsoft.Web/serverfarms");
+      if (plans.length > 0) {
+        try {
+          const planDetail = await armGet(`${plans[0].id}?api-version=2022-03-01`);
+          appServicePlan = {
+            name: planDetail.name, sku: planDetail.sku, kind: planDetail.kind,
+            status: planDetail.properties?.status, numberOfSites: planDetail.properties?.numberOfSites,
+            tier: planDetail.sku?.tier, size: planDetail.sku?.size, capacity: planDetail.sku?.capacity,
+          };
+        } catch {}
+      }
+
+      // Try to get Web App details
+      let webApp = null;
+      const webApps = resources.filter(r => r.type === "Microsoft.Web/sites");
+      if (webApps.length > 0) {
+        try {
+          const appDetail = await armGet(`${webApps[0].id}?api-version=2022-03-01`);
+          webApp = {
+            name: appDetail.name, state: appDetail.properties?.state, kind: appDetail.kind,
+            defaultHostName: appDetail.properties?.defaultHostName,
+            httpsOnly: appDetail.properties?.httpsOnly,
+            linuxFxVersion: appDetail.properties?.siteConfig?.linuxFxVersion,
+            ftpsState: appDetail.properties?.siteConfig?.ftpsState,
+          };
+        } catch {}
+      }
+
+      // Try to get MySQL Flexible Server details
+      let mysqlServer = null;
+      const mysqlServers = resources.filter(r => r.type === "Microsoft.DBforMySQL/flexibleServers");
+      if (mysqlServers.length > 0) {
+        try {
+          const mysqlDetail = await armGet(`${mysqlServers[0].id}?api-version=2021-12-01-preview`);
+          mysqlServer = {
+            name: mysqlDetail.name, sku: mysqlDetail.sku, state: mysqlDetail.properties?.state,
+            version: mysqlDetail.properties?.version, tier: mysqlDetail.sku?.tier,
+            storageSizeGB: mysqlDetail.properties?.storage?.storageSizeGB,
+            backupRetentionDays: mysqlDetail.properties?.backup?.backupRetentionDays,
+            haEnabled: mysqlDetail.properties?.highAvailability?.mode !== "Disabled",
+          };
+        } catch {}
+      }
+
+      return json(res, 200, {
+        live: true, subscriptionId: subId, resourceGroup: rg,
+        resources, appServicePlan, webApp, mysqlServer,
+        fetchedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[Azure Resources]", err.message);
+      return json(res, 200, { live: false, error: err.message, resources: [] });
     }
   }
 
