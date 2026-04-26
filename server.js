@@ -9854,6 +9854,16 @@ async function start() {
       } catch (e) { console.warn("[Daily Sync] Failed:", e.message); }
     };
 
+    // Hydrate zdLastSyncTime from DB (find latest ZD-synced incident)
+    try {
+      const allInc = await db.getAll("incidents");
+      const zdIncs = allInc.filter(i => i.zdTicketId).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+      if (zdIncs.length > 0 && zdIncs[0].updatedAt) {
+        zdLastSyncTime = zdIncs[0].updatedAt;
+        console.log(`[ZD Sync] Hydrated zdLastSyncTime from DB: ${zdLastSyncTime}`);
+      }
+    } catch (e) { console.warn("[ZD Sync] Could not hydrate zdLastSyncTime:", e.message); }
+
     // Start SLA Engine
     slaEngine.start().catch(err => console.error("[SLA Engine] Start failed:", err.message));
 

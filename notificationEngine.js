@@ -15,7 +15,7 @@ class NotificationEngine {
       slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || "",
       defaultFrom: process.env.MAIL_FROM || "itsupport@vgctechnology.com",
     };
-    this.stats = { sent: 0, failed: 0, byChannel: {} };
+    this.stats = { sent: 0, failed: 0, byChannel: { email: 0, teams: 0, slack: 0, inapp: 0, webhook: 0 } };
   }
 
   // ─── Send notification through configured channels ────────────────

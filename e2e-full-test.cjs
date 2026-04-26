@@ -66,7 +66,7 @@ async function run() {
   console.log("\n┌─── 2. FRONTEND HTML VERIFICATION ───────────────────────┐");
   const html = await GET_TEXT("/");
   test(html.status === 200, "Homepage returns HTTP 200");
-  test(html.text.includes("index-6se5c-mm.js"), "Correct v3.12.2 JS bundle hash", "bundle hash mismatch");
+  test(/index-[\w-]+\.js/.test(html.text), "JS bundle hash present in HTML", "no index-*.js bundle found");
   test(html.text.includes("vendor-"), "Vendor chunk (React) present");
   test(html.text.includes("rolldown-runtime-"), "Runtime chunk present");
   test(html.text.includes('meta name="description"'), "SEO meta description tag");
@@ -228,7 +228,8 @@ async function run() {
   // 11. STATIC ASSETS & CACHING
   // ═════════════════════════════════════════════════════════════════════
   console.log("\n┌─── 11. STATIC ASSETS & CACHING ─────────────────────────┐");
-  const jsBundle = await fetch(`${BASE}/assets/index-6se5c-mm.js`);
+  const bundleMatch = html.text.match(/index-[\w-]+\.js/);
+  const jsBundle = await fetch(`${BASE}/assets/${bundleMatch ? bundleMatch[0] : "index-unknown.js"}`);
   test(jsBundle.status === 200, "Main JS bundle accessible (200)");
   const jsCC = jsBundle.headers.get("cache-control") || "";
   test(jsCC.includes("max-age=31536000"), "JS bundle cache: 1 year", `cache-control: ${jsCC}`);
