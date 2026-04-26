@@ -9717,6 +9717,18 @@ async function start() {
       console.log(`[Seed] Created ${defaultKB.length} default KB articles`);
     }
 
+    // Seed enterprise KB documentation articles if KB0010 doesn't exist
+    try {
+      const kb10 = await db.get("kb", "KB0010");
+      if (!kb10) {
+        const enterpriseKB = require("./kb-enterprise-articles.json");
+        for (const kb of enterpriseKB) {
+          await db.upsert("kb", kb.id, JSON.stringify(kb));
+        }
+        console.log(`[Seed] Created ${enterpriseKB.length} enterprise KB articles (KB0010-KB0018)`);
+      }
+    } catch (e) { console.log("[Seed] Enterprise KB seed skipped:", e.message); }
+
     // Seed default incident templates if none exist
     if (!stats.incident_templates || stats.incident_templates === 0) {
       const defaultTemplates = [
