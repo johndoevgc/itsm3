@@ -107,14 +107,10 @@ const SECURITY_ALERTS = [];
 // Dev admins get VGC Dev Admin (full platform super-admin) role
 const DEV_ADMIN_EMAILS = [
   "hlaing@vgctechnology.com",
-  "qing@vgctechnology.com",
 ];
 // Tenant admins get Tenant Admin (full tenant management) role
 const ADMIN_EMAILS = [
   "hlaing@vgctechnology.com",
-  "qing@vgctechnology.com",
-  "hamidi@vgctechnology.com",
-  "adrian@vgctechnology.com",
 ];
 
 const USERS = [
@@ -126,8 +122,6 @@ const USERS = [
 // ─── Initial Customer Data ────────────────────────────────────────────
 const INITIAL_CUSTOMERS = [
   { id: "DCUS-001", name: "Demo Corp Pte Ltd", category: "CSP", contactPerson: "Sarah Lim", email: "sarah.lim@democorp.local", phone: "+65 6100 0001", address: "1 Raffles Place, Tower One, Singapore 048616", status: "Active", contractStart: "2025-01-01", contractEnd: "2026-12-31", services: ["Managed IT", "Cloud Hosting", "Security"], notes: "Tier-1 CSP customer — 120 endpoints", createdBy: "Demo Seed", createdAt: "2025-01-01" },
-  { id: "DCUS-002", name: "Kellington Group Pte Ltd", category: "CSP", contactPerson: "Daniel Lim", email: "daniel.lim@kellington.local", phone: "+65 6200 0002", address: "80 Robinson Road, Singapore 068898", status: "Active", contractStart: "2025-06-01", contractEnd: "2027-05-31", services: ["Managed IT", "Network", "Helpdesk"], notes: "Tier-1 CSP — 85 endpoints, 3 offices", createdBy: "Demo Seed", createdAt: "2025-06-01" },
-  { id: "DCUS-003", name: "Horizon Logistics Pte Ltd", category: "Ad-Hoc", contactPerson: "Kevin Tan", email: "kevin.tan@horizonlog.local", phone: "+65 6300 0003", address: "10 Changi Business Park, Singapore 486030", status: "Active", contractStart: "2026-01-15", contractEnd: "2026-07-14", services: ["Break-Fix", "Network"], notes: "Ad-hoc support contract — warehouse IT", createdBy: "Demo Seed", createdAt: "2026-01-15" },
 ];
 
 // ─── RBAC Enterprise Roles & Permissions ─────────────────────────────────
@@ -1072,7 +1066,7 @@ const INITIAL_INCIDENTS = [
   { id: "INC-D003", title: "VPN connection timeout for remote workers (FortiClient)", status: "Open", priority: "Sev-B", category: "Network", subcategory: "VPN", urgency: "High", impact: "Multiple Users", assignee: "Network Engineering", assignmentGroup: "Network Engineering", reporter: "David Chen", reporterEmail: "david.chen@democorp.local", customer: "Demo Corp Pte Ltd", description: "Remote workers in Malaysia and Indonesia experiencing VPN timeout after 5 minutes of inactivity. FortiClient v7.2 SSL-VPN tunnel drops.", contactMethod: "Teams", created: 6, createdAt: "2026-04-22T03:00:00Z", slaTarget: 4, aiTriaged: false, aiConfidence: 0, zdTicketId: null, workaround: "Increase keepalive interval in FortiClient settings to 30s", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D003", type: "status", user: "System", time: "22/04/2026, 03:00:00", detail: "Ticket created via Teams" }] },
   { id: "INC-D004", title: "Shared printer on Floor 1 printing blank pages", status: "In Progress", priority: "Sev-D", category: "Hardware", subcategory: "Printer", urgency: "Low", impact: "Single User", assignee: "IT Support", assignmentGroup: "End User Computing", reporter: "Lisa Tan", reporterEmail: "lisa.tan@democorp.local", customer: "Demo Corp Pte Ltd", description: "HP LaserJet Pro M404 on Floor 1 printing blank pages intermittently. Toner level shows 45%.", contactMethod: "Portal", created: 24, createdAt: "2026-04-21T09:00:00Z", slaTarget: 27, aiTriaged: true, aiConfidence: 78, zdTicketId: null, workaround: "Use Floor 2 printer temporarily", linkedProblem: "PRB0004", affectedAssets: ["AST-010"], activityLog: [{ id: "AL-D004", type: "status", user: "System", time: "21/04/2026, 09:00:00", detail: "Ticket created via Portal" }] },
   { id: "INC-D005", title: "Azure AD sync failure — new users not appearing in M365", status: "Resolved", priority: "Sev-A", category: "Cloud", subcategory: "Identity", urgency: "Critical", impact: "Enterprise", assignee: "Cloud Engineering", assignmentGroup: "Cloud Engineering", reporter: "IT Admin", reporterEmail: "admin@democorp.local", customer: "Demo Corp Pte Ltd", description: "Azure AD Connect sync failing since 20/04. Delta sync error: stopped-deletion-threshold-exceeded. 12 new hires cannot access M365.", contactMethod: "Portal", created: 48, createdAt: "2026-04-20T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 95, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: ["AST-007"], activityLog: [{ id: "AL-D005a", type: "status", user: "System", time: "20/04/2026, 09:00:00", detail: "Ticket created — Sev-A escalation" }, { id: "AL-D005b", type: "status", user: "Cloud Engineering", time: "20/04/2026, 10:30:00", detail: "Root cause: deletion threshold too low (50). Increased to 500, re-ran sync." }, { id: "AL-D005c", type: "status", user: "Cloud Engineering", time: "20/04/2026, 11:00:00", detail: "Status changed: Open → Resolved" }] },
-  { id: "INC-D006", title: "Password reset request — locked AD account", status: "Closed", priority: "Sev-D", category: "Access", subcategory: "Password", urgency: "Low", impact: "Single User", assignee: "Service Desk", assignmentGroup: "Service Desk", reporter: "Michael Ng", reporterEmail: "michael.ng@kellington.local", customer: "Kellington Group Pte Ltd", description: "User locked out after 5 failed login attempts. Needs AD password reset and MFA re-enrollment.", contactMethod: "Phone", created: 72, createdAt: "2026-04-19T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 99, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D006a", type: "status", user: "System", time: "19/04/2026, 09:00:00", detail: "Ticket created via Phone" }, { id: "AL-D006b", type: "status", user: "Service Desk", time: "19/04/2026, 09:15:00", detail: "Password reset completed. MFA re-enrolled." }, { id: "AL-D006c", type: "status", user: "System", time: "19/04/2026, 09:20:00", detail: "Status changed: Open → Closed" }] },
+  { id: "INC-D006", title: "Password reset request — locked AD account", status: "Closed", priority: "Sev-D", category: "Access", subcategory: "Password", urgency: "Low", impact: "Single User", assignee: "Service Desk", assignmentGroup: "Service Desk", reporter: "Michael Ng", reporterEmail: "michael.ng@democorp.local", customer: "Demo Corp Pte Ltd", description: "User locked out after 5 failed login attempts. Needs AD password reset and MFA re-enrollment.", contactMethod: "Phone", created: 72, createdAt: "2026-04-19T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 99, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D006a", type: "status", user: "System", time: "19/04/2026, 09:00:00", detail: "Ticket created via Phone" }, { id: "AL-D006b", type: "status", user: "Service Desk", time: "19/04/2026, 09:15:00", detail: "Password reset completed. MFA re-enrolled." }, { id: "AL-D006c", type: "status", user: "System", time: "19/04/2026, 09:20:00", detail: "Status changed: Open → Closed" }] },
 ];
 const INITIAL_PROBLEMS = [
   { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "VGC Technology", zdTicketId: null },
@@ -1086,10 +1080,10 @@ const INITIAL_CHANGES = [
 ];
 const INITIAL_REQUESTS = [
   { id: "REQ0001", service: "New Laptop Setup — Marketing Team Hire", status: "Pending Approval", priority: "Sev-C", category: "Hardware", requester: "HR Manager", requesterEmail: "hr@vgctechnology.com", assignee: "IT Support", assignmentGroup: "End User Computing", description: "New Dell Latitude 5540 needed for marketing hire starting 2026-04-22. Requires M365 E3, Adobe CC, VPN access, and standard security policy.", customer: "VGC Technology", created: 12, slaTarget: 24, zdTicketId: null },
-  { id: "REQ0002", service: "VPN Access Request — Remote Worker", status: "Pending Approval", priority: "Sev-C", category: "Access", requester: "Daniel Lim", requesterEmail: "daniel.lim@kellington.com", assignee: "", assignmentGroup: "Network Engineering", description: "Request permanent VPN access for new Kellington remote staff member. Requires FortiClient setup with MFA enrollment.", customer: "Kellington Group Pte Ltd", created: 6, slaTarget: 8, zdTicketId: null },
+  { id: "REQ0002", service: "VPN Access Request — Remote Worker", status: "Pending Approval", priority: "Sev-C", category: "Access", requester: "Daniel Lim", requesterEmail: "daniel.lim@democorp.local", assignee: "", assignmentGroup: "Network Engineering", description: "Request permanent VPN access for new remote staff member. Requires FortiClient setup with MFA enrollment.", customer: "Demo Corp Pte Ltd", created: 6, slaTarget: 8, zdTicketId: null },
   { id: "REQ0003", service: "Microsoft 365 License Upgrade — E3 to E5", status: "Pending Approval", priority: "Sev-D", category: "Software", requester: "CISO", requesterEmail: "security@vgctechnology.com", assignee: "IT Admin", assignmentGroup: "License Management", description: "Upgrade 15 security team M365 licenses from E3 to E5 for Microsoft Defender for Endpoint P2, eDiscovery Premium, and Information Protection.", customer: "VGC Technology", created: 48, slaTarget: 72, zdTicketId: null },
   { id: "REQ0004", service: "Conference Room AV Setup — Floor 3", status: "In Progress", priority: "Sev-D", category: "Hardware", requester: "Facilities Manager", requesterEmail: "facilities@vgctechnology.com", assignee: "IT Support", assignmentGroup: "End User Computing", description: "Install Zoom Rooms setup in Floor 3 conference room B. Includes Poly Studio X30 bar, Logitech Tap controller, and Dell 55\" display.", customer: "VGC Technology", created: 96, slaTarget: 120, zdTicketId: null },
-  { id: "REQ0005", service: "Password Reset — Kellington Staff", status: "Fulfilled", priority: "Sev-D", category: "Access", requester: "Sarah Tan", requesterEmail: "sarah.tan@kellington.com", assignee: "Marcus Chen", assignmentGroup: "Service Desk", description: "Password reset for Active Directory and M365 account. User locked out after 5 failed attempts.", customer: "Kellington Group Pte Ltd", created: 168, slaTarget: 4, zdTicketId: null },
+  { id: "REQ0005", service: "Password Reset — Staff", status: "Fulfilled", priority: "Sev-D", category: "Access", requester: "Sarah Tan", requesterEmail: "sarah.tan@democorp.local", assignee: "Marcus Chen", assignmentGroup: "Service Desk", description: "Password reset for Active Directory and M365 account. User locked out after 5 failed attempts.", customer: "Demo Corp Pte Ltd", created: 168, slaTarget: 4, zdTicketId: null },
   { id: "REQ0006", service: "Firewall Rule Change — Allow SaaS App", status: "Pending Approval", priority: "Sev-C", category: "Network", requester: "Application Team", requesterEmail: "apps@vgctechnology.com", assignee: "Network Engineering", assignmentGroup: "Network Engineering", description: "Open outbound HTTPS (443) to api.newcrm.io and cdn.newcrm.io on FortiGate for new CRM SaaS evaluation. Security review completed.", customer: "VGC Technology", created: 24, slaTarget: 48, zdTicketId: null },
   { id: "REQ0007", service: "User Offboarding — Ex-Employee", status: "In Progress", priority: "Sev-B", category: "Access", requester: "HR Manager", requesterEmail: "hr@vgctechnology.com", assignee: "IT Admin", assignmentGroup: "Identity & Access", description: "Full offboarding for departed employee: disable AD account, revoke MFA, forward email to manager, backup OneDrive, collect laptop (AST-019 area), revoke all app access.", customer: "VGC Technology", created: 4, slaTarget: 8, zdTicketId: null },
   { id: "REQ0008", service: "Database Backup Verification", status: "Open", priority: "Sev-C", category: "Database", requester: "DBA Lead", requesterEmail: "dba@vgctechnology.com", assignee: "Database Team", assignmentGroup: "Database", description: "Verify all production database backups from the past 7 days are restorable. Part of quarterly DR testing procedure.", customer: "VGC Technology", created: 2, slaTarget: 24, zdTicketId: null },
@@ -1468,6 +1462,11 @@ const SearchBar = ({ value, onChange, placeholder }) => (
 
 // ─── Main App ────────────────────────────────────────────────────────────
 export default function ITSMApp() {
+  // ─── HARD RULE: Demo mode detection (computed FIRST, before any data loading) ───
+  const isDemoMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "true";
+  const isDemoModeRef = useRef(isDemoMode);
+  isDemoModeRef.current = isDemoMode;
+
   const [activeModule, setActiveModule] = useState("dashboard");
   const [ticketsSubTab, setTicketsSubTab] = useState("incidents");
   const [slaApprovalsSubTab, setSlaApprovalsSubTab] = useState("sla");
@@ -1479,6 +1478,8 @@ export default function ITSMApp() {
   const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers"];
   const _ls = (key, fallback) => {
     try {
+      // HARD RULE: Demo mode ALWAYS returns fallback (seed data) — NEVER reads localStorage
+      if (isDemoMode && PRODUCTION_COLLECTIONS.includes(key)) return fallback;
       // HARD RULE: Entra users must NEVER see seed/demo data — start empty, hydrate from DB
       const savedUser = localStorage.getItem("vgc_current_user");
       if (savedUser) {
@@ -1486,30 +1487,16 @@ export default function ITSMApp() {
           const u = JSON.parse(savedUser);
           if (u.authType === "entra" && PRODUCTION_COLLECTIONS.includes(key)) {
             const s = localStorage.getItem(key);
-            // Only return cached data if it looks like production data (has zdTicketId or real IDs)
             if (s) {
               const parsed = JSON.parse(s);
-              if (Array.isArray(parsed) && parsed.length > 0 && !parsed.some(r => /^(INC000|PRB000|CHG000|REQ000)\d$/.test(r.id))) return parsed;
+              if (Array.isArray(parsed) && parsed.length > 0 && !parsed.some(r => /^(INC-D|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d/.test(r.id))) return parsed;
             }
-            return []; // Empty fallback — DB hydration will load production data
-          }
-          // HARD RULE: Demo users must NEVER see production data from localStorage cache
-          if (u.authType !== "entra" && PRODUCTION_COLLECTIONS.includes(key)) {
-            const s = localStorage.getItem(key);
-            if (s) {
-              const parsed = JSON.parse(s);
-              // If any record has a zdTicketId or looks like production data, discard it
-              if (Array.isArray(parsed) && parsed.some(r => r.zdTicketId || /^\[ZD#/.test(r.title))) {
-                localStorage.removeItem(key);
-                return fallback;
-              }
-            }
+            return [];
           }
         } catch {}
       }
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
-        // Clear stale data on version bump so new seed data takes effect
         ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services","vgc_zd_ai_queue","vgc_zd_tickets","vgc_zd_stats","vgc_zd_auto_log","vgc_zd_auto_stats","vgc_customers"].forEach(k => localStorage.removeItem(k));
         localStorage.setItem("vgc_data_version", DATA_VERSION);
         return fallback;
@@ -2067,7 +2054,7 @@ export default function ITSMApp() {
   // ─── HARD RULE: Data Isolation Mode ────────────────────────────────
   // Demo mode: ?demo=true in URL → forces demo seed data only (no production data exposure)
   // Production mode = Entra ID users (without ?demo=true) → only real Zendesk/API data
-  const isDemoMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "true";
+  // isDemoMode already declared at top of component (before _ls, so localStorage is bypassed for demo)
   const isLocalDemoUser = isDemoMode || !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
   const isEntraProductionUser = !isDemoMode && !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
@@ -3849,7 +3836,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // Sync an array collection to the SQLite backend (fire-and-forget)
   // HARD RULE: Demo users must NEVER write to the shared production DB
   const _dbSync = useCallback((collection, data) => {
-    if (isLocalDemoUser) return;
+    if (isDemoModeRef.current) return; // Use ref to avoid stale closure
     if (!data || !Array.isArray(data)) return;
     fetch(`${DB_API}/${collection}`, {
       method: "POST",
@@ -3861,7 +3848,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   // Sync a single record to the SQLite backend
   // HARD RULE: Demo users must NEVER write to the shared production DB
   const _dbSyncOne = useCallback((collection, record) => {
-    if (isLocalDemoUser) return;
+    if (isDemoModeRef.current) return; // Use ref to avoid stale closure
     if (!record || !record.id) return;
     fetch(`${DB_API}/${collection}/${encodeURIComponent(record.id)}`, {
       method: "PUT",
@@ -3876,6 +3863,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   useEffect(() => {
     if (dbInitRef.current) return;
     dbInitRef.current = true;
+    // HARD RULE: Demo mode must NEVER touch the production DB (read or write)
+    if (isDemoMode) return;
     fetch(`${DB_API}-stats`).then(r => r.json()).then(async (stats) => {
       // Hydrate state from DB if localStorage was empty (new browser/device)
       const hydrateMap = [
@@ -3901,8 +3890,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 const items = data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d));
                 // For Entra users: filter out any seed data that leaked into DB
                 if (isEntraProductionUser) {
-                  const seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
-                  const isSeedLinked = (item) => item.title?.includes("Problem from INC000") || item.linkedIncidents?.some(id => /^INC000\d$/.test(id));
+                  const seedPattern = /^(INC-D\d|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d*$/;
+                  const isSeedLinked = (item) => item.title?.includes("Problem from INC000") || item.linkedIncidents?.some(id => /^(INC000\d|INC-D\d)$/.test(id));
                   const filtered = items.filter(item => !seedPattern.test(item.id) && !isSeedLinked(item));
                   if (filtered.length > 0) setter(filtered);
                 } else {
@@ -3970,9 +3959,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dual-write: localStorage + DB — for Entra users, block seed data from contaminating DB
-  const _seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
-  const _isSeedLinked = (item) => item.title?.includes("Problem from INC000") || item.linkedIncidents?.some(id => /^INC000\d$/.test(id));
+  const _seedPattern = /^(INC-D\d|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d*$/;
+  const _isSeedLinked = (item) => item.title?.includes("Problem from INC000") || item.linkedIncidents?.some(id => /^(INC000\d|INC-D\d)$/.test(id));
   const _safeDbSync = (coll, data) => {
+    if (isDemoModeRef.current) return; // HARD RULE: Demo mode must NEVER write to production DB
     if (!data || !Array.isArray(data) || data.length === 0) return;
     // For Entra users: filter out seed data and seed-linked records before syncing
     if (isEntraProductionUser) {
@@ -3982,22 +3972,24 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     }
     _dbSync(coll, data);
   };
-  useEffect(() => { _save("vgc_incidents", incidents); _safeDbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_problems", problems); _safeDbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_changes", changes); _safeDbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_requests", requests); _safeDbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_assets", assets); _dbSync("assets", assets); }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_profile_photo", profilePhoto); }, [profilePhoto]);
-  useEffect(() => { _save("vgc_avatar", avatarConfig); }, [avatarConfig]);
-  useEffect(() => { _save("vgc_current_user", currentUser); }, [currentUser]);
-  useEffect(() => { _save("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_rbac_audit", rbacAuditLog); }, [rbacAuditLog]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_custom_permissions", customPermissions); }, [customPermissions]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _save("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
+  // HARD RULE: Demo mode must NEVER pollute localStorage with demo data (prevents prod user from seeing stale demo data)
+  const _demoSafeSave = (key, data) => { if (!isDemoMode) _save(key, data); };
+  useEffect(() => { _demoSafeSave("vgc_incidents", incidents); _safeDbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_problems", problems); _safeDbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_changes", changes); _safeDbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_requests", requests); _safeDbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_assets", assets); _dbSync("assets", assets); }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_profile_photo", profilePhoto); }, [profilePhoto]);
+  useEffect(() => { _demoSafeSave("vgc_avatar", avatarConfig); }, [avatarConfig]);
+  useEffect(() => { _demoSafeSave("vgc_current_user", currentUser); }, [currentUser]);
+  useEffect(() => { _demoSafeSave("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_rbac_audit", rbacAuditLog); }, [rbacAuditLog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_custom_permissions", customPermissions); }, [customPermissions]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Global Auto-Sync: Zendesk ↔ ITSM (every 60s) ─────────────────
   // HARD RULE: Demo user must NEVER trigger production API calls

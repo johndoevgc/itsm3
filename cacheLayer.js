@@ -53,7 +53,7 @@ class CacheLayer {
   invalidatePrefix(prefix) {
     let count = 0;
     for (const key of this.cache.keys()) {
-      if (key.startsWith(prefix)) { this.cache.delete(key); count++; }
+      if (key.startsWith(prefix) || key.includes(`:${prefix}:`)) { this.cache.delete(key); count++; }
     }
     return count;
   }
