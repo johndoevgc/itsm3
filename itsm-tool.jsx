@@ -3459,8 +3459,8 @@ export default function ITSMApp() {
     setCsatSubmitting(true);
     try {
       const res = await fetch("/api/csat/submit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, agentName: currentUser, customerName: form.customerName || "Customer" }) });
-      if (res.ok) { const data = await res.json(); addNotification("CSAT", `Survey response recorded: ${form.rating}/5 for ${form.ticketId}`, "success"); setCsatSubmitForm({ ticketId: "", rating: 0, comment: "", category: "General" }); fetchCsatScores(); return data; }
-    } catch (e) { addNotification("CSAT", `Submit failed: ${e.message}`, "error"); }
+      if (res.ok) { const data = await res.json(); showToast(`Survey response recorded: ${form.rating}/5 for ${form.ticketId}`, "success"); setCsatSubmitForm({ ticketId: "", rating: 0, comment: "", category: "General" }); fetchCsatScores(); return data; }
+    } catch (e) { showToast(`CSAT submit failed: ${e.message}`, "error"); }
     setCsatSubmitting(false);
     return null;
   };
@@ -3492,17 +3492,17 @@ export default function ITSMApp() {
         body: JSON.stringify({ ...freezeForm, createdBy: currentUser.name || "Admin" }),
       });
       if (res.ok) {
-        addNotification("Change Calendar", `Freeze window created: ${freezeForm.reason}`, "success");
+        showToast(`Freeze window created: ${freezeForm.reason}`, "success");
         setFreezeForm({ startDate: "", endDate: "", reason: "", show: false });
         fetchCalendarData();
       }
-    } catch (e) { addNotification("Change Calendar", `Failed: ${e.message}`, "error"); }
+    } catch (e) { showToast(`Change Calendar failed: ${e.message}`, "error"); }
   };
 
   const deleteFreezeWindow = async (id) => {
     try {
       const res = await fetch(`/api/changes/freeze-window?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (res.ok) { addNotification("Change Calendar", "Freeze window deleted", "success"); fetchCalendarData(); }
+      if (res.ok) { showToast("Freeze window deleted", "success"); fetchCalendarData(); }
     } catch (e) { console.warn("[Calendar] Delete freeze failed:", e.message); }
   };
 
@@ -11020,7 +11020,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   };
 
   // ─── Extracted Tab Components (fixes React Rules of Hooks violation) ──
-  const EmailWhitelistTab = ({ emailWhitelist, setEmailWhitelist, currentUser, addNotification, DB_API }) => {
+  const EmailWhitelistTab = ({ emailWhitelist, setEmailWhitelist, currentUser, showToast, DB_API }) => {
     const [wlInput, setWlInput] = React.useState("");
     const [wlType, setWlType] = React.useState("domain");
     const [wlLabel, setWlLabel] = React.useState("");
@@ -11081,8 +11081,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           }
         }
         if (newEntries.length > 0) setEmailWhitelist(prev => [...prev, ...newEntries]);
-        addNotification("info", `Imported ${newEntries.length} new domain(s) from customers`);
-      } catch (e) { addNotification("error", "Import failed: " + e.message); }
+        showToast(`Imported ${newEntries.length} new domain(s) from customers`, "info");
+      } catch (e) { showToast("Import failed: " + e.message, "error"); }
       finally { setImporting(false); }
     };
 
@@ -14903,7 +14903,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
         {/* Email Whitelist Configuration */}
         {activeTab === "emailWhitelist" && (
-          <EmailWhitelistTab emailWhitelist={emailWhitelist} setEmailWhitelist={setEmailWhitelist} currentUser={currentUser} addNotification={addNotification} DB_API={DB_API} />
+          <EmailWhitelistTab emailWhitelist={emailWhitelist} setEmailWhitelist={setEmailWhitelist} currentUser={currentUser} showToast={showToast} DB_API={DB_API} />
         )}
 
         {/* Licensing & Billing (Dev Admin Only) */}
