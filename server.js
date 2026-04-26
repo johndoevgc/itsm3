@@ -1491,6 +1491,19 @@ async function processInboundEmails() {
           continue;
         }
 
+        // ── Gate 6.7: Rapid same-sender dedup — same reporter within 2 min, no subject check ──
+        const rapidWindowMs = 2 * 60 * 1000; // 2 minutes
+        const rapidSenderMatch = _emailParsedIncidents.find(inc => {
+          if (inc.source !== "email" || !openStatuses.has(inc.status)) return false;
+          if ((inc.reporterEmail || "").toLowerCase() !== fromAddr) return false;
+          const incTime = inc.createdAt ? new Date(inc.createdAt).getTime() : 0;
+          return (nowMs - incTime) <= rapidWindowMs;
+        });
+        if (rapidSenderMatch) {
+          await _appendAsReply(rapidSenderMatch, msg, fromAddr, subject, "rapid-sender-dedup-2min");
+          continue;
+        }
+
         // Strip HTML from body to get plain text description
         const rawBody = (msg.body?.content || msg.bodyPreview || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
         const description = rawBody.substring(0, 2000);
@@ -7427,6 +7440,130 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) {
       console.error("[CSAT AI Analysis]", err.message);
       return json(res, 200, { success: false, error: err.message });
+    }
+  }
+
+  // ── POST /api/incidents/merge — Merge duplicate incidents into a primary ──
+  if (pathname === "/api/incidents/merge" && method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { primaryId, duplicateIds, mergedBy } = body;
+      if (!primaryId || !Array.isArray(duplicateIds) || duplicateIds.length === 0) {
+        return json(res, 400, { error: "primaryId and duplicateIds[] required" });
+      }
+      // Load primary
+      const primaryRow = await db.get("incidents", primaryId);
+      if (!primaryRow) return json(res, 404, { error: `Primary incident ${primaryId} not found` });
+      const primary = typeof primaryRow === "string" ? JSON.parse(primaryRow) : primaryRow;
+
+      const mergedIds = [];
+      for (const dupId of duplicateIds) {
+        if (dupId === primaryId) continue;
+        const dupRow = await db.get("incidents", dupId);
+        if (!dupRow) continue;
+        const dup = typeof dupRow === "string" ? JSON.parse(dupRow) : dupRow;
+
+        // Merge activity logs from duplicate into primary
+        const dupLogs = Array.isArray(dup.activityLog) ? dup.activityLog : [];
+        if (!Array.isArray(primary.activityLog)) primary.activityLog = [];
+        for (const log of dupLogs) {
+          primary.activityLog.push({ ...log, detail: `[Merged from ${dupId}] ${log.detail || ""}` });
+        }
+
+        // Mark duplicate as closed
+        dup.status = "Closed";
+        dup.duplicateOf = primaryId;
+        dup.updatedAt = new Date().toISOString();
+        if (!Array.isArray(dup.activityLog)) dup.activityLog = [];
+        dup.activityLog.push({
+          id: `AL-MERGE-${Date.now()}`,
+          type: "merged",
+          user: mergedBy || "System",
+          time: new Date().toISOString(),
+          detail: `Closed as duplicate — merged into ${primaryId}`,
+        });
+        await db.upsert("incidents", dupId, JSON.stringify(dup));
+        await db.audit("incidents", dupId, "merge_close", JSON.stringify({ primaryId, mergedBy }), mergedBy || "system");
+        mergedIds.push(dupId);
+      }
+
+      // Add merge summary to primary
+      primary.activityLog.push({
+        id: `AL-MERGE-P-${Date.now()}`,
+        type: "merge_primary",
+        user: mergedBy || "System",
+        time: new Date().toISOString(),
+        detail: `Merged ${mergedIds.length} duplicate(s): ${mergedIds.join(", ")}`,
+      });
+      primary.updatedAt = new Date().toISOString();
+      await db.upsert("incidents", primaryId, JSON.stringify(primary));
+      await db.audit("incidents", primaryId, "merge_primary", JSON.stringify({ mergedIds, mergedBy }), mergedBy || "system");
+
+      if (wsServer) wsServer.broadcast("incidents", { action: "merge", primaryId, mergedIds });
+      return json(res, 200, { success: true, primaryId, mergedIds, mergedCount: mergedIds.length });
+    } catch (err) {
+      console.error("[Incident Merge]", err.message);
+      return json(res, 500, { error: "Merge failed", details: err.message });
+    }
+  }
+
+  // ── GET /api/incidents/duplicates — Scan for potential duplicate groups ──
+  if (pathname === "/api/incidents/duplicates" && method === "GET") {
+    try {
+      const allIncidents = await db.getAll("incidents");
+      const openIncidents = allIncidents.filter(i => !["Closed", "Resolved"].includes(i.status));
+      const normalizeSubject = (s) => (s || "").replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").replace(/^\[.*?\]\s*/g, "").trim().toLowerCase();
+      const wordSimilarity = (s1, s2) => {
+        const w1 = s1.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+        const w2 = s2.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+        if (w1.length === 0 || w2.length === 0) return 0;
+        const intersection = w1.filter(w => w2.includes(w)).length;
+        return intersection / Math.max(w1.length, w2.length);
+      };
+
+      // Build groups: cluster by same reporter + high subject similarity + time proximity
+      const groups = [];
+      const visited = new Set();
+      for (let i = 0; i < openIncidents.length; i++) {
+        if (visited.has(openIncidents[i].id)) continue;
+        const a = openIncidents[i];
+        const cluster = [a];
+        for (let j = i + 1; j < openIncidents.length; j++) {
+          if (visited.has(openIncidents[j].id)) continue;
+          const b = openIncidents[j];
+          const sameSender = (a.reporterEmail || "").toLowerCase() === (b.reporterEmail || "").toLowerCase();
+          const sim = wordSimilarity(normalizeSubject(a.title), normalizeSubject(b.title));
+          const timeA = new Date(a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt || 0).getTime();
+          const timeDiffMin = Math.abs(timeA - timeB) / 60000;
+          // Same sender + (≥60% subject overlap OR created within 5 min)
+          if (sameSender && (sim >= 0.6 || timeDiffMin <= 5)) {
+            cluster.push(b);
+            visited.add(b.id);
+          }
+        }
+        if (cluster.length > 1) {
+          visited.add(a.id);
+          // Pick the earliest as suggested primary
+          cluster.sort((x, y) => new Date(x.createdAt || 0) - new Date(y.createdAt || 0));
+          groups.push({
+            suggestedPrimary: cluster[0].id,
+            incidents: cluster.map(inc => ({
+              id: inc.id, title: inc.title, status: inc.status, priority: inc.priority,
+              reporter: inc.reporterName || inc.reporterEmail, reporterEmail: inc.reporterEmail,
+              createdAt: inc.createdAt, source: inc.source, category: inc.category,
+              activityCount: Array.isArray(inc.activityLog) ? inc.activityLog.length : 0,
+            })),
+            similarity: cluster.length === 2
+              ? Math.round(wordSimilarity(normalizeSubject(cluster[0].title), normalizeSubject(cluster[1].title)) * 100)
+              : Math.round(cluster.slice(1).reduce((sum, c) => sum + wordSimilarity(normalizeSubject(cluster[0].title), normalizeSubject(c.title)), 0) / (cluster.length - 1) * 100),
+            reporter: cluster[0].reporterEmail,
+          });
+        }
+      }
+      return json(res, 200, { scanned: openIncidents.length, groupsFound: groups.length, groups });
+    } catch (err) {
+      return json(res, 500, { error: "Duplicate scan failed", details: err.message });
     }
   }
 
