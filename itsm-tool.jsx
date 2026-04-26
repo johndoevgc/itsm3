@@ -2032,6 +2032,8 @@ export default function ITSMApp() {
   const zdRealTimePollRef = useRef(null);
   const [zdEditingDraft, setZdEditingDraft] = useState(null);
   const [zdEditedText, setZdEditedText] = useState("");
+  const [zdExpandedSections, setZdExpandedSections] = useState({}); // { "ZDAI-xxx:customer": true, ... }
+  const zdToggleSection = (qId, section) => setZdExpandedSections(prev => ({ ...prev, [`${qId}:${section}`]: !prev[`${qId}:${section}`] }));
   const [zdImportProgress, setZdImportProgress] = useState(null);
   const zdBatchThrottleRef = useRef(0);
   // ─── Workflow Automation Rules State ─────────────────────────────────────
@@ -18946,6 +18948,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       const ticket = data.ticket;
       const requester = data.requester;
 
+      // Compute SLA deadline from creation time + target hours
+      const slaTargetHours = data.slaTargetHours || 9;
+      const ticketCreated = ticket?.created_at || new Date().toISOString();
+      const slaDeadline = new Date(new Date(ticketCreated).getTime() + slaTargetHours * 3600000).toISOString();
+
       const queueItem = {
         id: `ZDAI-${Date.now()}-${ticketId}`,
         ticketId, ticketSubject: ticket?.subject || "No subject",
@@ -18961,6 +18968,18 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         slaPriority: triage.sla_priority || "Sev-D",
         status: "pending_approval",
         createdAt: new Date().toISOString(), reviewedBy: null,
+        // Enriched context for engineer review
+        ticketDescription: data.ticketDescription || ticket?.description || "",
+        ticketComments: data.recentComments || [],
+        customerCompany: data.organization?.name || data.itsmCustomer?.name || "",
+        customerContract: data.itsmCustomer?.contract || "",
+        customerCategory: data.itsmCustomer?.category || "",
+        customerServices: data.itsmCustomer?.services || "",
+        orgDomains: data.organization?.domains || [],
+        historicalTicketCount: data.historicalTicketCount || 0,
+        lastTicketDate: data.lastTicketDate || null,
+        slaTargetHours,
+        slaDeadline,
       };
 
       setZdTriagedIds(prev => new Set(prev).add(ticketId));
@@ -19428,7 +19447,15 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     const priorityColor = (p) => ({ urgent: "#FF6B6B", high: "#FFB347", normal: "#64B5F6", low: "#81C784" }[p] || "#5A6178");
     const slaPriorityColor = (p) => ({ "Sev-A": "#FF6B6B", "Sev-B": "#FFB347", "Sev-C": "#64B5F6", "Sev-D": "#81C784" }[p] || "#5A6178");
     const statusIcon = (s) => ({ new: "🆕", open: "📂", pending: "⏳", hold: "⏸️", solved: "✅", closed: "🔒" }[s] || "📋");
-    const pendingQueue = zdAiQueue.filter(q => q.status === "pending_approval");
+    const pendingQueue = zdAiQueue.filter(q => q.status === "pending_approval").sort((a, b) => {
+      // Critical priority always first
+      if (a.suggestedPriority === "urgent" && b.suggestedPriority !== "urgent") return -1;
+      if (b.suggestedPriority === "urgent" && a.suggestedPriority !== "urgent") return 1;
+      // Then sort by SLA deadline (nearest breach first)
+      const aDeadline = a.slaDeadline ? new Date(a.slaDeadline).getTime() : Infinity;
+      const bDeadline = b.slaDeadline ? new Date(b.slaDeadline).getTime() : Infinity;
+      return aDeadline - bDeadline;
+    });
     const approvedSentQueue = zdAiQueue.filter(q => q.status === "sent");
     const rejectedQueue = zdAiQueue.filter(q => q.status === "rejected");
 
@@ -19729,7 +19756,20 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             ) : (
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  {sectionLabel("👤", "Requires Your Approval", pendingQueue.length)}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {sectionLabel("👤", "Requires Your Approval", pendingQueue.length)}
+                    {(() => {
+                      const now = Date.now();
+                      const breached = pendingQueue.filter(q => q.slaDeadline && new Date(q.slaDeadline).getTime() <= now).length;
+                      const urgent = pendingQueue.filter(q => { const r = q.slaDeadline ? (new Date(q.slaDeadline).getTime() - now) / 3600000 : 99; return r > 0 && r < 1; }).length;
+                      const atRisk = pendingQueue.filter(q => { const r = q.slaDeadline ? (new Date(q.slaDeadline).getTime() - now) / 3600000 : 99; return r >= 1 && r < 2; }).length;
+                      return <>
+                        {breached > 0 && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FF6B6B22", color: "#FF6B6B", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>🚨 {breached} BREACHED</span>}
+                        {urgent > 0 && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FF6B6B22", color: "#FF6B6B", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>⏰ {urgent} URGENT</span>}
+                        {atRisk > 0 && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FFB34722", color: "#FFB347", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>⚠️ {atRisk} AT RISK</span>}
+                      </>;
+                    })()}
+                  </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     {pendingQueue.filter(q => q.autoSendable && q.confidence >= 85).length > 0 && (
                       <button onClick={async () => {
@@ -19749,12 +19789,34 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                     <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>⚠️ Human approval required</span>
                   </div>
                 </div>
-                {pendingQueue.map((q, i) => (
-                  <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, border: `1px solid ${q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                {pendingQueue.map((q, i) => {
+                  // SLA countdown calculation
+                  const slaDeadlineMs = q.slaDeadline ? new Date(q.slaDeadline).getTime() : 0;
+                  const nowMs = Date.now();
+                  const slaRemainingMs = slaDeadlineMs - nowMs;
+                  const slaRemainingHrs = slaRemainingMs > 0 ? (slaRemainingMs / 3600000) : 0;
+                  const slaTotalHrs = q.slaTargetHours || 9;
+                  const slaPct = Math.max(0, Math.min(100, (slaRemainingHrs / slaTotalHrs) * 100));
+                  const slaBreached = slaRemainingMs <= 0;
+                  const slaUrgent = slaRemainingHrs < 1 && !slaBreached;
+                  const slaAtRisk = slaRemainingHrs < 2 && !slaUrgent && !slaBreached;
+                  const slaBarColor = slaBreached ? "#FF6B6B" : slaUrgent ? "#FF6B6B" : slaAtRisk ? "#FFB347" : "#81C784";
+                  const slaLabel = slaBreached ? "SLA BREACHED" : slaRemainingHrs < 1 ? `${Math.round(slaRemainingMs / 60000)}m remaining` : `${slaRemainingHrs.toFixed(1)}h remaining`;
+                  const isCustomerExpanded = zdExpandedSections[`${q.id}:customer`];
+                  const isDescExpanded = zdExpandedSections[`${q.id}:desc`];
+                  const isCommentsExpanded = zdExpandedSections[`${q.id}:comments`];
+
+                  return (
+                  <div key={q.id} style={{ ...cardStyle, padding: 16, marginBottom: 12, border: `1px solid ${slaBreached ? "#FF6B6B55" : q.confidence < 70 ? "#FF6B6B33" : "#FFB34733"}` }}>
+                    {/* ── Header: Ticket, Priority, SLA, Confidence, Company ── */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 6 }}>Ticket #{q.ticketId} — {q.ticketSubject}</div>
-                        {q.requesterName && <div style={{ fontSize: 10, color: "#A0AEC0", marginBottom: 6 }}>👤 {q.requesterName}{q.requesterEmail ? ` · ${q.requesterEmail}` : ""}</div>}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>Ticket #{q.ticketId}</span>
+                          {q.customerCompany && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#06B6D412", color: "#06B6D4", fontWeight: 600 }}>🏢 {q.customerCompany}</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#C4CAD6", marginBottom: 6 }}>{q.ticketSubject}</div>
+                        {q.requesterName && <div style={{ fontSize: 10, color: "#A0AEC0", marginBottom: 6 }}>👤 {q.requesterName}{q.requesterEmail ? ` · ${q.requesterEmail}` : ""}{q.historicalTicketCount > 1 ? ` · ${q.historicalTicketCount} previous tickets` : q.historicalTicketCount === 1 ? " · First ticket" : ""}</div>}
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: priorityColor(q.suggestedPriority) + "22", color: priorityColor(q.suggestedPriority), fontWeight: 600 }}>Priority: {q.suggestedPriority}</span>
                           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{q.category}</span>
@@ -19770,6 +19832,80 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                         <div>{new Date(q.createdAt).toLocaleString("en-SG")}</div>
                       </div>
                     </div>
+
+                    {/* ── SLA Impact Bar ── */}
+                    <div style={{ background: "#0A0C14", borderRadius: 6, padding: "6px 10px", marginBottom: 10, border: `1px solid ${slaBarColor}22` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <span style={{ fontSize: 9, color: slaBarColor, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{slaBreached ? "🚨" : slaUrgent ? "⏰" : "⏱️"} {slaLabel}</span>
+                        <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{q.slaPriority} · {slaTotalHrs}h target</span>
+                      </div>
+                      <div style={{ width: "100%", height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${slaPct}%`, height: "100%", background: slaBarColor, borderRadius: 2, transition: "width 0.3s" }} />
+                      </div>
+                    </div>
+
+                    {/* ── Collapsible: Customer Context ── */}
+                    {(q.customerCompany || q.customerContract || q.historicalTicketCount > 0) && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div onClick={() => zdToggleSection(q.id, "customer")} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "6px 10px", background: "#06B6D408", border: "1px solid #06B6D418", borderRadius: isCustomerExpanded ? "8px 8px 0 0" : 8, userSelect: "none" }}>
+                          <span style={{ fontSize: 9, color: "#06B6D4", transform: isCustomerExpanded ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>▶</span>
+                          <span style={{ fontSize: 9, color: "#06B6D4", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🏢 CUSTOMER CONTEXT</span>
+                          {!isCustomerExpanded && q.customerCompany && <span style={{ fontSize: 9, color: "#5A6178", marginLeft: 8 }}>{q.customerCompany}{q.customerContract ? ` · ${q.customerContract}` : ""}</span>}
+                        </div>
+                        {isCustomerExpanded && (
+                          <div style={{ padding: "8px 12px", background: "#06B6D406", border: "1px solid #06B6D418", borderTop: "none", borderRadius: "0 0 8px 8px" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                              {q.customerCompany && <div><span style={{ fontSize: 8, color: "#5A6178", display: "block" }}>COMPANY</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{q.customerCompany}</span></div>}
+                              {q.customerContract && <div><span style={{ fontSize: 8, color: "#5A6178", display: "block" }}>CONTRACT</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{q.customerContract}</span></div>}
+                              {q.customerCategory && <div><span style={{ fontSize: 8, color: "#5A6178", display: "block" }}>CATEGORY</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{q.customerCategory}</span></div>}
+                              {q.customerServices && <div><span style={{ fontSize: 8, color: "#5A6178", display: "block" }}>SERVICES</span><span style={{ fontSize: 11, color: "#C4CAD6" }}>{q.customerServices}</span></div>}
+                            </div>
+                            {q.historicalTicketCount > 0 && (
+                              <div style={{ marginTop: 6, fontSize: 10, color: "#A0AEC0" }}>📊 {q.historicalTicketCount} total ticket{q.historicalTicketCount > 1 ? "s" : ""} from this requester{q.lastTicketDate ? ` · Last: ${new Date(q.lastTicketDate).toLocaleDateString("en-SG")}` : ""}</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Collapsible: Original Request ── */}
+                    {q.ticketDescription && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div onClick={() => zdToggleSection(q.id, "desc")} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "6px 10px", background: "#3B82F608", border: "1px solid #3B82F618", borderRadius: isDescExpanded ? "8px 8px 0 0" : 8, userSelect: "none" }}>
+                          <span style={{ fontSize: 9, color: "#3B82F6", transform: isDescExpanded ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>▶</span>
+                          <span style={{ fontSize: 9, color: "#3B82F6", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>📝 ORIGINAL REQUEST</span>
+                          {!isDescExpanded && <span style={{ fontSize: 9, color: "#5A6178", marginLeft: 8 }}>{(q.ticketDescription || "").substring(0, 80)}{(q.ticketDescription || "").length > 80 ? "…" : ""}</span>}
+                        </div>
+                        {isDescExpanded && (
+                          <div style={{ padding: "8px 12px", background: "#3B82F606", border: "1px solid #3B82F618", borderTop: "none", borderRadius: "0 0 8px 8px", maxHeight: 200, overflow: "auto" }}>
+                            <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{q.ticketDescription}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Collapsible: Conversation History ── */}
+                    {(q.ticketComments || []).length > 0 && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div onClick={() => zdToggleSection(q.id, "comments")} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "6px 10px", background: "#A78BFA08", border: "1px solid #A78BFA18", borderRadius: isCommentsExpanded ? "8px 8px 0 0" : 8, userSelect: "none" }}>
+                          <span style={{ fontSize: 9, color: "#A78BFA", transform: isCommentsExpanded ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>▶</span>
+                          <span style={{ fontSize: 9, color: "#A78BFA", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>💬 CONVERSATION HISTORY ({q.ticketComments.length})</span>
+                        </div>
+                        {isCommentsExpanded && (
+                          <div style={{ padding: "8px 12px", background: "#A78BFA06", border: "1px solid #A78BFA18", borderTop: "none", borderRadius: "0 0 8px 8px", maxHeight: 250, overflow: "auto" }}>
+                            {q.ticketComments.map((c, ci) => (
+                              <div key={ci} style={{ marginBottom: ci < q.ticketComments.length - 1 ? 10 : 0, paddingBottom: ci < q.ticketComments.length - 1 ? 10 : 0, borderBottom: ci < q.ticketComments.length - 1 ? "1px solid #1E213044" : "none" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                                  <span style={{ fontSize: 10, color: c.authorRole === "end-user" ? "#FFB347" : "#81C784", fontWeight: 600 }}>{c.authorName || "Unknown"} <span style={{ fontWeight: 400, color: "#5A6178" }}>({c.authorRole === "end-user" ? "Customer" : c.authorRole === "agent" ? "Agent" : c.authorRole || ""})</span></span>
+                                  <span style={{ fontSize: 9, color: "#5A6178" }}>{c.createdAt ? new Date(c.createdAt).toLocaleString("en-SG", { dateStyle: "short", timeStyle: "short" }) : ""}</span>
+                                </div>
+                                <div style={{ fontSize: 11, color: "#C4CAD6", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{c.body}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Internal AI Analysis */}
                     <div style={{ background: "#FFB34708", border: "1px solid #FFB34722", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
@@ -19809,7 +19945,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

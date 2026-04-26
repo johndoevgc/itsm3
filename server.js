@@ -2732,6 +2732,28 @@ const server = http.createServer(async (req, res) => {
         const ticket = await zdRequest("GET", `/tickets/${ticketId}.json`);
         const comments = await zdRequest("GET", `/tickets/${ticketId}/comments.json`).catch(() => ({ comments: [] }));
         const lastComment = (comments.comments || []).slice(-1)[0]?.body || "";
+        // Build recent comments array (last 3) with author info
+        const allComments = comments.comments || [];
+        const recentComments = allComments.slice(-3).map(c => ({
+          body: (c.body || "").substring(0, 1000),
+          author: c.author_id,
+          createdAt: c.created_at,
+          isPublic: c.public !== false,
+        }));
+        // Resolve comment author names
+        const authorIds = [...new Set(recentComments.map(c => c.author).filter(Boolean))];
+        const authorMap = {};
+        for (const aid of authorIds) {
+          try {
+            const u = await zdRequest("GET", `/users/${aid}.json`);
+            if (u?.user) authorMap[aid] = { name: u.user.name, email: u.user.email, role: u.user.role };
+          } catch {}
+        }
+        for (const c of recentComments) {
+          const a = authorMap[c.author];
+          c.authorName = a?.name || `User ${c.author}`;
+          c.authorRole = a?.role || "unknown";
+        }
         // Fetch requester info for ITSM incident mapping
         let requester = null;
         if (ticket.ticket?.requester_id) {
@@ -2740,6 +2762,45 @@ const server = http.createServer(async (req, res) => {
             requester = reqData?.user || null;
           } catch {}
         }
+        // Fetch Zendesk organization info
+        let zdOrg = null;
+        const orgId = requester?.organization_id || ticket.ticket?.organization_id;
+        if (orgId) {
+          try {
+            const orgData = await zdRequest("GET", `/organizations/${orgId}.json`);
+            zdOrg = orgData?.organization ? { name: orgData.organization.name, domains: orgData.organization.domain_names || [] } : null;
+          } catch {}
+        }
+        // Match ITSM customer by org name or requester email domain
+        let itsmCustomer = null;
+        try {
+          const custRows = await db.getAll("customers");
+          const reqDomain = (requester?.email || "").split("@")[1]?.toLowerCase();
+          const orgName = (zdOrg?.name || "").toLowerCase();
+          for (const row of custRows) {
+            const cust = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            if (!cust) continue;
+            const custDomain = (cust.email || "").split("@")[1]?.toLowerCase();
+            const custName = (cust.company || cust.name || "").toLowerCase();
+            if ((reqDomain && custDomain && reqDomain === custDomain) || (orgName && custName && orgName.includes(custName))) {
+              itsmCustomer = { name: cust.company || cust.name, category: cust.category, contract: cust.contract || cust.contractType, services: cust.services };
+              break;
+            }
+          }
+        } catch {}
+        // Count historical tickets from same requester
+        let historicalTicketCount = 0;
+        let lastTicketDate = null;
+        if (requester?.email) {
+          try {
+            const histSearch = await zdRequest("GET", `/search.json?query=type:ticket requester:${encodeURIComponent(requester.email)}&sort_by=created_at&sort_order=desc&per_page=5`);
+            const histResults = histSearch?.results || [];
+            historicalTicketCount = histSearch?.count || histResults.length;
+            if (histResults.length > 1) lastTicketDate = histResults[1]?.created_at; // [0] is current ticket
+          } catch {}
+        }
+        // SLA target hours mapping
+        const slaHoursMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
 
         const systemPrompt = `You are an expert IT support AI for VGC Technology Pte Ltd — a managed IT services company.
 Analyze the support ticket and return a JSON object with:
@@ -2795,7 +2856,19 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           parsed = { category: "General", priority: "normal", tags: [], draft_response: text, internal_note: "Unstructured AI response", confidence: 50, suggested_assignee: "L1 Support", auto_sendable: false, itsm_category: "General", sla_priority: "Sev-D" };
         }
 
-        return json(res, 200, { triage: parsed, ticket: ticket.ticket, requester: requester ? { name: requester.name, email: requester.email, phone: requester.phone, organization_id: requester.organization_id } : null });
+        const slaPri = parsed.sla_priority || "Sev-D";
+        const slaTargetHours = slaHoursMap[slaPri] || 9;
+        return json(res, 200, {
+          triage: parsed, ticket: ticket.ticket,
+          requester: requester ? { name: requester.name, email: requester.email, phone: requester.phone, organization_id: requester.organization_id } : null,
+          ticketDescription: (ticket.ticket?.description || "").substring(0, 3000),
+          recentComments,
+          organization: zdOrg,
+          itsmCustomer,
+          historicalTicketCount,
+          lastTicketDate,
+          slaTargetHours,
+        });
       }
 
       // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)
@@ -2840,7 +2913,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 Ticket Reference: #${ticketId}<br/>
                 VGC IT Support — <a href="mailto:${MAIL_FROM}">${MAIL_FROM}</a></p>
               </div>`;
-              await graphSendMail({ to: requesterEmail, subject: `Re: ${ticketSubject} [#${ticketId}]`, body: htmlBody });
+              await graphSendMail({ to: requesterEmail, subject: `Re: ${ticketSubject} [#${ticketId}]`, body: htmlBody, isCustomerEmail: true });
               emailResult = { sent: true, to: requesterEmail };
               console.log(`[M365 Mail] Ticket #${ticketId} response emailed to ${requesterEmail}`);
             }
