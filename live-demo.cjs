@@ -70,8 +70,8 @@ async function main() {
   console.log(`  Target: ${BASE}`);
   console.log(`  Time: ${new Date().toISOString()}\n`);
   
-  look("Open the ITSM dashboard in your browser:");
-  console.log(`  \x1b[4;34m${BASE}\x1b[0m\n`);
+  look("Open the ITSM dashboard in your browser (demo mode — no production data):");
+  console.log(`  \x1b[4;34m${BASE}?demo=true\x1b[0m\n`);
   
   await waitForEnter("  ⏸️  Press ENTER when browser is ready...");
 

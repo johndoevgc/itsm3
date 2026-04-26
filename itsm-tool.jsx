@@ -2062,10 +2062,11 @@ export default function ITSMApp() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => _ls("vgc_current_user", null) !== null);
 
   // ─── HARD RULE: Data Isolation Mode ────────────────────────────────
-  // Demo mode = local devadmin user → only demo/seed data, NO production API calls
-  // Production mode = Entra ID users → only real Zendesk/API data, NO demo/hardcoded data
-  const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
-  const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
+  // Demo mode: ?demo=true in URL → forces demo seed data only (no production data exposure)
+  // Production mode = Entra ID users (without ?demo=true) → only real Zendesk/API data
+  const isDemoMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "true";
+  const isLocalDemoUser = isDemoMode || !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
+  const isEntraProductionUser = !isDemoMode && !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
 
   const [localUsername, setLocalUsername] = useState("");
@@ -2152,6 +2153,22 @@ export default function ITSMApp() {
       })();
     }
   }, [currentUser, isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── DEMO MODE: Force seed data only — no production data leakage ─────
+  useEffect(() => {
+    if (!isDemoMode) return;
+    // Clear any cached production data from localStorage so seed defaults take effect
+    ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_customers",
+     "vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
+    // Force-reset ITSM data to demo seed values (overrides any production data from prior Entra session)
+    setIncidents(INITIAL_INCIDENTS.filter(i => i.id !== "INC0001"));
+    setProblems(INITIAL_PROBLEMS.filter(p => p.id !== "PRB0001" && !p.title?.includes("Problem from INC000")));
+    setChanges(INITIAL_CHANGES.filter(c => c.id !== "CHG0002"));
+    setRequests(INITIAL_REQUESTS);
+    setAssets(ASSETS);
+    setCustomers(INITIAL_CUSTOMERS);
+    console.log("[DEMO MODE] Data isolation active — showing only demo seed data, production data hidden");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch live cyber news for dashboard threat feed
   useEffect(() => {

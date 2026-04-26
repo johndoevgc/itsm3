@@ -4,7 +4,7 @@ const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
 
-const APP = "https://vgc-itsm1-app.azurewebsites.net";
+const APP = "https://vgc-itsm1-app.azurewebsites.net?demo=true";
 const SS = path.join(__dirname, "screenshots");
 if (!fs.existsSync(SS)) fs.mkdirSync(SS);
 
