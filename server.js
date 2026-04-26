@@ -717,6 +717,289 @@ function parseBody(req, maxSize = 50000) {
   });
 }
 
+// ─── Enterprise Email Template Builder ───────────────────────────────────
+// Centralized HTML email builder for all notification types. Outlook-compatible
+// table-based layout with structured sections: header, action banner, details,
+// resolution, impact, next actions, references, AI guidance, footer.
+const PORTAL_URL = "https://vgc-itsm1-app.azurewebsites.net";
+const EMAIL_PRESETS = {
+  incident_resolved:       { color: "#4CAF50", gradient: "linear-gradient(135deg,#4CAF50,#06B6D4)", icon: "&#9989;", label: "Incident Resolved",           actionRequired: false },
+  incident_assigned:       { color: "#F59E0B", gradient: "linear-gradient(135deg,#F59E0B,#EF4444)", icon: "&#128276;", label: "Incident Assigned to You",    actionRequired: true },
+  incident_closed:         { color: "#6B7280", gradient: "linear-gradient(135deg,#6B7280,#374151)", icon: "&#128193;", label: "Incident Closed",             actionRequired: false },
+  ai_review:               { color: "#7C3AED", gradient: "linear-gradient(135deg,#7C3AED,#6366F1)", icon: "&#129302;", label: "AI Auto-Resolve — Review Required", actionRequired: true },
+  ai_approved_customer:    { color: "#0078D4", gradient: "linear-gradient(135deg,#0078D4,#00BCF2)", icon: "&#9989;", label: "Incident Resolved",             actionRequired: false },
+  ai_approved_internal:    { color: "#0078D4", gradient: "linear-gradient(135deg,#0078D4,#6366F1)", icon: "&#9989;", label: "Resolution Approved",           actionRequired: false },
+  ai_followup:             { color: "#6366F1", gradient: "linear-gradient(135deg,#6366F1,#8B5CF6)", icon: "&#128233;", label: "Follow-Up Update",            actionRequired: false },
+  ai_followup_resolved:    { color: "#4CAF50", gradient: "linear-gradient(135deg,#4CAF50,#06B6D4)", icon: "&#9989;", label: "Incident Resolved",             actionRequired: false },
+  escalation:              { color: "#EF4444", gradient: "linear-gradient(135deg,#EF4444,#F59E0B)", icon: "&#9889;", label: "Incident Escalated",            actionRequired: true },
+  sla_warning:             { color: "#F59E0B", gradient: "linear-gradient(135deg,#F59E0B,#EAB308)", icon: "&#9202;", label: "SLA Breach Warning",            actionRequired: true },
+  general_info:            { color: "#4CAF50", gradient: "linear-gradient(135deg,#4CAF50,#06B6D4)", icon: "&#8505;", label: "Notification",                  actionRequired: false },
+  general_warning:         { color: "#FFB347", gradient: "linear-gradient(135deg,#FFB347,#F59E0B)", icon: "&#9888;", label: "Warning",                       actionRequired: false },
+  general_critical:        { color: "#FF4444", gradient: "linear-gradient(135deg,#FF4444,#EF4444)", icon: "&#128680;", label: "Critical Alert",              actionRequired: true },
+};
+
+function esc(s) { return String(s || "").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function formatResolutionText(raw) {
+  if (!raw) return "";
+  let text = String(raw);
+  // Convert markdown bold **text** to <strong>
+  text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // Detect numbered items: (1), 1., 1) — split into ordered list
+  const numberedPattern = /(?:^|\n)\s*(?:\(?\d+\)?[\.\):])\s+/;
+  if (numberedPattern.test(text)) {
+    const items = text.split(/(?:^|\n)\s*(?:\(?\d+\)?[\.\):])\s+/).filter(Boolean);
+    if (items.length > 1) {
+      return `<ol style="margin:8px 0;padding-left:20px;color:#1F2937;font-size:13px;line-height:1.7;">${items.map(i => `<li style="margin-bottom:6px;">${i.trim().replace(/\n/g, " ")}</li>`).join("")}</ol>`;
+    }
+  }
+  // Detect bullet points: •, -, *
+  const bulletPattern = /(?:^|\n)\s*[•\-\*]\s+/;
+  if (bulletPattern.test(text)) {
+    const items = text.split(/(?:^|\n)\s*[•\-\*]\s+/).filter(Boolean);
+    if (items.length > 1) {
+      return `<ul style="margin:8px 0;padding-left:20px;color:#1F2937;font-size:13px;line-height:1.7;">${items.map(i => `<li style="margin-bottom:6px;">${i.trim().replace(/\n/g, " ")}</li>`).join("")}</ul>`;
+    }
+  }
+  // Paragraphs: double newline
+  const paras = text.split(/\n{2,}/).filter(Boolean);
+  if (paras.length > 1) {
+    return paras.map(p => `<p style="margin:0 0 10px;color:#1F2937;font-size:13px;line-height:1.7;">${p.trim().replace(/\n/g, "<br/>")}</p>`).join("");
+  }
+  // Single paragraph
+  return `<p style="margin:0;color:#1F2937;font-size:13px;line-height:1.7;">${text.replace(/\n/g, "<br/>")}</p>`;
+}
+
+function buildEmailTemplate(opts = {}) {
+  const {
+    type = "general_info",
+    title = "",
+    incidentId = "",
+    priority = "",
+    category = "",
+    status = "",
+    assignee = "",
+    confidence,
+    approvedBy = "",
+    resolvedBy = "",
+    resolution = "",
+    rootCause = "",
+    customerName = "",
+    customerMessage = "",
+    description = "",
+    impactAssessment = null,
+    nextActions = [],
+    references = [],
+    aiGuidance = "",
+    additionalFields = {},
+    footerNote = "",
+    timestamp = new Date().toISOString(),
+  } = opts;
+
+  const preset = EMAIL_PRESETS[type] || EMAIL_PRESETS.general_info;
+  const actionRequired = opts.actionRequired !== undefined ? opts.actionRequired : preset.actionRequired;
+  const dateStr = new Date(timestamp).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Singapore" });
+
+  // ── Build incident details rows ──
+  const detailRows = [];
+  if (incidentId) detailRows.push(["Incident ID", esc(incidentId)]);
+  if (title) detailRows.push(["Title", esc(title)]);
+  if (priority) detailRows.push(["Priority", esc(priority)]);
+  if (category) detailRows.push(["Category", esc(category)]);
+  if (status) detailRows.push(["Status", esc(status)]);
+  if (assignee) detailRows.push(["Assigned To", esc(assignee)]);
+  if (confidence !== undefined && confidence !== null) detailRows.push(["AI Confidence", `${confidence}%`]);
+  if (approvedBy) detailRows.push(["Approved By", esc(approvedBy)]);
+  if (resolvedBy) detailRows.push(["Resolved By", esc(resolvedBy)]);
+  Object.entries(additionalFields).forEach(([k, v]) => { if (v) detailRows.push([esc(k), esc(v)]); });
+  const detailsHtml = detailRows.map((r, i) =>
+    `<tr style="background:${i % 2 === 0 ? "#f8fafc" : "#ffffff"};"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:140px;border-bottom:1px solid #e8ebef;">${r[0]}</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${r[1]}</td></tr>`
+  ).join("");
+
+  // ── Action banner ──
+  const bannerHtml = actionRequired
+    ? `<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td style="background:#FFF3CD;border:1px solid #FFD700;border-radius:6px;padding:14px 18px;margin:0;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+          <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:14px;font-weight:700;color:#856404;">&#9888; Action Required</td>
+          <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:#856404;">Please review and take action</td>
+        </tr></table>
+      </td></tr></table>`
+    : `<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td style="background:#D4EDDA;border:1px solid #28A745;border-radius:6px;padding:14px 18px;margin:0;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+          <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:14px;font-weight:700;color:#155724;">&#8505; For Your Information</td>
+          <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:#155724;">No action required at this time</td>
+        </tr></table>
+      </td></tr></table>`;
+
+  // ── Resolution section ──
+  const resolutionHtml = resolution ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+    <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#128221; Resolution Summary</td></tr>
+    <tr><td style="background:#f8fafc;border:1px solid #e8ebef;border-radius:6px;padding:14px 16px;">${formatResolutionText(resolution)}</td></tr>
+  </table>` : "";
+
+  // ── Root cause ──
+  const rootCauseHtml = rootCause ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:14px;">
+    <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#128269; Root Cause Analysis</td></tr>
+    <tr><td style="background:#FFF8F0;border:1px solid #FED7AA;border-radius:6px;padding:14px 16px;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;color:#1F2937;line-height:1.6;">${esc(rootCause)}</td></tr>
+  </table>` : "";
+
+  // ── Organization & Customer Impact ──
+  let impactHtml = "";
+  if (impactAssessment) {
+    const ia = impactAssessment;
+    impactHtml = `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+      <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#127919; Impact Assessment</td></tr>
+      <tr><td style="border:1px solid #e8ebef;border-radius:6px;overflow:hidden;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr style="background:#f0f7ff;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#1E40AF;width:160px;border-bottom:1px solid #e8ebef;">Organization Impact</td>
+            <td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${ia.orgImpacted ? "&#9888; Yes — " + esc(ia.orgDetails || "Review recommended") : "&#9989; No direct impact identified"}</td></tr>
+          <tr><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#1E40AF;width:160px;">Customer Impact</td>
+            <td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;">${ia.customerImpacted ? "&#9888; Yes — " + esc(ia.customerDetails || "Customer may be affected") : "&#9989; No customer impact"}</td></tr>
+        </table>
+      </td></tr>
+    </table>`;
+  }
+
+  // ── Next Actions ──
+  let actionsHtml = "";
+  if (nextActions.length > 0) {
+    const actionItems = nextActions.map((a, i) => {
+      const linkBtn = a.url ? ` <a href="${a.url.replace(/"/g, "&quot;")}" style="display:inline-block;margin-left:8px;padding:4px 12px;background:#0078D4;color:#ffffff;font-size:11px;font-weight:600;border-radius:4px;text-decoration:none;font-family:'Segoe UI',Arial,sans-serif;">${esc(a.linkLabel || "Open")}</a>` : "";
+      return `<tr><td style="padding:8px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1F2937;border-bottom:1px solid #f0f0f0;line-height:1.6;"><strong style="color:#0078D4;">${i + 1}.</strong> ${esc(a.label || a.step || a)}${linkBtn}</td></tr>`;
+    }).join("");
+    actionsHtml = `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+      <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#128203; Recommended Next Actions</td></tr>
+      <tr><td style="border:1px solid #e8ebef;border-radius:6px;overflow:hidden;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">${actionItems}</table>
+      </td></tr>
+    </table>`;
+  }
+
+  // ── Official References ──
+  let refsHtml = "";
+  if (references.length > 0) {
+    const refItems = references.filter(r => r.url && r.title).map(r =>
+      `<tr><td style="padding:6px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;border-bottom:1px solid #f0f0f0;">&#128206; <a href="${r.url.replace(/"/g, "&quot;")}" style="color:#0369A1;text-decoration:none;font-weight:500;">${esc(r.title)}</a>${r.source ? ` <span style="color:#9CA3AF;font-size:10px;">(${esc(r.source)})</span>` : ""}</td></tr>`
+    ).join("");
+    if (refItems) {
+      refsHtml = `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+        <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#128218; Official References &amp; Resources</td></tr>
+        <tr><td style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;overflow:hidden;">
+          <table cellpadding="0" cellspacing="0" border="0" width="100%">${refItems}</table>
+        </td></tr>
+      </table>`;
+    }
+  }
+
+  // ── AI Guidance callout ──
+  const aiGuidanceHtml = aiGuidance ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+    <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#129302; ITSM AI Comprehensive Guidance</td></tr>
+    <tr><td style="background:#F5F3FF;border:1px solid #C4B5FD;border-radius:6px;padding:14px 16px;">
+      ${formatResolutionText(aiGuidance)}
+    </td></tr>
+  </table>` : "";
+
+  // ── Customer message callout ──
+  const customerMsgHtml = customerMessage ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:16px;">
+    <tr><td style="padding:14px 16px;background:#f0f7ff;border-left:4px solid #0078D4;border-radius:0 6px 6px 0;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;color:#2d3748;line-height:1.6;">${customerMessage.replace(/</g, "&lt;").replace(/\n/g, "<br/>")}</td></tr>
+  </table>` : "";
+
+  // ── Description (for assignment/review emails) ──
+  const descHtml = description ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:14px;">
+    <tr><td style="font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:700;color:#1a202c;padding:0 0 8px;">&#128196; Description</td></tr>
+    <tr><td style="background:#f8fafc;border:1px solid #e8ebef;border-radius:6px;padding:14px 16px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#374151;line-height:1.6;">${esc(description).substring(0, 500)}</td></tr>
+  </table>` : "";
+
+  // ── Custom footer note ──
+  const footerText = footerNote || (actionRequired
+    ? "Please review and take the recommended actions at your earliest convenience."
+    : "If this issue persists, please reply to this email or open a new support ticket.");
+
+  // ── Portal link button ──
+  const portalBtnHtml = `<table cellpadding="0" cellspacing="0" border="0" style="margin:20px 0 0;">
+    <tr><td align="center" style="background:#0078D4;border-radius:6px;padding:0;">
+      <a href="${PORTAL_URL}" style="display:inline-block;padding:12px 28px;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;">Open VGC ITSM Portal</a>
+    </td></tr>
+  </table>`;
+
+  // ── ASSEMBLE FULL EMAIL ──
+  const html = `<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;font-family:'Segoe UI',Arial,sans-serif;">
+  <tr><td align="center" style="padding:24px 0;">
+    <table cellpadding="0" cellspacing="0" border="0" width="640" style="max-width:640px;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+
+      <!-- HEADER -->
+      <tr><td style="background:${preset.gradient};padding:20px 24px;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:18px;font-weight:700;color:#ffffff;">${preset.icon} ${preset.label}</td>
+            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.85);">VGC Technology<br/>${dateStr}</td>
+          </tr>
+        </table>
+      </td></tr>
+
+      <!-- BODY -->
+      <tr><td style="padding:24px;">
+
+        <!-- Action / FYI Banner -->
+        ${bannerHtml}
+
+        <!-- Incident Details -->
+        ${detailsHtml ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;border:1px solid #e8ebef;border-radius:6px;overflow:hidden;">${detailsHtml}</table>` : ""}
+
+        <!-- Description -->
+        ${descHtml}
+
+        <!-- Resolution -->
+        ${resolutionHtml}
+
+        <!-- Root Cause -->
+        ${rootCauseHtml}
+
+        <!-- Impact Assessment -->
+        ${impactHtml}
+
+        <!-- Customer Message -->
+        ${customerMsgHtml}
+
+        <!-- AI Guidance -->
+        ${aiGuidanceHtml}
+
+        <!-- Next Actions -->
+        ${actionsHtml}
+
+        <!-- References -->
+        ${refsHtml}
+
+        <!-- Portal Link -->
+        ${portalBtnHtml}
+
+        <!-- Footer Note -->
+        <p style="font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#718096;margin:20px 0 0;line-height:1.5;">${esc(footerText)}</p>
+
+      </td></tr>
+
+      <!-- FOOTER -->
+      <tr><td style="background:#f8fafc;border-top:1px solid #e8ebef;padding:14px 24px;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;line-height:1.6;">
+              <strong>VGC Technology Pte Ltd</strong> &middot; IT Service Management<br/>
+              &#128231; <a href="mailto:helpdesk@vgctechnology.com" style="color:#a0aec0;text-decoration:none;">helpdesk@vgctechnology.com</a> &nbsp;|&nbsp; &#128222; +65 6000 0000<br/>
+              This is an automated notification from VGC ITSM. Please do not reply to automated messages.
+            </td>
+            <td align="right" valign="top" style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;">${incidentId ? `Ref: ${esc(incidentId)}` : ""}</td>
+          </tr>
+        </table>
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>`;
+
+  return html;
+}
+
 // ─── Category Normalization ──────────────────────────────────────────────
 // Maps freeform AI-generated categories to ~10 standard ITIL buckets.
 // Applied at incident write time to ensure consistent analytics/reporting.
@@ -1687,23 +1970,17 @@ const server = http.createServer(async (req, res) => {
             to: [body.reporterEmail || body.requesterEmail || "customer@example.com"],
             subject: `[VGC ITSM] Incident ${recordId} — ${body.status}`,
             isCustomerEmail: true,
-            body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
-              <div style="background:linear-gradient(135deg,${body.status === "Resolved" ? "#4CAF50,#06B6D4" : "#6B7280,#374151"});padding:16px 20px;border-radius:8px 8px 0 0;">
-                <h2 style="margin:0;color:#fff;font-size:18px;">${body.status === "Resolved" ? "✅ Incident Resolved" : "📁 Incident Closed"}</h2>
-              </div>
-              <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
-                <table style="border-collapse:collapse;width:100%;">
-                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:8px 12px;">${String(recordId).replace(/</g, "&lt;")}</td></tr>
-                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${(body.title || "").replace(/</g, "&lt;")}</td></tr>
-                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Status</td><td style="padding:8px 12px;">${body.status}</td></tr>
-                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolution</td><td style="padding:8px 12px;">${(body.resolution || "N/A").substring(0, 500).replace(/</g, "&lt;")}</td></tr>
-                  <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolved By</td><td style="padding:8px 12px;">${(body.resolvedBy || body.assignedTo || "IT Support").replace(/</g, "&lt;")}</td></tr>
-                </table>
-                <p style="color:#666;font-size:13px;margin-top:16px;">If this issue persists, please open a new ticket or reply to this email.</p>
-                <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-                <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
-              </div>
-            </div>`,
+            body: buildEmailTemplate({
+              type: body.status === "Resolved" ? "incident_resolved" : "incident_closed",
+              incidentId: recordId,
+              title: body.title || "",
+              status: body.status,
+              resolution: body.resolution || "N/A",
+              resolvedBy: body.resolvedBy || body.assignedTo || "IT Support",
+              nextActions: [
+                { label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" },
+              ],
+            }),
           }).catch(e => console.warn("[Incident Resolve] Customer email failed:", e.message));
         }
 
@@ -1714,23 +1991,19 @@ const server = http.createServer(async (req, res) => {
             graphSendMail({
               to: [newAssignee.includes("@") ? newAssignee : "itsupport@vgctechnology.com"],
               subject: `[VGC ITSM] You've been assigned: ${recordId} — ${(body.title || "").substring(0, 60)}`,
-              body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
-                <div style="background:linear-gradient(135deg,#F59E0B,#EF4444);padding:16px 20px;border-radius:8px 8px 0 0;">
-                  <h2 style="margin:0;color:#fff;font-size:18px;">🔔 Incident Assigned to You</h2>
-                </div>
-                <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
-                  <table style="border-collapse:collapse;width:100%;">
-                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:8px 12px;">${String(recordId).replace(/</g, "&lt;")}</td></tr>
-                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${(body.title || "").replace(/</g, "&lt;")}</td></tr>
-                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:8px 12px;">${body.priority || "N/A"}</td></tr>
-                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Status</td><td style="padding:8px 12px;">${body.status || "Open"}</td></tr>
-                    <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Description</td><td style="padding:8px 12px;">${(body.description || "").substring(0, 300).replace(/</g, "&lt;")}</td></tr>
-                  </table>
-                  <p style="color:#333;font-size:13px;margin-top:16px;">Please review and take action on this incident at your earliest convenience.</p>
-                  <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-                  <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
-                </div>
-              </div>`,
+              body: buildEmailTemplate({
+                type: "incident_assigned",
+                incidentId: recordId,
+                title: body.title || "",
+                priority: body.priority || "N/A",
+                status: body.status || "Open",
+                assignee: newAssignee,
+                description: (body.description || "").substring(0, 300),
+                nextActions: [
+                  { label: "Review incident details and begin investigation", url: PORTAL_URL, linkLabel: "Open Incident" },
+                  { label: "Update the status once you begin working on it" },
+                ],
+              }),
             }).catch(e => console.warn("[Incident Assign] Assignment email failed:", e.message));
           }
         }
@@ -7419,18 +7692,21 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
                 await graphSendMail({
                   to: ["hlaing@vgctechnology.com"],
                   subject: `[ITSM AI Review] ${inc.id} auto-resolved — please verify`,
-                  body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
-                    <h2 style="color:#7C3AED;">🤖 AI Auto-Resolve Review</h2>
-                    <table style="border-collapse:collapse;width:100%;">
-                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:6px 12px;">${inc.id}</td></tr>
-                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:6px 12px;">${(inc.title || "").replace(/</g, "&lt;")}</td></tr>
-                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:6px 12px;">${inc.priority || "-"}</td></tr>
-                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">AI Confidence</td><td style="padding:6px 12px;">${suggestion.confidence}%</td></tr>
-                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Resolution</td><td style="padding:6px 12px;">${(suggestion.resolution || "").substring(0, 500).replace(/</g, "&lt;")}</td></tr>
-                      <tr><td style="padding:6px 12px;font-weight:bold;color:#6B7280;">Root Cause</td><td style="padding:6px 12px;">${(suggestion.rootCause || "").replace(/</g, "&lt;")}</td></tr>
-                    </table>
-                    <p style="color:#9CA3AF;font-size:12px;margin-top:16px;">This incident was auto-resolved by the AI pipeline. Please verify the resolution is correct.</p>
-                  </div>`,
+                  body: buildEmailTemplate({
+                    type: "ai_review",
+                    incidentId: inc.id,
+                    title: inc.title || "",
+                    priority: inc.priority || "-",
+                    confidence: suggestion.confidence,
+                    resolution: suggestion.resolution || "",
+                    rootCause: suggestion.rootCause || "",
+                    nextActions: [
+                      { label: "Review the AI-generated resolution for accuracy", url: PORTAL_URL, linkLabel: "Open Review Queue" },
+                      { label: "Approve or reject in the AI Resolve Queue" },
+                      { label: "If incorrect, edit the resolution before approving" },
+                    ],
+                    footerNote: "This incident was auto-resolved by the AI pipeline. Please verify the resolution is correct before it reaches the customer.",
+                  }),
                 });
                 console.log(`[AI Pipeline] Review email sent for ${inc.id}`);
               } catch (emailErr) { console.warn(`[AI Pipeline] Review email failed for ${inc.id}:`, emailErr.message); }
@@ -7503,82 +7779,42 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
       // ─── Send email notifications on approve/reject ──────────────────
       if (action === "approve") {
         const incTitle = suggestion.incidentTitle || suggestion.incidentId || suggestionId;
-        const resolution = (suggestion.resolution || "").substring(0, 800).replace(/</g, "&lt;").replace(/\n/g, "<br/>");
-        const rootCause = (suggestion.rootCause || "N/A").replace(/</g, "&lt;");
-        const customerMessage = editedCustomerEmail ? editedCustomerEmail.replace(/</g, "&lt;").replace(/\n/g, "<br/>") : "";
-        const resolvedAt = suggestion.approvedAt || new Date().toISOString();
-        const resolvedDate = new Date(resolvedAt).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" });
 
-        // 1. Customer resolution notice — Outlook-compatible HTML (table-based layout)
+        // 1. Customer resolution notice — Enterprise template
         graphSendMail({
           to: [suggestion.reporterEmail || "customer@example.com"],
           subject: `[VGC ITSM] Your incident ${suggestion.incidentId} has been resolved`,
           isCustomerEmail: true,
-          body: `<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
-<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;">
-  <tr><td align="center" style="padding:24px 0;">
-    <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
-      <!-- Header -->
-      <tr><td style="background:#0078D4;padding:20px 24px;">
-        <table cellpadding="0" cellspacing="0" border="0" width="100%">
-          <tr>
-            <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:18px;font-weight:700;color:#ffffff;">&#9989; Incident Resolved</td>
-            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.8);">VGC Technology</td>
-          </tr>
-        </table>
-      </td></tr>
-      <!-- Body -->
-      <tr><td style="padding:24px;">
-        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e8ebef;border-radius:6px;overflow:hidden;">
-          <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Incident ID</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${(suggestion.incidentId || "").replace(/</g, "&lt;")}</td></tr>
-          <tr><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Title</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${String(incTitle).replace(/</g, "&lt;")}</td></tr>
-          <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Root Cause</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${rootCause}</td></tr>
-          <tr><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Resolved At</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${resolvedDate}</td></tr>
-          <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;">Resolution</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;line-height:1.6;">${resolution}</td></tr>
-        </table>
-        ${customerMessage ? `<div style="margin-top:16px;padding:14px;background:#f0f7ff;border-left:3px solid #0078D4;border-radius:0 4px 4px 0;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#2d3748;line-height:1.6;">${customerMessage}</div>` : ""}
-        <p style="font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#718096;margin:20px 0 0;line-height:1.5;">If this issue persists, please reply to this email or open a new support ticket.</p>
-      </td></tr>
-      <!-- Footer -->
-      <tr><td style="background:#f8fafc;border-top:1px solid #e8ebef;padding:14px 24px;">
-        <table cellpadding="0" cellspacing="0" border="0" width="100%">
-          <tr>
-            <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;line-height:1.5;">VGC Technology Pte Ltd &middot; IT Service Management<br/>This is an automated notification from VGC ITSM.</td>
-            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;">Ref: ${(suggestion.incidentId || "").replace(/</g, "&lt;")}</td>
-          </tr>
-        </table>
-      </td></tr>
-    </table>
-  </td></tr>
-</table>`,
+          body: buildEmailTemplate({
+            type: "ai_approved_customer",
+            incidentId: suggestion.incidentId || "",
+            title: incTitle,
+            rootCause: suggestion.rootCause || "N/A",
+            resolution: suggestion.resolution || "",
+            customerMessage: editedCustomerEmail || "",
+            timestamp: suggestion.approvedAt || new Date().toISOString(),
+            nextActions: [
+              { label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" },
+            ],
+          }),
         }).catch(e => console.warn("[AI Resolve Approve] Customer email failed:", e.message));
 
-        // 2. Approver confirmation → internal email (Outlook-compatible)
+        // 2. Approver confirmation → internal email (Enterprise template)
         graphSendMail({
           to: [approvedBy.includes("@") ? approvedBy : "itsupport@vgctechnology.com"],
           subject: `[VGC AI Assist] Resolution approved: ${suggestion.incidentId}`,
-          body: `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;">
-  <tr><td align="center" style="padding:24px 0;">
-    <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
-      <tr><td style="background:linear-gradient(135deg,#7C3AED,#3B82F6);padding:18px 24px;">
-        <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
-          <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:16px;font-weight:700;color:#ffffff;">&#129302; AI Resolution Approved</td>
-          <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:rgba(255,255,255,0.7);">Internal Notification</td>
-        </tr></table>
-      </td></tr>
-      <tr><td style="padding:20px 24px;font-family:'Segoe UI',Arial,sans-serif;">
-        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Incident:</strong> ${(suggestion.incidentId || "").replace(/</g, "&lt;")}</p>
-        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Title:</strong> ${String(incTitle).replace(/</g, "&lt;")}</p>
-        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Approved by:</strong> ${String(approvedBy).replace(/</g, "&lt;")}</p>
-        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Confidence:</strong> ${suggestion.confidence || "N/A"}%</p>
-        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Resolution:</strong></p>
-        <div style="background:#f8fafc;padding:12px;border-radius:6px;border:1px solid #e8ebef;font-size:12px;color:#4a5568;line-height:1.6;margin-bottom:12px;">${resolution}</div>
-        ${editedCustomerEmail ? `<p style="margin:0 0 4px;font-size:11px;color:#7C3AED;font-weight:600;">Engineer edited customer email:</p><div style="background:#f5f3ff;padding:10px;border-radius:4px;border:1px solid #7C3AED22;font-size:11px;color:#4a5568;line-height:1.5;">${customerMessage}</div>` : ""}
-      </td></tr>
-      <tr><td style="background:#f8fafc;border-top:1px solid #e8ebef;padding:12px 24px;font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;">VGC AI Assist — All actions logged &amp; auditable. Suggestion ID: ${suggestionId}</td></tr>
-    </table>
-  </td></tr>
-</table>`,
+          body: buildEmailTemplate({
+            type: "ai_approved_internal",
+            incidentId: suggestion.incidentId || "",
+            title: incTitle,
+            approvedBy: approvedBy,
+            confidence: suggestion.confidence,
+            resolution: suggestion.resolution || "",
+            rootCause: suggestion.rootCause || "N/A",
+            customerMessage: editedCustomerEmail || "",
+            additionalFields: { "Suggestion ID": suggestionId },
+            footerNote: "All AI resolution actions are logged and auditable.",
+          }),
         }).catch(e => console.warn("[AI Resolve Approve] Approver email failed:", e.message));
 
         console.log(`[AI Resolve Queue] Emails sent for approved suggestion ${suggestionId}`);
@@ -7738,51 +7974,23 @@ Respond in JSON ONLY:
             continue;
           }
 
-          // ── 4. Build HTML email from AI response using template ──
-          const refLinks = (aiResponse.references || [])
-            .filter(r => r.url && r.title)
-            .map(r => `<tr><td style="padding:4px 12px;">📎 <a href="${r.url.replace(/"/g, "&quot;")}" style="color:#3B82F6;text-decoration:none;">${r.title.replace(/</g, "&lt;")}</a></td></tr>`)
-            .join("");
-
-          const priorityColors = { "Sev-A": "#EF4444", "Sev-B": "#F59E0B", "Sev-C": "#3B82F6", "Sev-D": "#6B7280" };
-          const headerColor = priorityColors[inc.priority] || "#3B82F6";
-          const headerGradient = aiResponse.closingAction === "resolve"
-            ? `linear-gradient(135deg, #4CAF50, #06B6D4)`
-            : `linear-gradient(135deg, ${headerColor}, #6366F1)`;
-          const headerIcon = aiResponse.closingAction === "resolve" ? "✅" : "📧";
-          const headerTitle = aiResponse.closingAction === "resolve"
-            ? `Incident ${inc.id} — Resolved`
-            : `Update: Incident ${inc.id}`;
-
-          const emailHtml = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:640px;margin:0 auto;">
-  <div style="background:${headerGradient};padding:18px 24px;border-radius:10px 10px 0 0;">
-    <h2 style="margin:0;color:#fff;font-size:18px;">${headerIcon} ${headerTitle}</h2>
-    <p style="margin:4px 0 0;color:rgba(255,255,255,0.85);font-size:12px;">Ref: ${inc.id} | Priority: ${inc.priority || "Sev-C"} | Category: ${(inc.category || "General").replace(/</g, "&lt;")}</p>
-  </div>
-  <div style="background:#ffffff;padding:24px;border:1px solid #e5e7eb;border-top:none;">
-    <p style="margin:0 0 16px;color:#1F2937;font-size:14px;line-height:1.6;">${(aiResponse.greeting || "Dear Customer,").replace(/</g, "&lt;")}</p>
-    <div style="margin:0 0 20px;color:#374151;font-size:14px;line-height:1.7;">${aiResponse.body || ""}</div>
-    ${refLinks ? `<div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;padding:12px;margin:16px 0;">
-      <p style="margin:0 0 8px;font-weight:600;color:#0369A1;font-size:13px;">📚 Helpful Resources</p>
-      <table style="border-collapse:collapse;width:100%;font-size:13px;">${refLinks}</table>
-    </div>` : ""}
-    <div style="margin:20px 0 0;padding:16px;background:#F9FAFB;border-radius:6px;border:1px solid #E5E7EB;">
-      <table style="border-collapse:collapse;width:100%;font-size:13px;">
-        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;width:120px;">Incident ID</td><td style="padding:4px 8px;color:#1F2937;">${inc.id}</td></tr>
-        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Status</td><td style="padding:4px 8px;color:#1F2937;">${aiResponse.closingAction === "resolve" ? "✅ Resolved" : "🔄 In Progress"}</td></tr>
-        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Category</td><td style="padding:4px 8px;color:#1F2937;">${(inc.category || "General").replace(/</g, "&lt;")}</td></tr>
-        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Priority</td><td style="padding:4px 8px;color:#1F2937;">${inc.priority || "Sev-C"}</td></tr>
-        <tr><td style="padding:4px 8px;font-weight:600;color:#6B7280;">Handled By</td><td style="padding:4px 8px;color:#1F2937;">${(inc.assignee || inc.assignmentGroup || "VGC IT Support").replace(/</g, "&lt;")}</td></tr>
-      </table>
-    </div>
-  </div>
-  <div style="background:#F9FAFB;padding:16px 24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;">
-    <p style="margin:0 0 4px;color:#374151;font-size:13px;">If you need further assistance, please reply to this email or contact our helpdesk.</p>
-    <p style="margin:8px 0 0;color:#6B7280;font-size:12px;">Best regards,<br/><strong>VGC Technology IT Support Team</strong><br/>📧 helpdesk@vgctechnology.com | 📞 +65 6000 0000</p>
-    <hr style="border:none;border-top:1px solid #E5E7EB;margin:12px 0 8px;"/>
-    <p style="color:#9CA3AF;font-size:10px;margin:0;">VGC Technology Pte Ltd — IT Service Management Platform<br/>This email was generated by the VGC ITSM AI Support Engine. Please do not reply directly to automated notifications.</p>
-  </div>
-</div>`;
+          // ── 4. Build HTML email from AI response using enterprise template ──
+          const emailType = aiResponse.closingAction === "resolve" ? "ai_followup_resolved" : "ai_followup";
+          const emailHtml = buildEmailTemplate({
+            type: emailType,
+            incidentId: inc.id,
+            title: inc.title || "",
+            priority: inc.priority || "Sev-C",
+            category: inc.category || "General",
+            status: aiResponse.closingAction === "resolve" ? "Resolved" : "In Progress",
+            assignee: inc.assignee || inc.assignmentGroup || "VGC IT Support",
+            resolution: aiResponse.resolution || aiResponse.body || "",
+            customerMessage: aiResponse.greeting ? `${aiResponse.greeting}\n\n${aiResponse.body || ""}` : "",
+            references: (aiResponse.references || []).filter(r => r.url && r.title),
+            nextActions: aiResponse.closingAction === "resolve"
+              ? [{ label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" }]
+              : [{ label: "Our team is actively working on this — no action required from you at this time" }],
+          });
 
           // ── 5. Send email to customer ──
           const emailSubject = aiResponse.subject || `[VGC ITSM] Re: ${(inc.title || "Your request").substring(0, 60)} — ${aiResponse.closingAction === "resolve" ? "Resolved" : "Update"}`;
@@ -9183,7 +9391,7 @@ async function start() {
   server.on("upgrade", (req, socket, head) => wsServer.handleUpgrade(req, socket));
 
   // Initialize Notification Engine
-  notifyEngine = new NotificationEngine({ graphSendMail, wsServer, db });
+  notifyEngine = new NotificationEngine({ graphSendMail, buildEmailTemplate, wsServer, db });
 
   // Initialize Cache Layer
   cacheLayer = new CacheLayer({ maxSize: 1000, defaultTTL: 5 * 60 * 1000 });

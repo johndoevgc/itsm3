@@ -7,6 +7,7 @@ const https = require("https");
 class NotificationEngine {
   constructor(options = {}) {
     this.graphSendMail = options.graphSendMail; // injected from server.js
+    this.buildEmailTemplate = options.buildEmailTemplate; // enterprise template builder
     this.wsServer = options.wsServer; // WebSocket server for in-app push
     this.db = options.db; // for storing notification history
     this.config = {
@@ -91,26 +92,39 @@ class NotificationEngine {
   // ─── Email Channel ────────────────────────────────────────────────
   async _sendEmail(notification) {
     if (!this.graphSendMail) return { channel: "email", success: false, error: "Email not configured" };
-    const { title, body, recipients, severity, incidentId } = notification;
+    const { title, body, recipients, severity, incidentId, type, data } = notification;
     if (!recipients || recipients.length === 0) return { channel: "email", success: false, error: "No recipients" };
 
-    const sevColor = severity === "critical" ? "#FF4444" : severity === "warning" ? "#FFB347" : "#4CAF50";
-    const htmlBody = `
-      <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;">
+    const typeMap = { critical: "general_critical", warning: "general_warning", info: "general_info" };
+    const emailType = typeMap[severity] || "general_info";
+
+    let htmlBody;
+    if (this.buildEmailTemplate) {
+      htmlBody = this.buildEmailTemplate({
+        type: emailType,
+        title: title || "",
+        incidentId: incidentId || "",
+        resolution: body || "",
+        ...(data || {}),
+      });
+    } else {
+      // Fallback: basic HTML
+      const sevColor = severity === "critical" ? "#FF4444" : severity === "warning" ? "#FFB347" : "#4CAF50";
+      htmlBody = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;">
         <div style="background:${sevColor};padding:16px 24px;border-radius:10px 10px 0 0;">
-          <h2 style="margin:0;color:#fff;font-size:16px;">${severity === "critical" ? "🚨" : severity === "warning" ? "⚠️" : "ℹ️"} ${title}</h2>
+          <h2 style="margin:0;color:#fff;font-size:16px;">${title}</h2>
         </div>
         <div style="background:#ffffff;padding:20px 24px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
           <p style="margin:0 0 12px;color:#333;font-size:14px;line-height:1.6;">${body}</p>
           ${incidentId ? `<p style="margin:8px 0;color:#666;font-size:12px;">Incident: <strong>${incidentId}</strong></p>` : ""}
-          <hr style="border:none;border-top:1px solid #eee;margin:16px 0;"/>
-          <p style="margin:0;color:#999;font-size:11px;">VGC ITSM Notification Engine — Automated Alert</p>
+          <p style="margin:12px 0 0;color:#999;font-size:11px;">VGC ITSM Notification Engine — Automated Alert</p>
         </div>
       </div>`;
+    }
 
     await this.graphSendMail({
       to: recipients,
-      subject: `[VGC ITSM] ${severity === "critical" ? "🚨 CRITICAL: " : severity === "warning" ? "⚠️ " : ""}${title}`,
+      subject: `[VGC ITSM] ${severity === "critical" ? "CRITICAL: " : severity === "warning" ? "Warning: " : ""}${title}`,
       body: htmlBody,
     });
     return { channel: "email", success: true, sentTo: recipients };
