@@ -631,7 +631,7 @@ function buildAiResponse(topic, userMsg, ctx) {
   // Build urgency header if critical/high issues exist
   const urgencyBlock = (criticalInc.length > 0 || highInc.length > 0) ? 
     `\n\n🚨 **ATTENTION — ${criticalInc.length} Critical & ${highInc.length} High priority tickets active**` +
-    criticalInc.map(i => `\n   🔴 **${i.id}**: ${i.title} — ${i.assignee} (${Math.round((i.created/i.slaTarget)*100)}% SLA elapsed)`).join("") +
+    criticalInc.map(i => { const s = computeIncidentSla(i); return `\n   🔴 **${i.id}**: ${i.title} — ${i.assignee} (${s.pctUsed}% SLA elapsed)`; }).join("") +
     highInc.slice(0, 3).map(i => `\n   🟠 **${i.id}**: ${i.title} — ${i.assignee}`).join("") : "";
 
   // Suggested actions based on context
@@ -651,7 +651,7 @@ function buildAiResponse(topic, userMsg, ctx) {
       };
 
     case "briefing": {
-      const atRiskSLA = openInc.filter(i => (i.created / i.slaTarget) >= 0.7);
+      const atRiskSLA = openInc.filter(i => { const s = computeIncidentSla(i); return s.pctUsed >= 70; });
       const emergencyChanges = changes.filter(c => c.type === "Emergency" && c.status === "Implementing");
       suggestActions.push({ label: "🔴 Handle critical first", action: criticalInc[0] ? `Tell me about ${criticalInc[0].id}` : "Show all incidents" });
       if (atRiskSLA.length > 0) suggestActions.push({ label: "⏱️ Address SLA risks", action: "Which tickets are near SLA breach?" });
@@ -661,7 +661,7 @@ function buildAiResponse(topic, userMsg, ctx) {
       let briefing = `📋 **${greeting}, ${currentUser.name} — Your Priority Plan for Today**\n\n`;
       briefing += `**🔴 CRITICAL — Do First:**\n`;
       if (criticalInc.length > 0) {
-        criticalInc.forEach(i => { briefing += `• **${i.id}**: ${i.title} — SLA ${Math.round((i.created/i.slaTarget)*100)}% elapsed (${Math.max(0, Math.round(i.slaTarget - i.created))}h remaining)\n  → Recommended: Escalate to ${i.assignmentGroup}, verify workaround in place\n`; });
+        criticalInc.forEach(i => { const s = computeIncidentSla(i); briefing += `• **${i.id}**: ${i.title} — SLA ${s.pctUsed}% elapsed (${Math.round(s.remainingHours)}h remaining)\n  → Recommended: Escalate to ${i.assignmentGroup}, verify workaround in place\n`; });
       } else {
         briefing += `• ✅ No critical incidents — great start!\n`;
       }
@@ -697,7 +697,7 @@ function buildAiResponse(topic, userMsg, ctx) {
       if (criticalInc.length > 0) {
         resp += `\n⚡ **Requires Immediate Attention:**\n`;
         criticalInc.forEach(i => {
-          resp += `• **${i.id}**: ${i.title}\n  → Assigned: ${i.assignee} | SLA: ${Math.round((i.created/i.slaTarget)*100)}% elapsed\n  → Impact: ${i.impact} | Category: ${i.category}\n`;
+          resp += `• **${i.id}**: ${i.title}\n  → Assigned: ${i.assignee} | SLA: ${computeIncidentSla(i).pctUsed}% elapsed\n  → Impact: ${i.impact} | Category: ${i.category}\n`;
           // Show relevant KB for this incident's category
           const kbHits = searchKBArticles(i.category + " " + i.title, ctxKbArticles || [], 1);
           if (kbHits.length > 0) resp += `  → 📚 KB: **${kbHits[0].title}** (${kbHits[0].id}) — [Open in SharePoint](${kbHits[0].spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(kbHits[0].spSlug) : '#'})\n`;
@@ -727,20 +727,20 @@ function buildAiResponse(topic, userMsg, ctx) {
     }
 
     case "sla": {
-      const atRisk = openInc.filter(i => (i.created / i.slaTarget) >= 0.9);
-      const breached = openInc.filter(i => (i.created / i.slaTarget) >= 1.0);
+      const atRisk = openInc.filter(i => { const s = computeIncidentSla(i); return s.pctUsed >= 90; });
+      const breached = openInc.filter(i => computeIncidentSla(i).isBreached);
       suggestActions.push({ label: "🚨 Breached tickets", action: "Show SLA breached tickets" });
       suggestActions.push({ label: "⏱️ At-risk tickets", action: "Which tickets are near breach?" });
       suggestActions.push({ label: "📧 Notify stakeholders", action: "Draft SLA warning email" });
       let resp = `⏱️ **SLA Compliance Dashboard**\n\n`;
       if (breached.length > 0) {
         resp += `🚨 **BREACHED (${breached.length}):**\n`;
-        breached.forEach(i => { resp += `• **${i.id}**: ${i.title} — ${Math.round((i.created/i.slaTarget)*100)}% (OVER TARGET)\n`; });
+        breached.forEach(i => { resp += `• **${i.id}**: ${i.title} — ${computeIncidentSla(i).pctUsed}% (OVER TARGET)\n`; });
         resp += `\n⚠️ *Immediate escalation recommended. Shall I draft an escalation notice for your approval?*\n\n`;
       }
       if (atRisk.length > breached.length) {
         resp += `⚠️ **At Risk (${atRisk.length - breached.length}):**\n`;
-        atRisk.filter(i => (i.created / i.slaTarget) < 1.0).forEach(i => { resp += `• **${i.id}**: ${i.title} — ${Math.round((i.created/i.slaTarget)*100)}% elapsed\n`; });
+        atRisk.filter(i => !computeIncidentSla(i).isBreached).forEach(i => { resp += `• **${i.id}**: ${i.title} — ${computeIncidentSla(i).pctUsed}% elapsed\n`; });
         resp += `\n`;
       }
       resp += `**SLA Targets:** Sev-A: 4h | Sev-B: 8h | Sev-C: 24h | Sev-D: 72h\n`;
@@ -869,7 +869,7 @@ function buildAiResponse(topic, userMsg, ctx) {
       let resp = `✅ **VGC-ITSM System Status — All Systems Operational**\n\n`;
       resp += `• 🟢 Application: Online\n• 🟢 AI Engine: Active & Learning\n• 🟢 Email Service: Configured\n• 🟢 Security: ISO 27001 compliant\n\n`;
       resp += `**Live Stats:**\n`;
-      resp += `• Total tickets managed: ${totalTickets}\n• Open incidents: ${openInc.length}\n• SLA compliance: ${openInc.length > 0 ? Math.round((openInc.filter(i => (i.created/i.slaTarget) < 1.0).length / openInc.length) * 100) : 100}%\n`;
+      resp += `• Total tickets managed: ${totalTickets}\n• Open incidents: ${openInc.length}\n• SLA compliance: ${openInc.length > 0 ? Math.round((openInc.filter(i => !computeIncidentSla(i).isBreached).length / openInc.length) * 100) : 100}%\n`;
       resp += `• AI triage accuracy: 92%\n\n`;
       resp += `💡 *I'm learning from every interaction to serve you better!*`;
       return { text: resp, suggestions: suggestActions };
@@ -947,7 +947,7 @@ function buildAiResponse(topic, userMsg, ctx) {
     case "report":
       suggestActions.push({ label: "📊 View dashboard", action: "Open dashboard" });
       suggestActions.push({ label: "📈 SLA report", action: "Show SLA compliance report" });
-      return { text: `📊 **Reports & Analytics**\n\nKey metrics:\n• AI Automation Rate: 80% target\n• Triage Accuracy: 92%+\n• Open Incidents: ${openInc.length}\n• SLA Compliance: ${openInc.length > 0 ? Math.round((openInc.filter(i => (i.created/i.slaTarget) < 1.0).length / openInc.length) * 100) : 100}%\n\nAll metrics are on the Dashboard.`, suggestions: suggestActions };
+      return { text: `📊 **Reports & Analytics**\n\nKey metrics:\n• AI Automation Rate: 80% target\n• Triage Accuracy: 92%+\n• Open Incidents: ${openInc.length}\n• SLA Compliance: ${openInc.length > 0 ? Math.round((openInc.filter(i => !computeIncidentSla(i).isBreached).length / openInc.length) * 100) : 100}%\n\nAll metrics are on the Dashboard.`, suggestions: suggestActions };
 
     case "asset":
       suggestActions.push({ label: "💻 View CMDB", action: "Show all assets" });
@@ -1161,6 +1161,75 @@ const formatSlaCountdown = (hoursLeft) => {
   if (hoursLeft <= 0) { const over = Math.abs(hoursLeft); return over >= 1 ? `${Math.floor(over)}h ${Math.round((over % 1) * 60)}m over` : `${Math.round(over * 60)}m over`; }
   if (hoursLeft >= 1) return `${Math.floor(hoursLeft)}h ${Math.round((hoursLeft % 1) * 60)}m left`;
   return `${Math.round(hoursLeft * 60)}m left`;
+};
+
+// ─── Unified SLA Computation Helper ─────────────────────────────────
+// Single source of truth for all SLA calculations across the app.
+// Uses business hours (Mon-Fri 9AM-6PM SGT) when createdAt is available,
+// falls back to static 'created' field for legacy seed data.
+const computeIncidentSla = (inc) => {
+  const slaTarget = inc.slaTarget || 0;
+  if (slaTarget <= 0) return { hoursElapsed: 0, slaTarget: 0, pctUsed: 0, isBreached: false, isAtRisk: false, remainingHours: 0, hasValidSla: false };
+  let hoursElapsed = 0;
+  if (inc.createdAt) {
+    const d = new Date(inc.createdAt);
+    if (!isNaN(d.getTime())) hoursElapsed = getBusinessHoursElapsed(inc.createdAt);
+    else hoursElapsed = inc.created || 0;
+  } else {
+    hoursElapsed = inc.created || 0;
+  }
+  const pctUsed = Math.round((hoursElapsed / slaTarget) * 100);
+  return {
+    hoursElapsed,
+    slaTarget,
+    pctUsed,
+    isBreached: hoursElapsed > slaTarget,
+    isAtRisk: pctUsed >= 75 && pctUsed < 100,
+    remainingHours: Math.max(0, slaTarget - hoursElapsed),
+    hasValidSla: true,
+  };
+};
+
+// Compute real MTTR (Mean Time To Resolve) using business hours
+const computeMTTR = (resolvedIncidents) => {
+  const withTimestamps = resolvedIncidents.filter(i => i.createdAt && i.resolvedAt);
+  if (withTimestamps.length === 0) {
+    // Fallback: use created field for legacy incidents
+    const withCreated = resolvedIncidents.filter(i => typeof i.created === "number" && i.created > 0);
+    if (withCreated.length === 0) return 0;
+    return Math.round((withCreated.reduce((s, i) => s + i.created, 0) / withCreated.length) * 10) / 10;
+  }
+  let totalHours = 0;
+  for (const inc of withTimestamps) {
+    const start = new Date(inc.createdAt);
+    const end = new Date(inc.resolvedAt);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) continue;
+    // Calculate business hours between createdAt and resolvedAt
+    const BH_START = 9, BH_END = 18;
+    let elapsed = 0, cursor = new Date(start);
+    while (cursor < end) {
+      const day = cursor.getDay();
+      if (day >= 1 && day <= 5) {
+        const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+        if (hrs >= BH_START && hrs < BH_END) {
+          const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
+          const chunkEnd = endOfBH < end ? endOfBH : end;
+          elapsed += (chunkEnd - cursor) / 3600000;
+          cursor = new Date(chunkEnd);
+        } else if (hrs < BH_START) {
+          cursor.setHours(BH_START, 0, 0, 0);
+        } else {
+          cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+        }
+      } else {
+        const daysToMon = day === 0 ? 1 : 8 - day;
+        cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+      }
+      if (cursor >= end) break;
+    }
+    totalHours += elapsed;
+  }
+  return Math.round((totalHours / withTimestamps.length) * 10) / 10;
 };
 
 const STATUS_COLORS = {
@@ -2612,7 +2681,7 @@ export default function ITSMApp() {
     aiIdleTimerRef.current = setTimeout(() => {
       const pendingApprovals = changes.filter(c => c.status === "Submitted" || c.status === "Review");
       const criticalOpen = incidents.filter(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed");
-      const nearBreach = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed" && (i.created / i.slaTarget) >= 0.8);
+      const nearBreach = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed" && computeIncidentSla(i).pctUsed >= 80);
       if (criticalOpen.length > 0) {
         setAiIdleNudge({ icon: "🔴", text: `${criticalOpen.length} critical ticket${criticalOpen.length > 1 ? "s" : ""} need attention`, action: "Show me all Sev-A incidents", urgency: "critical" });
       } else if (pendingApprovals.length > 0) {
@@ -2641,12 +2710,12 @@ export default function ITSMApp() {
       const now = Date.now();
       // Check SLA breaches about to happen
       incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed").forEach(inc => {
-        const pct = (inc.created / inc.slaTarget) * 100;
-        if (pct >= 90 && pct < 100 && !dismissedProactiveAlerts.includes(`sla-${inc.id}`)) {
-          newAlerts.push({ id: `sla-${inc.id}`, type: "sla_warning", severity: "high", title: `⏱️ SLA About to Breach: ${inc.id}`, detail: `${inc.title} — only ${Math.round(inc.slaTarget - inc.created)}h remaining. Act now to avoid breach.`, action: "Escalate or resolve immediately", ticketId: inc.id, timestamp: now });
+        const sla = computeIncidentSla(inc);
+        if (sla.pctUsed >= 90 && !sla.isBreached && !dismissedProactiveAlerts.includes(`sla-${inc.id}`)) {
+          newAlerts.push({ id: `sla-${inc.id}`, type: "sla_warning", severity: "high", title: `⏱️ SLA About to Breach: ${inc.id}`, detail: `${inc.title} — only ${Math.round(sla.remainingHours)}h remaining. Act now to avoid breach.`, action: "Escalate or resolve immediately", ticketId: inc.id, timestamp: now });
         }
-        if (pct >= 100 && !dismissedProactiveAlerts.includes(`breach-${inc.id}`)) {
-          newAlerts.push({ id: `breach-${inc.id}`, type: "sla_breach", severity: "critical", title: `🚨 SLA BREACHED: ${inc.id}`, detail: `${inc.title} — SLA target exceeded by ${Math.round(inc.created - inc.slaTarget)}h. Immediate action required.`, action: "Escalate to management immediately", ticketId: inc.id, timestamp: now });
+        if (sla.isBreached && !dismissedProactiveAlerts.includes(`breach-${inc.id}`)) {
+          newAlerts.push({ id: `breach-${inc.id}`, type: "sla_breach", severity: "critical", title: `🚨 SLA BREACHED: ${inc.id}`, detail: `${inc.title} — SLA target exceeded by ${Math.round(sla.hoursElapsed - sla.slaTarget)}h. Immediate action required.`, action: "Escalate to management immediately", ticketId: inc.id, timestamp: now });
         }
       });
       // Check for critical security alerts
@@ -4163,7 +4232,8 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     const openInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length;
     const critInc = incidents.filter(i => i.priority === "Sev-A" && i.status !== "Resolved").length;
     const highInc = incidents.filter(i => i.priority === "Sev-B" && i.status !== "Resolved").length;
-    const slaBreaches = incidents.filter(i => i.created > i.slaTarget && i.status !== "Resolved").length;
+    const activeWithSla = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
+    const slaBreaches = activeWithSla.filter(i => computeIncidentSla(i).isBreached).length;
     const pendingApprovals = changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length;
     const resolvedThisWeek = incidents.filter(i => i.status === "Resolved").length;
     const totalIncidents = incidents.length;
@@ -4172,6 +4242,12 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     const avgConfidence = totalIncidents > 0 ? Math.round(incidents.reduce((s, i) => s + (i.aiConfidence || 0), 0) / totalIncidents) : 0;
     const slaCompliance = totalIncidents > 0 ? Math.round(((totalIncidents - slaBreaches) / totalIncidents) * 100) : 100;
 
+    // AI Performance KPI — computed from real data
+    const kbSuggestPct = (() => { const withKb = incidents.filter(i => i.kbSuggested || (i.aiSuggestions && i.aiSuggestions.length > 0)); return totalIncidents > 0 ? Math.round((withKb.length / totalIncidents) * 100) : 0; })();
+    const autoAssignAccuracy = (() => { const aiAssigned = incidents.filter(i => i.aiTriaged && i.assignee); const kept = aiAssigned.filter(i => !i.reassigned); return aiAssigned.length > 0 ? Math.round((kept.length / aiAssigned.length) * 100) : 0; })();
+    const slaPredictAccuracy = slaCompliance;
+    const sentimentPct = (() => { const withSent = incidents.filter(i => i.sentiment); return totalIncidents > 0 ? Math.round((withSent.length / totalIncidents) * 100) : 0; })();
+
     // Zendesk ↔ ITSM sync metrics
     const zdLinkedCount = incidents.filter(i => i.zdTicketId).length;
     const zdTotalLive = zdStats.open + zdStats.pending + zdStats.hold + zdStats.solved;
@@ -4179,7 +4255,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
     // Computed metrics (from real data, not hardcoded)
     const resolvedIncs = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
-    const computedMTTR = resolvedIncs.length > 0 ? (resolvedIncs.reduce((s, i) => s + (i.created || 0), 0) / resolvedIncs.length).toFixed(1) : "0";
+    const computedMTTR = computeMTTR(resolvedIncs);
     const computedFCR = totalIncidents > 0 ? Math.round((resolvedIncs.length / totalIncidents) * 100) : 0;
 
     // Engineer-specific
@@ -5018,10 +5094,11 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         {/* ═══ MY AI CO-PILOT — Daily Briefing (Engineer View) ═══ */}
         {cardVisibility.aiCoPilot?.on && (() => {
           const myOpenTickets = incidents.filter(i => i.assignee === currentUser.name && i.status !== "Resolved" && i.status !== "Closed");
-          const slaAtRisk = myOpenTickets.filter(i => (i.created / i.slaTarget) >= 0.75);
-          const slaBreached = myOpenTickets.filter(i => i.created >= i.slaTarget);
-          const totalResolved = incidents.filter(i => i.assignee === currentUser.name && (i.status === "Resolved" || i.status === "Closed")).length;
-          const avgResolutionHrs = totalResolved > 0 ? Math.round(incidents.filter(i => i.assignee === currentUser.name && (i.status === "Resolved" || i.status === "Closed")).reduce((sum, i) => sum + i.created, 0) / totalResolved) : 0;
+          const slaAtRisk = myOpenTickets.filter(i => { const s = computeIncidentSla(i); return s.isAtRisk; });
+          const slaBreached = myOpenTickets.filter(i => computeIncidentSla(i).isBreached);
+          const myResolvedIncs = incidents.filter(i => i.assignee === currentUser.name && (i.status === "Resolved" || i.status === "Closed"));
+          const totalResolved = myResolvedIncs.length;
+          const avgResolutionHrs = totalResolved > 0 ? Math.round(computeMTTR(myResolvedIncs)) : 0;
           const workloadScore = Math.min(100, Math.round((myOpenTickets.length / 6) * 100));
           const balanceStatus = workloadScore <= 40 ? "Healthy" : workloadScore <= 70 ? "Moderate" : "Heavy";
           const balanceColor = workloadScore <= 40 ? "#81C784" : workloadScore <= 70 ? "#FFB347" : "#FF6B6B";
@@ -5625,10 +5702,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             {[
-              { label: "KB Auto-Suggest", value: "87%", trend: "+3%", color: "#64B5F6", icon: "📖" },
-              { label: "Auto-Assign Accuracy", value: "94%", trend: "+1%", color: "#CE93D8", icon: "👤" },
-              { label: "SLA Predict Accuracy", value: "91%", trend: "+2%", color: "#4CAF50", icon: "⏱️" },
-              { label: "Sentiment Analysis", value: "89%", trend: "+5%", color: "#FFB347", icon: "💬" },
+              { label: "KB Auto-Suggest", value: `${kbSuggestPct}%`, trend: kbSuggestPct >= 80 ? "✓ Good" : "Building", color: "#64B5F6", icon: "📖" },
+              { label: "Auto-Assign Accuracy", value: `${autoAssignAccuracy}%`, trend: autoAssignAccuracy >= 90 ? "✓ Excellent" : "Learning", color: "#CE93D8", icon: "👤" },
+              { label: "SLA Predict Accuracy", value: `${slaPredictAccuracy}%`, trend: slaPredictAccuracy >= 90 ? "✓ On Track" : "At Risk", color: "#4CAF50", icon: "⏱️" },
+              { label: "Sentiment Analysis", value: `${sentimentPct}%`, trend: sentimentPct >= 70 ? "✓ Active" : "Building", color: "#FFB347", icon: "💬" },
             ].map((m, i) => (
               <div key={i} style={{ padding: "10px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -7480,18 +7557,12 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   const SLAModule = () => {
     const [slaRefreshing, setSlaRefreshing] = useState(false);
     const [slaLastSync, setSlaLastSync] = useState(null);
-    const activeInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed" && i.status !== "Cancelled" && i.slaTarget > 0);
-    // Dynamic SLA calculation — uses createdAt timestamp when available, falls back to static 'created'
-    const getElapsed = (inc) => {
-      if (inc.createdAt) {
-        const d = new Date(inc.createdAt);
-        if (!isNaN(d.getTime())) return getBusinessHoursElapsed(inc.createdAt);
-      }
-      return inc.created || 0;
-    };
-    const getRemaining = (inc) => (inc.slaTarget || 0) - getElapsed(inc);
-    const getSlaPercent = (inc) => inc.slaTarget > 0 ? Math.round((getElapsed(inc) / inc.slaTarget) * 100) : 0;
-    const isSlaCompliant = (inc) => getElapsed(inc) <= inc.slaTarget;
+    const activeInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed" && i.status !== "Cancelled" && computeIncidentSla(i).hasValidSla);
+    // Unified SLA calculation via computeIncidentSla helper
+    const getElapsed = (inc) => computeIncidentSla(inc).hoursElapsed;
+    const getRemaining = (inc) => computeIncidentSla(inc).remainingHours;
+    const getSlaPercent = (inc) => computeIncidentSla(inc).pctUsed;
+    const isSlaCompliant = (inc) => !computeIncidentSla(inc).isBreached;
 
     const refreshSlaFromZendesk = async () => {
       if (isLocalDemoUser) { showToast("Demo mode — Zendesk sync unavailable", "info"); return; }
@@ -9738,7 +9809,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       const smartSuggestions = (() => {
         const lc = userMsg.toLowerCase();
         const activeInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
-        const breachedCount = activeInc.filter(i => i.createdAt ? getBusinessHoursElapsed(i.createdAt) > i.slaTarget : i.created > i.slaTarget).length;
+        const breachedCount = activeInc.filter(i => computeIncidentSla(i).isBreached).length;
         if (lc.includes("vpn") || lc.includes("network") || lc.includes("connectivity")) return [
           { label: "🔧 VPN Troubleshoot Steps", action: "Give me step-by-step VPN troubleshooting guide" },
           { label: "📡 Check Network Status", action: "Show network device health status" },
@@ -14650,18 +14721,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 ))}
               </div>
             </div>
-            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Weekly Case Volume Trend</h3>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 80, padding: "0 20px" }}>
-                {[18, 24, 15, 22, 19, 12, incidents.length].map((v, i) => (
-                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                    <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{v}</div>
-                    <div style={{ width: "100%", height: `${(v / 30) * 60}px`, background: i === 6 ? "linear-gradient(180deg, #6366F1, #6366F188)" : "#1E2130", borderRadius: 3, minHeight: 6 }} />
-                    <div style={{ fontSize: 9, color: "#5A6178" }}>{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i]}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
+
           </div>
         )}
 
@@ -15314,8 +15374,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     const totalInc = incidents.length;
     const openInc = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length;
     const resolvedInc = incidents.filter(i => i.status === "Resolved").length;
-    const slaBreaches = incidents.filter(i => i.created > i.slaTarget).length;
-    const avgResolveHrs = resolvedInc > 0 ? (incidents.filter(i => i.status === "Resolved").reduce((s, i) => s + i.created, 0) / resolvedInc).toFixed(1) : "N/A";
+    const slaBreaches = incidents.filter(i => computeIncidentSla(i).isBreached).length;
+    const resolvedForMTTR = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+    const avgResolveHrs = resolvedForMTTR.length > 0 ? computeMTTR(resolvedForMTTR) : "N/A";
 
     const handleGenerate = () => {
       setGenerating(true);
@@ -20157,7 +20218,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       case "reports": return (<AnalyticsModule />);
       case "cybernews": return (<AnalyticsModule />);
       case "architecture": return (<AnalyticsModule />);
-      case "admin": return (<AdminSettingsModule />);
+      case "admin": return (AdminSettingsModule());
       case "productivity": return (<ProductivityDashboard />);
       default: return (<Dashboard />);
     }

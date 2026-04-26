@@ -930,7 +930,13 @@ async function graphSendMail({ to, subject, body, from, isCustomerEmail }) {
 // ─── Email-to-Ticket: Inbound Email Processing ─────────────────────────
 // Reads unread emails from the ITSM mailbox via Graph API and creates incidents
 // Only emails from registered customer domains or VGC internal domains create tickets.
+let _emailPipelineLock = false;
 async function processInboundEmails() {
+  if (_emailPipelineLock) {
+    console.log("[Email-to-Ticket] Pipeline already running, skipping concurrent call");
+    return { processed: 0, rejected: 0, incidents: [], skipped: "pipeline-locked" };
+  }
+  _emailPipelineLock = true;
   try {
     const token = await getManagedIdentityToken();
     const sender = HELPDESK_MAILBOX;
@@ -1035,15 +1041,19 @@ async function processInboundEmails() {
           continue;
         }
 
-        // ── Gate 2: Skip newsletters, marketing, bulk mail ──
-        const noisePatterns = ["newsletter", "marketing", "promo", "digest", "updates@", "info@", "notification@", "campaign", "unsubscribe"];
+        // ── Gate 2: Skip newsletters, marketing, bulk mail, news digests ──
+        const noisePatterns = ["newsletter", "marketing", "promo", "digest", "updates@", "info@", "notification@", "campaign", "unsubscribe", "daily briefing", "weekly briefing", "threat brief", "cyber brief", "news alert", "security alert roundup", "threat roundup", "daily recap", "weekly recap", "news round"];
         const isNoise = noisePatterns.some(p => fromAddr.includes(p) || subject.toLowerCase().includes(p));
         const headers = msg.internetMessageHeaders || [];
         const hasBulkHeader = headers.some(h => h.name?.toLowerCase() === "list-unsubscribe" || (h.name?.toLowerCase() === "precedence" && h.value?.toLowerCase() === "bulk"));
-        if (isNoise || hasBulkHeader) {
+        // Detect news aggregation: subjects with 3+ comma-separated topics (e.g. "Stuxnet Malware, Cisco Backdoor, NASA Phished")
+        const commaSegments = subject.split(",").map(s => s.trim()).filter(s => s.length > 3);
+        const isNewsDigest = commaSegments.length >= 3;
+        if (isNoise || hasBulkHeader || isNewsDigest) {
           await _markEmailRead(token, sender, msg.id);
-          await _logRejection(fromAddr, subject, hasBulkHeader ? "bulk-mail-header" : "newsletter-pattern");
-          console.log(`[Email-to-Ticket] Skipped newsletter/bulk: ${fromAddr} "${subject.substring(0, 60)}"`);
+          const reason = isNewsDigest ? "news-digest-multi-topic" : hasBulkHeader ? "bulk-mail-header" : "newsletter-pattern";
+          await _logRejection(fromAddr, subject, reason);
+          console.log(`[Email-to-Ticket] Skipped ${reason}: ${fromAddr} "${subject.substring(0, 60)}"`);
           continue;
         }
 
@@ -1107,6 +1117,7 @@ async function processInboundEmails() {
 
         // Create incident
         const incId = `INC-EMAIL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const slaMap = getSlaMap();
         const incident = {
           id: incId,
           title: subject.substring(0, 200),
@@ -1118,6 +1129,8 @@ async function processInboundEmails() {
           reporterName: msg.from?.emailAddress?.name || fromAddr,
           reporterEmail: fromAddr,
           assignedTeam: "Service Desk",
+          created: 0,
+          slaTarget: slaMap["Sev-C"] || 9,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           emailMessageId: msg.id,
@@ -1132,6 +1145,9 @@ async function processInboundEmails() {
 
         await db.upsert("incidents", incId, JSON.stringify(incident));
         await db.audit("incidents", incId, "email_create", JSON.stringify({ from: fromAddr, subject }), "email-pipeline");
+        // Update in-batch dedup sets so later emails in same batch are caught by Gate 5 & 6
+        _emailParsedIncidents.push(incident);
+        _emailMsgIdSet.add(msg.id);
         if (wsServer) wsServer.broadcast("incidents", { action: "upsert", collection: "incidents", id: incId, summary: incident.title });
         createdIncidents.push(incId);
 
@@ -1192,6 +1208,8 @@ async function processInboundEmails() {
       return { processed: 0, incidents: [], error: "Mail.Read permission not granted to Managed Identity — contact Azure AD admin to enable" };
     }
     return { processed: 0, incidents: [], error: err.message };
+  } finally {
+    _emailPipelineLock = false;
   }
 }
 
@@ -1528,6 +1546,11 @@ const server = http.createServer(async (req, res) => {
               previousAssignee = existing.assignedTo || existing.assignee || null;
             }
           } catch {}
+        }
+
+        // ─── Stamp resolvedAt when incident transitions to Resolved/Closed ──
+        if (collection === "incidents" && (body.status === "Resolved" || body.status === "Closed") && !body.resolvedAt) {
+          body.resolvedAt = new Date().toISOString();
         }
 
         await db.upsert(collection, recordId, JSON.stringify(body));
@@ -2672,17 +2695,20 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                     const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
                     const slaMap = getSlaMap();
                     const itsmPriority = priorityMap[t.priority] || "Sev-C";
+                    const zdStatus = statusMap[t.status] || "New";
                     const incident = {
                       id: `INC-ZD${t.id}`, title: t.subject || "Untitled",
                       description: t.description || "", category: (t.tags || [])[0] || "General",
                       subcategory: "", priority: itsmPriority,
-                      status: statusMap[t.status] || "New",
+                      status: zdStatus,
                       urgency: t.priority === "urgent" ? "Critical" : "Standard",
                       impact: t.priority === "urgent" ? "Enterprise" : "Individual",
                       assignee: "Unassigned", assignmentGroup: "Service Desk",
                       reporter: "Zendesk Import", reporterEmail: "",
                       customer: "", contactMethod: "Zendesk",
-                      created: Math.max(0, Math.round((Date.now() - new Date(t.created_at).getTime()) / 3600000)),
+                      created: 0,
+                      createdAt: t.created_at || new Date().toISOString(),
+                      resolvedAt: ["Resolved", "Closed"].includes(zdStatus) ? (t.updated_at || new Date().toISOString()) : undefined,
                       slaTarget: slaMap[itsmPriority] || 9,
                       aiTriaged: false, aiConfidence: 0, zdTicketId: t.id,
                       zdLastSync: new Date().toISOString(),
@@ -5261,6 +5287,170 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       return json(res, 200, { predictions, actions, count: predictions.length });
     } catch (err) {
       console.error("[AI SLA Predict]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/sla-audit — AI scans incidents for data quality issues
+  if (pathname === "/api/ai/sla-audit" && req.method === "POST") {
+    try {
+      const allRows = await db.getAll("incidents");
+      const slaMap = getSlaMap();
+      const issues = [];
+      let fixed = 0;
+
+      for (const row of allRows) {
+        try {
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!inc || !inc.id) continue;
+          const incIssues = [];
+          let changed = false;
+
+          if (inc.slaTarget === undefined || inc.slaTarget === null) {
+            incIssues.push("missing_slaTarget");
+            inc.slaTarget = slaMap[inc.priority] || 9;
+            changed = true;
+          }
+          if (inc.created === undefined || inc.created === null) {
+            incIssues.push("missing_created");
+            inc.created = 0;
+            changed = true;
+          }
+          if (!inc.createdAt) {
+            incIssues.push("missing_createdAt");
+            if (Array.isArray(inc.activityLog) && inc.activityLog.length > 0) {
+              const first = inc.activityLog.find(a => a.time);
+              if (first) { inc.createdAt = first.time; changed = true; }
+            }
+          }
+          if ((inc.status === "Resolved" || inc.status === "Closed") && !inc.resolvedAt) {
+            incIssues.push("missing_resolvedAt");
+            inc.resolvedAt = inc.updatedAt || inc.zdLastSync || new Date().toISOString();
+            changed = true;
+          }
+          if (typeof inc.created === "number" && inc.created > 8760) {
+            incIssues.push("stale_created_snapshot");
+          }
+
+          if (changed) {
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            fixed++;
+          }
+          if (incIssues.length > 0) {
+            issues.push({ id: inc.id, priority: inc.priority, status: inc.status, issues: incIssues, fixed: changed });
+          }
+        } catch {}
+      }
+
+      return json(res, 200, {
+        totalScanned: allRows.length,
+        issuesFound: issues.length,
+        autoFixed: fixed,
+        issues: issues.slice(0, 100),
+        summary: {
+          missingSlaTarget: issues.filter(i => i.issues.includes("missing_slaTarget")).length,
+          missingCreated: issues.filter(i => i.issues.includes("missing_created")).length,
+          missingCreatedAt: issues.filter(i => i.issues.includes("missing_createdAt")).length,
+          missingResolvedAt: issues.filter(i => i.issues.includes("missing_resolvedAt")).length,
+          staleCreatedSnapshot: issues.filter(i => i.issues.includes("stale_created_snapshot")).length,
+        },
+      });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/sla/compliance-report — Unified SLA metrics for all modules
+  if (pathname === "/api/sla/compliance-report" && req.method === "GET") {
+    try {
+      const allRows = await db.getAll("incidents");
+      const slaMap = getSlaMap();
+      const now = new Date();
+
+      const incidents = allRows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(Boolean);
+
+      const active = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
+      const resolved = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+
+      // Business hours SLA computation
+      const computeSla = (inc) => {
+        const target = inc.slaTarget || slaMap[inc.priority] || 9;
+        let elapsed = 0;
+        if (inc.createdAt) {
+          const start = new Date(inc.createdAt);
+          if (!isNaN(start.getTime())) {
+            const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? new Date(inc.resolvedAt) : now;
+            const BH_START = 9, BH_END = 18;
+            let cursor = new Date(start);
+            while (cursor < endTime) {
+              const day = cursor.getDay();
+              if (day >= 1 && day <= 5) {
+                const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+                if (hrs >= BH_START && hrs < BH_END) {
+                  const eob = new Date(cursor); eob.setHours(BH_END, 0, 0, 0);
+                  const chunk = eob < endTime ? eob : endTime;
+                  elapsed += (chunk - cursor) / 3600000;
+                  cursor = new Date(chunk);
+                } else if (hrs < BH_START) { cursor.setHours(BH_START, 0, 0, 0); }
+                else { cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0); }
+              } else {
+                const daysToMon = day === 0 ? 1 : 8 - day;
+                cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+              }
+              if (cursor >= endTime) break;
+            }
+          }
+        } else {
+          elapsed = inc.created || 0;
+        }
+        return { elapsed: Math.round(elapsed * 100) / 100, target, breached: elapsed > target, pct: Math.round((elapsed / target) * 100) };
+      };
+
+      const activeSla = active.map(i => ({ id: i.id, priority: i.priority, ...computeSla(i) }));
+      const resolvedSla = resolved.map(i => ({ id: i.id, priority: i.priority, ...computeSla(i) }));
+
+      const activeBreached = activeSla.filter(s => s.breached).length;
+      const activeMet = activeSla.length - activeBreached;
+      const resolvedBreached = resolvedSla.filter(s => s.breached).length;
+      const resolvedMet = resolvedSla.length - resolvedBreached;
+
+      // MTTR from resolved with timestamps
+      const withTimestamps = resolved.filter(i => i.createdAt && i.resolvedAt);
+      let mttrHours = 0;
+      if (withTimestamps.length > 0) {
+        const totalResolveTime = withTimestamps.reduce((sum, i) => {
+          const s = computeSla(i);
+          return sum + s.elapsed;
+        }, 0);
+        mttrHours = Math.round((totalResolveTime / withTimestamps.length) * 10) / 10;
+      }
+
+      const byPriority = {};
+      for (const p of ["Sev-A", "Sev-B", "Sev-C", "Sev-D"]) {
+        const pActive = activeSla.filter(s => s.priority === p);
+        const pResolved = resolvedSla.filter(s => s.priority === p);
+        byPriority[p] = {
+          active: pActive.length,
+          activeBreached: pActive.filter(s => s.breached).length,
+          resolved: pResolved.length,
+          resolvedBreached: pResolved.filter(s => s.breached).length,
+          target: slaMap[p] || 9,
+        };
+      }
+
+      return json(res, 200, {
+        overall: {
+          activeMet, activeBreached, activeTotal: active.length,
+          resolvedMet, resolvedBreached, resolvedTotal: resolved.length,
+          compliancePct: active.length > 0 ? Math.round((activeMet / active.length) * 100) : 100,
+          mttrHours,
+        },
+        byPriority,
+        generatedAt: now.toISOString(),
+      });
+    } catch (err) {
       return json(res, 500, { error: err.message });
     }
   }
@@ -8075,6 +8265,66 @@ async function start() {
         else console.log(`[Seed] Created 2 internal email whitelist entries`);
       } catch (e) { console.warn("[Seed] Email whitelist seed failed:", e.message); }
     }
+
+    // ─── SLA Data Migration: Backfill Missing Fields ────────────────
+    try {
+      const allIncRows = await db.getAll("incidents");
+      const slaMap = getSlaMap();
+      let backfilled = 0;
+      for (const row of allIncRows) {
+        try {
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!inc || !inc.id) continue;
+          let changed = false;
+
+          // Backfill slaTarget from SLA policy if missing
+          if (inc.slaTarget === undefined || inc.slaTarget === null) {
+            inc.slaTarget = slaMap[inc.priority] || slaMap["Sev-C"] || 9;
+            changed = true;
+          }
+
+          // Backfill created if missing (set to 0 for business-hours computation from createdAt)
+          if (inc.created === undefined || inc.created === null) {
+            inc.created = 0;
+            changed = true;
+          }
+
+          // Backfill createdAt from activityLog if missing
+          if (!inc.createdAt && Array.isArray(inc.activityLog) && inc.activityLog.length > 0) {
+            const firstEntry = inc.activityLog.find(a => a.type === "created" || a.type === "sync");
+            if (firstEntry && firstEntry.time) {
+              inc.createdAt = firstEntry.time;
+              changed = true;
+            }
+          }
+
+          // Backfill resolvedAt for Resolved/Closed incidents
+          if ((inc.status === "Resolved" || inc.status === "Closed") && !inc.resolvedAt) {
+            // Try to derive from activity log
+            if (Array.isArray(inc.activityLog)) {
+              const resolveEntry = [...inc.activityLog].reverse().find(a =>
+                a.detail && (a.detail.includes("Resolved") || a.detail.includes("Closed") || a.detail.includes("resolved"))
+              );
+              if (resolveEntry && resolveEntry.time) {
+                inc.resolvedAt = resolveEntry.time;
+                changed = true;
+              }
+            }
+            // Fallback: use updatedAt or zdLastSync
+            if (!inc.resolvedAt) {
+              inc.resolvedAt = inc.updatedAt || inc.zdLastSync || new Date().toISOString();
+              changed = true;
+            }
+          }
+
+          if (changed) {
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            backfilled++;
+          }
+        } catch {}
+      }
+      if (backfilled > 0) console.log(`[SLA Migration] Backfilled ${backfilled} incidents with missing SLA fields`);
+    } catch (e) { console.warn("[SLA Migration] Failed:", e.message); }
 
     // ─── Daily AI Knowledge Sync (every 24h) ────────────────────────
     const runDailySync = async () => {
