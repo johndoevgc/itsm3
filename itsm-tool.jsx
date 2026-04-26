@@ -1716,6 +1716,9 @@ export default function ITSMApp() {
   const [aiMonitorEnabled, setAiMonitorEnabled] = useState(() => _ls("vgc_ai_monitor", true));
   const [aiMonitorLastRun, setAiMonitorLastRun] = useState(null);
   const aiMonitorRef = useRef(null);
+  const [reviewTab, setReviewTab] = useState("all");
+  const [portalTab, setPortalTab] = useState("myTickets");
+  const [portalSearch, setPortalSearch] = useState("");
   // ─── AI Historical Incident Closure State ───────────────────────────
   const [historicalCloseRunning, setHistoricalCloseRunning] = useState(false);
   const [historicalCloseResult, setHistoricalCloseResult] = useState(null);
@@ -19267,9 +19270,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
-        {ticketsSubTab === "incidents" && <IncidentsModule />}
-        {ticketsSubTab === "zendesk" && <ZendeskModule />}
-        {ticketsSubTab === "operations" && <OperationsModule />}
+        {ticketsSubTab === "incidents" && (<IncidentsModule />)}
+        {ticketsSubTab === "zendesk" && ZendeskModule()}
+        {ticketsSubTab === "operations" && OperationsModule()}
       </div>
     );
   };
@@ -19420,7 +19423,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   // ─── Human Review Hub — Unified Review Center ─────────────────────────
   const HumanReviewHub = () => {
-    const [reviewTab, setReviewTab] = useState("all");
     const pendingAiActions = aiActions.filter(a => a.status === "pending_approval");
     const pendingZdQueue = zdAiQueue.filter(q => q.status === "pending_approval");
     const pendingChanges = changes.filter(c => c.status === "Awaiting Approval");
@@ -19633,13 +19635,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   // ─── Self-Service Portal (End User) ─────────────────────────────────
   const SelfServicePortal = () => {
-    const [portalTab, setPortalTab] = useState("myTickets");
     const userEmail = currentUser.email || currentUser.name;
     const myIncidents = incidents.filter(i => i.reporterEmail === userEmail || i.reporter === currentUser.name);
     const myRequests = requests.filter(r => r.requester === currentUser.name || r.requesterEmail === userEmail);
     const openCount = myIncidents.filter(i => !["Resolved","Closed"].includes(i.status)).length + myRequests.filter(r => !["Fulfilled","Cancelled"].includes(r.status)).length;
     const resolvedCount = myIncidents.filter(i => i.status === "Resolved" || i.status === "Closed").length;
-    const [portalSearch, setPortalSearch] = useState("");
 
     const statusColor = (s) => ({ "New": "#64B5F6", "In Progress": "#FFB347", "Pending": "#FFB347", "Awaiting Info": "#EC4899", "Resolved": "#4CAF50", "Closed": "#5A6178", "Open": "#64B5F6", "Fulfilled": "#4CAF50", "Cancelled": "#FF6B6B" })[s] || "#5A6178";
 
@@ -19777,33 +19777,33 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   const renderModule = () => {
     // End Users always get the self-service portal
-    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return <SelfServicePortal />;
+    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return SelfServicePortal();
     switch (activeModule) {
-      case "selfService": return <SelfServicePortal />;
-      case "dashboard": return <Dashboard />;
-      case "tickets": return <TicketsModule />;
-      case "incidents": return <TicketsModule />;
-      case "zendesk": return <TicketsModule />;
-      case "operations": return <OperationsModule />;
-      case "problems": return <OperationsModule />;
-      case "changes": return <OperationsModule />;
-      case "requests": return <OperationsModule />;
-      case "slaApprovals": return <SLAApprovalsModule />;
-      case "sla": return <SLAApprovalsModule />;
-      case "approvals": return <SLAApprovalsModule />;
-      case "humanReview": return <HumanReviewHub />;
-      case "catalog": return <CatalogModule />;
-      case "knowledge": return <KnowledgeModule />;
-      case "assets": return <AssetsModule />;
-      case "customers": return <CustomersModule />;
-      case "ai": return <AIAssistModule />;
-      case "analytics": return <AnalyticsModule />;
-      case "reports": return <AnalyticsModule />;
-      case "cybernews": return <AnalyticsModule />;
-      case "architecture": return <AnalyticsModule />;
-      case "admin": return <AdminSettingsModule />;
-      case "productivity": return <ProductivityDashboard />;
-      default: return <Dashboard />;
+      case "selfService": return SelfServicePortal();
+      case "dashboard": return Dashboard();
+      case "tickets": return TicketsModule();
+      case "incidents": return TicketsModule();
+      case "zendesk": return TicketsModule();
+      case "operations": return OperationsModule();
+      case "problems": return OperationsModule();
+      case "changes": return OperationsModule();
+      case "requests": return OperationsModule();
+      case "slaApprovals": return SLAApprovalsModule();
+      case "sla": return SLAApprovalsModule();
+      case "approvals": return SLAApprovalsModule();
+      case "humanReview": return HumanReviewHub();
+      case "catalog": return CatalogModule();
+      case "knowledge": return KnowledgeModule();
+      case "assets": return AssetsModule();
+      case "customers": return (<CustomersModule />);
+      case "ai": return AIAssistModule();
+      case "analytics": return AnalyticsModule();
+      case "reports": return AnalyticsModule();
+      case "cybernews": return AnalyticsModule();
+      case "architecture": return AnalyticsModule();
+      case "admin": return AdminSettingsModule();
+      case "productivity": return (<ProductivityDashboard />);
+      default: return Dashboard();
     }
   };
 
