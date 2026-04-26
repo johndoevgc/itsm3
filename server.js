@@ -5624,6 +5624,259 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
+  // ─── Phase 4: Smart Workload Balancing ──────────────────────────────
+  // POST /api/ai/workload-rebalance — AI analyzes team workload and suggests reassignments
+  if (pathname === "/api/ai/workload-rebalance" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 50000);
+      const { requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const allUsersRaw = await db.getAll("users");
+      const teamMembers = allUsersRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      const allIncRaw = await db.getAll("incidents");
+      const allIncidents = allIncRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      const openStatuses = new Set(["New", "Open", "In Progress", "Pending"]);
+      const openIncidents = allIncidents.filter(i => openStatuses.has(i.status));
+
+      // Build workload map: assignee → { count, sevA, sevB, totalSlaUsed, tickets[] }
+      const workloadMap = {};
+      for (const inc of openIncidents) {
+        const assignee = inc.assignee || "Unassigned";
+        if (!workloadMap[assignee]) workloadMap[assignee] = { count: 0, sevA: 0, sevB: 0, totalSlaUsed: 0, tickets: [] };
+        workloadMap[assignee].count++;
+        if (inc.priority === "Sev-A") workloadMap[assignee].sevA++;
+        if (inc.priority === "Sev-B") workloadMap[assignee].sevB++;
+        const slaTarget = inc.slaTarget || getSlaMap()[inc.priority] || 9;
+        workloadMap[assignee].totalSlaUsed += Math.round(((inc.created || 0) / slaTarget) * 100);
+        workloadMap[assignee].tickets.push({ id: inc.id, title: (inc.title || "").substring(0, 50), priority: inc.priority, category: inc.category, slaUsed: Math.round(((inc.created || 0) / slaTarget) * 100) });
+      }
+
+      // Historical resolution expertise
+      const resolvedInc = allIncidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+      const expertise = {};
+      for (const inc of resolvedInc) {
+        if (!inc.assignee || inc.assignee === "Unassigned") continue;
+        if (!expertise[inc.assignee]) expertise[inc.assignee] = {};
+        const cat = inc.category || "General";
+        expertise[inc.assignee][cat] = (expertise[inc.assignee][cat] || 0) + 1;
+      }
+
+      const workloadSummary = Object.entries(workloadMap).map(([name, w]) => {
+        const avgSla = w.count > 0 ? Math.round(w.totalSlaUsed / w.count) : 0;
+        const exp = expertise[name] ? Object.entries(expertise[name]).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, n]) => `${c}(${n})`).join(",") : "none";
+        return `${name}: ${w.count} open (${w.sevA} Sev-A, ${w.sevB} Sev-B), avg SLA ${avgSla}% used, expertise: ${exp}`;
+      }).join("\n");
+
+      const teamList = teamMembers.slice(0, 20).map(u => `${u.displayName || u.name || u.id} (${u.jobTitle || u.role || "Agent"})`).join(", ");
+
+      const systemPrompt = `You are the VGC-ITSM Workload Balancing Engine. Analyze team workload distribution and suggest reassignments to optimize performance.
+
+CURRENT WORKLOAD:
+${workloadSummary}
+
+TEAM MEMBERS: ${teamList}
+
+RULES:
+1. Balance ticket count across agents — no one should have >2x the average
+2. Match ticket category to agent expertise when possible
+3. Prioritize reassigning Sev-A/Sev-B tickets at high SLA usage
+4. Never reassign tickets already near resolution (>80% SLA used with activity)
+5. Consider "Unassigned" tickets as top priority for assignment
+
+Return JSON ONLY (no markdown): {
+  "summary": "brief overall assessment",
+  "avgWorkload": number,
+  "maxWorkload": number,
+  "imbalanceScore": 0-100 (0=perfectly balanced, 100=extremely unbalanced),
+  "reassignments": [{ "ticketId": "INC-XXX", "from": "current assignee", "to": "suggested assignee", "reason": "brief reason", "priority": "high|medium|low" }],
+  "unassignedActions": [{ "ticketId": "INC-XXX", "suggestedAssignee": "name", "reason": "why this person" }]
+}`;
+
+      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: `Analyze current workload and suggest optimal reassignments. ${openIncidents.length} open tickets across ${Object.keys(workloadMap).length} agents.` }], max_output_tokens: 2000 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let analysis;
+      try {
+        analysis = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch { analysis = { summary: "Could not parse AI response", imbalanceScore: 0, reassignments: [], unassignedActions: [] }; }
+
+      // Create AI actions for recommended reassignments
+      const dedupState = await getAiActionsDedupState();
+      const now = new Date().toISOString();
+      const actions = [];
+      for (const r of (analysis.reassignments || [])) {
+        const skipReason = shouldSkipAction(dedupState, { incidentId: r.ticketId, type: "workload_rebalance" });
+        if (skipReason) { console.log(`[Workload] Skipped ${r.ticketId}: ${skipReason}`); continue; }
+        const actionRecord = {
+          id: `WLB-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+          type: "workload_rebalance",
+          severity: r.priority === "high" ? "high" : "medium",
+          title: `Reassign ${r.ticketId}: ${r.from} → ${r.to}`,
+          description: r.reason,
+          incidentId: r.ticketId,
+          suggestedAction: "reassign",
+          fromAssignee: r.from,
+          toAssignee: r.to,
+          confidence: 80,
+          autoExecutable: false,
+          status: "pending_approval",
+          createdAt: now,
+          createdBy: "AI Workload Balancing Engine",
+          requestedBy,
+        };
+        await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+        trackNewAction(dedupState, { incidentId: r.ticketId, type: "workload_rebalance", title: actionRecord.title });
+        actions.push(actionRecord);
+      }
+
+      console.log(`[Workload] Imbalance: ${analysis.imbalanceScore || 0}%, ${(analysis.reassignments || []).length} suggestions, ${actions.length} actions created`);
+      return json(res, 200, { analysis, workloadMap, actions, count: actions.length });
+    } catch (err) {
+      console.error("[Workload Rebalance]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── Phase 5: Root Cause Correlation ────────────────────────────────
+  // POST /api/ai/correlate-incidents — AI finds patterns and common root causes across incidents
+  if (pathname === "/api/ai/correlate-incidents" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 50000);
+      const { requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const allIncRaw = await db.getAll("incidents");
+      const allIncidents = allIncRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      // Recent incidents (last 30 days or last 100)
+      const recentIncidents = allIncidents.slice(-100);
+      const openStatuses = new Set(["New", "Open", "In Progress", "Pending"]);
+      const openIncidents = recentIncidents.filter(i => openStatuses.has(i.status));
+      const resolvedIncidents = recentIncidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+
+      // Build category/priority clusters
+      const clusters = {};
+      for (const inc of recentIncidents) {
+        const key = `${inc.category || "General"}|${inc.assignmentGroup || "Service Desk"}`;
+        if (!clusters[key]) clusters[key] = { category: inc.category || "General", group: inc.assignmentGroup || "Service Desk", count: 0, open: 0, ids: [], priorities: {} };
+        clusters[key].count++;
+        if (openStatuses.has(inc.status)) clusters[key].open++;
+        clusters[key].ids.push(inc.id);
+        clusters[key].priorities[inc.priority] = (clusters[key].priorities[inc.priority] || 0) + 1;
+      }
+
+      const incidentSummaries = recentIncidents.slice(-50).map(inc => {
+        return `ID:${inc.id} Title:"${(inc.title||"").substring(0,60)}" Cat:${inc.category||"?"} Priority:${inc.priority} Status:${inc.status} Group:${inc.assignmentGroup||"?"} Reporter:${inc.reporter||"?"} Created:${inc.createdAt||"?"}`;
+      }).join("\n");
+
+      const clusterSummary = Object.values(clusters).sort((a, b) => b.count - a.count).slice(0, 15).map(c => {
+        return `${c.category} (${c.group}): ${c.count} total, ${c.open} open, priorities: ${Object.entries(c.priorities).map(([p, n]) => `${p}:${n}`).join(",")}`;
+      }).join("\n");
+
+      const systemPrompt = `You are the VGC-ITSM Root Cause Correlation Engine. Analyze recent incidents to identify patterns, recurring issues, and common root causes.
+
+INCIDENT CLUSTERS:
+${clusterSummary}
+
+RECENT INCIDENTS:
+${incidentSummaries}
+
+ANALYSIS TASKS:
+1. Identify recurring incident patterns (same category/type appearing multiple times)
+2. Find potential common root causes linking multiple incidents
+3. Detect category-specific trends (increasing/decreasing)
+4. Spot related incidents that might have a shared underlying cause
+5. Recommend proactive measures to prevent recurrence
+
+Return JSON ONLY (no markdown): {
+  "correlations": [{ "id": "COR-001", "title": "pattern title", "type": "recurring|related|trend|root_cause", "severity": "critical|high|medium|low", "affectedTickets": ["INC-XXX"], "description": "what was found", "rootCause": "likely root cause", "recommendation": "suggested fix", "confidence": 0-100 }],
+  "trends": [{ "category": "...", "direction": "increasing|decreasing|stable", "count": number, "insight": "brief" }],
+  "summary": "overall pattern analysis",
+  "riskScore": 0-100
+}`;
+
+      const payload = { model: getAIModel("primary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: `Analyze ${recentIncidents.length} recent incidents (${openIncidents.length} open, ${resolvedIncidents.length} resolved) across ${Object.keys(clusters).length} clusters. Find patterns and root causes.` }], max_output_tokens: 2500 };
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let analysis;
+      try {
+        analysis = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch { analysis = { correlations: [], trends: [], summary: "Could not parse AI response", riskScore: 0 }; }
+
+      // Create AI actions for high-confidence correlations
+      const dedupState = await getAiActionsDedupState();
+      const now = new Date().toISOString();
+      const actions = [];
+      for (const cor of (analysis.correlations || [])) {
+        if ((cor.confidence || 0) < 60) continue;
+        const dedupId = (cor.affectedTickets || []).sort().join(",") || cor.id;
+        const skipReason = shouldSkipAction(dedupState, { incidentId: dedupId, type: "root_cause_correlation" });
+        if (skipReason) { console.log(`[Correlation] Skipped ${cor.id}: ${skipReason}`); continue; }
+        const actionRecord = {
+          id: `COR-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+          type: "root_cause_correlation",
+          severity: cor.severity || "medium",
+          title: cor.title,
+          description: `${cor.description}\n\nRoot Cause: ${cor.rootCause || "Under investigation"}\nRecommendation: ${cor.recommendation || "Review affected tickets"}`,
+          incidentId: dedupId,
+          affectedTickets: cor.affectedTickets || [],
+          rootCause: cor.rootCause || "",
+          recommendation: cor.recommendation || "",
+          confidence: cor.confidence || 70,
+          correlationType: cor.type || "related",
+          autoExecutable: false,
+          status: "pending_approval",
+          createdAt: now,
+          createdBy: "AI Root Cause Correlation Engine",
+          requestedBy,
+        };
+        await db.upsert("ai_actions", actionRecord.id, JSON.stringify(actionRecord));
+        trackNewAction(dedupState, { incidentId: dedupId, type: "root_cause_correlation", title: actionRecord.title });
+        actions.push(actionRecord);
+      }
+
+      console.log(`[Correlation] Found ${(analysis.correlations || []).length} patterns, ${(analysis.trends || []).length} trends, created ${actions.length} actions`);
+      if (wsServer && actions.length > 0) {
+        wsServer.broadcast("ai_correlation", { action: "patterns_detected", correlations: analysis.correlations, trends: analysis.trends, riskScore: analysis.riskScore, count: actions.length });
+      }
+      return json(res, 200, { analysis, actions, count: actions.length });
+    } catch (err) {
+      console.error("[Correlation]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Phase 3: AI Knowledge Base Auto-Generation ─────────────────────
   // POST /api/ai/kb-auto-generate — generate KB article from resolved ticket
   if (pathname === "/api/ai/kb-auto-generate" && req.method === "POST") {
