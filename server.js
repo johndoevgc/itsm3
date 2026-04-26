@@ -7612,13 +7612,30 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
 
       const suggestions = [];
       let skipped = 0;
+      let autoDismissed = 0;
       for (const inc of candidates) {
         try {
-          const prompt = `You are an ITSM AI assistant. Analyze this incident and suggest a resolution.
-Incident: ${JSON.stringify({ id: inc.id, title: inc.title, description: inc.description, priority: inc.priority, category: inc.category, status: inc.status, assignee: inc.assignee, createdAt: inc.createdAt })}
-Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "Resolved", "confidence": 0-100, "customerEmail": "short message to customer about resolution"}`;
+          const prompt = `You are an enterprise ITSM AI assistant for VGC Technology Pte Ltd — a managed IT services company.
+Analyze this incident and:
+1. Suggest a resolution.
+2. CRITICALLY: Classify the RELEVANCE of this incident to determine if it needs human engineer review or can be auto-dismissed.
 
-          const payload = { model: getAIModel("tertiary"), input: [{ role: "system", content: "You are an expert IT support analyst. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 800 };
+Incident: ${JSON.stringify({ id: inc.id, title: inc.title, description: inc.description, priority: inc.priority, category: inc.category, status: inc.status, assignee: inc.assignee, createdAt: inc.createdAt, source: inc.source || "", reporter: inc.reporter || "" })}
+
+RELEVANCE CLASSIFICATION RULES:
+- "customer_critical": Real customer-reported outage, data loss, security breach, or business-critical service down. ALWAYS needs human review.
+- "customer_important": Customer-reported issue affecting productivity — password resets, access requests, software issues, hardware problems. Needs human review.
+- "internal_routine": Internal system alerts, monitoring notifications, scheduled tasks, routine maintenance alerts, vendor renewal reminders. Can be auto-resolved if confidence is high.
+- "noise_informational": Newsletter digests, vendor marketing, informational bulletins, threat intel summaries (not targeting us), product update announcements, general advisories, non-actionable notifications. Should be auto-dismissed — NOT relevant to our customers or operations.
+
+AUTO-RESOLVABLE RULES:
+- Set autoResolvable=true ONLY when the ticket requires NO human investigation, NO customer communication, and is either noise or a routine item with a clear standard resolution.
+- Set autoResolvable=false for anything that could impact a customer, requires investigation, or involves security/compliance.
+
+Respond ONLY with valid JSON:
+{"resolution": "...", "rootCause": "...", "suggestedStatus": "Resolved", "confidence": 0-100, "customerEmail": "short message to customer about resolution", "relevance": "customer_critical|customer_important|internal_routine|noise_informational", "autoResolvable": true/false, "classificationReasoning": "brief explanation of why this classification was chosen"}`;
+
+          const payload = { model: getAIModel("tertiary"), input: [{ role: "system", content: "You are an expert IT support analyst for a managed services company. Classify incidents by relevance to customers and operations. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 1000 };
           const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
           const aiResult = await new Promise((resolve, reject) => {
             const aiReq = https.request({
@@ -7639,7 +7656,11 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
 
           const text = extractAIText(aiResult);
           let parsed;
-          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { resolution: text, rootCause: "Unknown", suggestedStatus: "Resolved", confidence: 50, customerEmail: "" }; }
+          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { resolution: text, rootCause: "Unknown", suggestedStatus: "Resolved", confidence: 50, customerEmail: "", relevance: "customer_important", autoResolvable: false, classificationReasoning: "Could not parse AI response — defaulting to human review" }; }
+
+          const relevance = parsed.relevance || "customer_important";
+          const autoResolvable = parsed.autoResolvable === true;
+          const classificationReasoning = parsed.classificationReasoning || "";
 
           const suggestion = {
             id: `AIR-${inc.id}-${Date.now()}`,
@@ -7652,6 +7673,9 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
             suggestedStatus: parsed.suggestedStatus || "Resolved",
             confidence: parsed.confidence || 50,
             customerEmail: parsed.customerEmail || "",
+            relevance,
+            autoResolvable,
+            classificationReasoning,
             status: "pending_approval",
             createdAt: now.toISOString(),
             requestedBy,
@@ -7661,12 +7685,46 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
           if (_resPendingIncIds.has(inc.id)) { skipped++; continue; }
           _resPendingIncIds.add(inc.id); // prevent intra-batch dups
 
-          // Store in DB
+          // ─── Smart Routing: auto-dismiss noise/routine, queue important for engineers ───
+          const isNoise = relevance === "noise_informational";
+          const isRoutineHighConf = relevance === "internal_routine" && suggestion.confidence >= 80 && autoResolvable;
+          const shouldAutoDismiss = isNoise || isRoutineHighConf;
+
+          if (shouldAutoDismiss && suggestion.confidence >= AI_THRESHOLDS.autoResolveConfidence) {
+            // ── Auto-dismiss: resolve silently, NO email, NO engineer review ──
+            suggestion.status = "auto_dismissed";
+            suggestion.dismissedAt = new Date().toISOString();
+            suggestion.dismissReason = isNoise ? "noise_informational" : "routine_high_confidence";
+            await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+
+            // Apply resolution to incident (close it silently)
+            try {
+              const incRow = await db.get("incidents", inc.id);
+              if (incRow) {
+                const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+                liveInc.status = "Closed";
+                liveInc.resolvedAt = new Date().toISOString();
+                liveInc.resolution = suggestion.resolution || "Auto-dismissed by AI — not customer-impacting";
+                liveInc.rootCause = suggestion.rootCause || liveInc.rootCause;
+                liveInc.updatedAt = new Date().toISOString();
+                liveInc.skipZendeskSync = true;
+                liveInc.activityLog = liveInc.activityLog || [];
+                liveInc.activityLog.push({ id: `AL-AID-${Date.now()}`, type: "ai_dismiss", user: "AI Smart Filter", time: new Date().toISOString(), detail: `Auto-dismissed (${relevance}, ${suggestion.confidence}% confidence): ${classificationReasoning.substring(0, 200)}` });
+                await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
+              }
+            } catch (dismissErr) { console.warn(`[AI Smart Filter] Failed to close ${inc.id}:`, dismissErr.message); }
+            autoDismissed++;
+            suggestions.push(suggestion);
+            console.log(`[AI Smart Filter] Auto-dismissed ${inc.id} (${relevance}, ${suggestion.confidence}%): ${classificationReasoning.substring(0, 100)}`);
+            continue; // No email, no engineer review
+          }
+
+          // ── Customer-impacting or low-confidence: queue for engineer approval ──
           await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
           suggestions.push(suggestion);
 
-          // ─── Auto-approve & apply resolution in PROD_TEST_MODE ───
-          if (PROD_TEST_MODE && suggestion.confidence >= AI_THRESHOLDS.autoResolveConfidence) {
+          // ─── Auto-approve & apply resolution in PROD_TEST_MODE (only for customer-impacting with high confidence) ───
+          if (PROD_TEST_MODE && suggestion.confidence >= AI_THRESHOLDS.autoResolveConfidence && !shouldAutoDismiss) {
             try {
               suggestion.status = "auto_approved";
               suggestion.approvedBy = "AI Pipeline (PROD_TEST_MODE)";
@@ -7681,17 +7739,17 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
                 liveInc.rootCause = suggestion.rootCause || liveInc.rootCause;
                 liveInc.updatedAt = new Date().toISOString();
                 liveInc.activityLog = liveInc.activityLog || [];
-                liveInc.activityLog.push({ id: `AL-AIR-${Date.now()}`, type: "ai_resolve", user: "AI Auto-Resolve", time: new Date().toISOString(), detail: `AI auto-resolved (${suggestion.confidence}% confidence): ${(suggestion.resolution || "").substring(0, 200)}` });
+                liveInc.activityLog.push({ id: `AL-AIR-${Date.now()}`, type: "ai_resolve", user: "AI Auto-Resolve", time: new Date().toISOString(), detail: `AI auto-resolved (${suggestion.confidence}% confidence, ${relevance}): ${(suggestion.resolution || "").substring(0, 200)}` });
                 await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
               }
               await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
-              console.log(`[AI Pipeline] Auto-resolved ${inc.id} (${suggestion.confidence}% confidence)`);
+              console.log(`[AI Pipeline] Auto-resolved ${inc.id} (${suggestion.confidence}%, ${relevance})`);
 
-              // Send engineer review email for AI auto-resolved incidents
+              // Send engineer review email ONLY for customer-impacting incidents
               try {
                 await graphSendMail({
                   to: ["hlaing@vgctechnology.com"],
-                  subject: `[ITSM AI Review] ${inc.id} auto-resolved — please verify`,
+                  subject: `[ITSM AI Review] ${inc.id} auto-resolved (${relevance}) — please verify`,
                   body: buildEmailTemplate({
                     type: "ai_review",
                     incidentId: inc.id,
@@ -7700,6 +7758,7 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
                     confidence: suggestion.confidence,
                     resolution: suggestion.resolution || "",
                     rootCause: suggestion.rootCause || "",
+                    additionalFields: { "Relevance": relevance, "Classification": classificationReasoning },
                     nextActions: [
                       { label: "Review the AI-generated resolution for accuracy", url: PORTAL_URL, linkLabel: "Open Review Queue" },
                       { label: "Approve or reject in the AI Resolve Queue" },
@@ -7718,7 +7777,7 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
         }
       }
 
-      return json(res, 200, { success: true, suggestions, total: candidates.length });
+      return json(res, 200, { success: true, suggestions, total: candidates.length, autoDismissed, queued: suggestions.filter(s => s.status === "pending_approval").length });
     } catch (err) {
       console.error("[AI Auto-Resolve]", err.message);
       return json(res, 500, { error: err.message });
@@ -7823,6 +7882,112 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
       return json(res, 200, { success: true, suggestion });
     } catch (err) {
       console.error("[AI Resolve Queue Action]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── POST /api/ai/resolve-queue/bulk-dismiss — Bulk re-classify and dismiss noise/routine items ───
+  if (pathname === "/api/ai/resolve-queue/bulk-dismiss" && req.method === "POST") {
+    try {
+      if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+      const body = await parseBody(req);
+      const requestedBy = body.requestedBy || "system";
+      const maxItems = Math.min(body.maxItems || 50, 100);
+
+      const rows = await db.getAll("ai_resolve_queue");
+      const pending = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+        .filter(it => it && it.status === "pending_approval")
+        .slice(0, maxItems);
+
+      if (!pending.length) return json(res, 200, { success: true, dismissed: 0, kept: 0, message: "No pending items" });
+
+      let dismissed = 0, kept = 0;
+      for (const item of pending) {
+        try {
+          // Reclassify using AI
+          const prompt = `You are an enterprise ITSM AI assistant for VGC Technology — a managed IT services company.
+Classify this pending AI resolution suggestion. Should it go to human engineer review, or can it be auto-dismissed?
+
+Incident: ${JSON.stringify({ id: item.incidentId, title: item.incidentTitle, priority: item.priority, resolution: item.resolution, rootCause: item.rootCause, confidence: item.confidence })}
+
+CLASSIFICATION:
+- "customer_critical": Real customer outage/data loss/security breach → KEEP for engineer review
+- "customer_important": Customer-reported issue affecting productivity → KEEP for engineer review
+- "internal_routine": Internal monitoring alert, routine task, maintenance → DISMISS if confidence >= 60
+- "noise_informational": Newsletter, vendor marketing, advisory, non-actionable notification → DISMISS
+
+Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "classificationReasoning": "brief reason"}`;
+
+          const payload = { model: getAIModel("tertiary"), input: [{ role: "system", content: "Classify incidents by relevance. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 300 };
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({
+              hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+              method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+            }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => {
+                if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+                else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 200)}`));
+              });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(20000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const text = extractAIText(aiResult);
+          let parsed;
+          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { relevance: "customer_important", autoResolvable: false, classificationReasoning: "Parse error — keeping for review" }; }
+
+          item.relevance = parsed.relevance || "customer_important";
+          item.autoResolvable = parsed.autoResolvable === true;
+          item.classificationReasoning = parsed.classificationReasoning || "";
+
+          const shouldDismiss = (item.relevance === "noise_informational") || (item.relevance === "internal_routine" && item.autoResolvable && item.confidence >= AI_THRESHOLDS.autoResolveConfidence);
+
+          if (shouldDismiss) {
+            item.status = "auto_dismissed";
+            item.dismissedAt = new Date().toISOString();
+            item.dismissedBy = requestedBy;
+            item.dismissReason = item.relevance === "noise_informational" ? "noise_informational" : "routine_high_confidence";
+            await db.upsert("ai_resolve_queue", item.id, item);
+
+            // Also close the incident silently
+            try {
+              const incRow = await db.get("incidents", item.incidentId);
+              if (incRow) {
+                const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+                if (liveInc && !["Closed", "Resolved"].includes(liveInc.status)) {
+                  liveInc.status = "Closed";
+                  liveInc.resolvedAt = new Date().toISOString();
+                  liveInc.resolution = item.resolution || "Auto-dismissed — not customer-impacting";
+                  liveInc.updatedAt = new Date().toISOString();
+                  liveInc.skipZendeskSync = true;
+                  liveInc.activityLog = liveInc.activityLog || [];
+                  liveInc.activityLog.push({ id: `AL-BD-${Date.now()}`, type: "ai_bulk_dismiss", user: "AI Bulk Dismiss", time: new Date().toISOString(), detail: `Bulk dismissed: ${item.relevance} — ${(item.classificationReasoning || "").substring(0, 200)}` });
+                  await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
+                }
+              }
+            } catch (e) { console.warn(`[Bulk Dismiss] Failed to close ${item.incidentId}:`, e.message); }
+            dismissed++;
+          } else {
+            // Update classification but keep in queue
+            await db.upsert("ai_resolve_queue", item.id, item);
+            kept++;
+          }
+        } catch (err) {
+          console.warn(`[Bulk Dismiss] Failed to classify ${item.id}:`, err.message);
+          kept++;
+        }
+      }
+
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+      console.log(`[AI Bulk Dismiss] Processed ${pending.length}: ${dismissed} dismissed, ${kept} kept`);
+      return json(res, 200, { success: true, processed: pending.length, dismissed, kept });
+    } catch (err) {
+      console.error("[AI Bulk Dismiss]", err.message);
       return json(res, 500, { error: err.message });
     }
   }
