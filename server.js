@@ -736,6 +736,7 @@ const VALID_COLLECTIONS = new Set([
   "report_schedules",
   "email_rejections",
   "email_templates",
+  "email_whitelist",
   "advisories",
 ]);
 
@@ -931,8 +932,21 @@ async function processInboundEmails() {
     const token = await getManagedIdentityToken();
     const sender = HELPDESK_MAILBOX;
 
-    // ── Build customer domain whitelist ──────────────────────────────────
+    // ── Build customer domain + email whitelist ─────────────────────────
     const allowedDomains = new Set(["vgctechnology.com", "vgcsg.com"]); // internal always allowed
+    const allowedEmails = new Set(); // individual email addresses
+    // 1. Load from dedicated email_whitelist collection
+    try {
+      const wlRows = await db.getAll("email_whitelist");
+      for (const row of wlRows) {
+        try {
+          const entry = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (entry.type === "domain" && entry.value) allowedDomains.add(entry.value.toLowerCase());
+          if (entry.type === "email" && entry.value) allowedEmails.add(entry.value.toLowerCase());
+        } catch {}
+      }
+    } catch (e) { console.warn("[Email-to-Ticket] Could not load email_whitelist:", e.message); }
+    // 2. Merge customer domains as fallback (backward compat)
     try {
       const allCustomers = await db.getAll("customers");
       for (const row of allCustomers) {
@@ -944,6 +958,7 @@ async function processInboundEmails() {
       }
     } catch (e) { console.warn("[Email-to-Ticket] Could not load customers for whitelist:", e.message); }
     console.log(`[Email-to-Ticket] Allowed domains: ${[...allowedDomains].join(", ")}`);
+    if (allowedEmails.size > 0) console.log(`[Email-to-Ticket] Allowed emails: ${[...allowedEmails].join(", ")}`);
 
     // Fetch unread emails (top 10, newest first)
     const filterParams = new URLSearchParams({
@@ -1038,38 +1053,14 @@ async function processInboundEmails() {
           continue;
         }
 
-        // ── Gate 4: Customer domain whitelist — ONLY registered customers create tickets ──
+        // ── Gate 4: Customer domain + email whitelist — ONLY whitelisted senders create tickets ──
         const senderDomain = fromAddr.split("@")[1] || "";
-        if (!allowedDomains.has(senderDomain)) {
+        const isWhitelisted = allowedDomains.has(senderDomain) || allowedEmails.has(fromAddr);
+        if (!isWhitelisted) {
           await _markEmailRead(token, sender, msg.id);
-          await _logRejection(fromAddr, subject, "non-customer-domain");
-          console.log(`[Email-to-Ticket] Rejected non-customer: ${fromAddr} (domain "${senderDomain}" not in whitelist)`);
-
-          // Send formal rejection notice to the sender
-          graphSendMail({
-            to: [fromAddr],
-            subject: `[VGC ITSM] Your request could not be processed — ${subject.substring(0, 60)}`,
-            isCustomerEmail: true,
-            body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
-              <div style="background:linear-gradient(135deg,#6B7280,#374151);padding:16px 20px;border-radius:8px 8px 0 0;">
-                <h2 style="margin:0;color:#fff;font-size:18px;">📨 Email Received — Action Required</h2>
-              </div>
-              <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
-                <p style="margin:0 0 12px;color:#333;">Dear <strong>${(msg.from?.emailAddress?.name || fromAddr).replace(/</g, "&lt;")}</strong>,</p>
-                <p style="margin:0 0 12px;color:#333;">Thank you for contacting VGC Technology IT Service Management.</p>
-                <p style="margin:0 0 12px;color:#333;">Unfortunately, we are unable to process your request as your email domain (<code>${senderDomain}</code>) is not registered as an active customer in our system.</p>
-                <div style="background:#FFF3CD;border:1px solid #FFD700;border-radius:6px;padding:12px 16px;margin:16px 0;">
-                  <p style="margin:0;color:#856404;font-size:13px;"><strong>Interested in IT Managed Services?</strong></p>
-                  <p style="margin:6px 0 0;color:#856404;font-size:13px;">For IT maintenance contract enquiries, please contact our sales team:</p>
-                  <p style="margin:6px 0 0;color:#856404;font-size:14px;">📧 <a href="mailto:sales@vgctechnology.com" style="color:#0066CC;font-weight:bold;">sales@vgctechnology.com</a></p>
-                </div>
-                <p style="margin:16px 0 8px;color:#333;font-size:13px;">If you believe this is an error, please ask your company administrator to contact us to verify your service agreement.</p>
-                <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-                <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management<br/>This is an automated message. Please do not reply directly to this email.</p>
-              </div>
-            </div>`,
-          }).catch(e => console.warn(`[Email-to-Ticket] Rejection notice failed for ${fromAddr}:`, e.message));
-
+          await _logRejection(fromAddr, subject, "non-whitelisted");
+          // Silently ignore — do NOT send rejection email to non-whitelisted senders
+          console.log(`[Email-to-Ticket] Silently rejected: ${fromAddr} (not in whitelist)`);
           continue;
         }
 
@@ -7885,6 +7876,41 @@ async function start() {
         await db.upsert("approval_chains", chain.id, JSON.stringify(chain));
       }
       console.log(`[Seed] Created ${defaultChains.length} default approval chains`);
+    }
+
+    // Seed email_whitelist from customer domains if empty
+    if (!stats.email_whitelist || stats.email_whitelist === 0) {
+      try {
+        const custRows = await db.getAll("customers");
+        const seenDomains = new Set(["vgctechnology.com", "vgcsg.com"]);
+        let seeded = 0;
+        for (const row of custRows) {
+          try {
+            const cust = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            const domain = (cust.email || "").split("@")[1]?.toLowerCase();
+            if (domain && !seenDomains.has(domain)) {
+              seenDomains.add(domain);
+              const wlId = `WL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+              await db.upsert("email_whitelist", wlId, JSON.stringify({
+                id: wlId, type: "domain", value: domain,
+                label: cust.company || cust.name || domain,
+                addedBy: "System (auto-import)", addedAt: new Date().toISOString(),
+              }));
+              seeded++;
+            }
+          } catch {}
+        }
+        // Always add internal domains
+        for (const intDomain of ["vgctechnology.com", "vgcsg.com"]) {
+          const wlId = `WL-INT-${intDomain.replace(/\./g, "-")}`;
+          await db.upsert("email_whitelist", wlId, JSON.stringify({
+            id: wlId, type: "domain", value: intDomain,
+            label: "VGC Internal", addedBy: "System", addedAt: new Date().toISOString(), internal: true,
+          }));
+        }
+        if (seeded > 0) console.log(`[Seed] Created ${seeded + 2} email whitelist entries (${seeded} customer domains + 2 internal)`);
+        else console.log(`[Seed] Created 2 internal email whitelist entries`);
+      } catch (e) { console.warn("[Seed] Email whitelist seed failed:", e.message); }
     }
 
     // ─── Daily AI Knowledge Sync (every 24h) ────────────────────────
