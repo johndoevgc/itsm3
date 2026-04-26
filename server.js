@@ -717,6 +717,24 @@ function parseBody(req, maxSize = 50000) {
   });
 }
 
+// ─── Category Normalization ──────────────────────────────────────────────
+// Maps freeform AI-generated categories to ~10 standard ITIL buckets.
+// Applied at incident write time to ensure consistent analytics/reporting.
+function normalizeCategory(cat) {
+  const c = (cat || "General").toLowerCase();
+  if (c.includes("network") || c.includes("connectivity") || c.includes("vpn") || c.includes("firewall") || c.includes("dns") || c.includes("dhcp") || c.includes("ip address") || /\blan\b/.test(c) || /\bwan\b/.test(c)) return "Network";
+  if (c.includes("hardware") || c.includes("laptop") || c.includes("desktop") || c.includes("device") || c.includes("monitor") || c.includes("keyboard") || c.includes("mouse") || c.includes("dock")) return "Hardware";
+  if (c.includes("security") || c.includes("phishing") || c.includes("malware") || c.includes("virus") || c.includes("vulnerability") || c.includes("attack") || c.includes("threat") || c.includes("defender")) return "Security";
+  if (c.includes("print") || c.includes("scanner") || c.includes("fax")) return "Printing";
+  if (c.includes("email") || c.includes("outlook") || c.includes("exchange") || c.includes("mail")) return "Email";
+  if (c.includes("access") || c.includes("password") || c.includes("login") || c.includes("locked") || c.includes("permission") || c.includes("mfa") || c.includes("identity") || c.includes("certificate")) return "Access/Identity";
+  if (c.includes("cloud") || c.includes("azure") || c.includes("m365") || c.includes("microsoft") || c.includes("saas") || c.includes("subscription") || c.includes("license") || c.includes("licensing")) return "Cloud";
+  if (c.includes("service request") || c.includes("service catalog") || c.includes("service level") || c.includes("service management") || c.includes("change enablement") || c.includes("change management") || c.includes("request fulfilment") || c.includes("request fulfillment")) return "Service Request";
+  if (c.includes("software") || c.includes("application") || c.includes("install") || c.includes("update") || c.includes("patch") || c.includes("browser")) return "Software";
+  if (c.includes("end user") || c.includes("workstation") || c.includes("onboard") || c.includes("setup") || c.includes("provisioning") || c.includes("user account")) return "End User Computing";
+  return "General";
+}
+
 // Valid collection names (whitelist to prevent injection)
 const VALID_COLLECTIONS = new Set([
   "incidents", "problems", "changes", "requests",
@@ -1472,6 +1490,7 @@ const server = http.createServer(async (req, res) => {
         } else {
           const id = body.id || recordId || String(Date.now());
           body.id = id;
+          if (collection === "incidents" && body.category) body.category = normalizeCategory(body.category);
           await db.upsert(collection, id, JSON.stringify(body));
           await db.audit(collection, id, "upsert", JSON.stringify(body), authResult.user?.email || body._user || "system");
           if (wsServer) wsServer.broadcast(collection, { action: "upsert", collection, id, summary: body.title || body.name || id });
@@ -1727,6 +1746,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const { chainId, targetCollection, targetId } = body;
       if (!chainId || !targetCollection || !targetId) return json(res, 400, { error: "Missing chainId, targetCollection, or targetId" });
+      if (!VALID_COLLECTIONS.has(targetCollection)) return json(res, 400, { error: "Invalid target collection" });
       const chain = dbParse(await db.getOne("approval_chains", chainId));
       if (!chain) return json(res, 404, { error: "Approval chain not found" });
       const instanceId = `AI-${Date.now().toString(36)}`;
@@ -1739,7 +1759,7 @@ const server = http.createServer(async (req, res) => {
       // Update target record
       const target = dbParse(await db.getOne(targetCollection, targetId));
       if (target) { target.approvalInstanceId = instanceId; target.status = "Awaiting Approval"; await db.upsert(targetCollection, targetId, JSON.stringify(target)); }
-      await db.audit(targetCollection, "approval_submitted", targetId, JSON.stringify({ chainId, instanceId }), body.createdBy || "system");
+      await db.audit(targetCollection, targetId, "approval_submitted", JSON.stringify({ chainId, instanceId }), body.createdBy || "system");
       return json(res, 200, { success: true, instanceId, instance });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -1775,7 +1795,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
       await db.upsert("approval_instances", instanceId, JSON.stringify(instance));
-      await db.audit("approval_instances", `approval_${action}`, instanceId, JSON.stringify({ level: instance.approvals.length, action, approvedBy }), approvedBy || "system");
+      await db.audit("approval_instances", instanceId, `approval_${action}`, JSON.stringify({ level: instance.approvals.length, action, approvedBy }), approvedBy || "system");
       return json(res, 200, { success: true, instance });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -1821,7 +1841,7 @@ const server = http.createServer(async (req, res) => {
       const relId = `REL-${Date.now().toString(36)}`;
       const rel = { id: relId, sourceId, targetId, type, direction: "forward", createdBy: body.createdBy || "system", createdAt: new Date().toISOString() };
       await db.upsert("cmdb_relationships", relId, JSON.stringify(rel));
-      await db.audit("cmdb_relationships", "create", relId, JSON.stringify(rel), body.createdBy || "system");
+      await db.audit("cmdb_relationships", relId, "create", JSON.stringify(rel), body.createdBy || "system");
       return json(res, 200, { success: true, relationship: rel });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -1830,7 +1850,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const relId = pathname.split("/")[4];
       await db.deleteOne("cmdb_relationships", relId);
-      await db.audit("cmdb_relationships", "delete", relId, JSON.stringify({}), body.deletedBy || "system");
+      await db.audit("cmdb_relationships", relId, "delete", JSON.stringify({}), body.deletedBy || "system");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -1917,7 +1937,7 @@ const server = http.createServer(async (req, res) => {
         const inc = dbParse(await db.getOne("incidents", incidentId));
         if (inc) { inc.runbookExecutionId = execId; await db.upsert("incidents", incidentId, JSON.stringify(inc)); }
       }
-      await db.audit("runbook_executions", "started", execId, JSON.stringify({ runbookId, incidentId }), executedBy || "system");
+      await db.audit("runbook_executions", execId, "started", JSON.stringify({ runbookId, incidentId }), executedBy || "system");
       return json(res, 200, { success: true, execution });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -1967,7 +1987,7 @@ const server = http.createServer(async (req, res) => {
       const schedId = body.id || `RS-${Date.now().toString(36)}`;
       const schedule = { id: schedId, name, type, frequency: frequency || "weekly", dayOfWeek: body.dayOfWeek || 1, hour: body.hour || 9, recipients: recipients || [], format: format || "csv", filters: body.filters || {}, active: body.active !== false, createdAt: new Date().toISOString() };
       await db.upsert("report_schedules", schedId, JSON.stringify(schedule));
-      await db.audit("report_schedules", "create", schedId, JSON.stringify(schedule), body.createdBy || "system");
+      await db.audit("report_schedules", schedId, "create", JSON.stringify(schedule), body.createdBy || "system");
       return json(res, 200, { success: true, schedule });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2698,7 +2718,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                     const zdStatus = statusMap[t.status] || "New";
                     const incident = {
                       id: `INC-ZD${t.id}`, title: t.subject || "Untitled",
-                      description: t.description || "", category: (t.tags || [])[0] || "General",
+                      description: t.description || "", category: normalizeCategory((t.tags || [])[0] || "General"),
                       subcategory: "", priority: itsmPriority,
                       status: zdStatus,
                       urgency: t.priority === "urgent" ? "Critical" : "Standard",
@@ -2841,7 +2861,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold" };
                   const newInc = {
                     id: `INC-ZD${t.id}`, title: t.subject || "Untitled",
-                    description: t.description || "", category: (t.tags || [])[0] || "General",
+                    description: t.description || "", category: normalizeCategory((t.tags || [])[0] || "General"),
                     subcategory: "", priority: itsmPriority, status: statusMap[t.status] || "New",
                     urgency: t.priority === "urgent" ? "Critical" : "Standard",
                     impact: t.priority === "urgent" ? "Enterprise" : "Individual",
@@ -3382,7 +3402,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
             const entry = {
               id: kbId, title: t.subject || `Zendesk #${t.id}`,
-              category: (t.tags || [])[0] || "General",
+              category: normalizeCategory((t.tags || [])[0] || "General"),
               content: `Issue: ${t.subject}\n\nDescription: ${(t.description || "").substring(0, 500)}\n\nResolution: ${resolution.substring(0, 1000)}`,
               tags: [...(t.tags || []), "zendesk-import", "historical"],
               trainedBy: "Zendesk Historical Import",
@@ -5004,7 +5024,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         const incRow = await db.getOne("incidents", ticket.id);
         if (incRow) {
           const inc = JSON.parse(incRow.data);
-          inc.category = triage.category;
+          inc.category = normalizeCategory(triage.category);
           inc.subcategory = triage.subcategory || inc.subcategory;
           inc.priority = triage.priority;
           inc.assignee = triage.assignee || inc.assignee;
@@ -5070,7 +5090,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         const incRow = await db.getOne("incidents", action.incidentId);
         if (incRow) {
           const inc = JSON.parse(incRow.data);
-          inc.category = triage.category;
+          inc.category = normalizeCategory(triage.category);
           inc.subcategory = triage.subcategory || inc.subcategory;
           inc.priority = triage.priority;
           inc.assignee = triage.assignee || inc.assignee;
