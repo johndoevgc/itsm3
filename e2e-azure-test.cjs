@@ -430,6 +430,107 @@ async function main() {
   const fwColl = await getJson("/api/data/change_freeze_windows");
   assert("Freeze windows collection accessible via /api/data", fwColl.status === 200, `Status: ${fwColl.status}`);
 
+  // ─── Phase 9: AI Learning Dashboard ──────────────────────────────
+  console.log("--- Phase 9: AI Learning Dashboard ---");
+
+  // 56. GET /api/ai/learning/metrics returns 200
+  const alMetrics = await getJson("/api/ai/learning/metrics");
+  assert("AI learning metrics returns 200", alMetrics.status === 200, `Status: ${alMetrics.status}`);
+
+  // 57. Metrics has expected fields
+  assert("Metrics has totalTriages field", alMetrics.json.totalTriages !== undefined, `Missing totalTriages`);
+  assert("Metrics has avgConfidence field", alMetrics.json.avgConfidence !== undefined, `Missing avgConfidence`);
+  assert("Metrics has autoApplyRate field", alMetrics.json.autoApplyRate !== undefined, `Missing autoApplyRate`);
+  assert("Metrics has confidenceBuckets field", alMetrics.json.confidenceBuckets !== undefined, `Missing confidenceBuckets`);
+  assert("Metrics has feedbackStats field", alMetrics.json.feedbackStats !== undefined, `Missing feedbackStats`);
+  assert("Metrics has categoryBreakdown field", alMetrics.json.categoryBreakdown !== undefined, `Missing categoryBreakdown`);
+
+  // 62. GET /api/ai/learning/trends returns 200
+  const alTrends = await getJson("/api/ai/learning/trends");
+  assert("AI learning trends returns 200", alTrends.status === 200, `Status: ${alTrends.status}`);
+
+  // 63. Trends has expected fields
+  assert("Trends has period field", alTrends.json.period !== undefined, `Missing period`);
+  assert("Trends has trends array", Array.isArray(alTrends.json.trends), `trends not array`);
+
+  // 65. Trends with daily period
+  const alTrendsDaily = await getJson("/api/ai/learning/trends?period=daily");
+  assert("Daily trends returns 200", alTrendsDaily.status === 200, `Status: ${alTrendsDaily.status}`);
+  assert("Daily trends period is daily", alTrendsDaily.json.period === "daily", `Period: ${alTrendsDaily.json.period}`);
+
+  // 67. POST /api/ai/learning/feedback — create feedback
+  const fbRes = await postJson("/api/ai/learning/feedback", { triageId: "TEST-TRIAGE-001", verdict: "correct", notes: "E2E test feedback" });
+  assert("Create AI feedback returns 201", fbRes.status === 201, `Status: ${fbRes.status}`);
+  assert("Feedback has id", fbRes.json.feedback?.id?.startsWith("ALFB-"), `ID: ${fbRes.json.feedback?.id}`);
+  const testFeedbackId = fbRes.json.feedback?.id;
+
+  // 69. POST feedback validation — missing fields
+  const fbBad = await postJson("/api/ai/learning/feedback", { triageId: "X" });
+  assert("Feedback without verdict returns 400", fbBad.status === 400, `Status: ${fbBad.status}`);
+
+  // 70. POST feedback invalid verdict
+  const fbBad2 = await postJson("/api/ai/learning/feedback", { triageId: "X", verdict: "maybe" });
+  assert("Feedback with invalid verdict returns 400", fbBad2.status === 400, `Status: ${fbBad2.status}`);
+
+  // 71. GET /api/ai/learning/feedback — list feedback
+  const fbList = await getJson("/api/ai/learning/feedback");
+  assert("List AI feedback returns 200", fbList.status === 200, `Status: ${fbList.status}`);
+  assert("Feedback list has our entry", fbList.json.feedback?.some(f => f.id === testFeedbackId), `Not found: ${testFeedbackId}`);
+
+  // 73. DELETE /api/ai/learning/feedback/:id
+  const fbDelRes = await new Promise((resolve, reject) => {
+    const url = new URL(`${BASE}/api/ai/learning/feedback/${testFeedbackId}`);
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "DELETE" }, res => {
+      let buf = "";
+      res.on("data", c => buf += c);
+      res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(buf) }); } catch { resolve({ status: res.statusCode, json: {} }); } });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  assert("Delete AI feedback returns 200", fbDelRes.status === 200, `Status: ${fbDelRes.status}`);
+
+  // 74. Verify feedback deleted
+  const fbListAfter = await getJson("/api/ai/learning/feedback");
+  assert("Feedback no longer in list after delete", !(fbListAfter.json.feedback?.some(f => f.id === testFeedbackId) ?? false), `still present`);
+
+  // 75. GET /api/ai/learning/model-health returns 200
+  const healthRes = await getJson("/api/ai/learning/model-health");
+  assert("AI model health returns 200", healthRes.status === 200, `Status: ${healthRes.status}`);
+  assert("Model health has healthScore", healthRes.json.healthScore !== undefined, `Missing healthScore`);
+  assert("Model health has healthStatus", healthRes.json.healthStatus !== undefined, `Missing healthStatus`);
+  assert("Model health has trend", healthRes.json.trend !== undefined, `Missing trend`);
+
+  // 79. AI learning feedback collection accessible via generic API
+  const alColl = await getJson("/api/data/ai_learning_feedback");
+  assert("AI learning feedback collection accessible via /api/data", alColl.status === 200, `Status: ${alColl.status}`);
+
+  // 80. POST feedback with corrections
+  const fbCorrRes = await postJson("/api/ai/learning/feedback", { triageId: "TEST-TRIAGE-002", verdict: "incorrect", notes: "Wrong category", correctedCategory: "Security", correctedPriority: "Sev-A" });
+  assert("Feedback with corrections returns 201", fbCorrRes.status === 201, `Status: ${fbCorrRes.status}`);
+  assert("Corrected category saved", fbCorrRes.json.feedback?.correctedCategory === "Security", `Cat: ${fbCorrRes.json.feedback?.correctedCategory}`);
+
+  // 82. Cleanup correction feedback
+  if (fbCorrRes.json.feedback?.id) {
+    await new Promise((resolve, reject) => {
+      const url = new URL(`${BASE}/api/ai/learning/feedback/${fbCorrRes.json.feedback.id}`);
+      const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "DELETE" }, res => {
+        let buf = ""; res.on("data", c => buf += c); res.on("end", () => resolve());
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  // 83. Metrics reflect updated state after feedback operations
+  const alMetrics2 = await getJson("/api/ai/learning/metrics");
+  assert("Metrics still returns 200 after operations", alMetrics2.status === 200, `Status: ${alMetrics2.status}`);
+
+  // 84. Monthly trends work
+  const alTrendsMonthly = await getJson("/api/ai/learning/trends?period=monthly");
+  assert("Monthly trends returns 200", alTrendsMonthly.status === 200, `Status: ${alTrendsMonthly.status}`);
+  assert("Monthly trends period is monthly", alTrendsMonthly.json.period === "monthly", `Period: ${alTrendsMonthly.json.period}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));

@@ -6,8 +6,8 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "4.2.0",
-  build: "phase8-change-calendar",
+  version: "4.3.0",
+  build: "phase9-ai-learning",
   date: "2026-04-27",
   channel: "Production",
   name: "VGC-ITSM",
@@ -3052,6 +3052,54 @@ export default function ITSMApp() {
 
   // ─── Phase 5: AI Pattern Detection ────────────────────────────────
   const [aiPatterns, setAiPatterns] = useState([]);
+
+  // ─── Phase 9: AI Learning Dashboard ────────────────────────────────
+  const [aiLearningMetrics, setAiLearningMetrics] = useState(null);
+  const [aiLearningTrends, setAiLearningTrends] = useState([]);
+  const [aiModelHealth, setAiModelHealth] = useState(null);
+  const [aiLearningFeedback, setAiLearningFeedback] = useState([]);
+  const [aiLearningLoading, setAiLearningLoading] = useState(false);
+  const [aiLearningTrendPeriod, setAiLearningTrendPeriod] = useState("weekly");
+
+  const fetchAiLearningData = useCallback(async () => {
+    if (aiLearningLoading || !isLoggedIn) return;
+    setAiLearningLoading(true);
+    try {
+      const [metricsRes, trendsRes, healthRes, feedbackRes] = await Promise.all([
+        fetch("/api/ai/learning/metrics").then(r => r.json()),
+        fetch(`/api/ai/learning/trends?period=${aiLearningTrendPeriod}`).then(r => r.json()),
+        fetch("/api/ai/learning/model-health").then(r => r.json()),
+        fetch("/api/ai/learning/feedback").then(r => r.json()),
+      ]);
+      setAiLearningMetrics(metricsRes);
+      setAiLearningTrends(trendsRes.trends || []);
+      setAiModelHealth(healthRes);
+      setAiLearningFeedback(feedbackRes.feedback || []);
+    } catch (e) { console.error("AI Learning fetch error:", e); }
+    setAiLearningLoading(false);
+  }, [aiLearningLoading, isLoggedIn, aiLearningTrendPeriod]);
+
+  const submitAiFeedback = useCallback(async (triageId, verdict, notes) => {
+    try {
+      const res = await fetch("/api/ai/learning/feedback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ triageId, verdict, notes }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`✅ Feedback recorded: ${verdict}`, "success");
+        setAiLearningFeedback(prev => [data.feedback, ...prev]);
+      }
+    } catch (e) { showToast("Failed to submit feedback", "error"); }
+  }, []);
+
+  const deleteAiFeedback = useCallback(async (feedbackId) => {
+    try {
+      await fetch(`/api/ai/learning/feedback/${feedbackId}`, { method: "DELETE" });
+      setAiLearningFeedback(prev => prev.filter(f => f.id !== feedbackId));
+      showToast("Feedback deleted", "info");
+    } catch (e) { showToast("Failed to delete feedback", "error"); }
+  }, []);
   const runPatternDetection = useCallback(async () => {
     try {
       showToast("🔍 AI analyzing patterns...", "info");
@@ -20591,6 +20639,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           <button onClick={() => setAnalyticsSubTab("insights")} style={tabStyle("insights")}>
             📈 Advanced Insights
           </button>
+          <button onClick={() => { setAnalyticsSubTab("ailearning"); fetchAiLearningData(); }} style={tabStyle("ailearning")}>
+            🧠 AI Learning
+          </button>
         </div>
         {analyticsSubTab === "reports" && <ReportingModule />}
         {analyticsSubTab === "cybernews" && <CyberNewsModule />}
@@ -20684,11 +20735,146 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             </div>
           </div>
         )}
+        {analyticsSubTab === "ailearning" && (
+          <div>
+            {aiLearningLoading && !aiLearningMetrics && <div style={{ textAlign: "center", padding: 40, color: "#5A6178" }}>Loading AI Learning data...</div>}
+            {aiLearningMetrics && (
+              <div>
+                {/* Model Health Banner */}
+                {aiModelHealth && (
+                  <div style={{ background: "linear-gradient(135deg, #0F111788, #111422)", borderRadius: 10, border: `1px solid ${aiModelHealth.healthStatus === "healthy" ? "#81C78433" : aiModelHealth.healthStatus === "moderate" ? "#FFB34733" : "#FF6B6B33"}`, padding: "14px 20px", marginBottom: 20, position: "relative", overflow: "hidden" }}>
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: `linear-gradient(90deg, ${aiModelHealth.healthStatus === "healthy" ? "#81C784" : aiModelHealth.healthStatus === "moderate" ? "#FFB347" : "#FF6B6B"}, #6366F1)` }} />
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 42, height: 42, borderRadius: 10, background: `linear-gradient(135deg, ${aiModelHealth.healthStatus === "healthy" ? "#81C784" : "#FFB347"}, #6366F1)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🧠</div>
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Model Health: {aiModelHealth.healthScore}/100</div>
+                          <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                            Status: <span style={{ color: aiModelHealth.healthStatus === "healthy" ? "#81C784" : aiModelHealth.healthStatus === "moderate" ? "#FFB347" : "#FF6B6B", textTransform: "uppercase" }}>{aiModelHealth.healthStatus}</span>
+                            {" · "}Trend: <span style={{ color: aiModelHealth.trend === "improving" ? "#81C784" : aiModelHealth.trend === "stable" ? "#64B5F6" : "#FF6B6B" }}>{aiModelHealth.trend === "improving" ? "📈" : aiModelHealth.trend === "stable" ? "➡️" : "📉"} {aiModelHealth.trend}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <button onClick={() => fetchAiLearningData()} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+                        🔄 Refresh
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Key Metrics Cards */}
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
+                  <StatCard label="Total AI Triages" value={aiLearningMetrics.totalTriages} icon="⚡" accent="#6366F1" />
+                  <StatCard label="Auto-Apply Rate" value={`${aiLearningMetrics.autoApplyRate}%`} icon="🤖" accent="#81C784" />
+                  <StatCard label="Avg Confidence" value={`${aiLearningMetrics.avgConfidence}%`} icon="🎯" accent="#06B6D4" />
+                  <StatCard label="Feedback Accuracy" value={`${aiLearningMetrics.feedbackStats?.accuracyRate || 0}%`} icon="✅" accent="#EC4899" />
+                  <StatCard label="Pending Actions" value={aiLearningMetrics.pendingActions} icon="⏳" accent="#FFB347" />
+                </div>
+
+                {/* Confidence Distribution */}
+                <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                  <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>🎯 Confidence Distribution</h3>
+                  <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+                    {Object.entries(aiLearningMetrics.confidenceBuckets || {}).map(([range, count]) => {
+                      const colors = { "0-20": "#FF4444", "21-40": "#FF6B6B", "41-60": "#FFB347", "61-80": "#64B5F6", "81-100": "#81C784" };
+                      const maxCount = Math.max(...Object.values(aiLearningMetrics.confidenceBuckets || {}), 1);
+                      return (
+                        <div key={range} style={{ textAlign: "center", flex: 1 }}>
+                          <div style={{ height: 120, display: "flex", alignItems: "flex-end", justifyContent: "center", marginBottom: 8 }}>
+                            <div style={{ width: 36, background: `${colors[range]}44`, borderRadius: "4px 4px 0 0", height: `${Math.max(4, (count / maxCount) * 100)}%`, border: `1px solid ${colors[range]}66`, transition: "height 0.4s" }} />
+                          </div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: colors[range], fontFamily: "'Space Grotesk', sans-serif" }}>{count}</div>
+                          <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{range}%</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Category Breakdown */}
+                <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                  <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>📊 Category Performance</h3>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {Object.entries(aiLearningMetrics.categoryBreakdown || {}).sort((a, b) => b[1].total - a[1].total).map(([cat, stats]) => (
+                      <div key={cat} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033" }}>
+                        <span style={{ fontSize: 13, color: "#E8ECF4", flex: 1, fontWeight: 600 }}>{cat}</span>
+                        <span style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{stats.total} triages</span>
+                        <span style={{ fontSize: 11, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{stats.autoApplied} auto</span>
+                        <span style={{ fontSize: 11, color: stats.avgConfidence >= 80 ? "#81C784" : stats.avgConfidence >= 60 ? "#FFB347" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{stats.avgConfidence}% conf</span>
+                      </div>
+                    ))}
+                    {Object.keys(aiLearningMetrics.categoryBreakdown || {}).length === 0 && (
+                      <div style={{ textAlign: "center", padding: 20, color: "#5A6178", fontSize: 12 }}>No category data yet. AI triages will populate this.</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Trends Chart */}
+                <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                    <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>📈 Performance Trends</h3>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {["daily", "weekly", "monthly"].map(p => (
+                        <button key={p} onClick={() => { setAiLearningTrendPeriod(p); }} style={{
+                          padding: "4px 10px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                          background: aiLearningTrendPeriod === p ? "#6366F122" : "transparent",
+                          border: `1px solid ${aiLearningTrendPeriod === p ? "#6366F144" : "#1E213044"}`,
+                          color: aiLearningTrendPeriod === p ? "#6366F1" : "#5A6178", cursor: "pointer",
+                          fontFamily: "'JetBrains Mono', monospace", textTransform: "capitalize"
+                        }}>{p}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {aiLearningTrends.length > 0 ? (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "100px repeat(4, 1fr)", gap: 8, padding: "6px 12px", fontSize: 10, fontWeight: 600, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", borderBottom: "1px solid #1E213044" }}>
+                        <span>Period</span><span>Triages</span><span>Auto-Apply</span><span>Avg Conf</span><span>Feedback</span>
+                      </div>
+                      {aiLearningTrends.slice(-12).map((t, idx) => (
+                        <div key={idx} style={{ display: "grid", gridTemplateColumns: "100px repeat(4, 1fr)", gap: 8, padding: "8px 12px", background: idx % 2 === 0 ? "#0A0C14" : "transparent", borderRadius: 4, fontSize: 11, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>
+                          <span style={{ color: "#64B5F6" }}>{t.period}</span>
+                          <span>{t.triages}</span>
+                          <span style={{ color: "#81C784" }}>{t.autoApplyRate}%</span>
+                          <span style={{ color: t.avgConfidence >= 80 ? "#81C784" : t.avgConfidence >= 60 ? "#FFB347" : "#FF6B6B" }}>{t.avgConfidence}%</span>
+                          <span>{t.feedbackCorrect > 0 || t.feedbackIncorrect > 0 ? `✅${t.feedbackCorrect} ❌${t.feedbackIncorrect}` : "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: "center", padding: 20, color: "#5A6178", fontSize: 12 }}>No trend data yet. Run AI triages to populate trends.</div>
+                  )}
+                </div>
+
+                {/* Feedback Log */}
+                <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                    <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>💬 Human Feedback Log <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400 }}>({aiLearningFeedback.length})</span></h3>
+                  </div>
+                  {aiLearningFeedback.length > 0 ? (
+                    <div style={{ display: "grid", gap: 6, maxHeight: 300, overflowY: "auto" }}>
+                      {aiLearningFeedback.slice(0, 20).map(fb => (
+                        <div key={fb.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${fb.verdict === "correct" ? "#81C78433" : "#FF6B6B33"}` }}>
+                          <span style={{ fontSize: 16 }}>{fb.verdict === "correct" ? "✅" : "❌"}</span>
+                          <div style={{ flex: 1 }}>
+                            <span style={{ fontSize: 11, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>Triage: {fb.triageId}</span>
+                            {fb.notes && <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{fb.notes}</div>}
+                          </div>
+                          <span style={{ fontSize: 9, color: "#5A6178" }}>{new Date(fb.createdAt).toLocaleDateString("en-SG")}</span>
+                          <button onClick={() => deleteAiFeedback(fb.id)} style={{ background: "none", border: "1px solid #FF444433", borderRadius: 4, padding: "2px 6px", fontSize: 9, color: "#FF6B6B", cursor: "pointer" }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: "center", padding: 20, color: "#5A6178", fontSize: 12 }}>No feedback recorded yet. Submit feedback on AI triage decisions to track accuracy.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   };
-
-  // ─── Engineer Review Hub — Unified Review Center ─────────────────────────
   const EngineerReviewHub = () => {
     const pendingAiActions = aiActions.filter(a => a.status === "pending_approval");
     const pendingZdQueue = zdAiQueue.filter(q => q.status === "pending_approval");

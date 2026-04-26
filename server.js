@@ -761,6 +761,7 @@ const VALID_COLLECTIONS = new Set([
   "advisories",
   "csat_responses",
   "change_freeze_windows",
+  "ai_learning_feedback",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -8826,6 +8827,252 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       freezeViolations,
       aiAnalysis,
     });
+  }
+
+  // ─── AI Learning Dashboard (Phase 9) ────────────────────────────────
+
+  // GET /api/ai/learning/metrics — Aggregate AI performance metrics
+  if (pathname === "/api/ai/learning/metrics" && req.method === "GET") {
+    try {
+      const triageRows = await db.getAll("ai_triage_history");
+      const actionRows = await db.getAll("ai_actions");
+      const feedbackRows = await db.getAll("ai_learning_feedback");
+      const incidentRows = await db.getAll("incidents");
+
+      const triageHistory = triageRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const aiActions = actionRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const feedback = feedbackRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const incidents = incidentRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+
+      const aiTriagedIncidents = incidents.filter(i => i.aiTriaged);
+      const totalIncidents = incidents.length;
+
+      // Confidence distribution buckets
+      const confidenceBuckets = { "0-20": 0, "21-40": 0, "41-60": 0, "61-80": 0, "81-100": 0 };
+      triageHistory.forEach(t => {
+        const c = t.confidence || 0;
+        if (c <= 20) confidenceBuckets["0-20"]++;
+        else if (c <= 40) confidenceBuckets["21-40"]++;
+        else if (c <= 60) confidenceBuckets["41-60"]++;
+        else if (c <= 80) confidenceBuckets["61-80"]++;
+        else confidenceBuckets["81-100"]++;
+      });
+
+      // Auto-apply rate
+      const autoApplied = triageHistory.filter(t => t.autoApplied).length;
+      const autoApplyRate = triageHistory.length > 0 ? Math.round((autoApplied / triageHistory.length) * 100) : 0;
+
+      // Average confidence
+      const avgConfidence = triageHistory.length > 0
+        ? Math.round(triageHistory.reduce((sum, t) => sum + (t.confidence || 0), 0) / triageHistory.length)
+        : 0;
+
+      // Feedback stats
+      const correctFeedback = feedback.filter(f => f.verdict === "correct").length;
+      const incorrectFeedback = feedback.filter(f => f.verdict === "incorrect").length;
+      const accuracyRate = feedback.length > 0 ? Math.round((correctFeedback / feedback.length) * 100) : 0;
+
+      // Category accuracy — how many AI-triaged ended up being correct category
+      const categoryBreakdown = {};
+      triageHistory.forEach(t => {
+        const cat = t.triage?.category || "Unknown";
+        if (!categoryBreakdown[cat]) categoryBreakdown[cat] = { total: 0, autoApplied: 0, avgConfidence: 0, totalConfidence: 0 };
+        categoryBreakdown[cat].total++;
+        categoryBreakdown[cat].totalConfidence += (t.confidence || 0);
+        if (t.autoApplied) categoryBreakdown[cat].autoApplied++;
+      });
+      Object.keys(categoryBreakdown).forEach(cat => {
+        categoryBreakdown[cat].avgConfidence = Math.round(categoryBreakdown[cat].totalConfidence / categoryBreakdown[cat].total);
+        delete categoryBreakdown[cat].totalConfidence;
+      });
+
+      return json(res, 200, {
+        totalTriages: triageHistory.length,
+        totalAiActions: aiActions.length,
+        totalIncidents,
+        aiTriagedCount: aiTriagedIncidents.length,
+        autoApplyRate,
+        avgConfidence,
+        confidenceBuckets,
+        feedbackStats: { total: feedback.length, correct: correctFeedback, incorrect: incorrectFeedback, accuracyRate },
+        categoryBreakdown,
+        pendingActions: aiActions.filter(a => a.status === "pending_approval").length,
+      });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/learning/trends — Time-series AI performance data
+  if (pathname === "/api/ai/learning/trends" && req.method === "GET") {
+    try {
+      const period = urlObj.searchParams.get("period") || "weekly";
+      const triageRows = await db.getAll("ai_triage_history");
+      const feedbackRows = await db.getAll("ai_learning_feedback");
+
+      const triageHistory = triageRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const feedback = feedbackRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+
+      // Group by time period
+      const getKey = (dateStr) => {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return null;
+        if (period === "daily") return d.toISOString().split("T")[0];
+        if (period === "monthly") return d.toISOString().slice(0, 7);
+        // weekly — ISO week
+        const dayOfWeek = d.getDay();
+        const weekStart = new Date(d);
+        weekStart.setDate(d.getDate() - dayOfWeek);
+        return weekStart.toISOString().split("T")[0];
+      };
+
+      const trendMap = {};
+      triageHistory.forEach(t => {
+        const key = getKey(t.timestamp);
+        if (!key) return;
+        if (!trendMap[key]) trendMap[key] = { period: key, triages: 0, autoApplied: 0, totalConfidence: 0, feedbackCorrect: 0, feedbackIncorrect: 0 };
+        trendMap[key].triages++;
+        trendMap[key].totalConfidence += (t.confidence || 0);
+        if (t.autoApplied) trendMap[key].autoApplied++;
+      });
+
+      feedback.forEach(f => {
+        const key = getKey(f.createdAt);
+        if (!key) return;
+        if (!trendMap[key]) trendMap[key] = { period: key, triages: 0, autoApplied: 0, totalConfidence: 0, feedbackCorrect: 0, feedbackIncorrect: 0 };
+        if (f.verdict === "correct") trendMap[key].feedbackCorrect++;
+        else if (f.verdict === "incorrect") trendMap[key].feedbackIncorrect++;
+      });
+
+      const trends = Object.values(trendMap).sort((a, b) => a.period.localeCompare(b.period)).map(t => ({
+        period: t.period,
+        triages: t.triages,
+        autoApplied: t.autoApplied,
+        autoApplyRate: t.triages > 0 ? Math.round((t.autoApplied / t.triages) * 100) : 0,
+        avgConfidence: t.triages > 0 ? Math.round(t.totalConfidence / t.triages) : 0,
+        feedbackCorrect: t.feedbackCorrect,
+        feedbackIncorrect: t.feedbackIncorrect,
+      }));
+
+      return json(res, 200, { period, trends });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/learning/feedback — Record human feedback on AI decisions
+  if (pathname === "/api/ai/learning/feedback" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { triageId, verdict, notes, correctedCategory, correctedPriority } = body;
+      if (!triageId || !verdict) return json(res, 400, { error: "triageId and verdict (correct/incorrect) required" });
+      if (!["correct", "incorrect"].includes(verdict)) return json(res, 400, { error: "verdict must be 'correct' or 'incorrect'" });
+
+      const feedbackId = `ALFB-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const now = new Date().toISOString();
+      const feedbackRecord = {
+        id: feedbackId,
+        triageId,
+        verdict,
+        notes: (notes || "").substring(0, 500),
+        correctedCategory: correctedCategory || null,
+        correctedPriority: correctedPriority || null,
+        createdAt: now,
+        createdBy: "system",
+      };
+
+      await db.upsert("ai_learning_feedback", feedbackId, JSON.stringify(feedbackRecord));
+      await db.audit("ai_learning_feedback", feedbackId, "created", JSON.stringify({ verdict, triageId }), "system");
+
+      return json(res, 201, { success: true, feedback: feedbackRecord });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/learning/feedback — List feedback entries
+  if (pathname === "/api/ai/learning/feedback" && req.method === "GET") {
+    try {
+      const feedbackRows = await db.getAll("ai_learning_feedback");
+      const feedback = feedbackRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      feedback.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      return json(res, 200, { feedback, total: feedback.length });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // DELETE /api/ai/learning/feedback/:id — Delete a feedback entry
+  if (pathname.startsWith("/api/ai/learning/feedback/") && req.method === "DELETE") {
+    try {
+      const feedbackId = pathname.split("/").pop();
+      if (!feedbackId) return json(res, 400, { error: "feedbackId required" });
+      await db.deleteOne("ai_learning_feedback", feedbackId);
+      await db.audit("ai_learning_feedback", feedbackId, "deleted", "{}", "system");
+      return json(res, 200, { success: true, deleted: feedbackId });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/ai/learning/model-health — AI model health indicators
+  if (pathname === "/api/ai/learning/model-health" && req.method === "GET") {
+    try {
+      const triageRows = await db.getAll("ai_triage_history");
+      const feedbackRows = await db.getAll("ai_learning_feedback");
+      const actionRows = await db.getAll("ai_actions");
+
+      const triageHistory = triageRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const feedback = feedbackRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const aiActions = actionRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+
+      // Recent vs overall confidence (last 7 days vs all time)
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const recentTriages = triageHistory.filter(t => (t.timestamp || "") >= sevenDaysAgo);
+      const recentAvgConfidence = recentTriages.length > 0
+        ? Math.round(recentTriages.reduce((s, t) => s + (t.confidence || 0), 0) / recentTriages.length)
+        : 0;
+      const overallAvgConfidence = triageHistory.length > 0
+        ? Math.round(triageHistory.reduce((s, t) => s + (t.confidence || 0), 0) / triageHistory.length)
+        : 0;
+
+      // Trend: improving, stable, declining
+      const confidenceDelta = recentAvgConfidence - overallAvgConfidence;
+      const trend = confidenceDelta > 5 ? "improving" : confidenceDelta < -5 ? "declining" : "stable";
+
+      // Recent feedback accuracy
+      const recentFeedback = feedback.filter(f => (f.createdAt || "") >= sevenDaysAgo);
+      const recentCorrect = recentFeedback.filter(f => f.verdict === "correct").length;
+      const recentAccuracy = recentFeedback.length > 0 ? Math.round((recentCorrect / recentFeedback.length) * 100) : 0;
+
+      // Pending actions ratio
+      const pendingCount = aiActions.filter(a => a.status === "pending_approval").length;
+
+      // Health score (0-100)
+      let healthScore = 50;
+      if (overallAvgConfidence > 0) healthScore = Math.min(100, Math.max(0, Math.round(overallAvgConfidence * 0.5 + (feedback.length > 0 ? (feedback.filter(f => f.verdict === "correct").length / feedback.length) * 50 : 25))));
+
+      // Health status
+      const healthStatus = healthScore >= 80 ? "healthy" : healthScore >= 60 ? "moderate" : healthScore >= 40 ? "attention" : "critical";
+
+      return json(res, 200, {
+        healthScore,
+        healthStatus,
+        trend,
+        recentAvgConfidence,
+        overallAvgConfidence,
+        confidenceDelta,
+        recentAccuracy,
+        totalTriages: triageHistory.length,
+        recentTriages: recentTriages.length,
+        totalFeedback: feedback.length,
+        recentFeedback: recentFeedback.length,
+        pendingActions: pendingCount,
+        lastTriageAt: triageHistory.length > 0 ? triageHistory.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""))[0].timestamp : null,
+      });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
   }
 
   // ─── Static File Serving ──────────────────────────────────────────────
