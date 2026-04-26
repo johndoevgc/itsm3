@@ -6212,6 +6212,46 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
+  // ─── POST /api/ai/purge-all-pending — Bulk delete ALL pending_approval AI actions (no email sent) ───
+  if (pathname === "/api/ai/purge-all-pending" && req.method === "POST") {
+    try {
+      const body = await parseBody(req, 2000);
+      const statusFilter = body.status || "pending_approval";
+      const allowedStatuses = ["pending_approval", "rejected", "dismissed", "failed"];
+      if (!allowedStatuses.includes(statusFilter)) {
+        return json(res, 400, { error: `Invalid status filter. Allowed: ${allowedStatuses.join(", ")}` });
+      }
+      const actionRows = await db.getAll("ai_actions");
+      let deleted = 0;
+      for (const r of actionRows) {
+        try {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (item && item.status === statusFilter) {
+            await db.delete("ai_actions", item.id);
+            deleted++;
+          }
+        } catch {}
+      }
+      if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
+      console.log(`[Bulk Purge] Deleted ${deleted} ${statusFilter} ai_actions`);
+      return json(res, 200, { deleted, status: statusFilter });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── DELETE /api/ai/actions/:id — Delete a single AI action by ID ───
+  if (/^\/api\/ai\/actions\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    try {
+      const actionId = pathname.split("/").pop();
+      await db.delete("ai_actions", actionId);
+      if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
+      return json(res, 200, { deleted: true, id: actionId });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // ─── Phase 6: AI Historical Incident Closure (Bulk Close — No Notifications) ───
   // POST /api/ai/historical-close — AI bulk-close past incidents with generated resolutions
   if (pathname === "/api/ai/historical-close" && req.method === "POST") {
