@@ -759,6 +759,7 @@ const VALID_COLLECTIONS = new Set([
   "email_whitelist",
   "zd_ai_queue",
   "advisories",
+  "csat_responses",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -6651,7 +6652,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const emailBody = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:650px;margin:0 auto;">
         <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;border-radius:10px 10px 0 0;">
           <h2 style="margin:0;color:#fff;font-size:20px;">🤖 VGC AI Assist — Action Requires Your Approval</h2>
-          <p style="margin:6px 0 0;color:#8B8FA3;font-size:13px;">AI has identified an action that needs human review</p>
+          <p style="margin:6px 0 0;color:#8B8FA3;font-size:13px;">AI has identified an action that needs engineer review</p>
         </div>
         <div style="background:#ffffff;padding:24px;border:1px solid #e0e0e0;border-top:none;">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
@@ -6863,6 +6864,141 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) {
       console.error("[Azure Resources]", err.message);
       return json(res, 200, { live: false, error: err.message, resources: [] });
+    }
+  }
+
+  // ─── CSAT Survey Engine (Phase 7) ──────────────────────────────────────
+
+  // POST /api/csat/submit — Record a CSAT survey response
+  if (pathname === "/api/csat/submit" && req.method === "POST") {
+    const body = await parseBody(req);
+    const { ticketId, rating, comment, agentName, category, customerName, customerEmail } = body;
+    if (!ticketId || !rating || rating < 1 || rating > 5) {
+      return json(res, 400, { error: "ticketId and rating (1-5) are required" });
+    }
+    const id = `CSAT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const response = {
+      id, ticketId, rating: Number(rating), comment: (comment || "").substring(0, 2000),
+      agentName: agentName || "Unknown", category: category || "General",
+      customerName: customerName || "Anonymous", customerEmail: customerEmail || "",
+      sentiment: null, createdAt: new Date().toISOString(),
+    };
+    // AI sentiment analysis on comment (if comment provided and AI enabled)
+    if (response.comment && AZURE_OPENAI_ENDPOINT && AZURE_OPENAI_KEY) {
+      try {
+        const sentimentResult = await callAzureOpenAI([
+          { role: "system", content: "Analyze the sentiment of this customer feedback comment. Return ONLY a JSON object: {\"sentiment\": \"positive\"|\"neutral\"|\"negative\", \"keywords\": [\"word1\",\"word2\"], \"summary\": \"one sentence summary\"}" },
+          { role: "user", content: response.comment },
+        ], { model: "nano", max_tokens: 150 });
+        const parsed = JSON.parse(sentimentResult.replace(/```json\n?|```/g, "").trim());
+        response.sentiment = parsed.sentiment || null;
+        response.keywords = parsed.keywords || [];
+        response.aiSummary = parsed.summary || "";
+      } catch { /* sentiment analysis optional */ }
+    }
+    await db.upsert("csat_responses", id, JSON.stringify(response));
+    console.log(`[CSAT] Recorded rating ${rating}/5 for ${ticketId} by ${customerName || "anonymous"}`);
+    // WebSocket broadcast
+    if (wsServer) wsServer.broadcast("csat", { action: "new_response", ...response });
+    return json(res, 200, { success: true, id, response });
+  }
+
+  // GET /api/csat/scores — Aggregate CSAT scores with breakdowns
+  if (pathname === "/api/csat/scores" && req.method === "GET") {
+    const rows = await db.getAll("csat_responses");
+    const responses = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+    const total = responses.length;
+    if (total === 0) return json(res, 200, { total: 0, average: 0, nps: 0, byAgent: {}, byCategory: {}, byRating: {}, trend: [] });
+
+    const sum = responses.reduce((s, r) => s + r.rating, 0);
+    const average = Math.round((sum / total) * 10) / 10;
+
+    // NPS calculation: promoters (4-5) - detractors (1-2) / total * 100
+    const promoters = responses.filter(r => r.rating >= 4).length;
+    const detractors = responses.filter(r => r.rating <= 2).length;
+    const nps = Math.round(((promoters - detractors) / total) * 100);
+
+    // By rating
+    const byRating = {};
+    for (let i = 1; i <= 5; i++) byRating[i] = responses.filter(r => r.rating === i).length;
+
+    // By agent
+    const byAgent = {};
+    for (const r of responses) {
+      const agent = r.agentName || "Unknown";
+      if (!byAgent[agent]) byAgent[agent] = { total: 0, sum: 0, count5: 0, count1: 0 };
+      byAgent[agent].total++;
+      byAgent[agent].sum += r.rating;
+      if (r.rating === 5) byAgent[agent].count5++;
+      if (r.rating <= 2) byAgent[agent].count1++;
+    }
+    for (const a in byAgent) byAgent[a].avg = Math.round((byAgent[a].sum / byAgent[a].total) * 10) / 10;
+
+    // By category
+    const byCategory = {};
+    for (const r of responses) {
+      const cat = r.category || "General";
+      if (!byCategory[cat]) byCategory[cat] = { total: 0, sum: 0 };
+      byCategory[cat].total++;
+      byCategory[cat].sum += r.rating;
+    }
+    for (const c in byCategory) byCategory[c].avg = Math.round((byCategory[c].sum / byCategory[c].total) * 10) / 10;
+
+    // Weekly trend (last 12 weeks)
+    const trend = [];
+    const now = Date.now();
+    for (let w = 11; w >= 0; w--) {
+      const weekStart = now - (w + 1) * 7 * 86400000;
+      const weekEnd = now - w * 7 * 86400000;
+      const weekR = responses.filter(r => { const t = new Date(r.createdAt).getTime(); return t >= weekStart && t < weekEnd; });
+      trend.push({
+        week: new Date(weekStart).toISOString().split("T")[0],
+        count: weekR.length,
+        avg: weekR.length > 0 ? Math.round((weekR.reduce((s, r) => s + r.rating, 0) / weekR.length) * 10) / 10 : null,
+      });
+    }
+
+    // Sentiment breakdown
+    const sentimentBreakdown = { positive: 0, neutral: 0, negative: 0 };
+    for (const r of responses) { if (r.sentiment) sentimentBreakdown[r.sentiment] = (sentimentBreakdown[r.sentiment] || 0) + 1; }
+
+    // Recent comments with sentiment
+    const recentComments = responses.filter(r => r.comment).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 20).map(r => ({
+      ticketId: r.ticketId, rating: r.rating, comment: r.comment, sentiment: r.sentiment,
+      keywords: r.keywords, aiSummary: r.aiSummary, customerName: r.customerName, agentName: r.agentName,
+      createdAt: r.createdAt,
+    }));
+
+    return json(res, 200, { total, average, nps, byRating, byAgent, byCategory, trend, sentimentBreakdown, recentComments });
+  }
+
+  // POST /api/csat/ai-analyze — AI deep analysis of CSAT patterns
+  if (pathname === "/api/csat/ai-analyze" && req.method === "POST") {
+    if (!AZURE_OPENAI_ENDPOINT || !AZURE_OPENAI_KEY) return json(res, 400, { error: "Azure OpenAI not configured" });
+    const rows = await db.getAll("csat_responses");
+    const responses = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+    if (responses.length < 3) return json(res, 200, { analysis: "Not enough CSAT data for analysis. Need at least 3 survey responses.", recommendations: [] });
+
+    const summary = responses.slice(-50).map(r => `${r.ticketId}: ${r.rating}/5 [${r.category}] ${r.agentName} — "${(r.comment || "no comment").substring(0, 100)}"`).join("\n");
+    try {
+      const aiResult = await callAzureOpenAI([
+        { role: "system", content: `You are a customer experience analytics expert for an IT service desk (VGC Technology, Singapore). Analyze CSAT survey data and provide insights. Return ONLY a JSON object:
+{
+  "overallAssessment": "brief paragraph",
+  "topStrengths": ["strength1", "strength2"],
+  "areasForImprovement": ["area1", "area2"],
+  "agentInsights": [{"agent": "name", "insight": "observation"}],
+  "categoryInsights": [{"category": "name", "insight": "observation"}],
+  "recommendations": [{"priority": "high|medium|low", "action": "what to do", "impact": "expected result"}],
+  "riskAlerts": ["any concerning patterns"]
+}` },
+        { role: "user", content: `Analyze these ${responses.length} CSAT responses:\n${summary}` },
+      ], { model: "mini", max_tokens: 1200 });
+      const parsed = JSON.parse(aiResult.replace(/```json\n?|```/g, "").trim());
+      return json(res, 200, { success: true, analysis: parsed, responseCount: responses.length });
+    } catch (err) {
+      console.error("[CSAT AI Analysis]", err.message);
+      return json(res, 200, { success: false, error: err.message });
     }
   }
 

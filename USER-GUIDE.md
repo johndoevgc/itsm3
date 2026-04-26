@@ -185,9 +185,9 @@ The AI engine automatically:
 1. Categorizes incoming tickets by type (Network, Software, Hardware, etc.)
 2. Assigns priority level (Sev-A through Sev-D)
 3. Drafts response using knowledge base and historical patterns
-4. Routes to the **Human Review Queue** for approval
+4. Routes to the **Engineer Review Queue** for approval
 
-#### Human Review Queue
+#### Engineer Review Queue
 - View AI-drafted responses before they are sent
 - **Approve** — Send the AI draft as-is
 - **Edit & Send** — Modify the draft before sending
@@ -694,8 +694,8 @@ Yes. The interface is responsive with breakpoints at 1024px, 768px, and 480px. O
 1. A new Zendesk ticket is received
 2. The AI engine (GPT-5.4-nano) analyzes the ticket content
 3. It assigns: Category, Priority, Suggested Tags, and Draft Response
-4. The draft is placed in the **Human Review Queue** with a confidence score
-5. A human reviewer approves, edits, or rejects the draft
+4. The draft is placed in the **Engineer Review Queue** with a confidence score
+5. An engineer reviewer approves, edits, or rejects the draft
 6. If approved, the response is sent to the customer and an ITSM incident is created
 
 ### Q: How do I connect N-able RMM?

@@ -307,6 +307,51 @@ async function main() {
   assert("Report schedules list returns 200", schedList.status === 200, `Status: ${schedList.status}`);
   assert("Report schedules has data", Array.isArray(schedList.json.data), `type: ${typeof schedList.json.data}`);
 
+  // ─── Phase 7: CSAT Survey Engine ──────────────────────────────────
+  console.log("--- Phase 7: CSAT Survey Engine ---");
+
+  // 36. Submit CSAT response
+  const csatSubmit = await postJson("/api/csat/submit", { ticketId: "INC-E2E-CSAT", rating: 5, comment: "Excellent service! Very fast resolution.", agentName: "E2E Agent", category: "Network", customerName: "E2E Customer", customerEmail: "e2e@test.com" });
+  assert("CSAT submit returns 200", csatSubmit.status === 200, `Status: ${csatSubmit.status}`);
+  assert("CSAT submit has success", csatSubmit.json.success === true, `success: ${csatSubmit.json.success}`);
+  assert("CSAT submit has id", !!csatSubmit.json.id, `id: ${csatSubmit.json.id}`);
+
+  // 37. Submit second CSAT response (different rating)
+  const csatSubmit2 = await postJson("/api/csat/submit", { ticketId: "INC-E2E-CSAT2", rating: 3, comment: "OK service, could be faster.", agentName: "E2E Agent", category: "Email", customerName: "E2E Customer 2" });
+  assert("CSAT submit #2 returns 200", csatSubmit2.status === 200, `Status: ${csatSubmit2.status}`);
+
+  // 38. Submit third CSAT response (for AI analysis minimum)
+  const csatSubmit3 = await postJson("/api/csat/submit", { ticketId: "INC-E2E-CSAT3", rating: 4, comment: "Good support, agent was helpful.", agentName: "E2E Agent 2", category: "Software", customerName: "E2E Customer 3" });
+  assert("CSAT submit #3 returns 200", csatSubmit3.status === 200, `Status: ${csatSubmit3.status}`);
+
+  // 39. CSAT validation — missing ticketId
+  const csatBad = await postJson("/api/csat/submit", { rating: 5 });
+  assert("CSAT submit rejects missing ticketId", csatBad.status === 400, `Status: ${csatBad.status}`);
+
+  // 40. CSAT validation — invalid rating
+  const csatBadRating = await postJson("/api/csat/submit", { ticketId: "X", rating: 0 });
+  assert("CSAT submit rejects invalid rating", csatBadRating.status === 400, `Status: ${csatBadRating.status}`);
+
+  // 41. Get CSAT scores
+  const csatScores = await getJson("/api/csat/scores");
+  assert("CSAT scores returns 200", csatScores.status === 200, `Status: ${csatScores.status}`);
+  assert("CSAT scores has total >= 3", csatScores.json.total >= 3, `total: ${csatScores.json.total}`);
+  assert("CSAT scores has average", typeof csatScores.json.average === "number" && csatScores.json.average > 0, `avg: ${csatScores.json.average}`);
+  assert("CSAT scores has NPS", typeof csatScores.json.nps === "number", `nps: ${csatScores.json.nps}`);
+  assert("CSAT scores has byAgent", typeof csatScores.json.byAgent === "object", `byAgent: ${typeof csatScores.json.byAgent}`);
+  assert("CSAT scores has byCategory", typeof csatScores.json.byCategory === "object", `byCategory: ${typeof csatScores.json.byCategory}`);
+  assert("CSAT scores has byRating", typeof csatScores.json.byRating === "object", `byRating: ${typeof csatScores.json.byRating}`);
+  assert("CSAT scores has trend", Array.isArray(csatScores.json.trend), `trend: ${typeof csatScores.json.trend}`);
+  assert("CSAT scores has sentimentBreakdown", typeof csatScores.json.sentimentBreakdown === "object", `sentiment: ${typeof csatScores.json.sentimentBreakdown}`);
+
+  // 42. AI CSAT Analysis
+  const csatAi = await postJson("/api/csat/ai-analyze", {});
+  assert("CSAT AI analyze returns 200", csatAi.status === 200, `Status: ${csatAi.status}`);
+
+  // 43. CSAT data in generic collection API
+  const csatColl = await getJson("/api/data/csat_responses");
+  assert("CSAT collection accessible via /api/data", csatColl.status === 200, `Status: ${csatColl.status}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));
