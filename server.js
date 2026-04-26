@@ -760,6 +760,7 @@ const VALID_COLLECTIONS = new Set([
   "zd_ai_queue",
   "advisories",
   "csat_responses",
+  "change_freeze_windows",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -8628,6 +8629,203 @@ Create a professional KB article. Respond in JSON ONLY:
       console.error("[AI KB Learn]", err.message);
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // ─── Change Calendar Engine (Phase 8) ─────────────────────────────────
+
+  // GET /api/changes/calendar — Aggregate changes + freeze windows for calendar view
+  if (pathname === "/api/changes/calendar" && req.method === "GET") {
+    const changeRows = await db.getAll("changes");
+    const allChanges = changeRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+    const freezeRows = await db.getAll("change_freeze_windows");
+    const freezeWindows = freezeRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+
+    // Parse month/year from query (default to current month)
+    const now = new Date();
+    const qMonth = parseInt(urlObj.searchParams.get("month")) || (now.getMonth() + 1);
+    const qYear = parseInt(urlObj.searchParams.get("year")) || now.getFullYear();
+
+    // Filter changes that overlap with the requested month
+    const monthStart = new Date(qYear, qMonth - 1, 1);
+    const monthEnd = new Date(qYear, qMonth, 0, 23, 59, 59);
+
+    const monthChanges = allChanges.filter(c => {
+      if (!c.scheduledStart) return false;
+      const start = new Date(c.scheduledStart);
+      const end = c.scheduledEnd ? new Date(c.scheduledEnd) : start;
+      return start <= monthEnd && end >= monthStart;
+    });
+
+    const monthFreezes = freezeWindows.filter(fw => {
+      const start = new Date(fw.startDate);
+      const end = new Date(fw.endDate);
+      return start <= monthEnd && end >= monthStart;
+    });
+
+    // Detect conflicts: overlapping changes on the same day or changes during freeze windows
+    const conflicts = [];
+    for (let i = 0; i < monthChanges.length; i++) {
+      const ci = monthChanges[i];
+      const ciStart = new Date(ci.scheduledStart);
+      const ciEnd = ci.scheduledEnd ? new Date(ci.scheduledEnd) : ciStart;
+      // Check against freeze windows
+      for (const fw of monthFreezes) {
+        const fwStart = new Date(fw.startDate);
+        const fwEnd = new Date(fw.endDate);
+        if (ciStart <= fwEnd && ciEnd >= fwStart && ci.type !== "Emergency") {
+          conflicts.push({ type: "freeze_violation", changeId: ci.id, changeTitle: ci.title, freezeId: fw.id, freezeReason: fw.reason, severity: "high" });
+        }
+      }
+      // Check overlapping changes
+      for (let j = i + 1; j < monthChanges.length; j++) {
+        const cj = monthChanges[j];
+        const cjStart = new Date(cj.scheduledStart);
+        const cjEnd = cj.scheduledEnd ? new Date(cj.scheduledEnd) : cjStart;
+        if (ciStart <= cjEnd && ciEnd >= cjStart) {
+          conflicts.push({ type: "overlap", changes: [ci.id, cj.id], titles: [ci.title, cj.title], severity: ci.type === "Emergency" || cj.type === "Emergency" ? "high" : "medium" });
+        }
+      }
+    }
+
+    return json(res, 200, {
+      month: qMonth, year: qYear,
+      changes: monthChanges,
+      freezeWindows: monthFreezes,
+      conflicts,
+      stats: {
+        total: monthChanges.length,
+        emergency: monthChanges.filter(c => c.type === "Emergency").length,
+        normal: monthChanges.filter(c => c.type === "Normal").length,
+        standard: monthChanges.filter(c => c.type === "Standard").length,
+        freezeDays: monthFreezes.length,
+        conflictCount: conflicts.length,
+      },
+    });
+  }
+
+  // POST /api/changes/freeze-window — Create/update a change freeze window
+  if (pathname === "/api/changes/freeze-window" && req.method === "POST") {
+    const body = await readBody(req);
+    const { id, startDate, endDate, reason, createdBy, exceptions } = body;
+    if (!startDate || !endDate || !reason) return json(res, 400, { error: "startDate, endDate, and reason are required" });
+    if (new Date(endDate) <= new Date(startDate)) return json(res, 400, { error: "endDate must be after startDate" });
+
+    const fwId = id || `FRZ-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const freezeWindow = {
+      id: fwId,
+      startDate,
+      endDate,
+      reason: String(reason).substring(0, 500),
+      createdBy: createdBy || "System",
+      exceptions: Array.isArray(exceptions) ? exceptions : [],
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+    };
+    await db.upsert("change_freeze_windows", fwId, JSON.stringify(freezeWindow));
+    await db.audit("change_freeze_windows", fwId, "created", JSON.stringify({ reason: freezeWindow.reason, startDate, endDate }), freezeWindow.createdBy);
+    console.log(`[Change Calendar] Freeze window created: ${fwId} (${startDate} → ${endDate})`);
+    if (wsServer) wsServer.broadcast("changes", { action: "freeze_window_created", ...freezeWindow });
+    return json(res, 201, { success: true, freezeWindow });
+  }
+
+  // DELETE /api/changes/freeze-window?id=FRZ-xxx — Delete a freeze window
+  if (pathname === "/api/changes/freeze-window" && req.method === "DELETE") {
+    const fwId = urlObj.searchParams.get("id");
+    if (!fwId) return json(res, 400, { error: "id query parameter is required" });
+    await db.deleteOne("change_freeze_windows", fwId);
+    await db.audit("change_freeze_windows", fwId, "deleted", JSON.stringify({ id: fwId }), "System");
+    console.log(`[Change Calendar] Freeze window deleted: ${fwId}`);
+    return json(res, 200, { success: true, deleted: fwId });
+  }
+
+  // GET /api/changes/freeze-windows — List all freeze windows
+  if (pathname === "/api/changes/freeze-windows" && req.method === "GET") {
+    const rows = await db.getAll("change_freeze_windows");
+    const windows = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+    return json(res, 200, { freezeWindows: windows });
+  }
+
+  // POST /api/changes/conflict-check — AI-powered conflict analysis for a proposed change
+  if (pathname === "/api/changes/conflict-check" && req.method === "POST") {
+    const body = await readBody(req);
+    const { scheduledStart, scheduledEnd, title, type, category, impact } = body;
+    if (!scheduledStart || !title) return json(res, 400, { error: "scheduledStart and title are required" });
+
+    // Fetch existing changes around the proposed time
+    const changeRows = await db.getAll("changes");
+    const allChanges = changeRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+    const freezeRows = await db.getAll("change_freeze_windows");
+    const freezeWindows = freezeRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+
+    const propStart = new Date(scheduledStart);
+    const propEnd = scheduledEnd ? new Date(scheduledEnd) : new Date(propStart.getTime() + 3600000);
+
+    // Find direct conflicts
+    const directConflicts = [];
+    for (const c of allChanges) {
+      if (!c.scheduledStart || c.status === "Closed" || c.status === "Cancelled") continue;
+      const cStart = new Date(c.scheduledStart);
+      const cEnd = c.scheduledEnd ? new Date(c.scheduledEnd) : cStart;
+      if (propStart <= cEnd && propEnd >= cStart) {
+        directConflicts.push({ id: c.id, title: c.title, type: c.type, scheduledStart: c.scheduledStart, scheduledEnd: c.scheduledEnd });
+      }
+    }
+
+    // Check freeze windows
+    const freezeViolations = [];
+    for (const fw of freezeWindows) {
+      const fwStart = new Date(fw.startDate);
+      const fwEnd = new Date(fw.endDate);
+      if (propStart <= fwEnd && propEnd >= fwStart) {
+        freezeViolations.push({ id: fw.id, reason: fw.reason, startDate: fw.startDate, endDate: fw.endDate });
+      }
+    }
+
+    // AI analysis if configured
+    let aiAnalysis = null;
+    if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT && (directConflicts.length > 0 || freezeViolations.length > 0)) {
+      try {
+        const prompt = `Analyze this proposed IT change for conflicts and risks:
+PROPOSED: "${title}" (${type || "Normal"}, ${category || "General"}, Impact: ${impact || "Unknown"})
+Scheduled: ${scheduledStart} to ${scheduledEnd || "TBD"}
+
+CONFLICTS WITH:
+${directConflicts.map(c => `- ${c.id}: "${c.title}" (${c.type}) ${c.scheduledStart}–${c.scheduledEnd}`).join("\n") || "None"}
+
+FREEZE WINDOWS:
+${freezeViolations.map(f => `- ${f.reason} (${f.startDate}–${f.endDate})`).join("\n") || "None"}
+
+Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendation": "brief recommendation", "suggestedSlot": "alternative time if conflict exists or null", "reasoning": "brief explanation" }`;
+
+        const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+        const aiPayload = JSON.stringify({
+          model: getAIModel("secondary"),
+          input: [{ role: "system", content: "You are an ITIL change management advisor. Analyze change conflicts briefly." }, { role: "user", content: prompt }],
+          max_output_tokens: 400,
+        });
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({ hostname: aiUrl.hostname, path: aiUrl.pathname, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY, "Content-Length": Buffer.byteLength(aiPayload) } }, aiRes => {
+            let d = ""; aiRes.on("data", c => d += c); aiRes.on("end", () => resolve(d));
+          });
+          aiReq.on("error", reject);
+          aiReq.write(aiPayload);
+          aiReq.end();
+        });
+        const aiJson = JSON.parse(aiResult);
+        const content = aiJson.output?.[0]?.content?.[0]?.text || aiJson.choices?.[0]?.message?.content || "";
+        const cleaned = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        aiAnalysis = JSON.parse(cleaned);
+      } catch (err) {
+        console.error("[Change Calendar] AI conflict analysis failed:", err.message);
+      }
+    }
+
+    return json(res, 200, {
+      hasConflicts: directConflicts.length > 0 || freezeViolations.length > 0,
+      directConflicts,
+      freezeViolations,
+      aiAnalysis,
+    });
   }
 
   // ─── Static File Serving ──────────────────────────────────────────────

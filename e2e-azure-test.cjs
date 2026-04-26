@@ -352,6 +352,84 @@ async function main() {
   const csatColl = await getJson("/api/data/csat_responses");
   assert("CSAT collection accessible via /api/data", csatColl.status === 200, `Status: ${csatColl.status}`);
 
+  // ─── Phase 8: Change Calendar Engine ──────────────────────────────
+  console.log("--- Phase 8: Change Calendar Engine ---");
+
+  // 44. Get change calendar (current month)
+  const cal = await getJson("/api/changes/calendar");
+  assert("Calendar returns 200", cal.status === 200, `Status: ${cal.status}`);
+  assert("Calendar has month", typeof cal.json.month === "number", `month: ${cal.json.month}`);
+  assert("Calendar has year", typeof cal.json.year === "number", `year: ${cal.json.year}`);
+  assert("Calendar has changes array", Array.isArray(cal.json.changes), `changes: ${typeof cal.json.changes}`);
+  assert("Calendar has freezeWindows array", Array.isArray(cal.json.freezeWindows), `freezeWindows: ${typeof cal.json.freezeWindows}`);
+  assert("Calendar has conflicts array", Array.isArray(cal.json.conflicts), `conflicts: ${typeof cal.json.conflicts}`);
+  assert("Calendar has stats object", typeof cal.json.stats === "object", `stats: ${typeof cal.json.stats}`);
+  assert("Calendar stats has total", typeof cal.json?.stats?.total === "number", `total: ${cal.json?.stats?.total}`);
+
+  // 45. Get change calendar with month/year params
+  const calApril = await getJson("/api/changes/calendar?month=4&year=2026");
+  assert("Calendar with params returns 200", calApril.status === 200, `Status: ${calApril.status}`);
+  assert("Calendar respects month param", calApril.json.month === 4, `month: ${calApril.json.month}`);
+  assert("Calendar respects year param", calApril.json.year === 2026, `year: ${calApril.json.year}`);
+
+  // 46. Create freeze window
+  const freezeCreate = await postJson("/api/changes/freeze-window", { startDate: "2026-12-20T00:00:00", endDate: "2026-12-31T23:59:59", reason: "E2E Year-end freeze", createdBy: "E2E Tester" });
+  assert("Freeze window create returns 201", freezeCreate.status === 201, `Status: ${freezeCreate.status}`);
+  assert("Freeze window has success", freezeCreate.json.success === true, `success: ${freezeCreate.json.success}`);
+  assert("Freeze window has id", !!freezeCreate.json.freezeWindow?.id, `id: ${freezeCreate.json.freezeWindow?.id}`);
+  const freezeId = freezeCreate.json.freezeWindow?.id;
+
+  // 47. Freeze window validation — missing required fields
+  const freezeBad = await postJson("/api/changes/freeze-window", { startDate: "2026-12-20" });
+  assert("Freeze window rejects missing fields", freezeBad.status === 400, `Status: ${freezeBad.status}`);
+
+  // 48. Freeze window validation — endDate before startDate
+  const freezeBadDates = await postJson("/api/changes/freeze-window", { startDate: "2026-12-31", endDate: "2026-12-20", reason: "Bad" });
+  assert("Freeze window rejects bad date range", freezeBadDates.status === 400, `Status: ${freezeBadDates.status}`);
+
+  // 49. List freeze windows
+  const freezeList = await getJson("/api/changes/freeze-windows");
+  assert("Freeze windows list returns 200", freezeList.status === 200, `Status: ${freezeList.status}`);
+  assert("Freeze windows list has array", Array.isArray(freezeList.json.freezeWindows), `type: ${typeof freezeList.json.freezeWindows}`);
+  assert("Freeze windows contains created window", freezeList.json.freezeWindows?.some(fw => fw.id === freezeId) ?? false, `freezeId: ${freezeId}, list: ${freezeList.json.freezeWindows?.length ?? 'N/A'}`);
+
+  // 50. Conflict check — no conflict scenario
+  const conflictOk = await postJson("/api/changes/conflict-check", { scheduledStart: "2026-06-15T10:00:00", scheduledEnd: "2026-06-15T12:00:00", title: "E2E Safe Change", type: "Normal", category: "General", impact: "Department" });
+  assert("Conflict check returns 200", conflictOk.status === 200, `Status: ${conflictOk.status}`);
+  assert("Conflict check has hasConflicts", typeof conflictOk.json.hasConflicts === "boolean", `hasConflicts: ${conflictOk.json.hasConflicts}`);
+  assert("Conflict check has directConflicts array", Array.isArray(conflictOk.json.directConflicts), `type: ${typeof conflictOk.json.directConflicts}`);
+  assert("Conflict check has freezeViolations array", Array.isArray(conflictOk.json.freezeViolations), `type: ${typeof conflictOk.json.freezeViolations}`);
+
+  // 51. Conflict check — freeze window violation
+  const conflictFreeze = await postJson("/api/changes/conflict-check", { scheduledStart: "2026-12-25T10:00:00", scheduledEnd: "2026-12-25T12:00:00", title: "E2E Freeze Conflict", type: "Normal" });
+  assert("Conflict check detects freeze violation", conflictFreeze.json.hasConflicts === true, `hasConflicts: ${conflictFreeze.json.hasConflicts}`);
+  assert("Conflict check returns freeze violations", (conflictFreeze.json.freezeViolations?.length ?? 0) > 0, `violations: ${conflictFreeze.json.freezeViolations?.length ?? 'N/A'}`);
+
+  // 52. Conflict check validation — missing fields
+  const conflictBad = await postJson("/api/changes/conflict-check", { scheduledEnd: "2026-06-15" });
+  assert("Conflict check rejects missing fields", conflictBad.status === 400, `Status: ${conflictBad.status}`);
+
+  // 53. Delete freeze window
+  const freezeDelRes = await new Promise((resolve, reject) => {
+    const url = new URL(`${BASE}/api/changes/freeze-window?id=${encodeURIComponent(freezeId || '')}`);
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "DELETE" }, res => {
+      let buf = "";
+      res.on("data", c => buf += c);
+      res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(buf) }); } catch { resolve({ status: res.statusCode, json: {} }); } });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  assert("Freeze window delete returns 200", freezeDelRes.status === 200, `Status: ${freezeDelRes.status}`);
+
+  // 54. Verify freeze window deleted
+  const freezeListAfter = await getJson("/api/changes/freeze-windows");
+  assert("Freeze window no longer in list", !(freezeListAfter.json.freezeWindows?.some(fw => fw.id === freezeId) ?? false), `still present: ${freezeListAfter.json.freezeWindows?.some(fw => fw.id === freezeId) ?? 'N/A'}`);
+
+  // 55. Calendar data via generic collection API
+  const fwColl = await getJson("/api/data/change_freeze_windows");
+  assert("Freeze windows collection accessible via /api/data", fwColl.status === 200, `Status: ${fwColl.status}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));
