@@ -442,6 +442,29 @@ class WorkflowEngine {
                 similarity: Math.round(similarity * 100),
               });
             }
+
+            // Auto-close email-sourced duplicates with ≥80% similarity from same reporter
+            if (similarity >= 0.8 && newIncident.source === "email" && existing.source === "email" &&
+                (newIncident.reporterEmail || "").toLowerCase() === (existing.reporterEmail || "").toLowerCase()) {
+              // Mark the newer incident as duplicate of the older one
+              newIncident.status = "Closed";
+              newIncident.duplicateOf = existing.id;
+              newIncident.closedReason = `Auto-closed: duplicate of ${existing.id} (${Math.round(similarity * 100)}% match)`;
+              newIncident.updatedAt = new Date().toISOString();
+              if (!newIncident.activityLog) newIncident.activityLog = [];
+              newIncident.activityLog.push({
+                id: `AL-DEDUP-${Date.now()}`,
+                type: "auto_dedup_closed",
+                user: "Workflow Engine",
+                time: new Date().toISOString(),
+                detail: `Auto-closed as duplicate of ${existing.id} — ${Math.round(similarity * 100)}% subject overlap, same reporter (${newIncident.reporterEmail})`,
+              });
+              if (this.db) {
+                await this.db.upsert("incidents", newIncident.id, JSON.stringify(newIncident));
+                this._log("action", rule.id, `Auto-closed duplicate ${newIncident.id} → linked to ${existing.id}`);
+              }
+            }
+
             break; // only report first match
           }
         } catch {}

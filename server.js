@@ -1278,7 +1278,7 @@ async function processInboundEmails() {
       "$filter": "isRead eq false",
       "$top": "10",
       "$orderby": "receivedDateTime desc",
-      "$select": "id,subject,bodyPreview,from,receivedDateTime,body,internetMessageHeaders",
+      "$select": "id,subject,bodyPreview,from,receivedDateTime,body,internetMessageHeaders,conversationId",
     });
     const graphData = await new Promise((resolve, reject) => {
       const graphReq = https.request({
@@ -1329,6 +1329,49 @@ async function processInboundEmails() {
       try { return typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { return null; }
     }).filter(Boolean);
     const _emailMsgIdSet = new Set(_emailParsedIncidents.filter(i => i.emailMessageId).map(i => i.emailMessageId));
+    // Dedup: conversationId → existing incident ID (for email-sourced open incidents)
+    const _emailConvIdMap = new Map();
+    // Dedup: RFC Message-ID set (from internetMessageHeaders stored on incidents)
+    const _emailRfcMsgIdSet = new Set();
+    for (const inc of _emailParsedIncidents) {
+      if (inc.source === "email" && !["Closed", "Resolved"].includes(inc.status)) {
+        if (inc.conversationId) _emailConvIdMap.set(inc.conversationId, inc);
+        if (inc.rfcMessageId) _emailRfcMsgIdSet.add(inc.rfcMessageId);
+      }
+    }
+
+    // Helper: extract RFC header value from internetMessageHeaders array
+    const _extractHeader = (headers, name) => {
+      if (!Array.isArray(headers)) return null;
+      const h = headers.find(h => h.name?.toLowerCase() === name.toLowerCase());
+      return h ? h.value : null;
+    };
+
+    // Helper: fuzzy subject similarity (word overlap)
+    const _subjectSimilarity = (s1, s2) => {
+      const words1 = s1.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+      const words2 = s2.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+      if (words1.length === 0 || words2.length === 0) return 0;
+      const matchCount = words1.filter(w => words2.includes(w)).length;
+      return matchCount / Math.max(words1.length, words2.length);
+    };
+
+    // Helper: append email as reply to an existing incident
+    const _appendAsReply = async (existingInc, msg, fromAddr, subject, reason) => {
+      const rawReply = (msg.body?.content || msg.bodyPreview || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      if (!existingInc.activityLog) existingInc.activityLog = [];
+      existingInc.activityLog.push({
+        id: `AL-REPLY-${Date.now()}`,
+        type: "email_reply",
+        user: msg.from?.emailAddress?.name || fromAddr,
+        time: new Date().toISOString(),
+        detail: `Email reply from ${fromAddr}: ${rawReply.substring(0, 500)}`,
+      });
+      existingInc.updatedAt = new Date().toISOString();
+      await db.upsert("incidents", existingInc.id, JSON.stringify(existingInc));
+      await _markEmailRead(token, sender, msg.id);
+      console.log(`[Email-to-Ticket] Dedup (${reason}): appended to ${existingInc.id} — "${subject.substring(0, 60)}"`);
+    };
 
     for (const msg of messages) {
       try {
@@ -1389,29 +1432,62 @@ async function processInboundEmails() {
           continue;
         }
 
+        // ── Gate 5.5: RFC Message-ID dedup — unique email ID from headers ──
+        const msgHeaders = msg.internetMessageHeaders || [];
+        const rfcMessageId = _extractHeader(msgHeaders, "Message-ID");
+        const inReplyTo = _extractHeader(msgHeaders, "In-Reply-To");
+        if (rfcMessageId && _emailRfcMsgIdSet.has(rfcMessageId)) {
+          await _markEmailRead(token, sender, msg.id);
+          console.log(`[Email-to-Ticket] Skipped duplicate RFC Message-ID: ${rfcMessageId}`);
+          continue;
+        }
+
+        // ── Gate 5.7: ConversationId dedup — Graph API groups thread messages ──
+        const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold"]);
+        if (msg.conversationId && _emailConvIdMap.has(msg.conversationId)) {
+          const convInc = _emailConvIdMap.get(msg.conversationId);
+          if (convInc && openStatuses.has(convInc.status)) {
+            await _appendAsReply(convInc, msg, fromAddr, subject, "conversationId-match");
+            continue;
+          }
+        }
+
         // ── Gate 6: Thread-aware dedup — replies to same thread append to existing incident ──
         const normalizeSubject = (s) => s.replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").replace(/^\[.*?\]\s*/g, "").trim().toLowerCase();
         const normalizedSubject = normalizeSubject(subject);
-        const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold"]);
+        // 6a: Exact normalized subject match
         const threadMatch = _emailParsedIncidents.find(inc =>
           inc.source === "email" && openStatuses.has(inc.status) &&
           normalizeSubject(inc.title || "") === normalizedSubject
         );
         if (threadMatch) {
-          // Append reply as activity to existing incident instead of creating new one
-          const rawReply = (msg.body?.content || msg.bodyPreview || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-          if (!threadMatch.activityLog) threadMatch.activityLog = [];
-          threadMatch.activityLog.push({
-            id: `AL-REPLY-${Date.now()}`,
-            type: "email_reply",
-            user: msg.from?.emailAddress?.name || fromAddr,
-            time: new Date().toISOString(),
-            detail: `Email reply from ${fromAddr}: ${rawReply.substring(0, 500)}`,
-          });
-          threadMatch.updatedAt = new Date().toISOString();
-          await db.upsert("incidents", threadMatch.id, JSON.stringify(threadMatch));
-          await _markEmailRead(token, sender, msg.id);
-          console.log(`[Email-to-Ticket] Thread reply appended to ${threadMatch.id}: "${subject.substring(0, 60)}"`);
+          await _appendAsReply(threadMatch, msg, fromAddr, subject, "exact-subject-match");
+          continue;
+        }
+        // 6b: Fuzzy subject match — same sender ≥70% overlap, different sender ≥80%
+        const fuzzyMatch = _emailParsedIncidents.find(inc => {
+          if (!inc.source || inc.source !== "email" || !openStatuses.has(inc.status)) return false;
+          const sim = _subjectSimilarity(normalizedSubject, normalizeSubject(inc.title || ""));
+          const sameSender = (inc.reporterEmail || "").toLowerCase() === fromAddr;
+          return sameSender ? sim >= 0.7 : sim >= 0.8;
+        });
+        if (fuzzyMatch) {
+          await _appendAsReply(fuzzyMatch, msg, fromAddr, subject, `fuzzy-subject-${Math.round(_subjectSimilarity(normalizedSubject, normalizeSubject(fuzzyMatch.title || "")) * 100)}%`);
+          continue;
+        }
+
+        // ── Gate 6.5: Sender + time window dedup — same reporter within 10 min + ≥50% subject overlap ──
+        const nowMs = Date.now();
+        const timeWindowMs = 10 * 60 * 1000; // 10 minutes
+        const timeWindowMatch = _emailParsedIncidents.find(inc => {
+          if (inc.source !== "email" || !openStatuses.has(inc.status)) return false;
+          if ((inc.reporterEmail || "").toLowerCase() !== fromAddr) return false;
+          const incTime = inc.createdAt ? new Date(inc.createdAt).getTime() : 0;
+          if (nowMs - incTime > timeWindowMs) return false;
+          return _subjectSimilarity(normalizedSubject, normalizeSubject(inc.title || "")) >= 0.5;
+        });
+        if (timeWindowMatch) {
+          await _appendAsReply(timeWindowMatch, msg, fromAddr, subject, "sender-time-window-dedup");
           continue;
         }
 
@@ -1438,6 +1514,8 @@ async function processInboundEmails() {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           emailMessageId: msg.id,
+          conversationId: msg.conversationId || null,
+          rfcMessageId: rfcMessageId || null,
           activityLog: [{
             id: `AL-EMAIL-${Date.now()}`,
             type: "created",
@@ -1452,6 +1530,8 @@ async function processInboundEmails() {
         // Update in-batch dedup sets so later emails in same batch are caught by Gate 5 & 6
         _emailParsedIncidents.push(incident);
         _emailMsgIdSet.add(msg.id);
+        if (msg.conversationId) _emailConvIdMap.set(msg.conversationId, incident);
+        if (rfcMessageId) _emailRfcMsgIdSet.add(rfcMessageId);
         if (wsServer) wsServer.broadcast("incidents", { action: "upsert", collection: "incidents", id: incId, summary: incident.title });
         createdIncidents.push(incId);
 
@@ -7274,6 +7354,35 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) {
       console.error("[CSAT AI Analysis]", err.message);
       return json(res, 200, { success: false, error: err.message });
+    }
+  }
+
+  // ── Dedup scan — one-time scan to find and flag existing duplicate incidents ──
+  if (pathname === "/api/incidents/dedup-scan" && method === "POST") {
+    try {
+      const allIncidents = await db.getAll("incidents");
+      const emailIncidents = allIncidents.filter(i => i.source === "email" && !["Closed", "Resolved"].includes(i.status));
+      const normalizeSubject = (s) => (s || "").replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").replace(/^\[.*?\]\s*/g, "").trim().toLowerCase();
+      const wordSimilarity = (s1, s2) => {
+        const w1 = s1.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+        const w2 = s2.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+        if (w1.length === 0 || w2.length === 0) return 0;
+        return w1.filter(w => w2.includes(w)).length / Math.max(w1.length, w2.length);
+      };
+      const duplicates = [];
+      for (let i = 0; i < emailIncidents.length; i++) {
+        for (let j = i + 1; j < emailIncidents.length; j++) {
+          const a = emailIncidents[i], b = emailIncidents[j];
+          const sim = wordSimilarity(normalizeSubject(a.title), normalizeSubject(b.title));
+          const sameSender = (a.reporterEmail || "").toLowerCase() === (b.reporterEmail || "").toLowerCase();
+          if (sim >= 0.7 && sameSender) {
+            duplicates.push({ incidentA: a.id, incidentB: b.id, similarity: Math.round(sim * 100), reporter: a.reporterEmail, titleA: a.title, titleB: b.title });
+          }
+        }
+      }
+      return json(res, 200, { scanned: emailIncidents.length, duplicatesFound: duplicates.length, duplicates });
+    } catch (err) {
+      return json(res, 500, { error: "Dedup scan failed", details: err.message });
     }
   }
 
