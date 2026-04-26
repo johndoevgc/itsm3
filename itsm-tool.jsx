@@ -1818,6 +1818,8 @@ export default function ITSMApp() {
   const [aiInput, setAiInput] = useState("");
   const [aiAttachments, setAiAttachments] = useState([]);
   const [aiUploadingFiles, setAiUploadingFiles] = useState(false);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashFilter, setSlashFilter] = useState("");
   const [adminTab, setAdminTab] = useState("ai");
   const [emailWhitelist, setEmailWhitelist] = useState([]);
   const [emailRejections, setEmailRejections] = useState([]);
@@ -10747,6 +10749,28 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     })();
   };
 
+  // ─── Slash Command Definitions ───
+  const SLASH_COMMANDS = useMemo(() => [
+    { cmd: "/create incident", icon: "🎫", label: "Create Incident", desc: "Open a new incident ticket", category: "Create" },
+    { cmd: "/create request", icon: "📋", label: "Create Service Request", desc: "Submit a new service request", category: "Create" },
+    { cmd: "/create change", icon: "🔄", label: "Raise Change Request", desc: "Submit a change for approval", category: "Create" },
+    { cmd: "/create problem", icon: "🔗", label: "Create Problem", desc: "Log a new problem record", category: "Create" },
+    { cmd: "/briefing", icon: "📊", label: "Morning Briefing", desc: "Get your daily ITSM summary", category: "Insights" },
+    { cmd: "/sla", icon: "⏱️", label: "SLA Status", desc: "Check SLA compliance & at-risk tickets", category: "Insights" },
+    { cmd: "/open tickets", icon: "🎫", label: "Open Tickets", desc: "List all open incidents", category: "Find" },
+    { cmd: "/search kb", icon: "📚", label: "Search Knowledge Base", desc: "Find articles & solutions", category: "Find" },
+    { cmd: "/find", icon: "🔍", label: "Find Ticket", desc: "Search for a specific ticket by ID or keyword", category: "Find" },
+    { cmd: "/escalate", icon: "⚡", label: "Escalate", desc: "Escalate a ticket to L2/L3", category: "Actions" },
+    { cmd: "/assign", icon: "👤", label: "Assign Ticket", desc: "Assign a ticket to a team member", category: "Actions" },
+    { cmd: "/email", icon: "📧", label: "Draft Email", desc: "Draft a professional email", category: "Actions" },
+    { cmd: "/security", icon: "🛡️", label: "Security Check", desc: "Review security alerts & threats", category: "Insights" },
+    { cmd: "/reports", icon: "📈", label: "Reports", desc: "View analytics & dashboards", category: "Insights" },
+    { cmd: "/duplicates", icon: "🔗", label: "Scan Duplicates", desc: "Find & merge duplicate tickets", category: "Actions" },
+    { cmd: "/patterns", icon: "🧩", label: "Detect Patterns", desc: "AI pattern detection across tickets", category: "Insights" },
+    { cmd: "/train", icon: "🧠", label: "Train AI", desc: "Add knowledge to improve AI", category: "Actions" },
+    { cmd: "/help", icon: "❓", label: "Help", desc: "Show all available commands", category: "General" },
+  ], []);
+
   // ─── AI Chat Action Card Detection ───
   const detectAiActionCards = useCallback((userMsg) => {
     const lc = (userMsg || "").toLowerCase();
@@ -10767,6 +10791,18 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       cards.push({ type: "reports", icon: "📈", title: "Service Reports", description: "View analytics and performance reports", btnLabel: "View Reports →", action: () => { setShowAiPanel(false); setActiveModule("reports"); } });
     if (lc.includes("ai action") || lc.includes("approval") || lc.includes("monitor"))
       cards.push({ type: "ai_actions", icon: "🛡️", title: "AI Actions & Approvals", description: "Review AI-suggested actions pending your approval", btnLabel: "Open AI Actions →", action: () => { setShowAiPanel(false); setShowAiActionsPanel(true); } });
+    if (lc.includes("duplicate") || lc.includes("merge"))
+      cards.push({ type: "scan_duplicates", icon: "🔗", title: "Duplicate Scanner", description: "Find and merge duplicate incidents", btnLabel: "Scan Now →", action: () => { setShowAiPanel(false); setActiveModule("incidents"); setShowDupPanel(true); } });
+    if (lc.includes("assign") && !lc.includes("auto"))
+      cards.push({ type: "assign_ticket", icon: "👤", title: "Assign Ticket", description: "Navigate to incidents to assign a ticket", btnLabel: "Go to Incidents →", action: () => { setShowAiPanel(false); setActiveModule("incidents"); } });
+    if (lc.includes("email") || lc.includes("draft"))
+      cards.push({ type: "email_draft", icon: "📧", title: "Email Module", description: "Open email management for drafting", btnLabel: "Open Email →", action: () => { setShowAiPanel(false); setActiveModule("email"); } });
+    if (lc.includes("pattern") || lc.includes("root cause"))
+      cards.push({ type: "patterns", icon: "🧩", title: "AI Pattern Detection", description: "View detected patterns across tickets", btnLabel: "View Patterns →", action: () => { setShowAiPanel(false); setActiveModule("problems"); } });
+    if (lc.includes("problem") && (lc.includes("create") || lc.includes("new") || lc.includes("raise")))
+      cards.push({ type: "create_problem", icon: "🔗", title: "Create Problem Record", description: "Log a new problem for root cause analysis", btnLabel: "Create Problem →", action: () => { setShowAiPanel(false); setModal("newProblem"); } });
+    if (lc.includes("train") || lc.includes("teach"))
+      cards.push({ type: "train_ai", icon: "🧠", title: "Train AI", description: "Add knowledge to improve AI accuracy", btnLabel: "Open Training →", action: () => { setShowFloatingKbTraining(true); } });
     return cards;
   }, []);
 
@@ -10903,252 +10939,70 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
-          {/* AI Activity Feed */}
-          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-            <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-              <span>🤖</span> AI Activity Log
-            </h3>
+        {/* Open AI Command Center CTA */}
+        <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 12, border: "1px solid #6366F133", padding: 24, marginBottom: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>🚀</div>
+          <h3 style={{ margin: "0 0 8px", fontSize: 16, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>VGC AI Command Center</h3>
+          <p style={{ margin: "0 0 16px", fontSize: 13, color: "#8B92A8", lineHeight: 1.5 }}>
+            Your personal AI assistant for ITSM operations. Create tickets, check SLA, draft emails, search KB, and more — all from one chat.
+          </p>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 }}>
             {[
-              ...(isEntraProductionUser ? [
-                { action: "AI Engine Active", detail: "Monitoring live incidents and tickets for patterns", time: "now", confidence: 100 },
-              ] : [
-                { action: "Auto-triaged INC0005", detail: "Category: Database, Priority: Critical, Assignee: James Wright", time: "2m ago", confidence: 94 },
-                { action: "KB Article Suggested", detail: "Recommended KB002 for VPN issue", time: "15m ago", confidence: 88 },
-                { action: "Risk Assessment Complete", detail: "CHG0003 rated High Risk — CAB review recommended", time: "32m ago", confidence: 91 },
-                { action: "SLA Breach Predicted", detail: "Incident likely to breach in 1.5 hours — escalation suggested", time: "45m ago", confidence: 85 },
-                { action: "Auto-assigned REQ0004", detail: "Assigned to Marcus Chen based on skill match & workload", time: "1h ago", confidence: 90 },
-                { action: "Root Cause Pattern Detected", detail: "3 email incidents may share common root cause", time: "2h ago", confidence: 82 },
-              ]),
-            ].map((log, i) => (
-              <div key={i} style={{ padding: "10px 12px", borderRadius: 6, marginBottom: 8, background: "#0A0C14", border: "1px solid #1E213044" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ color: "#E8ECF4", fontSize: 13, fontWeight: 600 }}>{log.action}</span>
-                  <Badge color={log.confidence >= 90 ? AI_CONFIDENCE_COLORS.high : AI_CONFIDENCE_COLORS.medium}>{log.confidence}%</Badge>
-                </div>
-                <div style={{ color: "#5A6178", fontSize: 12, marginBottom: 2 }}>{log.detail}</div>
-                <div style={{ color: "#5A617866", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{log.time}</div>
-              </div>
+              { icon: "🎫", label: "Create Tickets" },
+              { icon: "📊", label: "SLA Insights" },
+              { icon: "📧", label: "Draft Emails" },
+              { icon: "📚", label: "KB Search" },
+              { icon: "🔍", label: "Find & Fix" },
+              { icon: "⚡", label: "Escalate" },
+            ].map(cap => (
+              <span key={cap.label} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 6, background: "#0F1117", border: "1px solid #1E213066", fontSize: 11, color: "#C4CAD6" }}>
+                {cap.icon} {cap.label}
+              </span>
             ))}
           </div>
+          <button onClick={() => setShowAiPanel(true)} style={{
+            padding: "10px 28px", borderRadius: 8, border: "none",
+            background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff",
+            fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif",
+            boxShadow: "0 4px 16px #6366F144", transition: "all 0.2s"
+          }}
+          onMouseOver={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 6px 24px #6366F166"; }}
+          onMouseOut={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 4px 16px #6366F144"; }}>
+            💬 Open AI Command Center
+          </button>
+          <div style={{ marginTop: 10, fontSize: 10, color: "#5A617888" }}>Type <code style={{ background: "#1E2130", padding: "1px 4px", borderRadius: 3, color: "#6366F1" }}>/</code> in the chat to see all available commands</div>
+        </div>
 
-          {/* AI Chat Assistant */}
-          <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, display: "flex", flexDirection: "column" }}>
-            <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-              <span>💬</span> Assisted by {currentUser.name} AI
+        {/* Recent AI Activity Feed (live, not hardcoded) */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 24 }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+            <span>🤖</span> Recent AI Activity
             </h3>
-            <div style={{ flex: 1, overflowY: "auto", marginBottom: 12, maxHeight: 420, scrollBehavior: "smooth" }}>
-              {aiMessages.map((msg, i) => (
-                <div key={i} style={{ marginBottom: 12, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 8, animation: i === aiMessages.length - 1 ? "nudgeSlideIn 0.3s ease" : "none" }}>
-                  <div style={{
-                    width: 28, height: 28, borderRadius: 6, flexShrink: 0,
-                    background: msg.role === "ai" ? (profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4)") : "#1E2130",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: msg.role === "ai" ? 14 : 11, color: "#fff", fontWeight: 600,
-                    border: msg.role === "ai" ? `1px solid ${avatarConfig.glowColor}44` : "none",
-                    overflow: "hidden"
-                  }}>{msg.role === "ai" ? (!profilePhoto ? currentUser.avatar : "") : currentUser.avatar}</div>
-                  <div style={{ maxWidth: "80%", display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{
-                      padding: "12px 16px", borderRadius: 10,
-                      background: msg.role === "ai" ? "#0A0C14" : "#6366F122",
-                      border: `1px solid ${msg.role === "ai" ? "#1E213055" : "#6366F133"}`,
-                      color: "#C4CAD6", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-line"
-                    }}>
-                      {msg.role === "ai" ? renderAiRichText(msg.text, handleTicketLinkClick) : msg.text}
-                      {msg.role === "ai" && (
-                        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, borderTop: "1px solid #1E213044", paddingTop: 6 }}>
-                          <span style={{
-                            fontSize: 9, color: msg.source === "azure" ? "#06B6D4" : "#FFB347",
-                            background: msg.source === "azure" ? "#06B6D411" : "#FFB34711",
-                            border: `1px solid ${msg.source === "azure" ? "#06B6D422" : "#FFB34722"}`,
-                            padding: "2px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace",
-                            display: "inline-flex", alignItems: "center", gap: 4
-                          }}>
-                            {msg.source === "azure" ? "⚡ VGC-AI Engine" : "🧠 Local AI Engine"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    {/* Suggested Reply Cards */}
-                    {msg.role === "ai" && !msg._typing && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {msg.suggestions.map((s, si) => (
-                          <button key={si} onClick={() => handleAiChat(s.action)} style={{
-                            padding: "6px 12px", fontSize: 11, background: "linear-gradient(135deg, #6366F108, #06B6D408)",
-                            border: "1px solid #6366F133", borderRadius: 8, color: "#6366F1", cursor: "pointer",
-                            fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s",
-                            display: "flex", alignItems: "center", gap: 4
-                          }}
-                          onMouseOver={e => { e.target.style.background = "#6366F122"; e.target.style.borderColor = "#6366F166"; }}
-                          onMouseOut={e => { e.target.style.background = "linear-gradient(135deg, #6366F108, #06B6D408)"; e.target.style.borderColor = "#6366F133"; }}>
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+          {(() => {
+            const recentAiLogs = aiMessages.filter(m => m.role === "ai" && !m._typing).slice(-6).reverse().map((m, idx) => ({
+              action: m.text.substring(0, 50).replace(/[*#_]/g, "").trim() + (m.text.length > 50 ? "..." : ""),
+              detail: m.source === "azure" ? "VGC-AI Engine" : "Local AI",
+              time: idx === 0 ? "just now" : idx < 3 ? `${idx * 5}m ago` : `${idx * 15}m ago`,
+              source: m.source
+            }));
+            const logs = recentAiLogs.length > 0 ? recentAiLogs : [
+              { action: "AI Engine Active", detail: "Monitoring live incidents and tickets", time: "now", source: "azure" },
+            ];
+            return logs.map((log, i) => (
+              <div key={i} style={{ padding: "10px 12px", borderRadius: 6, marginBottom: 8, background: "#0A0C14", border: "1px solid #1E213044" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{log.action}</span>
+                  <span style={{ fontSize: 8, color: log.source === "azure" ? "#06B6D4" : "#FFB347", background: log.source === "azure" ? "#06B6D411" : "#FFB34711", padding: "2px 6px", borderRadius: 3, fontFamily: "'JetBrains Mono', monospace", flexShrink: 0, marginLeft: 8 }}>{log.source === "azure" ? "⚡ VGC AI" : "🧠 Local"}</span>
                 </div>
-              ))}
-              <div ref={chatEndRef} />
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input type="file" id="ai-chat-file-input" multiple style={{ display: "none" }}
-                onChange={e => { handleAiFileAttach(e.target.files); e.target.value = ""; }} />
-              <button onClick={() => document.getElementById("ai-chat-file-input").click()}
-                disabled={aiUploadingFiles}
-                style={{ ...btnStyle("#3B3F51"), fontSize: 16, padding: "6px 10px", minWidth: 36 }}
-                title="Attach files to chat">
-                {aiUploadingFiles ? "⏳" : "📎"}
-              </button>
-              <input style={{ ...inputStyle, flex: 1 }} value={aiInput} onChange={e => setAiInput(e.target.value)}
-                placeholder="Ask me anything — incidents, SLA, security, briefing..."
-                onKeyDown={e => { if (e.key === "Enter") handleAiChat(); }} />
-              <button style={btnStyle("#6366F1")} onClick={() => handleAiChat()}>Send</button>
-              <button onClick={() => { setShowKbTraining(!showKbTraining); if (!showKbTraining) fetchKbEntries(); }} style={{ ...btnStyle(showKbTraining ? "#FFB347" : "#00BF6F"), fontSize: 11, whiteSpace: "nowrap" }}>{showKbTraining ? "✕ Close" : "🧠 Train AI"}</button>
-            </div>
-            {aiAttachments.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                {aiAttachments.map((a, i) => (
-                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#1E2130", border: "1px solid #6366F133", borderRadius: 6, padding: "3px 8px", fontSize: 11, color: "#A78BFA", fontFamily: "'JetBrains Mono', monospace" }}>
-                    📎 {a.fileName} ({(a.fileSize / 1024).toFixed(1)}KB)
-                    <button onClick={() => setAiAttachments(prev => prev.filter((_, j) => j !== i))}
-                      style={{ background: "none", border: "none", color: "#EF4444", cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1 }}>✕</button>
-                  </span>
-                ))}
+                <div style={{ color: "#5A617866", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{log.time}</div>
               </div>
-            )}
-            {/* AI Training Panel */}
-            {showKbTraining && (
-              <div style={{ marginTop: 12, background: "#0A0C14", borderRadius: 10, border: "1px solid #00BF6F33", padding: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <h4 style={{ margin: 0, fontSize: 13, color: "#00BF6F", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
-                    <span>🧠</span> Train AI — All Users Can Contribute
-                  </h4>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", padding: "2px 8px", background: "#1E213044", borderRadius: 4 }}>{kbEntries.length} entries</span>
-                    <button onClick={async () => {
-                      try {
-                        const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-                        const d = await r.json();
-                        trackAction("AI Training", "Knowledge Sync", `${d.syncedThisRun || 0} new entries synced. Total: ${d.totalEntries}`, "AI");
-                        setAiMessages(prev => [...prev, { role: "ai", text: `🔄 **Knowledge Sync Complete!**\n\n📊 Synced ${d.syncedThisRun || 0} new entries from Zendesk\n📚 Total knowledge entries: ${d.totalEntries}\n🕐 Last sync: ${new Date(d.lastSync).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}\n⏭ Next auto-sync: ${new Date(d.nextSync).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}\n\nAll training is shared across the entire system — every user benefits!`, source: "azure" }]);
-                        fetchKbEntries();
-                      } catch (e) { setAiMessages(prev => [...prev, { role: "ai", text: `⚠️ Sync failed: ${e.message}`, source: "azure" }]); }
-                    }} style={{ ...btnStyle("#06B6D4"), fontSize: 9, padding: "3px 8px" }} title="Sync all Zendesk tickets + KB into unified AI training">🔄 Sync Now</button>
-                  </div>
-                </div>
-
-                {/* Sync Status Banner */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 6, background: "#06B6D408", border: "1px solid #06B6D422", marginBottom: 12 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />
-                  <div style={{ fontSize: 9, color: "#8A8FA8", flex: 1 }}>
-                    <strong style={{ color: "#06B6D4" }}>Daily Auto-Sync Active</strong> — All training syncs to every user's AI Assist daily. Zendesk tickets, KB articles, uploaded docs — everything is shared system-wide.
-                  </div>
-                </div>
-
-                <div style={{ fontSize: 10, color: "#8A8FA8", marginBottom: 12, lineHeight: 1.5 }}>
-                  👥 <strong style={{ color: "#E8ECF4" }}>Every user</strong> can add knowledge here. AI checks internal docs first when answering questions. Training is shared across the <strong style={{ color: "#81C784" }}>entire organization</strong>.
-                </div>
-
-                {/* Quick Train Shortcuts */}
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
-                  <span style={{ fontSize: 9, color: "#5A6178", alignSelf: "center" }}>Quick:</span>
-                  {[
-                    { label: "📧 Email Issue Fix", cat: "Email" },
-                    { label: "🔒 VPN Troubleshoot", cat: "VPN" },
-                    { label: "🔑 Password Reset", cat: "Security" },
-                    { label: "🖨️ Printer Setup", cat: "Printing" },
-                    { label: "💻 New PC Setup", cat: "Onboarding" },
-                    { label: "🛡️ Security Alert", cat: "Security" },
-                  ].map(q => (
-                    <button key={q.label} onClick={() => { setKbForm(p => ({ ...p, title: q.label.replace(/^[^\s]+\s/, ""), category: q.cat })); }} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 8, border: "1px solid #1E213066", background: "#0F1117", color: "#8A8FA8", cursor: "pointer" }}>{q.label}</button>
-                  ))}
-                </div>
-
-                {/* Add New Knowledge Form */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-                  <input style={{ ...inputStyle, fontSize: 11 }} placeholder="Title (e.g., VPN Setup Guide)" value={kbForm.title} onChange={e => setKbForm(p => ({ ...p, title: e.target.value }))} />
-                  <select style={{ ...inputStyle, fontSize: 11 }} value={kbForm.category} onChange={e => setKbForm(p => ({ ...p, category: e.target.value }))}>
-                    {["General", "Networking", "Security", "Hardware", "Software", "Email", "VPN", "Firewall", "Printing", "Onboarding", "Policy", "SOP", "Troubleshooting"].map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <textarea style={{ ...inputStyle, fontSize: 11, width: "100%", minHeight: 80, resize: "vertical", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5, boxSizing: "border-box" }} placeholder="Knowledge content — procedures, solutions, policies, troubleshooting steps..." value={kbForm.content} onChange={e => setKbForm(p => ({ ...p, content: e.target.value }))} />
-                {/* File Upload Area */}
-                <div style={{ marginBottom: 10, border: "2px dashed #1E213066", borderRadius: 8, padding: 12, textAlign: "center", cursor: "pointer", transition: "border-color 0.2s" }}
-                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#6366F1"; }}
-                  onDragLeave={e => { e.currentTarget.style.borderColor = "#1E213066"; }}
-                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "#1E213066"; handleKbFileUpload(e.dataTransfer.files); }}
-                  onClick={() => document.getElementById("kb-file-upload-main")?.click()}>
-                  <input id="kb-file-upload-main" type="file" multiple accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.md,.json,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov" style={{ display: "none" }} onChange={e => handleKbFileUpload(e.target.files)} />
-                  <div style={{ fontSize: 20, marginBottom: 4 }}>📎</div>
-                  <div style={{ fontSize: 10, color: "#8A8FA8" }}>Drop files here or click to upload</div>
-                  <div style={{ fontSize: 8, color: "#5A617888", marginTop: 2 }}>Word, Excel, PowerPoint, PDF, Images, Videos, Text, CSV</div>
-                </div>
-                {kbUploadFiles.length > 0 && (
-                  <div style={{ marginBottom: 10 }}>
-                    {kbUploadFiles.map((f, idx) => (
-                      <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", marginBottom: 4, background: "#0F1117", borderRadius: 4, border: `1px solid ${f.done ? "#81C78433" : "#1E213033"}` }}>
-                        <span style={{ fontSize: 12 }}>{f.type === "Word" ? "📄" : f.type === "Excel" ? "📊" : f.type === "PowerPoint" ? "📽️" : f.type === "PDF" ? "📕" : f.type === "Image" ? "🖼️" : f.type === "Video" ? "🎬" : "📎"}</span>
-                        <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
-                        <span style={{ fontSize: 8, color: "#5A6178" }}>{(f.size / 1024).toFixed(0)}KB</span>
-                        {f.uploading && <span style={{ fontSize: 8, color: "#6366F1" }}>⏳</span>}
-                        {f.done && <span style={{ fontSize: 8, color: "#81C784" }}>✅</span>}
-                        {!f.uploading && !f.done && <button onClick={() => setKbUploadFiles(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 10, padding: 0 }}>✕</button>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                  <input style={{ ...inputStyle, fontSize: 11, flex: 1 }} placeholder="Tags (comma-separated: vpn, networking, cisco)" value={kbForm.tags} onChange={e => setKbForm(p => ({ ...p, tags: e.target.value }))} />
-                  <button onClick={kbUploadFiles.length > 0 ? submitKbWithFiles : submitKbEntry} disabled={!kbForm.title.trim() || (!kbForm.content.trim() && kbUploadFiles.length === 0)} style={{ ...btnStyle("#00BF6F"), fontSize: 11, opacity: (!kbForm.title.trim() || (!kbForm.content.trim() && kbUploadFiles.length === 0)) ? 0.4 : 1, whiteSpace: "nowrap" }}>💾 {kbUploadFiles.length > 0 ? `Save + Upload (${kbUploadFiles.length})` : "Save Knowledge"}</button>
-                </div>
-                {/* Existing Knowledge Entries */}
-                {kbEntries.length > 0 && (
-                  <div style={{ borderTop: "1px solid #1E213044", paddingTop: 12 }}>
-                    <div style={{ fontSize: 11, color: "#6366F1", fontWeight: 600, marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>📚 Trained Knowledge ({kbEntries.length})</div>
-                    <div style={{ maxHeight: 200, overflowY: "auto" }}>
-                      {kbEntries.map(e => (
-                        <div key={e.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", marginBottom: 6, background: "#0F1117", borderRadius: 6, border: "1px solid #1E213033" }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                              <span style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 600 }}>{e.title}</span>
-                              <span style={{ fontSize: 8, padding: "1px 6px", borderRadius: 3, background: "#6366F118", color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>{e.category}</span>
-                            </div>
-                            <div style={{ fontSize: 10, color: "#8A8FA8", lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{e.content}</div>
-                            <div style={{ display: "flex", gap: 8, marginTop: 4, fontSize: 9, color: "#5A617888" }}>
-                              <span>By: {e.trainedBy}</span>
-                              <span>·</span>
-                              <span>{new Date(e.createdAt).toLocaleDateString("en-SG")}</span>
-                              {e.tags && e.tags.length > 0 && <span>· Tags: {e.tags.join(", ")}</span>}
-                            </div>
-                          </div>
-                          <button onClick={() => deleteKbEntry(e.id)} style={{ background: "none", border: "1px solid #FF444433", borderRadius: 4, padding: "2px 6px", fontSize: 9, color: "#FF6B6B", cursor: "pointer", flexShrink: 0 }}>✕</button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {kbLoading && <div style={{ textAlign: "center", fontSize: 10, color: "#5A6178", padding: 10 }}>Loading knowledge base...</div>}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-              {[
-                { label: "📊 Morning Briefing", action: "Give me my morning briefing" },
-                { label: "🎫 Open Tickets", action: "Show open incidents" },
-                { label: "📚 Knowledge Base", action: "Search knowledge base" },
-                { label: "⏱️ SLA Status", action: "Check SLA compliance" },
-                { label: "🛡️ Security", action: "Any security threats?" },
-                { label: "📧 Draft Email", action: "Help me draft an email" },
-              ].map(q => (
-                <button key={q.action} style={{ padding: "4px 10px", fontSize: 10, background: "#0A0C14", border: "1px solid #1E213066", borderRadius: 6, color: "#6366F1", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}
-                  onClick={() => handleAiChat(q.action)}>
-                  {q.label}
-                </button>
-              ))}
+            ));
+          })()}
+          {aiMessages.length <= 1 && (
+            <div style={{ textAlign: "center", padding: "16px 0", color: "#5A617888", fontSize: 11 }}>
+              No recent activity. Open the AI Command Center to get started.
             </div>
-
-          </div>
+          )}
         </div>
 
         {/* AI Automation Breakdown */}
@@ -11180,32 +11034,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 <div style={{ width: `${row.humanPct}%`, background: "#06B6D4", transition: "width 0.6s" }} />
                 <div style={{ flex: 1, background: "#1E2130" }} />
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* AI Capabilities */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
-          {[
-            { title: "Smart Triage", desc: "Auto-categorize, prioritize & assign incidents", status: "Active", icon: "⚡", color: "#6366F1" },
-            { title: "KB Intelligence", desc: "Suggest relevant articles for faster resolution", status: "Active", icon: "📖", color: "#81C784" },
-            { title: "Risk Analyzer", desc: "Assess change risk with ML-based scoring", status: "Active", icon: "🛡️", color: "#FFB347" },
-            { title: "SLA Predictor", desc: "Predict SLA breaches before they happen", status: "Active", icon: "⏱️", color: "#CE93D8" },
-            { title: "Root Cause Engine", desc: "Detect patterns across incidents & problems", status: "Active", icon: "🔍", color: "#EC4899" },
-            { title: "Sentiment Analysis", desc: "Gauge user satisfaction from ticket language", status: "Beta", icon: "💬", color: "#06B6D4" },
-            { title: "Capacity Forecast", desc: "Predict resource needs based on trends", status: "Coming Soon", icon: "📈", color: "#5A6178" },
-            { title: "Auto-Remediation", desc: "Execute automated fixes for known issues", status: "Coming Soon", icon: "🔧", color: "#5A6178" },
-          ].map((cap, i) => (
-            <div key={i} style={{
-              background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 18,
-              opacity: cap.status === "Coming Soon" ? 0.5 : 1
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                <span style={{ fontSize: 24 }}>{cap.icon}</span>
-                <Badge color={cap.status === "Active" ? { bg: "#0D2D1A", text: "#81C784" } : cap.status === "Beta" ? { bg: "#2D1F0A", text: "#FFB347" } : { bg: "#1A1A2E", text: "#5A6178" }}>{cap.status}</Badge>
-              </div>
-              <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 600, marginBottom: 4, fontFamily: "'Space Grotesk', sans-serif" }}>{cap.title}</div>
-              <div style={{ color: "#5A6178", fontSize: 12 }}>{cap.desc}</div>
             </div>
           ))}
         </div>
@@ -23316,26 +23144,32 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       }}>
         {showAiPanel && (
           <div style={{
-            width: aiChatExpanded ? 600 : 380, background: "#12141E", borderRadius: 12, border: "1px solid #6366F133",
+            width: aiChatExpanded ? 680 : 420, background: "#12141E", borderRadius: 16, border: "1px solid #6366F133",
             boxShadow: "0 24px 48px #00000066, 0 0 30px #6366F111",
             overflow: "hidden", animation: "aiBorderPulse 3s ease-in-out infinite",
             transition: "width 0.3s ease, max-height 0.3s ease",
-            maxHeight: aiChatExpanded ? "85vh" : "auto"
+            maxHeight: aiChatExpanded ? "85vh" : "auto", display: "flex", flexDirection: "column"
           }}>
+            {/* Header — VGC AI Command Center */}
             <div
               onMouseDown={handleAiDragStart} onTouchStart={handleAiDragStart}
               style={{
-              padding: "14px 18px", background: "linear-gradient(135deg, #6366F1, #06B6D4)",
+              padding: "12px 18px", background: "linear-gradient(135deg, #6366F1, #4F46E5)",
               display: "flex", justifyContent: "space-between", alignItems: "center",
               cursor: "grab", userSelect: "none"
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 12, cursor: "grab" }}>⠿</span>
-                {/* Mini avatar in header — Profile Photo */}
-                <div style={{ width: 28, height: 28, borderRadius: 8, overflow: "hidden", background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #1E2130, #0F1117)", display: "flex", alignItems: "center", justifyContent: "center", border: "1.5px solid #ffffff33" }}>
-                  {!profilePhoto && <span style={{ fontSize: 10, fontWeight: 700, color: "#E8ECF4" }}>{currentUser.avatar}</span>}
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 12, cursor: "grab", color: "#ffffff55" }}>⠿</span>
+                <div style={{ width: 30, height: 30, borderRadius: 10, overflow: "hidden", background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #1E2130, #0F1117)", display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #ffffff33" }}>
+                  {!profilePhoto && <span style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4" }}>{currentUser.avatar}</span>}
                 </div>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4" }}>{currentUser.name}</span>
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "'Space Grotesk', sans-serif" }}>VGC AI Command Center</span>
+                  <span style={{ fontSize: 9, color: "#ffffff88", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: azureOpenAI.enabled ? "#81C784" : "#FFB347", display: "inline-block" }} />
+                    {azureOpenAI.enabled ? "VGC-AI Engine" : "Local AI"} · {currentUser.name}
+                  </span>
+                </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <button onClick={() => { setAiMessages(prev => [prev[0]]); setAiEditingIdx(null); }} style={{ background: "none", border: "none", color: "#ffffff55", cursor: "pointer", fontSize: 12, padding: "2px 4px", borderRadius: 4, transition: "background 0.2s" }} title="Clear chat"
@@ -23346,35 +23180,70 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   onMouseOut={e => e.currentTarget.style.background = "none"}>
                   {aiChatExpanded ? "⊟" : "⊞"}
                 </button>
-                <button onClick={() => setShowAiPanel(false)} style={{ background: "none", border: "none", color: "#ffffff88", cursor: "pointer", fontSize: 16 }}>✕</button>
+                <button onClick={() => { setShowAiPanel(false); setShowSlashMenu(false); }} style={{ background: "none", border: "none", color: "#ffffff88", cursor: "pointer", fontSize: 16 }}>✕</button>
               </div>
             </div>
-            <div style={{ padding: 14, maxHeight: aiChatExpanded ? "60vh" : 350, overflowY: "auto", scrollBehavior: "smooth" }}>
-              {aiMessages.map((msg, i) => (
-                <div key={i} style={{ marginBottom: 10, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 6, animation: i === aiMessages.length - 1 ? "nudgeSlideIn 0.3s ease" : "none" }}>
+            {/* WhatsApp-style Messages Area */}
+            <div style={{ padding: "14px 16px", maxHeight: aiChatExpanded ? "60vh" : 400, overflowY: "auto", scrollBehavior: "smooth", flex: 1, background: "#0D0F18" }}>
+              {/* Welcome state when only initial message */}
+              {aiMessages.length <= 1 && (
+                <div style={{ textAlign: "center", padding: "24px 12px" }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>🚀</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 6 }}>VGC AI Command Center</div>
+                  <div style={{ fontSize: 11, color: "#8B92A8", lineHeight: 1.5, marginBottom: 16 }}>Create tickets, check SLA, draft emails, search KB, and more.<br/>Type <code style={{ background: "#1E2130", padding: "1px 4px", borderRadius: 3, color: "#6366F1", fontSize: 10 }}>/</code> to see all commands.</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {[
+                      { icon: "📊", label: "Morning Briefing", action: "Give me my morning briefing" },
+                      { icon: "🎫", label: "Open Tickets", action: "Show open incidents" },
+                      { icon: "⏱️", label: "SLA Status", action: "Check SLA compliance" },
+                      { icon: "📧", label: "Draft Email", action: "Help me draft an email" },
+                      { icon: "📚", label: "Search KB", action: "Search knowledge base" },
+                      { icon: "🛡️", label: "Security Check", action: "Any security threats?" },
+                    ].map(q => (
+                      <button key={q.action} onClick={() => handleAiChat(q.action)} style={{
+                        padding: "10px 12px", borderRadius: 10, background: "#12141E", border: "1px solid #1E2130",
+                        cursor: "pointer", display: "flex", alignItems: "center", gap: 8, transition: "all 0.2s",
+                        textAlign: "left"
+                      }}
+                      onMouseOver={e => { e.currentTarget.style.borderColor = "#6366F144"; e.currentTarget.style.background = "#1E213044"; }}
+                      onMouseOut={e => { e.currentTarget.style.borderColor = "#1E2130"; e.currentTarget.style.background = "#12141E"; }}>
+                        <span style={{ fontSize: 18, flexShrink: 0 }}>{q.icon}</span>
+                        <span style={{ fontSize: 11, color: "#C4CAD6", fontWeight: 600 }}>{q.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {aiMessages.map((msg, i) => {
+                if (i === 0 && aiMessages.length <= 1) return null; // skip welcome msg when showing welcome state
+                return (
+                <div key={i} style={{ marginBottom: 12, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 8, animation: i === aiMessages.length - 1 ? "nudgeSlideIn 0.3s ease" : "none" }}>
+                  {/* Avatar */}
                   <div style={{
-                    width: 24, height: 24, borderRadius: 6, flexShrink: 0,
-                    background: msg.role === "ai" ? "linear-gradient(135deg, #6366F1, #06B6D4)" : (profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "#1E2130"),
+                    width: 28, height: 28, borderRadius: 8, flexShrink: 0, marginTop: 2,
+                    background: msg.role === "ai" ? "linear-gradient(135deg, #6366F1, #4F46E5)" : (profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "#1E2130"),
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: msg.role === "ai" ? 10 : 9, color: "#fff", fontWeight: 700,
-                    border: msg.role === "ai" ? "1px solid #6366F144" : "none",
+                    fontSize: msg.role === "ai" ? 11 : 9, color: "#fff", fontWeight: 700,
+                    border: msg.role === "ai" ? "1.5px solid #6366F144" : "1px solid #1E213066",
                     overflow: "hidden"
                   }}>{msg.role === "ai" ? "V" : (!profilePhoto ? currentUser.avatar : "")}</div>
-                  <div style={{ maxWidth: "80%", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ maxWidth: "82%", display: "flex", flexDirection: "column", gap: 4 }}>
+                    {/* Bubble */}
                     <div style={{
-                      padding: "8px 12px", borderRadius: 8, fontSize: 12,
-                      background: msg.role === "ai" ? "#0A0C14" : "#6366F122",
-                      border: `1px solid ${msg.role === "ai" ? "#1E213055" : "#6366F133"}`,
-                      color: "#C4CAD6", lineHeight: 1.5, whiteSpace: "pre-line"
+                      padding: "10px 14px",
+                      borderRadius: msg.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
+                      fontSize: 12.5,
+                      background: msg.role === "ai" ? "#12141E" : "linear-gradient(135deg, #6366F1, #4F46E5)",
+                      border: msg.role === "ai" ? "1px solid #1E213066" : "none",
+                      color: msg.role === "user" ? "#fff" : "#C4CAD6", lineHeight: 1.6, whiteSpace: "pre-line",
+                      boxShadow: msg.role === "user" ? "0 2px 8px #6366F133" : "0 1px 4px #00000022"
                     }}>
                       {msg.role === "ai" ? renderAiRichText(msg.text, handleTicketLinkClick) : msg.text}
                       {msg.role === "ai" && !msg._typing && (
-                        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, borderTop: "1px solid #1E213044", paddingTop: 4 }}>
+                        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, fontSize: 8, color: "#5A617888" }}>
                           <span style={{
-                            fontSize: 8, color: msg.source === "azure" ? "#06B6D4" : "#FFB347",
-                            background: msg.source === "azure" ? "#06B6D411" : "#FFB34711",
-                            border: `1px solid ${msg.source === "azure" ? "#06B6D422" : "#FFB34722"}`,
-                            padding: "1px 6px", borderRadius: 3, fontFamily: "'JetBrains Mono', monospace",
+                            color: msg.source === "azure" ? "#06B6D4" : "#FFB347",
+                            fontFamily: "'JetBrains Mono', monospace",
                             display: "inline-flex", alignItems: "center", gap: 3
                           }}>
                             {msg.source === "azure" ? "⚡ VGC AI" : "🧠 Local AI"}
@@ -23440,36 +23309,38 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                         </div>
                       </div>
                     )}
-                    {/* Suggested Reply Cards */}
+                    {/* Suggested Reply Mini-Cards */}
                     {msg.role === "ai" && !msg._typing && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}> 
-                        {msg.suggestions.slice(0, 3).map((s, si) => (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}> 
+                        {msg.suggestions.slice(0, 4).map((s, si) => (
                           <button key={si} onClick={() => handleAiChat(s.action)} style={{
-                            padding: "4px 8px", fontSize: 9, background: "#6366F108",
-                            border: "1px solid #6366F133", borderRadius: 6, color: "#6366F1", cursor: "pointer",
-                            fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s"
+                            padding: "6px 12px", fontSize: 10, background: "#12141E",
+                            border: "1px solid #6366F133", borderRadius: 10, color: "#C4CAD6", cursor: "pointer",
+                            fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s",
+                            display: "inline-flex", alignItems: "center", gap: 4
                           }}
-                          onMouseOver={e => { e.target.style.background = "#6366F122"; }}
-                          onMouseOut={e => { e.target.style.background = "#6366F108"; }}>
-                            {s.label}
+                          onMouseOver={e => { e.currentTarget.style.background = "#6366F118"; e.currentTarget.style.borderColor = "#6366F155"; e.currentTarget.style.color = "#E8ECF4"; }}
+                          onMouseOut={e => { e.currentTarget.style.background = "#12141E"; e.currentTarget.style.borderColor = "#6366F133"; e.currentTarget.style.color = "#C4CAD6"; }}>
+                            💡 {s.label}
                           </button>
                         ))}
                       </div>
                     )}
                   </div>
                 </div>
-              ))}
+              );
+              })}
               {aiLoading && (
-                <div style={{ marginBottom: 8, display: "flex", gap: 6 }}>
+                <div style={{ marginBottom: 8, display: "flex", gap: 8 }}>
                   <div style={{
-                    width: 24, height: 24, borderRadius: 6, flexShrink: 0,
-                    background: profilePhoto ? `url(${profilePhoto}) center/cover no-repeat` : "linear-gradient(135deg, #6366F1, #06B6D4)",
-                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12,
-                    border: `1px solid ${avatarConfig.glowColor}44`, overflow: "hidden"
-                  }}>{!profilePhoto ? currentUser.avatar : ""}</div>
+                    width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                    background: "linear-gradient(135deg, #6366F1, #4F46E5)",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#fff", fontWeight: 700,
+                    border: "1.5px solid #6366F144"
+                  }}>V</div>
                   <div style={{
-                    padding: "10px 14px", borderRadius: 8, background: "#0A0C14",
-                    border: "1px solid #1E213044", display: "flex", gap: 4, alignItems: "center"
+                    padding: "10px 14px", borderRadius: "4px 14px 14px 14px", background: "#12141E",
+                    border: "1px solid #1E213066", display: "flex", gap: 4, alignItems: "center"
                   }}>
                     {[0,1,2].map(d => (
                       <div key={d} style={{
@@ -23485,21 +23356,56 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               )}
               <div ref={floatingChatEndRef} />
             </div>
-            <div style={{ padding: "10px 14px", borderTop: "1px solid #1E2130", display: "flex", gap: 6, alignItems: "center" }}>
-              <input style={{ ...inputStyle, flex: 1, fontSize: 12 }} value={aiInput}
-                onChange={e => setAiInput(e.target.value)} placeholder={azureOpenAI.enabled ? "Ask VGC-AI anything..." : "Ask me anything..."}
+            {/* Slash Command Palette */}
+            {showSlashMenu && (
+              <div style={{ maxHeight: 240, overflowY: "auto", borderTop: "1px solid #1E2130", background: "#0D0F18", padding: "8px 0" }}>
+                <div style={{ padding: "2px 14px 6px", fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>Commands</div>
+                {(() => {
+                  const filtered = SLASH_COMMANDS.filter(c => !slashFilter || c.cmd.toLowerCase().includes(slashFilter.toLowerCase()) || c.label.toLowerCase().includes(slashFilter.toLowerCase()));
+                  const groups = {};
+                  filtered.forEach(c => { (groups[c.category] = groups[c.category] || []).push(c); });
+                  return Object.entries(groups).map(([cat, cmds]) => (
+                    <div key={cat}>
+                      <div style={{ padding: "4px 14px 2px", fontSize: 8, color: "#6366F1", fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", textTransform: "uppercase", letterSpacing: 1 }}>{cat}</div>
+                      {cmds.map(c => (
+                        <div key={c.cmd} onClick={() => { setAiInput(""); setShowSlashMenu(false); setSlashFilter(""); handleAiChat(c.cmd); }}
+                          style={{ padding: "6px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, transition: "background 0.15s" }}
+                          onMouseOver={e => e.currentTarget.style.background = "#1E213044"}
+                          onMouseOut={e => e.currentTarget.style.background = "transparent"}>
+                          <span style={{ fontSize: 16, flexShrink: 0 }}>{c.icon}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "#E8ECF4" }}>{c.label}</div>
+                            <div style={{ fontSize: 9, color: "#5A6178" }}>{c.desc}</div>
+                          </div>
+                          <span style={{ fontSize: 9, color: "#5A617855", fontFamily: "'JetBrains Mono', monospace" }}>{c.cmd}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ));
+                })()}
+              </div>
+            )}
+            {/* Input Footer */}
+            <div style={{ padding: "10px 14px", borderTop: "1px solid #1E2130", display: "flex", gap: 8, alignItems: "center", background: "#12141E" }}>
+              <input style={{ ...inputStyle, flex: 1, fontSize: 12, borderRadius: 10, padding: "8px 14px" }} value={aiInput}
+                onChange={e => {
+                  setAiInput(e.target.value);
+                  if (e.target.value === "/") { setShowSlashMenu(true); setSlashFilter(""); }
+                  else if (e.target.value.startsWith("/")) { setShowSlashMenu(true); setSlashFilter(e.target.value.slice(1)); }
+                  else { setShowSlashMenu(false); setSlashFilter(""); }
+                }}
+                placeholder={azureOpenAI.enabled ? "Message VGC AI... (type / for commands)" : "Ask me anything..."}
                 disabled={aiLoading}
                 onKeyDown={e => {
-                  if (e.key === "Enter" && aiInput.trim() && !aiLoading) {
-                    handleAiChat();
-                  }
+                  if (e.key === "Enter" && aiInput.trim() && !aiLoading) { setShowSlashMenu(false); setSlashFilter(""); handleAiChat(); }
+                  if (e.key === "Escape") { setShowSlashMenu(false); setSlashFilter(""); }
                 }} />
               <button style={{
-                ...btnStyle("#6366F1"), fontSize: 11, padding: "6px 12px",
-                opacity: aiLoading ? 0.5 : 1, cursor: aiLoading ? "wait" : "pointer"
-              }} disabled={aiLoading} onClick={() => handleAiChat()}>{azureOpenAI.enabled ? "⚡" : "↑"}</button>
-              <button onClick={() => { setShowFloatingKbTraining(!showFloatingKbTraining); if (!showFloatingKbTraining) fetchKbEntries(); }} style={{ ...btnStyle(showFloatingKbTraining ? "#FFB347" : "#00BF6F"), fontSize: 10, padding: "6px 8px", whiteSpace: "nowrap" }} title="Train AI / Upload Documents">{showFloatingKbTraining ? "✕" : "🧠"}</button>
-              <button onClick={() => document.getElementById("kb-quick-upload-chat")?.click()} style={{ ...btnStyle("#2B579A"), fontSize: 10, padding: "6px 8px" }} title="Upload document for AI training">📎</button>
+                background: "linear-gradient(135deg, #6366F1, #4F46E5)", border: "none", borderRadius: 10, padding: "8px 14px",
+                fontSize: 13, color: "#fff", cursor: aiLoading ? "wait" : "pointer", opacity: aiLoading ? 0.5 : 1, transition: "all 0.2s",
+                fontWeight: 700, display: "flex", alignItems: "center", gap: 4
+              }} disabled={aiLoading} onClick={() => { setShowSlashMenu(false); setSlashFilter(""); handleAiChat(); }}>⚡</button>
+              <button onClick={() => document.getElementById("kb-quick-upload-chat")?.click()} style={{ ...btnStyle("#2B579A"), fontSize: 11, padding: "6px 10px", borderRadius: 8 }} title="Upload document for AI training">📎</button>
               <input id="kb-quick-upload-chat" type="file" multiple accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.md,.json" style={{ display: "none" }} onChange={e => {
                 const files = Array.from(e.target.files);
                 if (files.length === 0) return;
@@ -23567,18 +23473,17 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 )}
               </div>
             )}
-            {/* AI Engine Status Footer */}
+            {/* AI Status Footer */}
             <div style={{
-              padding: "4px 14px 6px", borderTop: "1px solid #1E213022",
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 2
+              padding: "6px 14px", borderTop: "1px solid #1E213022",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: azureOpenAI.enabled ? "#81C784" : "#FFB347", boxShadow: azureOpenAI.enabled ? "0 0 6px #81C78444" : "0 0 6px #FFB34744", animation: "pulse 2s infinite" }} />
-                <span style={{ color: "#5A617866", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>
-                  {azureOpenAI.enabled ? "Primary: VGC-AI Engine ⚡ · Fallback: Local AI 🧠" : "Active: Local AI 🧠 · VGC-AI Engine offline"}
-                </span>
-              </div>
-              <span style={{ color: "#6366F144", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>I assist, I don't replace — your expertise leads. 🤝</span>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: azureOpenAI.enabled ? "#81C784" : "#FFB347", boxShadow: azureOpenAI.enabled ? "0 0 6px #81C78444" : "0 0 6px #FFB34744", animation: "pulse 2s infinite" }} />
+              <span style={{ color: "#5A617855", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>
+                {azureOpenAI.enabled ? "VGC-AI Engine · Ready" : "Local AI · Online"}
+              </span>
+              <span style={{ color: "#6366F133", fontSize: 8 }}>·</span>
+              <span style={{ color: "#6366F133", fontSize: 8, fontFamily: "'JetBrains Mono', monospace" }}>I assist, you lead 🤝</span>
             </div>
           </div>
         )}
