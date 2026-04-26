@@ -737,6 +737,7 @@ const VALID_COLLECTIONS = new Set([
   "email_rejections",
   "email_templates",
   "email_whitelist",
+  "zd_ai_queue",
   "advisories",
 ]);
 
@@ -6599,7 +6600,7 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
   if (pathname === "/api/ai/resolve-queue/action" && req.method === "POST") {
     try {
       const body = await parseBody(req);
-      const { suggestionId, action, approvedBy, editedResolution } = body;
+      const { suggestionId, action, approvedBy, editedResolution, editedCustomerEmail } = body;
       if (!suggestionId || !action) return json(res, 400, { error: "suggestionId and action required" });
       if (action === "approve" && !approvedBy) return json(res, 403, { error: "Human approval required — approvedBy is mandatory" });
 
@@ -6638,51 +6639,82 @@ Respond in JSON: {"resolution": "...", "rootCause": "...", "suggestedStatus": "R
       // ─── Send email notifications on approve/reject ──────────────────
       if (action === "approve") {
         const incTitle = suggestion.incidentTitle || suggestion.incidentId || suggestionId;
-        const resolution = (suggestion.resolution || "").substring(0, 500).replace(/</g, "&lt;");
+        const resolution = (suggestion.resolution || "").substring(0, 800).replace(/</g, "&lt;").replace(/\n/g, "<br/>");
         const rootCause = (suggestion.rootCause || "N/A").replace(/</g, "&lt;");
+        const customerMessage = editedCustomerEmail ? editedCustomerEmail.replace(/</g, "&lt;").replace(/\n/g, "<br/>") : "";
+        const resolvedAt = suggestion.approvedAt || new Date().toISOString();
+        const resolvedDate = new Date(resolvedAt).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" });
 
-        // 1. Customer resolution notice → CUSTOMER_TEST_EMAIL
+        // 1. Customer resolution notice — Outlook-compatible HTML (table-based layout)
         graphSendMail({
           to: [suggestion.reporterEmail || "customer@example.com"],
           subject: `[VGC ITSM] Your incident ${suggestion.incidentId} has been resolved`,
           isCustomerEmail: true,
-          body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
-            <div style="background:linear-gradient(135deg,#4CAF50,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
-              <h2 style="margin:0;color:#fff;font-size:18px;">✅ Incident Resolved</h2>
-            </div>
-            <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
-              <table style="border-collapse:collapse;width:100%;">
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident</td><td style="padding:8px 12px;">${(suggestion.incidentId || "").replace(/</g, "&lt;")}</td></tr>
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Title</td><td style="padding:8px 12px;">${String(incTitle).replace(/</g, "&lt;")}</td></tr>
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolution</td><td style="padding:8px 12px;">${resolution}</td></tr>
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Root Cause</td><td style="padding:8px 12px;">${rootCause}</td></tr>
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Resolved At</td><td style="padding:8px 12px;">${suggestion.approvedAt || new Date().toISOString()}</td></tr>
-              </table>
-              <p style="color:#666;font-size:13px;margin-top:16px;">If this issue persists, please open a new ticket or reply to this email.</p>
-              <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-              <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
-            </div>
-          </div>`,
+          body: `<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;">
+  <tr><td align="center" style="padding:24px 0;">
+    <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      <!-- Header -->
+      <tr><td style="background:#0078D4;padding:20px 24px;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:18px;font-weight:700;color:#ffffff;">&#9989; Incident Resolved</td>
+            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.8);">VGC Technology</td>
+          </tr>
+        </table>
+      </td></tr>
+      <!-- Body -->
+      <tr><td style="padding:24px;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e8ebef;border-radius:6px;overflow:hidden;">
+          <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Incident ID</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${(suggestion.incidentId || "").replace(/</g, "&lt;")}</td></tr>
+          <tr><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Title</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${String(incTitle).replace(/</g, "&lt;")}</td></tr>
+          <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Root Cause</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${rootCause}</td></tr>
+          <tr><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;border-bottom:1px solid #e8ebef;">Resolved At</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;border-bottom:1px solid #e8ebef;">${resolvedDate}</td></tr>
+          <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;font-weight:600;color:#4a5568;width:130px;">Resolution</td><td style="padding:10px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1a202c;line-height:1.6;">${resolution}</td></tr>
+        </table>
+        ${customerMessage ? `<div style="margin-top:16px;padding:14px;background:#f0f7ff;border-left:3px solid #0078D4;border-radius:0 4px 4px 0;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#2d3748;line-height:1.6;">${customerMessage}</div>` : ""}
+        <p style="font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#718096;margin:20px 0 0;line-height:1.5;">If this issue persists, please reply to this email or open a new support ticket.</p>
+      </td></tr>
+      <!-- Footer -->
+      <tr><td style="background:#f8fafc;border-top:1px solid #e8ebef;padding:14px 24px;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;line-height:1.5;">VGC Technology Pte Ltd &middot; IT Service Management<br/>This is an automated notification from VGC ITSM.</td>
+            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;">Ref: ${(suggestion.incidentId || "").replace(/</g, "&lt;")}</td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>`,
         }).catch(e => console.warn("[AI Resolve Approve] Customer email failed:", e.message));
 
-        // 2. Approver confirmation → internal email
+        // 2. Approver confirmation → internal email (Outlook-compatible)
         graphSendMail({
           to: [approvedBy.includes("@") ? approvedBy : "itsupport@vgctechnology.com"],
           subject: `[VGC AI Assist] Resolution approved: ${suggestion.incidentId}`,
-          body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
-            <div style="background:linear-gradient(135deg,#7C3AED,#3B82F6);padding:16px 20px;border-radius:8px 8px 0 0;">
-              <h2 style="margin:0;color:#fff;font-size:18px;">🤖 AI Resolution Approved</h2>
-            </div>
-            <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
-              <p style="margin:0 0 12px;color:#333;"><strong>Incident:</strong> ${(suggestion.incidentId || "").replace(/</g, "&lt;")}</p>
-              <p style="margin:0 0 12px;color:#333;"><strong>Title:</strong> ${String(incTitle).replace(/</g, "&lt;")}</p>
-              <p style="margin:0 0 12px;color:#333;"><strong>Approved by:</strong> ${String(approvedBy).replace(/</g, "&lt;")}</p>
-              <p style="margin:0 0 12px;color:#333;"><strong>Confidence:</strong> ${suggestion.confidence || "N/A"}%</p>
-              <p style="margin:0 0 12px;color:#333;"><strong>Resolution:</strong> ${resolution}</p>
-              <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-              <p style="color:#888;font-size:11px;">VGC AI Assist — All actions are logged and auditable.<br/>Suggestion ID: ${suggestionId}</p>
-            </div>
-          </div>`,
+          body: `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;">
+  <tr><td align="center" style="padding:24px 0;">
+    <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      <tr><td style="background:linear-gradient(135deg,#7C3AED,#3B82F6);padding:18px 24px;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+          <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:16px;font-weight:700;color:#ffffff;">&#129302; AI Resolution Approved</td>
+          <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:rgba(255,255,255,0.7);">Internal Notification</td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="padding:20px 24px;font-family:'Segoe UI',Arial,sans-serif;">
+        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Incident:</strong> ${(suggestion.incidentId || "").replace(/</g, "&lt;")}</p>
+        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Title:</strong> ${String(incTitle).replace(/</g, "&lt;")}</p>
+        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Approved by:</strong> ${String(approvedBy).replace(/</g, "&lt;")}</p>
+        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Confidence:</strong> ${suggestion.confidence || "N/A"}%</p>
+        <p style="margin:0 0 8px;font-size:12px;color:#333;"><strong>Resolution:</strong></p>
+        <div style="background:#f8fafc;padding:12px;border-radius:6px;border:1px solid #e8ebef;font-size:12px;color:#4a5568;line-height:1.6;margin-bottom:12px;">${resolution}</div>
+        ${editedCustomerEmail ? `<p style="margin:0 0 4px;font-size:11px;color:#7C3AED;font-weight:600;">Engineer edited customer email:</p><div style="background:#f5f3ff;padding:10px;border-radius:4px;border:1px solid #7C3AED22;font-size:11px;color:#4a5568;line-height:1.5;">${customerMessage}</div>` : ""}
+      </td></tr>
+      <tr><td style="background:#f8fafc;border-top:1px solid #e8ebef;padding:12px 24px;font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;">VGC AI Assist — All actions logged &amp; auditable. Suggestion ID: ${suggestionId}</td></tr>
+    </table>
+  </td></tr>
+</table>`,
         }).catch(e => console.warn("[AI Resolve Approve] Approver email failed:", e.message));
 
         console.log(`[AI Resolve Queue] Emails sent for approved suggestion ${suggestionId}`);
