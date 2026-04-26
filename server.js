@@ -1196,6 +1196,58 @@ async function processInboundEmails() {
           </div>`,
         }).catch(e => console.warn(`[Email-to-Ticket] Confirmation email failed for ${incId}:`, e.message));
 
+        // ─── AI Sentiment Analysis on inbound email (fire-and-forget) ───
+        if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
+          try {
+            const sentimentPrompt = `Analyze the sentiment and urgency of this IT support email. Return JSON ONLY (no markdown): { "sentiment": "positive|neutral|frustrated|angry", "urgencyScore": 0-100, "emotionalTone": "brief description", "shouldEscalate": true/false }. Only set shouldEscalate=true if sentiment is "frustrated" or "angry" AND urgencyScore >= 80.`;
+            const sentPayload = {
+              model: getAIModel("nano"),
+              input: [{ role: "system", content: sentimentPrompt }, { role: "user", content: `Subject: ${subject}\n\n${description.substring(0, 1000)}` }],
+              max_output_tokens: 200
+            };
+            const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+            const sentReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (sentRes) => {
+              let d = ""; sentRes.on("data", c => d += c);
+              sentRes.on("end", async () => {
+                try {
+                  const sentResult = JSON.parse(d);
+                  const sentText = extractAIText(sentResult);
+                  const sentData = JSON.parse(sentText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+                  // Update incident with sentiment data
+                  const incRow = await db.getOne("incidents", incId);
+                  if (incRow) {
+                    const inc = JSON.parse(incRow.data);
+                    inc.aiSentiment = sentData.sentiment || "neutral";
+                    inc.aiSentimentScore = sentData.urgencyScore || 0;
+                    inc.aiEmotionalTone = sentData.emotionalTone || "";
+                    // Auto-escalate priority if angry/frustrated with high urgency
+                    if (sentData.shouldEscalate && inc.priority !== "Sev-A") {
+                      const escalationMap = { "Sev-D": "Sev-C", "Sev-C": "Sev-B", "Sev-B": "Sev-A" };
+                      const oldPriority = inc.priority;
+                      inc.priority = escalationMap[inc.priority] || inc.priority;
+                      const slaMap = getSlaMap();
+                      inc.slaTarget = slaMap[inc.priority] || inc.slaTarget;
+                      inc.activityLog = inc.activityLog || [];
+                      inc.activityLog.push({
+                        id: `AL-SENT-${Date.now().toString(36)}`, type: "ai_sentiment",
+                        user: "AI Sentiment Engine", time: new Date().toISOString(),
+                        detail: `Sentiment: ${sentData.sentiment} (urgency: ${sentData.urgencyScore}%). Priority auto-escalated ${oldPriority} → ${inc.priority}. Tone: ${sentData.emotionalTone}`,
+                      });
+                      console.log(`[AI Sentiment] ${incId}: ${sentData.sentiment} → escalated ${oldPriority} → ${inc.priority}`);
+                    }
+                    inc.updatedAt = new Date().toISOString();
+                    await db.upsert("incidents", incId, JSON.stringify(inc));
+                  }
+                } catch (parseErr) { console.warn(`[AI Sentiment] Parse error for ${incId}:`, parseErr.message); }
+              });
+            });
+            sentReq.on("error", e => console.warn(`[AI Sentiment] Request failed for ${incId}:`, e.message));
+            sentReq.setTimeout(15000, () => { sentReq.destroy(); });
+            sentReq.write(JSON.stringify(sentPayload));
+            sentReq.end();
+          } catch (sentErr) { console.warn("[AI Sentiment] Trigger error:", sentErr.message); }
+        }
+
         // Fire AI auto-triage + assignment pipeline (fire-and-forget)
         if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
           try {
@@ -5053,6 +5105,27 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
               wfReq.end();
             } catch (wfErr) { console.warn("[AI Pipeline] Workflow assist trigger error:", wfErr.message); }
           }
+
+          // ─── SLA Guardian: auto-trigger SLA prediction after triage ───
+          try {
+            const slaPredPayload = JSON.stringify({ incidents: [inc], requestedBy: "AI SLA Guardian (post-triage)" });
+            const slaPredReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/sla-predict", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(slaPredPayload) } }, (slaPredRes) => {
+              let d = ""; slaPredRes.on("data", c => d += c);
+              slaPredRes.on("end", () => {
+                try {
+                  const result = JSON.parse(d);
+                  if (result.actions && result.actions.length > 0 && wsServer) {
+                    wsServer.broadcast("sla_guardian", { action: "sla_risk_detected", atRiskCount: result.actions.length, predictions: result.predictions });
+                  }
+                } catch {}
+                console.log(`[SLA Guardian] Post-triage prediction for ${inc.id}: ${d.substring(0, 200)}`);
+              });
+            });
+            slaPredReq.on("error", e => console.warn(`[SLA Guardian] Post-triage prediction failed:`, e.message));
+            slaPredReq.setTimeout(35000, () => { slaPredReq.destroy(); });
+            slaPredReq.write(slaPredPayload);
+            slaPredReq.end();
+          } catch (slaErr) { console.warn("[SLA Guardian] Post-triage trigger error:", slaErr.message); }
         }
       }
 
@@ -8470,6 +8543,51 @@ async function start() {
 
     // Start Workflow Engine
     workflowEngine.start().catch(err => console.error("[WorkflowEngine] Start failed:", err.message));
+
+    // ─── SLA Guardian: Proactive SLA prediction scan (every 15 min) ──
+    const SLA_GUARDIAN_INTERVAL = 15 * 60 * 1000; // 15 minutes
+    let slaGuardianRunning = false;
+    const runSlaGuardian = async () => {
+      if (slaGuardianRunning) return;
+      slaGuardianRunning = true;
+      try {
+        const incRows = await db.getAll("incidents");
+        const openIncidents = incRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+          .filter(i => i && !i._deleted && !["Resolved", "Closed"].includes(i.status));
+        if (openIncidents.length === 0) { slaGuardianRunning = false; return; }
+
+        const payload = JSON.stringify({ incidents: openIncidents, requestedBy: "SLA Guardian Cron" });
+        const predReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/sla-predict", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } }, (predRes) => {
+          let d = ""; predRes.on("data", c => d += c);
+          predRes.on("end", () => {
+            try {
+              const result = JSON.parse(d);
+              const atRiskCount = (result.actions || []).length;
+              if (atRiskCount > 0 && wsServer) {
+                wsServer.broadcast("sla_guardian", { action: "sla_risk_detected", atRiskCount, predictions: result.predictions, source: "scheduled_scan" });
+              }
+              console.log(`[SLA Guardian] Scan complete: ${openIncidents.length} open tickets, ${result.predictions?.length || 0} at risk, ${atRiskCount} new actions`);
+            } catch (parseErr) {
+              console.warn("[SLA Guardian] Parse error:", parseErr.message);
+            }
+            slaGuardianRunning = false;
+          });
+        });
+        predReq.on("error", e => { console.warn("[SLA Guardian] Request error:", e.message); slaGuardianRunning = false; });
+        predReq.setTimeout(60000, () => { predReq.destroy(); slaGuardianRunning = false; });
+        predReq.write(payload);
+        predReq.end();
+      } catch (e) {
+        console.warn("[SLA Guardian] Scan failed:", e.message);
+        slaGuardianRunning = false;
+      }
+    };
+    // Run initial scan after 2 min delay, then every 15 min
+    setTimeout(() => {
+      runSlaGuardian();
+      setInterval(runSlaGuardian, SLA_GUARDIAN_INTERVAL);
+    }, 2 * 60 * 1000);
+    console.log("[SLA Guardian] Proactive SLA prediction scheduled every 15 minutes");
 
     // ─── Scheduled Zendesk Incremental Sync (every 5 min) ───────────
     if (ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN) {
