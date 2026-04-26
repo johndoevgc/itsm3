@@ -1483,6 +1483,29 @@ const server = http.createServer(async (req, res) => {
             }).catch(e => console.warn("[Incident Create] Confirmation email failed:", e.message));
           }
 
+          // ─── Auto-add customer domain to email whitelist ──────────────
+          if (collection === "customers" && body.email) {
+            const custDomain = body.email.split("@")[1]?.toLowerCase();
+            if (custDomain) {
+              try {
+                const wlRows = await db.getAll("email_whitelist");
+                const exists = wlRows.some(r => {
+                  try { const e = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return e.type === "domain" && e.value === custDomain; } catch { return false; }
+                });
+                if (!exists) {
+                  const wlId = `WL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+                  await db.upsert("email_whitelist", wlId, JSON.stringify({
+                    id: wlId, type: "domain", value: custDomain,
+                    label: body.company || body.name || custDomain,
+                    addedBy: "Auto-sync (customer create)", addedAt: new Date().toISOString(),
+                  }));
+                  if (cacheLayer) cacheLayer.invalidatePrefix("email_whitelist");
+                  console.log(`[Email Whitelist] Auto-added domain "${custDomain}" from new customer ${body.name || id}`);
+                }
+              } catch (wlErr) { console.warn("[Email Whitelist] Auto-add failed:", wlErr.message); }
+            }
+          }
+
           return json(res, 200, { ok: true, id });
         }
       }
@@ -1509,6 +1532,29 @@ const server = http.createServer(async (req, res) => {
         if (wsServer) wsServer.broadcast(collection, { action: "update", collection, id: recordId, summary: body.title || body.name || recordId });
         if (workflowEngine) workflowEngine.onEvent("update", collection, body).catch(() => {});
         if (cacheLayer) cacheLayer.invalidatePrefix(collection);
+
+        // ─── Auto-add customer domain to email whitelist on update ──────
+        if (collection === "customers" && body.email) {
+          const custDomain = body.email.split("@")[1]?.toLowerCase();
+          if (custDomain) {
+            try {
+              const wlRows = await db.getAll("email_whitelist");
+              const exists = wlRows.some(r => {
+                try { const e = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return e.type === "domain" && e.value === custDomain; } catch { return false; }
+              });
+              if (!exists) {
+                const wlId = `WL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+                await db.upsert("email_whitelist", wlId, JSON.stringify({
+                  id: wlId, type: "domain", value: custDomain,
+                  label: body.company || body.name || custDomain,
+                  addedBy: "Auto-sync (customer update)", addedAt: new Date().toISOString(),
+                }));
+                if (cacheLayer) cacheLayer.invalidatePrefix("email_whitelist");
+                console.log(`[Email Whitelist] Auto-added domain "${custDomain}" from updated customer ${body.name || recordId}`);
+              }
+            } catch (wlErr) { console.warn("[Email Whitelist] Auto-add failed:", wlErr.message); }
+          }
+        }
 
         // Auto KB Draft: generate KB article when incident is Resolved/Closed
         if (collection === "incidents" && (body.status === "Resolved" || body.status === "Closed")) {
