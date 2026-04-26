@@ -1125,21 +1125,22 @@ const DEFAULT_SLA_POLICY = {
 };
 
 // ─── Dynamic SLA Business Hours Calculator ──────────────────────────
-const getBusinessHoursElapsed = (createdAt) => {
+const getBusinessHoursElapsed = (createdAt, endTime) => {
   if (!createdAt) return 0;
   const start = new Date(createdAt);
-  const now = new Date();
+  const end = endTime ? new Date(endTime) : new Date();
   if (isNaN(start.getTime())) return 0;
+  if (endTime && isNaN(end.getTime())) return 0;
   const BH_START = 9, BH_END = 18; // 9AM-6PM SGT
   let elapsed = 0;
   let cursor = new Date(start);
-  while (cursor < now) {
+  while (cursor < end) {
     const day = cursor.getDay(); // 0=Sun, 6=Sat
     if (day >= 1 && day <= 5) { // Mon-Fri
       const hrs = cursor.getHours() + cursor.getMinutes() / 60;
       if (hrs >= BH_START && hrs < BH_END) {
         const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
-        const chunkEnd = endOfBH < now ? endOfBH : now;
+        const chunkEnd = endOfBH < end ? endOfBH : end;
         elapsed += (chunkEnd - cursor) / 3600000;
         cursor = new Date(chunkEnd);
       } else if (hrs < BH_START) {
@@ -1152,7 +1153,7 @@ const getBusinessHoursElapsed = (createdAt) => {
       const daysToMon = day === 0 ? 1 : 8 - day;
       cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
     }
-    if (cursor >= now) break;
+    if (cursor >= end) break;
   }
   return Math.round(elapsed * 100) / 100;
 };
@@ -1173,8 +1174,11 @@ const computeIncidentSla = (inc) => {
   let hoursElapsed = 0;
   if (inc.createdAt) {
     const d = new Date(inc.createdAt);
-    if (!isNaN(d.getTime())) hoursElapsed = getBusinessHoursElapsed(inc.createdAt);
-    else hoursElapsed = inc.created || 0;
+    if (!isNaN(d.getTime())) {
+      // For resolved/closed incidents, stop the SLA clock at resolvedAt
+      const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? inc.resolvedAt : undefined;
+      hoursElapsed = getBusinessHoursElapsed(inc.createdAt, endTime);
+    } else hoursElapsed = inc.created || 0;
   } else {
     hoursElapsed = inc.created || 0;
   }

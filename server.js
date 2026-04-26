@@ -5360,6 +5360,82 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     }
   }
 
+  // POST /api/ai/sla-remediate — Recalculate SLA for resolved incidents using business hours, stamp results
+  if (pathname === "/api/ai/sla-remediate" && req.method === "POST") {
+    try {
+      const allRows = await db.getAll("incidents");
+      const slaMap = getSlaMap();
+      const now = new Date();
+      let remediated = 0, alreadyDone = 0, skipped = 0;
+      const details = [];
+
+      for (const row of allRows) {
+        try {
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!inc || !inc.id) continue;
+          if (inc.status !== "Resolved" && inc.status !== "Closed") { skipped++; continue; }
+          if (inc.slaRemediated) { alreadyDone++; continue; }
+
+          const target = inc.slaTarget || slaMap[inc.priority] || 9;
+          let elapsed = 0;
+          if (inc.createdAt) {
+            const start = new Date(inc.createdAt);
+            if (!isNaN(start.getTime())) {
+              const endTime = inc.resolvedAt ? new Date(inc.resolvedAt) : now;
+              const BH_START = 9, BH_END = 18;
+              let cursor = new Date(start);
+              while (cursor < endTime) {
+                const day = cursor.getDay();
+                if (day >= 1 && day <= 5) {
+                  const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+                  if (hrs >= BH_START && hrs < BH_END) {
+                    const eob = new Date(cursor); eob.setHours(BH_END, 0, 0, 0);
+                    const chunk = eob < endTime ? eob : endTime;
+                    elapsed += (chunk - cursor) / 3600000;
+                    cursor = new Date(chunk);
+                  } else if (hrs < BH_START) { cursor.setHours(BH_START, 0, 0, 0); }
+                  else { cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0); }
+                } else {
+                  const daysToMon = day === 0 ? 1 : 8 - day;
+                  cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+                }
+                if (cursor >= endTime) break;
+              }
+            }
+          } else {
+            elapsed = inc.created || 0;
+          }
+          elapsed = Math.round(elapsed * 100) / 100;
+          const breached = elapsed > target;
+
+          inc.slaElapsedHours = elapsed;
+          inc.slaStatus = breached ? "Breached" : "Met";
+          inc.slaRemediated = true;
+          inc.slaRemediatedAt = now.toISOString();
+
+          await db.upsert("incidents", inc.id, JSON.stringify(inc));
+          remediated++;
+          details.push({ id: inc.id, priority: inc.priority, elapsed, target, breached, status: inc.slaStatus });
+        } catch {}
+      }
+
+      console.log(`[AI SLA Remediate] Remediated ${remediated}, already done ${alreadyDone}, skipped ${skipped} active`);
+      return json(res, 200, {
+        totalScanned: allRows.length,
+        remediated,
+        alreadyDone,
+        skippedActive: skipped,
+        sample: details.slice(0, 50),
+        summary: {
+          met: details.filter(d => !d.breached).length,
+          breached: details.filter(d => d.breached).length,
+        },
+      });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
   // GET /api/sla/compliance-report — Unified SLA metrics for all modules
   if (pathname === "/api/sla/compliance-report" && req.method === "GET") {
     try {
@@ -5618,10 +5694,39 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       const openInc = allInc.filter(i => !["Resolved", "Closed"].includes(i.status));
       const criticalOpen = openInc.filter(i => i.priority === "Sev-A" || i.priority === "Sev-B");
       const resolvedRecent = allInc.filter(i => (i.status === "Resolved" || i.status === "Closed"));
-      const totalSLABreaches = openInc.filter(i => {
-        const target = i.slaTarget || 9;
-        return (i.created || 0) >= target;
-      }).length;
+
+      // Business-hours SLA breach calculation for briefing
+      const computeBriefingSla = (inc) => {
+        const target = inc.slaTarget || 9;
+        let elapsed = 0;
+        if (inc.createdAt) {
+          const start = new Date(inc.createdAt);
+          if (!isNaN(start.getTime())) {
+            const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? new Date(inc.resolvedAt) : now;
+            const BH_START = 9, BH_END = 18;
+            let cursor = new Date(start);
+            while (cursor < endTime) {
+              const day = cursor.getDay();
+              if (day >= 1 && day <= 5) {
+                const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+                if (hrs >= BH_START && hrs < BH_END) {
+                  const eob = new Date(cursor); eob.setHours(BH_END, 0, 0, 0);
+                  const chunk = eob < endTime ? eob : endTime;
+                  elapsed += (chunk - cursor) / 3600000;
+                  cursor = new Date(chunk);
+                } else if (hrs < BH_START) { cursor.setHours(BH_START, 0, 0, 0); }
+                else { cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0); }
+              } else {
+                const daysToMon = day === 0 ? 1 : 8 - day;
+                cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+              }
+              if (cursor >= endTime) break;
+            }
+          } else { elapsed = inc.created || 0; }
+        } else { elapsed = inc.created || 0; }
+        return elapsed > target;
+      };
+      const totalSLABreaches = openInc.filter(i => computeBriefingSla(i)).length;
 
       const dataSummary = `ITSM Overview (${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}):\n- Total Incidents: ${allInc.length}\n- Open: ${openInc.length} (${criticalOpen.length} critical/high)\n- Resolved: ${resolvedRecent.length}\n- SLA Breaches: ${totalSLABreaches}\n- Open Requests: ${allReqs.filter(r => r.status !== "Completed" && r.status !== "Closed").length}\n- Scheduled Changes: ${allChanges.filter(c => c.status === "Scheduled" || c.status === "Approved").length}\n- AI Actions Pending: ${pendingActions}\n- AI Auto-Applied: ${autoApplied}\n\nCritical Items:\n${criticalOpen.map(i => `- ${i.id}: "${i.title}" [${i.priority}] assigned to ${i.assignee || "Unassigned"}, SLA ${Math.round((i.created / (i.slaTarget || 9)) * 100)}%`).join("\n") || "None"}`;
 
