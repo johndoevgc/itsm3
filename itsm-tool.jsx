@@ -2523,7 +2523,7 @@ export default function ITSMApp() {
 
   // ─── Weather Disaster Alert System (one-time per session) ─────────────
   useEffect(() => {
-    if (!isLoggedIn || disasterAlertDismissedRef.current()) return;
+    if (!isLoggedIn || disasterAlertDismissedRef.current) return;
     // Simulated regional disaster monitoring — cycles through ASEAN/Singapore threat scenarios
     const disasterScenarios = [
       { type: "Thunderstorm", icon: "⛈️", severity: "High", region: "Singapore & Johor Bahru", summary: "Severe thunderstorm warning issued by MSS (Meteorological Service Singapore). Heavy rainfall of 70-100mm/hr expected with lightning activity, gusty winds up to 80km/h, and potential flash flooding in low-lying areas.", aiAdvice: "Stay indoors and away from windows. Avoid open areas and tall structures. Unplug sensitive electronics. If driving, pull over safely. Monitor NEA weather updates. Keep emergency supplies ready.", color: "#FF6B6B", sources: "MSS weather.gov.sg · NEA nea.gov.sg · WMO severe weather bulletin" },
