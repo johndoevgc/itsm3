@@ -1072,9 +1072,10 @@ const VALID_COLLECTIONS = new Set([
   "cost_allocations",
   "cost_rates",
   "compliance_evidence",
-  "teams_webhooks",
-  "cmdb_discovery",
-  "status_subscribers",
+  "saved_reports",
+  "report_schedules",
+  "anomaly_alerts",
+  "benchmarks",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -11834,6 +11835,262 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const windows = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
       const activeFreeze = windows.find(w => checkDate >= new Date(w.startDate).getTime() && checkDate <= new Date(w.endDate).getTime());
       return json(res, 200, { date: dateStr, frozen: !!activeFreeze, freezeWindow: activeFreeze || null });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ─── PHASE 4: Advanced Analytics & Reporting ─────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── Step 31: Custom Report Builder ───────────────────────────────────
+  // POST /api/reports/build — build and run a custom report
+  if (pathname === "/api/reports/build" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.dataSource) return json(res, 400, { error: "dataSource required" });
+    try {
+      const validSources = ["incidents", "changes", "assets", "requests", "problems", "worklogs", "services", "kb", "users"];
+      if (!validSources.includes(body.dataSource)) return json(res, 400, { error: `Invalid dataSource. Must be: ${validSources.join(", ")}` });
+      const rows = await db.getAll(body.dataSource);
+      let data = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      if (body.filters && Array.isArray(body.filters)) {
+        body.filters.forEach(f => {
+          if (f.field && f.value !== undefined) {
+            if (f.operator === "equals") data = data.filter(d => d[f.field] === f.value);
+            else if (f.operator === "contains") data = data.filter(d => (d[f.field] || "").toString().toLowerCase().includes(f.value.toString().toLowerCase()));
+            else if (f.operator === "gt") data = data.filter(d => d[f.field] > f.value);
+            else if (f.operator === "lt") data = data.filter(d => d[f.field] < f.value);
+            else data = data.filter(d => d[f.field] === f.value);
+          }
+        });
+      }
+      if (body.groupBy) {
+        const groups = {};
+        data.forEach(d => { const key = d[body.groupBy] || "Unknown"; if (!groups[key]) groups[key] = []; groups[key].push(d); });
+        const grouped = Object.entries(groups).map(([key, items]) => ({ group: key, count: items.length, items: body.includeItems ? items : undefined }));
+        return json(res, 200, { dataSource: body.dataSource, groupBy: body.groupBy, groups: grouped, totalRecords: data.length });
+      }
+      if (body.columns && Array.isArray(body.columns)) {
+        data = data.map(d => { const row = {}; body.columns.forEach(c => { row[c] = d[c]; }); return row; });
+      }
+      return json(res, 200, { dataSource: body.dataSource, records: data.slice(0, body.limit || 500), totalRecords: data.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/reports/save — save a report definition
+  if (pathname === "/api/reports/save" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.name || !body.dataSource) return json(res, 400, { error: "name and dataSource required" });
+    const id = body.id || `RPT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const report = { id, name: body.name, dataSource: body.dataSource, filters: body.filters || [], groupBy: body.groupBy || null, columns: body.columns || [], chartType: body.chartType || "table", schedule: body.schedule || null, createdAt: body.createdAt || new Date().toISOString(), createdBy: auth.name || "System", updatedAt: new Date().toISOString() };
+    await db.upsert("saved_reports", id, report);
+    return json(res, 201, report);
+  }
+  // GET /api/reports/saved — list saved reports
+  if (pathname === "/api/reports/saved" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("saved_reports");
+      return json(res, 200, rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data));
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 32: AI Anomaly Detection ────────────────────────────────────
+  if (pathname === "/api/analytics/anomalies" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const now = Date.now();
+      const day = 86400000;
+      const anomalies = [];
+      // Ticket volume spike detection
+      const last7 = incidents.filter(i => new Date(i.createdAt || 0).getTime() > now - 7 * day).length;
+      const prev7 = incidents.filter(i => { const t = new Date(i.createdAt || 0).getTime(); return t > now - 14 * day && t <= now - 7 * day; }).length;
+      if (prev7 > 0 && last7 > prev7 * 1.5) anomalies.push({ type: "volume_spike", severity: "high", message: `Ticket volume up ${Math.round((last7/prev7 - 1)*100)}% (${last7} vs ${prev7} previous week)`, detectedAt: new Date().toISOString() });
+      // SLA breach cluster
+      const recentBreaches = incidents.filter(i => new Date(i.createdAt || 0).getTime() > now - 7 * day && (i.slaStatus === "breached" || i.slaStatus === "exceeded"));
+      if (recentBreaches.length >= 5) anomalies.push({ type: "sla_breach_cluster", severity: "high", message: `${recentBreaches.length} SLA breaches in last 7 days`, detectedAt: new Date().toISOString(), ticketIds: recentBreaches.slice(0, 10).map(i => i.id) });
+      // Category concentration
+      const catCounts = {};
+      incidents.filter(i => new Date(i.createdAt || 0).getTime() > now - 7 * day).forEach(i => { const c = i.category || "Unknown"; catCounts[c] = (catCounts[c] || 0) + 1; });
+      const topCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0];
+      if (topCat && last7 > 5 && topCat[1] / last7 > 0.5) anomalies.push({ type: "category_concentration", severity: "medium", message: `${topCat[0]} accounts for ${Math.round(topCat[1]/last7*100)}% of recent tickets`, detectedAt: new Date().toISOString() });
+      return json(res, 200, { anomalies, analyzedTickets: incidents.length, period: "7d" });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 33: Executive Dashboard API ─────────────────────────────────
+  if (pathname === "/api/analytics/executive-summary" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const svcRows = await db.getAll("services");
+      const services = svcRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const chgRows = await db.getAll("changes");
+      const changes = chgRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const total = incidents.length;
+      const open = incidents.filter(i => !["Resolved", "Closed"].includes(i.status)).length;
+      const resolved = incidents.filter(i => ["Resolved", "Closed"].includes(i.status));
+      const slaMet = resolved.filter(i => i.slaStatus === "met" || i.slaStatus === "within").length;
+      const slaRate = resolved.length > 0 ? Math.round(slaMet / resolved.length * 100) : 100;
+      const csatScores = incidents.filter(i => i.csatScore).map(i => i.csatScore);
+      const avgCsat = csatScores.length > 0 ? Math.round(csatScores.reduce((s, c) => s + c, 0) / csatScores.length * 10) / 10 : 0;
+      const p1Open = incidents.filter(i => i.priority === "P1" && !["Resolved", "Closed"].includes(i.status)).length;
+      const operationalServices = services.filter(s => s.status === "Operational").length;
+      const healthScore = Math.round((slaRate * 0.4) + ((operationalServices / Math.max(services.length, 1)) * 100 * 0.3) + (Math.min(avgCsat / 5, 1) * 100 * 0.3));
+      return json(res, 200, {
+        healthScore, totalTickets: total, openTickets: open, slaComplianceRate: slaRate, avgCsat,
+        p1OpenCount: p1Open, serviceHealth: { total: services.length, operational: operationalServices },
+        changeSuccessRate: changes.length > 0 ? Math.round(changes.filter(c => c.status === "Completed" || c.status === "Closed").length / changes.length * 100) : 100,
+        riskHeatmap: { high: incidents.filter(i => i.priority === "P1").length, medium: incidents.filter(i => i.priority === "P2").length, low: incidents.filter(i => i.priority === "P3" || i.priority === "P4").length },
+        generatedAt: new Date().toISOString()
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 34: Trend Analysis & Forecasting ────────────────────────────
+  if (pathname === "/api/analytics/trend-forecast" && req.method === "GET") {
+    const metric = urlObj.searchParams.get("metric") || "tickets";
+    const days = parseInt(urlObj.searchParams.get("days") || "30", 10);
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const now = Date.now();
+      const day = 86400000;
+      const dailyData = [];
+      for (let d = days - 1; d >= 0; d--) {
+        const start = now - (d + 1) * day;
+        const end = now - d * day;
+        const dayIncs = incidents.filter(i => { const t = new Date(i.createdAt || 0).getTime(); return t >= start && t < end; });
+        const resolved = dayIncs.filter(i => ["Resolved", "Closed"].includes(i.status));
+        dailyData.push({ date: new Date(end).toISOString().split("T")[0], created: dayIncs.length, resolved: resolved.length });
+      }
+      const avgDaily = dailyData.reduce((s, d) => s + d.created, 0) / Math.max(days, 1);
+      const recentAvg = dailyData.slice(-7).reduce((s, d) => s + d.created, 0) / 7;
+      const trend = recentAvg > avgDaily * 1.1 ? "increasing" : recentAvg < avgDaily * 0.9 ? "decreasing" : "stable";
+      return json(res, 200, { metric, days, dailyData, averageDaily: Math.round(avgDaily * 10) / 10, trend, forecast7d: Math.round(recentAvg * 7) });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 35: SLA Analytics Deep Dive ─────────────────────────────────
+  if (pathname === "/api/analytics/sla-deep-dive" && req.method === "GET") {
+    const groupBy = urlObj.searchParams.get("groupBy") || "category";
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const groups = {};
+      incidents.forEach(i => {
+        const key = i[groupBy] || "Unknown";
+        if (!groups[key]) groups[key] = { group: key, total: 0, met: 0, breached: 0, avgResolutionMins: 0, resolutionTimes: [] };
+        groups[key].total++;
+        if (i.slaStatus === "met" || i.slaStatus === "within") groups[key].met++;
+        if (i.slaStatus === "breached" || i.slaStatus === "exceeded") groups[key].breached++;
+        if (i.resolvedAt && i.createdAt) {
+          const mins = (new Date(i.resolvedAt) - new Date(i.createdAt)) / 60000;
+          if (mins > 0) groups[key].resolutionTimes.push(mins);
+        }
+      });
+      const results = Object.values(groups).map(g => ({
+        group: g.group, total: g.total, met: g.met, breached: g.breached,
+        complianceRate: g.total > 0 ? Math.round(g.met / g.total * 100) : 100,
+        avgResolutionMins: g.resolutionTimes.length > 0 ? Math.round(g.resolutionTimes.reduce((s, t) => s + t, 0) / g.resolutionTimes.length) : 0
+      })).sort((a, b) => a.complianceRate - b.complianceRate);
+      return json(res, 200, { groupBy, groups: results });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 36: AI Model Performance Dashboard ─────────────────────────
+  if (pathname === "/api/analytics/ai-performance" && req.method === "GET") {
+    try {
+      const auditRows = await db.getAllAudit(10000);
+      const aiAudits = auditRows.filter(a => (a.action || "").includes("ai") || (a.collection || "").includes("ai") || (a.detail || "").toLowerCase().includes("ai triage") || (a.detail || "").toLowerCase().includes("openai"));
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const aiTriaged = incidents.filter(i => i.aiTriaged || i.aiConfidence);
+      const confidences = aiTriaged.filter(i => i.aiConfidence).map(i => parseFloat(i.aiConfidence));
+      const avgConfidence = confidences.length > 0 ? Math.round(confidences.reduce((s, c) => s + c, 0) / confidences.length * 100) / 100 : 0;
+      const highConf = confidences.filter(c => c >= 0.8).length;
+      const lowConf = confidences.filter(c => c < 0.5).length;
+      return json(res, 200, {
+        totalAiCalls: aiAudits.length, totalAiTriaged: aiTriaged.length,
+        avgConfidence, highConfidenceRate: confidences.length > 0 ? Math.round(highConf / confidences.length * 100) : 0,
+        lowConfidenceRate: confidences.length > 0 ? Math.round(lowConf / confidences.length * 100) : 0,
+        confidenceDistribution: { high: highConf, medium: confidences.filter(c => c >= 0.5 && c < 0.8).length, low: lowConf },
+        generatedAt: new Date().toISOString()
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 37: Audit Trail Analytics ───────────────────────────────────
+  if (pathname === "/api/analytics/audit-trail" && req.method === "GET") {
+    const user = urlObj.searchParams.get("user");
+    const collection = urlObj.searchParams.get("collection");
+    const action = urlObj.searchParams.get("action");
+    const limit = parseInt(urlObj.searchParams.get("limit") || "200", 10);
+    try {
+      let audits = await db.getAllAudit(Math.min(limit, 5000));
+      if (user) audits = audits.filter(a => (a.user || "").toLowerCase().includes(user.toLowerCase()));
+      if (collection) audits = audits.filter(a => a.collection === collection);
+      if (action) audits = audits.filter(a => a.action === action);
+      const byUser = {};
+      const byCollection = {};
+      const byAction = {};
+      audits.forEach(a => {
+        byUser[a.user || "system"] = (byUser[a.user || "system"] || 0) + 1;
+        byCollection[a.collection || "unknown"] = (byCollection[a.collection || "unknown"] || 0) + 1;
+        byAction[a.action || "unknown"] = (byAction[a.action || "unknown"] || 0) + 1;
+      });
+      return json(res, 200, {
+        entries: audits.slice(0, limit).map(a => ({ timestamp: a.timestamp || a.created_at, collection: a.collection, action: a.action, user: a.user, recordId: a.record_id, detail: (a.detail || "").substring(0, 300) })),
+        total: audits.length, summary: { byUser, byCollection, byAction }
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 38: Real-Time Operations Dashboard API ──────────────────────
+  if (pathname === "/api/analytics/realtime" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const now = Date.now();
+      const activeTickets = incidents.filter(i => !["Resolved", "Closed"].includes(i.status));
+      const last1h = incidents.filter(i => new Date(i.createdAt || 0).getTime() > now - 3600000);
+      const activeAgents = [...new Set(activeTickets.map(i => i.assignedTo).filter(Boolean))];
+      const slaCounting = activeTickets.filter(i => i.slaDeadline).map(i => ({
+        id: i.id, title: i.title, priority: i.priority,
+        minutesRemaining: Math.round((new Date(i.slaDeadline).getTime() - now) / 60000),
+        breached: new Date(i.slaDeadline).getTime() < now
+      })).sort((a, b) => a.minutesRemaining - b.minutesRemaining);
+      return json(res, 200, {
+        activeTickets: activeTickets.length, ticketsLast1h: last1h.length,
+        activeAgents: activeAgents.length, agentList: activeAgents.slice(0, 20),
+        slaCountdowns: slaCounting.slice(0, 20),
+        byPriority: { P1: activeTickets.filter(i => i.priority === "P1").length, P2: activeTickets.filter(i => i.priority === "P2").length, P3: activeTickets.filter(i => i.priority === "P3").length, P4: activeTickets.filter(i => i.priority === "P4").length },
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 39: Benchmarking Dashboard ──────────────────────────────────
+  if (pathname === "/api/analytics/benchmarks" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const resolved = incidents.filter(i => ["Resolved", "Closed"].includes(i.status));
+      const resolutionTimes = resolved.filter(i => i.resolvedAt && i.createdAt).map(i => (new Date(i.resolvedAt) - new Date(i.createdAt)) / 60000);
+      const mttr = resolutionTimes.length > 0 ? Math.round(resolutionTimes.reduce((s, t) => s + t, 0) / resolutionTimes.length) : 0;
+      const slaMet = resolved.filter(i => i.slaStatus === "met" || i.slaStatus === "within").length;
+      const slaRate = resolved.length > 0 ? Math.round(slaMet / resolved.length * 100) : 100;
+      const csatScores = incidents.filter(i => i.csatScore).map(i => i.csatScore);
+      const avgCsat = csatScores.length > 0 ? Math.round(csatScores.reduce((s, c) => s + c, 0) / csatScores.length * 10) / 10 : 0;
+      const users = await db.getAll("users");
+      const agentCount = Math.max(users.length, 1);
+      const industry = { mttrMinutes: 480, slaComplianceRate: 85, avgCsat: 3.8, ticketsPerAgent: 25 };
+      return json(res, 200, {
+        yours: { mttrMinutes: mttr, slaComplianceRate: slaRate, avgCsat, ticketsPerAgent: Math.round(incidents.length / agentCount), firstCallResolution: resolved.length > 0 ? Math.round(resolved.filter(i => !i.reopened).length / resolved.length * 100) : 100 },
+        industry, comparison: {
+          mttr: mttr < industry.mttrMinutes ? "better" : mttr > industry.mttrMinutes * 1.2 ? "worse" : "on_par",
+          sla: slaRate > industry.slaComplianceRate ? "better" : slaRate < industry.slaComplianceRate * 0.9 ? "worse" : "on_par",
+          csat: avgCsat > industry.avgCsat ? "better" : avgCsat < industry.avgCsat * 0.9 ? "worse" : "on_par"
+        }, generatedAt: new Date().toISOString()
+      });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 

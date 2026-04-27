@@ -795,6 +795,92 @@ async function main() {
   const freezeCheckSafe = await getJson("/api/changes/freeze-check?date=2026-03-15");
   assert("Freeze check safe date returns 200", freezeCheckSafe.status === 200, `Status: ${freezeCheckSafe.status}`);
 
+  // ═══ Phase 4: Advanced Analytics & Reporting ═══
+
+  // Step 31: Custom Report Builder
+  const reportBuild = await postJson("/api/reports/build", { dataSource: "incidents" });
+  assert("Report build returns 200", reportBuild.status === 200, `Status: ${reportBuild.status}`);
+  assert("Report build has records", Array.isArray(reportBuild.json.records), `Got: ${typeof reportBuild.json.records}`);
+  const reportBuildGroup = await postJson("/api/reports/build", { dataSource: "incidents", groupBy: "status" });
+  assert("Report build grouped returns 200", reportBuildGroup.status === 200, `Status: ${reportBuildGroup.status}`);
+  assert("Report build grouped has groups", Array.isArray(reportBuildGroup.json.groups), `Got: ${typeof reportBuildGroup.json.groups}`);
+  const reportBuildBad = await postJson("/api/reports/build", { dataSource: "invalid_collection" });
+  assert("Report build invalid source returns 400", reportBuildBad.status === 400, `Status: ${reportBuildBad.status}`);
+  const reportBuildFilter = await postJson("/api/reports/build", { dataSource: "incidents", filters: [{ field: "status", operator: "equals", value: "Open" }] });
+  assert("Report build with filter returns 200", reportBuildFilter.status === 200, `Status: ${reportBuildFilter.status}`);
+  const reportSave = await postJson("/api/reports/save", { name: "E2E Test Report", dataSource: "incidents", groupBy: "priority" });
+  assert("Report save returns 201", reportSave.status === 201, `Status: ${reportSave.status}`);
+  assert("Saved report has id", !!reportSave.json.id, `Got: ${reportSave.json.id}`);
+  const savedReports = await getJson("/api/reports/saved");
+  assert("Saved reports returns 200", savedReports.status === 200, `Status: ${savedReports.status}`);
+  assert("Saved reports is array", Array.isArray(savedReports.json), `Got: ${typeof savedReports.json}`);
+
+  // Step 32: AI Anomaly Detection
+  const anomalies = await getJson("/api/analytics/anomalies");
+  assert("Anomaly detection returns 200", anomalies.status === 200, `Status: ${anomalies.status}`);
+  assert("Anomalies has anomalies array", Array.isArray(anomalies.json.anomalies), `Got: ${typeof anomalies.json.anomalies}`);
+  assert("Anomalies has analyzedTickets", typeof anomalies.json.analyzedTickets === "number", `Got: ${typeof anomalies.json.analyzedTickets}`);
+
+  // Step 33: Executive Dashboard
+  const execDash = await getJson("/api/analytics/executive-summary");
+  assert("Executive dashboard returns 200", execDash.status === 200, `Status: ${execDash.status}`);
+  assert("Executive dashboard has healthScore", typeof execDash.json.healthScore === "number", `Got: ${typeof execDash.json.healthScore}`);
+  assert("Executive dashboard has slaComplianceRate", typeof execDash.json.slaComplianceRate === "number", `Got: ${typeof execDash.json.slaComplianceRate}`);
+  assert("Executive dashboard has riskHeatmap", !!execDash.json.riskHeatmap, `Got: ${JSON.stringify(execDash.json.riskHeatmap)}`);
+
+  // Step 34: Trend Analysis & Forecasting
+  const trends = await getJson("/api/analytics/trend-forecast?metric=tickets&days=30");
+  assert("Trends returns 200", trends.status === 200, `Status: ${trends.status}`);
+  assert("Trends has dailyData", Array.isArray(trends.json.dailyData), `Got: ${typeof trends.json.dailyData}`);
+  assert("Trends has trend field", ["increasing", "decreasing", "stable"].includes(trends.json.trend), `Got: ${trends.json.trend}`);
+  assert("Trends has forecast7d", typeof trends.json.forecast7d === "number", `Got: ${typeof trends.json.forecast7d}`);
+
+  // Step 35: SLA Analytics Deep Dive
+  const slaDeep = await getJson("/api/analytics/sla-deep-dive?groupBy=category");
+  assert("SLA deep dive returns 200", slaDeep.status === 200, `Status: ${slaDeep.status}`);
+  assert("SLA deep dive has groups", Array.isArray(slaDeep.json.groups), `Got: ${typeof slaDeep.json.groups}`);
+  const slaDeepTeam = await getJson("/api/analytics/sla-deep-dive?groupBy=assignedTo");
+  assert("SLA deep dive by team returns 200", slaDeepTeam.status === 200, `Status: ${slaDeepTeam.status}`);
+
+  // Step 36: AI Model Performance Dashboard
+  const aiPerf = await getJson("/api/analytics/ai-performance");
+  assert("AI performance returns 200", aiPerf.status === 200, `Status: ${aiPerf.status}`);
+  assert("AI performance has totalAiCalls", typeof aiPerf.json.totalAiCalls === "number", `Got: ${typeof aiPerf.json.totalAiCalls}`);
+  assert("AI performance has confidenceDistribution", !!aiPerf.json.confidenceDistribution, `Got: ${JSON.stringify(aiPerf.json.confidenceDistribution)}`);
+
+  // Step 37: Audit Trail Analytics
+  const auditAnalytics = await getJson("/api/analytics/audit-trail?limit=50");
+  assert("Audit analytics returns 200", auditAnalytics.status === 200, `Status: ${auditAnalytics.status}`);
+  assert("Audit analytics has entries", Array.isArray(auditAnalytics.json.entries), `Got: ${typeof auditAnalytics.json.entries}`);
+  assert("Audit analytics has summary", !!auditAnalytics.json.summary, `Got: ${typeof auditAnalytics.json.summary}`);
+  assert("Audit analytics summary has byAction", !!auditAnalytics.json.summary.byAction, `Got: ${typeof auditAnalytics.json.summary.byAction}`);
+
+  // Step 38: Real-Time Operations Dashboard
+  const realtime = await getJson("/api/analytics/realtime");
+  assert("Realtime ops returns 200", realtime.status === 200, `Status: ${realtime.status}`);
+  assert("Realtime has activeTickets", typeof realtime.json.activeTickets === "number", `Got: ${typeof realtime.json.activeTickets}`);
+  assert("Realtime has byPriority", !!realtime.json.byPriority, `Got: ${JSON.stringify(realtime.json.byPriority)}`);
+  assert("Realtime has slaCountdowns", Array.isArray(realtime.json.slaCountdowns), `Got: ${typeof realtime.json.slaCountdowns}`);
+
+  // Step 39: Benchmarking Dashboard
+  const benchmarks = await getJson("/api/analytics/benchmarks");
+  assert("Benchmarks returns 200", benchmarks.status === 200, `Status: ${benchmarks.status}`);
+  assert("Benchmarks has yours", !!benchmarks.json.yours, `Got: ${typeof benchmarks.json.yours}`);
+  assert("Benchmarks has industry", !!benchmarks.json.industry, `Got: ${typeof benchmarks.json.industry}`);
+  assert("Benchmarks has comparison", !!benchmarks.json.comparison, `Got: ${typeof benchmarks.json.comparison}`);
+  assert("Benchmarks comparison has mttr", ["better", "worse", "on_par"].includes(benchmarks.json.comparison.mttr), `Got: ${benchmarks.json.comparison.mttr}`);
+
+  // Step 40: Scheduled Report Delivery (uses existing schedule API)
+  const reportSched = await postJson("/api/reports/schedule", { name: "E2E Weekly Report", type: "incidents", frequency: "weekly", recipients: ["test@example.com"] });
+  assert("Report schedule create returns 200", reportSched.status === 200, `Status: ${reportSched.status}`);
+  assert("Report schedule has schedule obj", !!reportSched.json.schedule, `Got: ${JSON.stringify(reportSched.json)}`);
+  assert("Report schedule has frequency", reportSched.json.schedule && reportSched.json.schedule.frequency === "weekly", `Got: ${reportSched.json.schedule && reportSched.json.schedule.frequency}`);
+  const schedBad = await postJson("/api/reports/schedule", { frequency: "hourly" });
+  assert("Report schedule missing name returns 400", schedBad.status === 400, `Status: ${schedBad.status}`);
+  const rptSchedList = await getJson("/api/reports/schedules");
+  assert("Report schedules list returns 200", rptSchedList.status === 200, `Status: ${rptSchedList.status}`);
+  assert("Report schedules has data", !!rptSchedList.json.data, `Got: ${typeof rptSchedList.json.data}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));
