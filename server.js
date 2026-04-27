@@ -88,6 +88,20 @@ function getAIModel(tier) { return AI_MODELS[tier] || AI_MODELS.primary; }
 // Centralized AI call helper with automatic model fallback
 async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens = 1500, timeout = 30000 } = {}) {
   if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) throw new Error("Azure OpenAI not configured");
+  // Budget enforcement: check monthly spend
+  try {
+    const now = new Date();
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+    const row = await db.getOne("ai_usage", `usage_${monthKey}`);
+    if (row) {
+      const usage = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      if (usage.estimatedCostUSD >= AI_MONTHLY_BUDGET_USD) {
+        if (tier !== "tertiary") { tier = "tertiary"; console.warn(`[AI Budget] Monthly budget $${AI_MONTHLY_BUDGET_USD} exceeded ($${usage.estimatedCostUSD}), downgrading to nano`); }
+      } else if (usage.estimatedCostUSD >= AI_MONTHLY_BUDGET_USD * 0.8 && tier === "primary") {
+        tier = "secondary"; console.warn(`[AI Budget] 80% budget used, downgrading primary to secondary`);
+      }
+    }
+  } catch {}
   const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
   let currentTier = tier;
   let lastError = null;
@@ -112,7 +126,27 @@ async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens 
         req.end();
       });
       const text = extractAIText(result);
-      return { text, model, tier: currentTier, fallback: currentTier !== tier };
+      // Track AI usage
+      try {
+        const now = new Date();
+        const monthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+        const usageId = `usage_${monthKey}`;
+        let usage = { month: monthKey, totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, estimatedCostUSD: 0, byModel: {}, byDay: {} };
+        try { const row = await db.getOne("ai_usage", usageId); if (row) usage = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch {}
+        const inTok = result.usage?.input_tokens || result.usage?.prompt_tokens || 0;
+        const outTok = result.usage?.output_tokens || result.usage?.completion_tokens || 0;
+        const costPer1k = model.includes("nano") ? 0.0001 : model.includes("mini") ? 0.0004 : 0.003;
+        const cost = ((inTok + outTok) / 1000) * costPer1k;
+        usage.totalCalls++;
+        usage.totalInputTokens += inTok;
+        usage.totalOutputTokens += outTok;
+        usage.estimatedCostUSD = Math.round((usage.estimatedCostUSD + cost) * 10000) / 10000;
+        const dayKey = now.toISOString().slice(0,10);
+        usage.byDay[dayKey] = (usage.byDay[dayKey] || 0) + 1;
+        usage.byModel[model] = (usage.byModel[model] || 0) + 1;
+        await db.upsert("ai_usage", usageId, JSON.stringify(usage));
+      } catch (e) { console.warn("[AI Usage] tracking failed:", e.message); }
+      return { text, model, tier: currentTier, fallback: currentTier !== tier, inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0 };
     } catch (err) {
       lastError = err;
       console.error(`[AI] ${model} failed: ${err.message}, trying fallback...`);
@@ -150,6 +184,10 @@ const FEATURE_PDPA = process.env.FEATURE_PDPA === "true";
 const FEATURE_PORTAL = process.env.FEATURE_PORTAL === "true";
 const FEATURE_BILLING = process.env.FEATURE_BILLING === "true";
 const FEATURE_SETUP_WIZARD = process.env.FEATURE_SETUP_WIZARD !== "false"; // default ON
+
+// ─── AI Cost Control ────────────────────────────────────────────────────
+const AI_MONTHLY_BUDGET_USD = parseFloat(process.env.AI_MONTHLY_BUDGET_USD || "10");
+const AI_AUTONOMY_LEVEL = process.env.AI_AUTONOMY_LEVEL || "suggest"; // suggest | auto-approve | full-auto
 
 // ─── Email Redirect (safety net) ────────────────────────────────────────
 // When true, ALL outbound emails are redirected to EMAIL_REDIRECT_TARGET
@@ -1091,6 +1129,8 @@ const VALID_COLLECTIONS = new Set([
   "billing_entries",
   "sg_holidays",
   "portal_sessions",
+  "ai_usage",
+  "ai_audit_log",
   "releases",
   "cost_allocations",
   "cost_rates",
@@ -5782,6 +5822,18 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       // Save triage action
       await db.upsert("ai_actions", triageRecord.id, JSON.stringify(triageRecord));
 
+      // AI Governance: audit log entry
+      try {
+        const auditId = `AUDIT-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,5)}`;
+        await db.upsert("ai_audit_log", auditId, JSON.stringify({
+          id: auditId, type: "auto_triage", incidentId: ticket.id,
+          input: { title: ticket.title, description: (ticket.description || "").slice(0, 200) },
+          output: { category: triage.category, priority: triage.priority, assignee: triage.assignee, confidence },
+          model: aiResult.model, autoApplied: autoApply, autonomyLevel: AI_AUTONOMY_LEVEL,
+          timestamp: now
+        }));
+      } catch (e) { console.warn("[AI Audit] triage log failed:", e.message); }
+
       // Save triage history
       await db.upsert("ai_triage_history", triageRecord.id, JSON.stringify({
         id: triageRecord.id, ticketId: ticket.id, triage: triageRecord.triage,
@@ -8422,7 +8474,10 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
         portal: FEATURE_PORTAL,
         billing: FEATURE_BILLING,
         setupWizard: FEATURE_SETUP_WIZARD,
+        aiGovernance: true,
+        automationRules: true,
       },
+      aiGovernance: { autonomyLevel: AI_AUTONOMY_LEVEL, monthlyBudgetUSD: AI_MONTHLY_BUDGET_USD },
     });
   }
 
@@ -8701,6 +8756,214 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       .filter(a => a && a.status === "Published")
       .map(a => ({ id: a.id, title: a.title, category: a.category, content: a.content }));
     return json(res, 200, articles);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PHASE 4: AI Enhancement — Cost Control, Governance, Automation Rules
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── AI Usage / Cost Control ──────────────────────────────────────────
+  // GET /api/ai/usage — current month AI usage stats
+  if (pathname === "/api/ai/usage" && req.method === "GET") {
+    const month = url.searchParams.get("month");
+    const now = new Date();
+    const monthKey = month || `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+    try {
+      const row = await db.getOne("ai_usage", `usage_${monthKey}`);
+      const usage = row ? (typeof row.data === "string" ? JSON.parse(row.data) : row.data) : { month: monthKey, totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, estimatedCostUSD: 0, byModel: {}, byDay: {} };
+      return json(res, 200, { ...usage, budgetUSD: AI_MONTHLY_BUDGET_USD, budgetUsedPercent: Math.round((usage.estimatedCostUSD / AI_MONTHLY_BUDGET_USD) * 100), budgetExceeded: usage.estimatedCostUSD >= AI_MONTHLY_BUDGET_USD });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/ai/usage/history — last N months
+  if (pathname === "/api/ai/usage/history" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_usage");
+      const history = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean).sort((a, b) => b.month.localeCompare(a.month));
+      return json(res, 200, history);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── AI Audit Log / Governance ────────────────────────────────────────
+  // GET /api/ai/audit — AI decision audit log
+  if (pathname === "/api/ai/audit" && req.method === "GET") {
+    try {
+      const limit = parseInt(url.searchParams.get("limit") || "100");
+      const rows = await db.getAll("ai_audit_log");
+      const logs = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+        .filter(Boolean).sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || "")).slice(0, limit);
+      return json(res, 200, logs);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/ai/audit/:id/override — admin overrides AI decision
+  if (/^\/api\/ai\/audit\/([^/]+)\/override$/.test(pathname) && req.method === "POST") {
+    const auditId = pathname.split("/")[4];
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("ai_audit_log", auditId);
+      if (!row) return json(res, 404, { error: "Audit entry not found" });
+      const entry = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      entry.overridden = true;
+      entry.overriddenBy = auth.name || "admin";
+      entry.overrideReason = String(body.reason || "").slice(0, 500);
+      entry.overrideAt = new Date().toISOString();
+      await db.upsert("ai_audit_log", auditId, JSON.stringify(entry));
+      return json(res, 200, entry);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/ai/governance — AI governance settings
+  if (pathname === "/api/ai/governance" && req.method === "GET") {
+    return json(res, 200, { autonomyLevel: AI_AUTONOMY_LEVEL, monthlyBudgetUSD: AI_MONTHLY_BUDGET_USD, models: AI_MODELS });
+  }
+
+  // ─── Automation Rules Engine ──────────────────────────────────────────
+  // GET /api/automation/rules — list all rules
+  if (pathname === "/api/automation/rules" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("automation_rules");
+      const rules = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, rules);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/automation/rules — create rule
+  if (pathname === "/api/automation/rules" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.name || !body.conditions || !body.actions) return json(res, 400, { error: "name, conditions, and actions required" });
+    const ruleId = `RULE-${Date.now().toString(36).toUpperCase()}`;
+    const rule = {
+      id: ruleId,
+      name: String(body.name).slice(0, 200),
+      description: String(body.description || "").slice(0, 500),
+      enabled: body.enabled !== false,
+      trigger: body.trigger || "incident_created", // incident_created | incident_updated | sla_breach | scheduled
+      conditions: body.conditions, // [{ field, operator, value }]
+      actions: body.actions, // [{ type, params }] — assign, notify, set_priority, add_tag, escalate
+      createdBy: auth.name || "admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      executionCount: 0,
+      lastExecuted: null,
+    };
+    await db.upsert("automation_rules", ruleId, JSON.stringify(rule));
+    await db.audit("automation_rules", ruleId, "create", `Rule created: ${rule.name}`, auth.name || "System");
+    return json(res, 201, rule);
+  }
+  // PUT /api/automation/rules/:id — update rule
+  if (/^\/api\/automation\/rules\/([^/]+)$/.test(pathname) && req.method === "PUT") {
+    const ruleId = pathname.split("/")[4];
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("automation_rules", ruleId);
+      if (!row) return json(res, 404, { error: "Rule not found" });
+      const rule = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      if (body.name) rule.name = String(body.name).slice(0, 200);
+      if (body.description !== undefined) rule.description = String(body.description).slice(0, 500);
+      if (body.enabled !== undefined) rule.enabled = !!body.enabled;
+      if (body.conditions) rule.conditions = body.conditions;
+      if (body.actions) rule.actions = body.actions;
+      if (body.trigger) rule.trigger = body.trigger;
+      rule.updatedAt = new Date().toISOString();
+      await db.upsert("automation_rules", ruleId, JSON.stringify(rule));
+      return json(res, 200, rule);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // DELETE /api/automation/rules/:id
+  if (/^\/api\/automation\/rules\/([^/]+)$/.test(pathname) && req.method === "DELETE") {
+    const ruleId = pathname.split("/")[4];
+    try {
+      await db.delete("automation_rules", ruleId);
+      return json(res, 200, { ok: true, deleted: ruleId });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/automation/rules/:id/test — dry-run a rule against a ticket
+  if (/^\/api\/automation\/rules\/([^/]+)\/test$/.test(pathname) && req.method === "POST") {
+    const ruleId = pathname.split("/")[4];
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("automation_rules", ruleId);
+      if (!row) return json(res, 404, { error: "Rule not found" });
+      const rule = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      // Evaluate conditions against provided ticket data
+      const ticket = body.ticket || {};
+      let allMatch = true;
+      const results = (rule.conditions || []).map(c => {
+        const val = ticket[c.field];
+        let match = false;
+        switch (c.operator) {
+          case "equals": match = val === c.value; break;
+          case "contains": match = String(val || "").toLowerCase().includes(String(c.value).toLowerCase()); break;
+          case "not_equals": match = val !== c.value; break;
+          case "in": match = Array.isArray(c.value) ? c.value.includes(val) : false; break;
+          case "gt": match = parseFloat(val) > parseFloat(c.value); break;
+          case "lt": match = parseFloat(val) < parseFloat(c.value); break;
+          default: match = val === c.value;
+        }
+        if (!match) allMatch = false;
+        return { field: c.field, operator: c.operator, expected: c.value, actual: val, match };
+      });
+      return json(res, 200, { ruleId, ruleName: rule.name, wouldFire: allMatch, conditions: results, actions: allMatch ? rule.actions : [] });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/automation/evaluate — evaluate all enabled rules against a ticket
+  if (pathname === "/api/automation/evaluate" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId) return json(res, 400, { error: "incidentId required" });
+    try {
+      const incRow = await db.getOne("incidents", body.incidentId);
+      if (!incRow) return json(res, 404, { error: "Incident not found" });
+      const ticket = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+      const rulesRows = await db.getAll("automation_rules");
+      const rules = rulesRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(r => r && r.enabled);
+      const fired = [];
+      for (const rule of rules) {
+        const trigger = body.trigger || "incident_updated";
+        if (rule.trigger && rule.trigger !== trigger) continue;
+        let allMatch = true;
+        for (const c of (rule.conditions || [])) {
+          const val = ticket[c.field];
+          let match = false;
+          switch (c.operator) {
+            case "equals": match = val === c.value; break;
+            case "contains": match = String(val || "").toLowerCase().includes(String(c.value).toLowerCase()); break;
+            case "not_equals": match = val !== c.value; break;
+            case "in": match = Array.isArray(c.value) ? c.value.includes(val) : false; break;
+            default: match = val === c.value;
+          }
+          if (!match) { allMatch = false; break; }
+        }
+        if (!allMatch) continue;
+        // Execute actions
+        const executedActions = [];
+        for (const action of (rule.actions || [])) {
+          switch (action.type) {
+            case "set_field": ticket[action.params.field] = action.params.value; executedActions.push(`Set ${action.params.field}=${action.params.value}`); break;
+            case "assign": ticket.assignee = action.params.assignee; ticket.team = action.params.team || ticket.team; executedActions.push(`Assigned to ${action.params.assignee}`); break;
+            case "set_priority": ticket.priority = action.params.priority; executedActions.push(`Priority → ${action.params.priority}`); break;
+            case "add_tag": ticket.tags = [...(ticket.tags || []), action.params.tag]; executedActions.push(`Tag added: ${action.params.tag}`); break;
+            case "escalate": ticket.priority = "Critical"; ticket.escalated = true; executedActions.push("Escalated to Critical"); break;
+            case "notify": executedActions.push(`Notify: ${action.params.target || action.params.email}`); break;
+          }
+        }
+        // Update rule execution stats
+        rule.executionCount = (rule.executionCount || 0) + 1;
+        rule.lastExecuted = new Date().toISOString();
+        await db.upsert("automation_rules", rule.id, JSON.stringify(rule));
+        // AI audit log entry
+        const auditId = `AUDIT-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,5)}`;
+        await db.upsert("ai_audit_log", auditId, JSON.stringify({
+          id: auditId, type: "automation_rule", ruleId: rule.id, ruleName: rule.name,
+          incidentId: body.incidentId, actions: executedActions, trigger,
+          timestamp: new Date().toISOString(), autonomyLevel: AI_AUTONOMY_LEVEL
+        }));
+        fired.push({ ruleId: rule.id, ruleName: rule.name, actions: executedActions });
+      }
+      if (fired.length > 0) {
+        ticket.updated = new Date().toISOString();
+        ticket.timeline = ticket.timeline || [];
+        ticket.timeline.push({ action: "automation", details: `${fired.length} rule(s) fired: ${fired.map(f => f.ruleName).join(", ")}`, timestamp: new Date().toISOString(), by: "Automation Engine" });
+        await db.upsert("incidents", body.incidentId, JSON.stringify(ticket));
+      }
+      return json(res, 200, { incidentId: body.incidentId, rulesFired: fired.length, fired, autonomyLevel: AI_AUTONOMY_LEVEL });
+    } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
   // Health check
