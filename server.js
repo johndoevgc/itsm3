@@ -2827,9 +2827,12 @@ Analyze the support ticket and return a JSON object with:
 8. auto_sendable — true if confidence >= 85 AND the response is safe to send without human review
 9. itsm_category — ITIL category mapping
 10. sla_priority — ${getSlaDescription()}
+11. sentiment — one of: frustrated, neutral, satisfied (analyze customer tone)
+12. sentimentScore — 1-10 (1=very negative, 5=neutral, 10=very positive)
 
 IMPORTANT: Set auto_sendable=true ONLY for routine issues (password resets, basic how-to, status inquiries, simple troubleshooting). 
 Set auto_sendable=false for: security incidents, data loss, system outages, escalations, angry customers, complex issues.
+For sentiment: analyze the customer's tone from description and comments. Frustrated customers should get auto_sendable=false.
 
 Respond ONLY with valid JSON, no markdown.`;
 
@@ -2866,7 +2869,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         try {
           parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
         } catch {
-          parsed = { category: "General", priority: "normal", tags: [], draft_response: text, internal_note: "Unstructured AI response", confidence: 50, suggested_assignee: "L1 Support", auto_sendable: false, itsm_category: "General", sla_priority: "Sev-D" };
+          parsed = { category: "General", priority: "normal", tags: [], draft_response: text, internal_note: "Unstructured AI response", confidence: 50, suggested_assignee: "L1 Support", auto_sendable: false, itsm_category: "General", sla_priority: "Sev-D", sentiment: "neutral", sentimentScore: 5 };
         }
 
         const slaPri = parsed.sla_priority || "Sev-D";
@@ -5374,6 +5377,13 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         return `${cat}: ${s.count} resolved, avg ${avgHrs}h, top resolver: ${bestAssignee ? bestAssignee[0] : "N/A"}`;
       }).join("\n");
 
+      // Gather open incident titles for AI duplicate detection context
+      const openIncidents = allIncidents.filter(i => openStatuses.has(i.status));
+      const openTicketsSummary = openIncidents.slice(0, 50).map(i => `${i.id}: ${(i.title || "").substring(0, 120)}`).join("\n");
+
+      // Gather KB article titles for coverage gap analysis
+      const kbTitlesSummary = kbArticles.slice(0, 60).map(a => `[${a.category || "General"}] ${(a.title || "").substring(0, 100)}`).join("\n");
+
       const systemPrompt = `You are the VGC-ITSM AI Auto-Triage Engine for VGC Technology Pte Ltd.
 Analyze the incoming ticket and determine the best category, priority, assignee, and assignment group.
 
@@ -5393,12 +5403,21 @@ ${teamSummary || "No team members data available — assign to Service Desk"}
 HISTORICAL RESOLUTION STATS:
 ${catStatsSummary || "No historical data yet"}
 
+CURRENTLY OPEN TICKETS (check for duplicates):
+${openTicketsSummary || "No open tickets"}
+
+EXISTING KB ARTICLES (check for coverage gaps):
+${kbTitlesSummary || "No KB articles"}
+
 RULES:
 1. Default priority is Sev-C unless clear evidence of higher severity.
 2. Assign to the team member with lowest workload in the matching skill area.
 3. If unsure about category, use the closest match from KB categories.
 4. Never assign Sev-A or Sev-B unless the ticket clearly describes a major outage or VIP impact.
 5. Consider historical resolution data to pick the best assignee for the category.
+6. SENTIMENT: Analyze the reporter's tone — frustrated, neutral, or satisfied. Score 1-10 (1=very negative, 5=neutral, 10=very positive).
+7. DUPLICATE CHECK: Compare the new ticket title+description against CURRENTLY OPEN TICKETS. If >70% semantically similar, flag it.
+8. KB COVERAGE: Check if EXISTING KB ARTICLES already cover this issue topic. If not, flag the gap.
 
 Respond with ONLY valid JSON (no markdown):
 {
@@ -5410,7 +5429,13 @@ Respond with ONLY valid JSON (no markdown):
   "confidence": 0-100,
   "reasoning": "brief explanation",
   "suggestedSlaTarget": number_in_hours,
-  "tags": ["tag1","tag2"]
+  "tags": ["tag1","tag2"],
+  "sentiment": "frustrated|neutral|satisfied",
+  "sentimentScore": 1-10,
+  "possibleDuplicateOf": "INC-xxx or null if no duplicate found",
+  "duplicateSimilarity": 0-100,
+  "kbCoverage": "covered|partial|gap",
+  "suggestedKbTopic": "topic title if kbCoverage is gap or partial, else null"
 }`;
 
       const userPrompt = `TICKET TO TRIAGE:
@@ -5429,7 +5454,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       const payload = {
         model: getAIModel("secondary"),
         input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
-        max_output_tokens: 800
+        max_output_tokens: 1000
       };
 
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
@@ -5490,6 +5515,12 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           assignmentGroup: triage.assignmentGroup || "Service Desk",
           suggestedSlaTarget: triage.suggestedSlaTarget || slaMap[triage.priority] || 9,
           tags: triage.tags || [],
+          sentiment: triage.sentiment || "neutral",
+          sentimentScore: triage.sentimentScore || 5,
+          possibleDuplicateOf: triage.possibleDuplicateOf || null,
+          duplicateSimilarity: triage.duplicateSimilarity || 0,
+          kbCoverage: triage.kbCoverage || "unknown",
+          suggestedKbTopic: triage.suggestedKbTopic || null,
         },
         confidence,
         autoExecutable: autoApply,
@@ -5511,6 +5542,10 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       await db.upsert("ai_triage_history", triageRecord.id, JSON.stringify({
         id: triageRecord.id, ticketId: ticket.id, triage: triageRecord.triage,
         confidence, autoApplied: autoApply, timestamp: now, requestedBy,
+        sentiment: triage.sentiment || "neutral",
+        sentimentScore: triage.sentimentScore || 5,
+        kbCoverage: triage.kbCoverage || "unknown",
+        possibleDuplicateOf: triage.possibleDuplicateOf || null,
       }));
 
       // If auto-apply, update the actual incident
@@ -5526,6 +5561,12 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           inc.slaTarget = triage.suggestedSlaTarget || slaMap[triage.priority] || inc.slaTarget;
           inc.aiTriaged = true;
           inc.aiConfidence = confidence;
+          inc.sentiment = triage.sentiment || "neutral";
+          inc.sentimentScore = triage.sentimentScore || 5;
+          if (triage.possibleDuplicateOf) inc.possibleDuplicateOf = triage.possibleDuplicateOf;
+          if (triage.duplicateSimilarity) inc.duplicateSimilarity = triage.duplicateSimilarity;
+          inc.kbCoverage = triage.kbCoverage || "unknown";
+          if (triage.suggestedKbTopic) inc.suggestedKbTopic = triage.suggestedKbTopic;
           inc.activityLog = inc.activityLog || [];
           inc.activityLog.push({
             id: `AL-AIT-${Date.now().toString(36)}`, type: "ai_triage", user: "AI Auto-Triage",
@@ -5719,6 +5760,292 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
     } catch (err) {
       console.error("[AI Batch Triage]", err.message);
       return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── AI Semantic Duplicate Detection ──────────────────────────────────
+  // POST /api/ai/detect-duplicates — AI-powered semantic duplicate detection
+  if (pathname === "/api/ai/detect-duplicates" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 100000);
+      const { ticketId, requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      const allIncRaw = await db.getAll("incidents");
+      const allIncidents = allIncRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      // Get the target ticket
+      let targetTicket;
+      if (ticketId) {
+        targetTicket = allIncidents.find(i => i.id === ticketId);
+        if (!targetTicket) return json(res, 404, { error: "Ticket not found" });
+      }
+
+      const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "Reopened"]);
+      const openIncidents = allIncidents.filter(i => openStatuses.has(i.status));
+      if (openIncidents.length < 2) return json(res, 200, { groups: [], message: "Not enough open tickets for comparison" });
+
+      // Build ticket summaries for AI
+      const ticketSummaries = (targetTicket ? openIncidents.filter(i => i.id !== targetTicket.id) : openIncidents)
+        .slice(0, 40).map(i => `${i.id}|${(i.title || "").substring(0, 100)}|${(i.description || "").substring(0, 200)}|${i.category || ""}|${i.reporter || ""}`).join("\n");
+
+      const targetInfo = targetTicket
+        ? `TARGET TICKET:\n${targetTicket.id}|${targetTicket.title}|${(targetTicket.description || "").substring(0, 300)}|${targetTicket.category || ""}|${targetTicket.reporter || ""}`
+        : "Analyze ALL tickets below for duplicate groups.";
+
+      const systemPrompt = `You are a duplicate ticket detection AI for VGC Technology ITSM.
+${targetInfo}
+
+OPEN TICKETS (ID|Title|Description|Category|Reporter):
+${ticketSummaries}
+
+${targetTicket ? `Find tickets that are semantically similar to the TARGET TICKET (same underlying issue, even if worded differently).` : `Group tickets that describe the same underlying issue. Not every ticket needs to be in a group.`}
+
+Respond with ONLY valid JSON (no markdown):
+{
+  "groups": [
+    {
+      "primaryId": "INC-xxx",
+      "duplicateIds": ["INC-yyy"],
+      "similarity": 0-100,
+      "reason": "brief explanation of why these are duplicates"
+    }
+  ]
+}
+If no duplicates found, return {"groups": []}.`;
+
+      const payload = {
+        model: getAIModel("secondary"),
+        input: [{ role: "system", content: systemPrompt }],
+        max_output_tokens: 800
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let parsed;
+      try {
+        parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        parsed = { groups: [] };
+      }
+
+      // Enrich groups with ticket details
+      const enrichedGroups = (parsed.groups || []).map(g => ({
+        ...g,
+        primaryTitle: allIncidents.find(i => i.id === g.primaryId)?.title || "",
+        duplicates: (g.duplicateIds || []).map(id => {
+          const inc = allIncidents.find(i => i.id === id);
+          return inc ? { id: inc.id, title: inc.title, status: inc.status } : { id, title: "Unknown" };
+        }),
+      }));
+
+      console.log(`[AI Dup Detect] Found ${enrichedGroups.length} duplicate group(s) for ${ticketId || "all tickets"}`);
+      return json(res, 200, { groups: enrichedGroups, ticketId: ticketId || null });
+    } catch (err) {
+      console.error("[AI Dup Detect]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI KB Gap Analysis Report ──────────────────────────────────────
+  // POST /api/ai/kb-gaps — Analyze incidents vs KB articles to find coverage gaps
+  if (pathname === "/api/ai/kb-gaps" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { requestedBy } = body;
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      // Gather recent incidents (last 100)
+      const allIncRaw = await db.getAll("incidents");
+      const allIncidents = allIncRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const recentIncidents = allIncidents.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 100);
+
+      // Gather KB articles
+      const kbRaw = await db.getAll("kb");
+      const kbArticles = kbRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      const incidentSummary = recentIncidents.map(i => `${i.category || "General"}|${(i.title || "").substring(0, 80)}|${i.status}`).join("\n");
+      const kbSummary = kbArticles.map(a => `${a.category || "General"}|${(a.title || "").substring(0, 80)}`).join("\n");
+
+      const systemPrompt = `You are a Knowledge Base coverage analyst for VGC Technology ITSM.
+
+RECENT INCIDENTS (Category|Title|Status):
+${incidentSummary || "No incidents"}
+
+EXISTING KB ARTICLES (Category|Title):
+${kbSummary || "No KB articles"}
+
+Analyze the incidents and identify topics/issues that appear frequently but are NOT covered by existing KB articles.
+For each gap, suggest an article title, category, and estimate how many incidents it would help.
+
+Respond with ONLY valid JSON (no markdown):
+{
+  "gaps": [
+    {
+      "topic": "suggested article topic",
+      "category": "category",
+      "incidentCount": number_of_related_incidents,
+      "severity": "high|medium|low",
+      "suggestedTitle": "KB Article: ...",
+      "reason": "brief explanation"
+    }
+  ],
+  "coverageScore": 0-100,
+  "summary": "brief overall assessment"
+}`;
+
+      const payload = {
+        model: getAIModel("secondary"),
+        input: [{ role: "system", content: systemPrompt }],
+        max_output_tokens: 1000
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let parsed;
+      try {
+        parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        parsed = { gaps: [], coverageScore: 0, summary: "Failed to parse AI response" };
+      }
+
+      console.log(`[KB Gaps] Found ${(parsed.gaps || []).length} gap(s), coverage: ${parsed.coverageScore}%`);
+      return json(res, 200, { ...parsed, totalIncidents: recentIncidents.length, totalKbArticles: kbArticles.length });
+    } catch (err) {
+      console.error("[KB Gaps]", err.message);
+      return json(res, 502, { error: err.message });
+    }
+  }
+
+  // ─── AI Resolution Summary Generator ────────────────────────────────
+  // POST /api/ai/generate-resolution-summary — Generate a resolution summary for a resolved ticket
+  if (pathname === "/api/ai/generate-resolution-summary" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    try {
+      const body = await parseBody(req, 50000);
+      const { ticketId, requestedBy } = body;
+      if (!ticketId || !requestedBy) return json(res, 400, { error: "ticketId and requestedBy required" });
+
+      const incRow = await db.getOne("incidents", ticketId);
+      if (!incRow) return json(res, 404, { error: "Ticket not found" });
+      const inc = JSON.parse(incRow.data);
+
+      // Gather activity log for context
+      const activities = (inc.activityLog || []).map(a => `[${a.time}] ${a.type}: ${a.detail}`).join("\n");
+
+      const systemPrompt = `You are a VGC Technology ITSM Resolution Summary AI.
+Generate a structured resolution summary for the following resolved/closed ticket.
+
+TICKET:
+ID: ${inc.id}
+Title: ${inc.title}
+Category: ${inc.category || "General"}
+Priority: ${inc.priority || "Sev-C"}
+Status: ${inc.status}
+Description: ${(inc.description || "").substring(0, 1000)}
+Workaround: ${inc.workaround || "None"}
+Resolution Notes: ${inc.resolutionNotes || "None"}
+
+ACTIVITY LOG:
+${activities || "No activity log"}
+
+Generate a professional resolution summary with:
+1. Root cause (or suspected root cause)
+2. Steps taken to resolve
+3. Resolution outcome
+4. Preventive recommendations
+5. Customer communication draft (1-2 paragraphs)
+
+Respond with ONLY valid JSON (no markdown):
+{
+  "rootCause": "string",
+  "stepsTaken": ["step1", "step2"],
+  "outcome": "string",
+  "preventiveActions": ["action1", "action2"],
+  "customerMessage": "string",
+  "internalNotes": "string",
+  "timeToResolve": "estimated hours"
+}`;
+
+      const payload = {
+        model: getAIModel("tertiary"),
+        input: [{ role: "system", content: systemPrompt }],
+        max_output_tokens: 1000
+      };
+
+      const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+      const aiResult = await new Promise((resolve, reject) => {
+        const aiReq = https.request({
+          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+          method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+        }, (aiRes) => {
+          let data = ""; aiRes.on("data", c => data += c);
+          aiRes.on("end", () => {
+            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+          });
+        });
+        aiReq.on("error", reject);
+        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+        aiReq.write(JSON.stringify(payload));
+        aiReq.end();
+      });
+
+      const text = extractAIText(aiResult);
+      let parsed;
+      try {
+        parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch {
+        parsed = { rootCause: "Unable to parse", stepsTaken: [], outcome: text.substring(0, 500), preventiveActions: [], customerMessage: "", internalNotes: "", timeToResolve: "N/A" };
+      }
+
+      console.log(`[Resolution Summary] Generated for ${ticketId}`);
+      return json(res, 200, { ticketId, summary: parsed });
+    } catch (err) {
+      console.error("[Resolution Summary]", err.message);
+      return json(res, 502, { error: err.message });
     }
   }
 
