@@ -1873,6 +1873,7 @@ const server = http.createServer(async (req, res) => {
       if (!body.severities) return json(res, 400, { error: "severities object required" });
       await db.upsert("sla_config", "active_policy", JSON.stringify(body));
       await db.audit("sla_config", "active_policy", "update", JSON.stringify(body), authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("sla_config");
       if (slaEngine) await slaEngine.loadPolicy();
       return json(res, 200, { ok: true, policy: body });
     } catch (err) { return json(res, 500, { error: err.message }); }
@@ -2386,6 +2387,7 @@ const server = http.createServer(async (req, res) => {
       const rel = { id: relId, sourceId, targetId, type, direction: "forward", createdBy: body.createdBy || "system", createdAt: new Date().toISOString() };
       await db.upsert("cmdb_relationships", relId, JSON.stringify(rel));
       await db.audit("cmdb_relationships", relId, "create", JSON.stringify(rel), body.createdBy || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("cmdb_relationships");
       return json(res, 200, { success: true, relationship: rel });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2395,6 +2397,7 @@ const server = http.createServer(async (req, res) => {
       const relId = pathname.split("/")[4];
       await db.deleteOne("cmdb_relationships", relId);
       await db.audit("cmdb_relationships", relId, "delete", JSON.stringify({}), body.deletedBy || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("cmdb_relationships");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2482,6 +2485,7 @@ const server = http.createServer(async (req, res) => {
         if (inc) { inc.runbookExecutionId = execId; await db.upsert("incidents", incidentId, JSON.stringify(inc)); }
       }
       await db.audit("runbook_executions", execId, "started", JSON.stringify({ runbookId, incidentId }), executedBy || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("runbook_executions");
       return json(res, 200, { success: true, execution });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2502,6 +2506,7 @@ const server = http.createServer(async (req, res) => {
       if (allDone) { execution.status = "completed"; execution.completedAt = new Date().toISOString(); }
       await db.upsert("runbook_executions", execId, JSON.stringify(execution));
       await db.audit("runbook_executions", "step_updated", execId, JSON.stringify({ stepNum, status }), body.updatedBy || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("runbook_executions");
       return json(res, 200, { success: true, execution });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2509,7 +2514,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/api/runbook/executions" && req.method === "GET") {
     try {
       const incidentId = urlObj.searchParams.get("incidentId");
-      const data = dbParseAll(await db.getAll("runbook_executions"));
+      const data = dbParseAll(await cachedGetAll("runbook_executions"));
       const filtered = incidentId ? data.filter(e => e.incidentId === incidentId) : data;
       return json(res, 200, { data: filtered, count: filtered.length });
     } catch (err) { return json(res, 500, { error: err.message }); }
@@ -2518,7 +2523,7 @@ const server = http.createServer(async (req, res) => {
   // ─── Scheduled Report API ────────────────────────────────────────────
   if (pathname === "/api/reports/schedules" && req.method === "GET") {
     try {
-      const data = dbParseAll(await db.getAll("report_schedules"));
+      const data = dbParseAll(await cachedGetAll("report_schedules"));
       return json(res, 200, { data, count: data.length });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2532,6 +2537,7 @@ const server = http.createServer(async (req, res) => {
       const schedule = { id: schedId, name, type, frequency: frequency || "weekly", dayOfWeek: body.dayOfWeek || 1, hour: body.hour || 9, recipients: recipients || [], format: format || "csv", filters: body.filters || {}, active: body.active !== false, createdAt: new Date().toISOString() };
       await db.upsert("report_schedules", schedId, JSON.stringify(schedule));
       await db.audit("report_schedules", schedId, "create", JSON.stringify(schedule), body.createdBy || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("report_schedules");
       return json(res, 200, { success: true, schedule });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2553,7 +2559,7 @@ const server = http.createServer(async (req, res) => {
   // ─── SLA Business Calendar & Holiday Management ──────────────────────
   if (pathname === "/api/sla/calendars" && req.method === "GET") {
     try {
-      const data = dbParseAll(await db.getAll("sla_calendars"));
+      const data = dbParseAll(await cachedGetAll("sla_calendars"));
       return json(res, 200, { data, count: data.length });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2566,6 +2572,7 @@ const server = http.createServer(async (req, res) => {
       const calendar = { id: calId, name: body.name, timezone: body.timezone || "Asia/Singapore", businessHours: body.businessHours || { start: 9, end: 18, days: "Mon-Fri" }, holidays: body.holidays || [], isDefault: body.isDefault || false, createdAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
       await db.upsert("sla_calendars", calId, JSON.stringify(calendar));
       await db.audit("sla_calendars", calId, body.id ? "update" : "create", JSON.stringify(calendar), authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("sla_calendars");
       return json(res, 200, { success: true, calendar });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2575,6 +2582,7 @@ const server = http.createServer(async (req, res) => {
       const calId = pathname.split("/").pop();
       await db.deleteOne("sla_calendars", calId);
       await db.audit("sla_calendars", calId, "delete", null, authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("sla_calendars");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2582,7 +2590,7 @@ const server = http.createServer(async (req, res) => {
   // ─── Notification Template Management ─────────────────────────────────
   if (pathname === "/api/notification-templates" && req.method === "GET") {
     try {
-      const data = dbParseAll(await db.getAll("notification_templates"));
+      const data = dbParseAll(await cachedGetAll("notification_templates"));
       return json(res, 200, { data, count: data.length });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2595,6 +2603,7 @@ const server = http.createServer(async (req, res) => {
       const template = { id: tplId, name: body.name, eventType: body.eventType, channels: body.channels || ["email", "inapp"], subject: body.subject || "", bodyTemplate: body.bodyTemplate || "", variables: body.variables || [], active: body.active !== false, createdAt: body.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
       await db.upsert("notification_templates", tplId, JSON.stringify(template));
       await db.audit("notification_templates", tplId, body.id ? "update" : "create", JSON.stringify(template), authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("notification_templates");
       return json(res, 200, { success: true, template });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2604,6 +2613,7 @@ const server = http.createServer(async (req, res) => {
       const tplId = pathname.split("/").pop();
       await db.deleteOne("notification_templates", tplId);
       await db.audit("notification_templates", tplId, "delete", null, authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("notification_templates");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -2676,6 +2686,7 @@ const server = http.createServer(async (req, res) => {
       if (!body.lang || !body.strings) return json(res, 400, { error: "lang and strings required" });
       await db.upsert("i18n_packs", body.lang, JSON.stringify(body));
       await db.audit("i18n_packs", body.lang, "update", JSON.stringify({ lang: body.lang, keyCount: Object.keys(body.strings).length }), authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("i18n_packs");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -8853,6 +8864,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     };
     await db.upsert("automation_rules", ruleId, JSON.stringify(rule));
     await db.audit("automation_rules", ruleId, "create", `Rule created: ${rule.name}`, auth.name || "System");
+    if (cacheLayer) cacheLayer.invalidatePrefix("automation_rules");
     return json(res, 201, rule);
   }
   // PUT /api/automation/rules/:id — update rule
@@ -8871,6 +8883,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       if (body.trigger) rule.trigger = body.trigger;
       rule.updatedAt = new Date().toISOString();
       await db.upsert("automation_rules", ruleId, JSON.stringify(rule));
+      if (cacheLayer) cacheLayer.invalidatePrefix("automation_rules");
       return json(res, 200, rule);
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -13758,16 +13771,27 @@ async function start() {
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
 
 // Graceful shutdown
-const _gracefulShutdown = () => {
-  try { _shutdownIntervals.forEach(h => { try { clearInterval(h); } catch {} }); } catch {}
-  try { _shutdownTimeouts.forEach(h => { try { clearTimeout(h); } catch {} }); } catch {}
-  if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval);
-  if (workflowEngine) workflowEngine.stop();
-  if (cacheLayer) cacheLayer.stop();
-  if (wsServer) wsServer.stop();
-  if (slaEngine) slaEngine.stop();
-  db.close();
-  process.exit(0);
+const _gracefulShutdown = (signal) => {
+  console.log(`[Shutdown] Received ${signal || "signal"}, draining...`);
+  // Stop accepting new requests, drain in-flight ones
+  let exited = false;
+  const finalize = () => {
+    if (exited) return;
+    exited = true;
+    try { _shutdownIntervals.forEach(h => { try { clearInterval(h); } catch {} }); } catch {}
+    try { _shutdownTimeouts.forEach(h => { try { clearTimeout(h); } catch {} }); } catch {}
+    if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval);
+    if (workflowEngine) workflowEngine.stop();
+    if (cacheLayer) cacheLayer.stop();
+    if (wsServer) wsServer.stop();
+    if (slaEngine) slaEngine.stop();
+    db.close();
+    console.log("[Shutdown] Complete");
+    process.exit(0);
+  };
+  try { server.close(finalize); } catch { finalize(); }
+  // Force-exit fallback if drain takes too long
+  setTimeout(() => { console.warn("[Shutdown] Force-exit after 10s drain timeout"); finalize(); }, 10000).unref?.();
 };
-process.on("SIGINT", _gracefulShutdown);
-process.on("SIGTERM", _gracefulShutdown);
+process.on("SIGINT", () => _gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => _gracefulShutdown("SIGTERM"));
