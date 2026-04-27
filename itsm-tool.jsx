@@ -242,7 +242,7 @@ const AI_FEATURE_EXPLAINERS = {
   operations: { title: "Operations Module", explain: "Unified view of Problems, Changes, and Service Requests. Problems track root causes affecting multiple incidents. Changes follow ITIL change management with CAB approval. Requests are service fulfillment tasks. Cross-referenced with Zendesk data automatically." },
   catalog: { title: "Service Catalog", explain: "Self-service portal where users can request IT services. Each card shows the service name, category, SLA target, and a description. Click 'Request →' to submit. Services are organized by category and based on common Zendesk ticket patterns." },
   knowledge: { title: "Knowledge Base", explain: "SharePoint-connected knowledge portal. Articles are organized by category with Quick Fix steps, related articles, and AI recommendations. When an incident matches a KB article, AI automatically suggests it. Engineers can create new articles from resolved incidents." },
-  sla: { title: "SLA Management", explain: "Tracks SLA compliance for all tickets against VGC's official SLA policy. Shows response times, resolution targets, and breach alerts. SLA countdown pauses outside business hours (Mon-Fri 9AM-6PM SGT). Auto-escalation triggers when thresholds are exceeded." },
+  sla: { title: "SLA Management", explain: "Tracks SLA compliance for all tickets against VGC's official SLA policy. Shows response times, resolution targets, and breach alerts. SLA countdown pauses outside business hours (Mon-Fri 9AM-6PM SGT) and when ticket status is Pending or On Hold. Auto-escalation triggers when thresholds are exceeded." },
   ai: { title: "AI Assist", explain: "Your AI co-pilot dashboard. Shows automation rates, AI activity log, confidence scores, and the AI chat interface. Primary engine: VGC-AI Engine. Fallback: Local AI. Use 'Train AI' to add internal knowledge that AI references first when answering questions." },
   zendesk: { title: "Zendesk AI Command Center", explain: "Full Zendesk integration hub. Auto-triage incoming tickets using AI, manage the approval queue (human-in-the-loop), view real-time ticket sync, run historical imports, and configure automation rules. All AI actions require your approval before execution." },
   reports: { title: "Reports & Analytics", explain: "Generate and view ITSM reports: incident trends, SLA compliance, team performance, category breakdown, and AI efficiency metrics. Export to PDF or share via email. Data updates in real-time from all integrated sources." },
@@ -1117,7 +1117,7 @@ const DEFAULT_SLA_POLICY = {
     "Default severity for all new tickets = Severity C (Medium)",
     "Manual escalation to Severity A or B must be explicit",
     "Severity D tickets MUST NOT be used for actionable issues",
-    "SLA countdown pauses outside business hours (Mon-Fri 9AM-6PM SGT)",
+    "SLA countdown pauses outside business hours (Mon-Fri 9AM-6PM SGT) and when status is Pending or On Hold",
     "SLA breach alerts trigger when Worst Response Time is exceeded",
     "Ticket updates must be logged within the ITSM system",
     "Engineers must update ticket status upon: First response, Work in progress, Resolution, Closure",
@@ -1125,37 +1125,54 @@ const DEFAULT_SLA_POLICY = {
 };
 
 // ─── Dynamic SLA Business Hours Calculator ──────────────────────────
-const getBusinessHoursElapsed = (createdAt, endTime) => {
+const getBusinessHoursElapsed = (createdAt, endTime, slaPauseHistory) => {
   if (!createdAt) return 0;
   const start = new Date(createdAt);
   const end = endTime ? new Date(endTime) : new Date();
   if (isNaN(start.getTime())) return 0;
   if (endTime && isNaN(end.getTime())) return 0;
   const BH_START = 9, BH_END = 18; // 9AM-6PM SGT
-  let elapsed = 0;
-  let cursor = new Date(start);
-  while (cursor < end) {
-    const day = cursor.getDay(); // 0=Sun, 6=Sat
-    if (day >= 1 && day <= 5) { // Mon-Fri
-      const hrs = cursor.getHours() + cursor.getMinutes() / 60;
-      if (hrs >= BH_START && hrs < BH_END) {
-        const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
-        const chunkEnd = endOfBH < end ? endOfBH : end;
-        elapsed += (chunkEnd - cursor) / 3600000;
-        cursor = new Date(chunkEnd);
-      } else if (hrs < BH_START) {
-        cursor.setHours(BH_START, 0, 0, 0);
+  const calcBH = (from, to) => {
+    let elapsed = 0;
+    let cursor = new Date(from);
+    while (cursor < to) {
+      const day = cursor.getDay(); // 0=Sun, 6=Sat
+      if (day >= 1 && day <= 5) { // Mon-Fri
+        const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+        if (hrs >= BH_START && hrs < BH_END) {
+          const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
+          const chunkEnd = endOfBH < to ? endOfBH : to;
+          elapsed += (chunkEnd - cursor) / 3600000;
+          cursor = new Date(chunkEnd);
+        } else if (hrs < BH_START) {
+          cursor.setHours(BH_START, 0, 0, 0);
+        } else {
+          cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+        }
       } else {
-        cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+        // Skip to next Monday
+        const daysToMon = day === 0 ? 1 : 8 - day;
+        cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
       }
-    } else {
-      // Skip to next Monday
-      const daysToMon = day === 0 ? 1 : 8 - day;
-      cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
+      if (cursor >= to) break;
     }
-    if (cursor >= end) break;
+    return elapsed;
+  };
+  let elapsed = calcBH(start, end);
+  // Subtract paused business hours
+  if (Array.isArray(slaPauseHistory) && slaPauseHistory.length > 0) {
+    for (const pause of slaPauseHistory) {
+      if (!pause.pausedAt) continue;
+      const pStart = new Date(pause.pausedAt);
+      const pEnd = pause.resumedAt ? new Date(pause.resumedAt) : end; // still paused → count to now
+      if (pStart < end && pEnd > start) {
+        const effStart = pStart < start ? start : pStart;
+        const effEnd = pEnd > end ? end : pEnd;
+        elapsed -= calcBH(effStart, effEnd);
+      }
+    }
   }
-  return Math.round(elapsed * 100) / 100;
+  return Math.max(0, Math.round(elapsed * 100) / 100);
 };
 
 const formatSlaCountdown = (hoursLeft) => {
@@ -1177,7 +1194,7 @@ const computeIncidentSla = (inc) => {
     if (!isNaN(d.getTime())) {
       // For resolved/closed incidents, stop the SLA clock at resolvedAt
       const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? inc.resolvedAt : undefined;
-      hoursElapsed = getBusinessHoursElapsed(inc.createdAt, endTime);
+      hoursElapsed = getBusinessHoursElapsed(inc.createdAt, endTime, inc.slaPauseHistory);
     } else hoursElapsed = inc.created || 0;
   } else {
     hoursElapsed = inc.created || 0;
@@ -1670,6 +1687,7 @@ export default function ITSMApp() {
   const [slaTick, setSlaTick] = useState(0); // SLA live refresh counter
   const [aiTypingState, setAiTypingState] = useState({ active: false, fullText: "", displayedText: "", msgIndex: -1 }); // AI typing animation
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [notifPrefs, setNotifPrefs] = useState(() => _ls("vgc_notif_prefs", { email: true, teams: true, inApp: true, sms: false, severityFilter: ["Sev-A", "Sev-B", "Sev-C", "Sev-D"], quietHoursEnabled: false, quietStart: "22:00", quietEnd: "07:00", digestEnabled: true, digestTime: "08:00" }));
   const [showAvatarCustomizer, setShowAvatarCustomizer] = useState(false);
   const [errorAdvisory, setErrorAdvisory] = useState(null); // AI Error Advisory overlay
   const [disasterAlert, setDisasterAlert] = useState(null); // Weather disaster alert toast
@@ -2107,6 +2125,12 @@ export default function ITSMApp() {
   const [entraRoleMappings, setEntraRoleMappings] = useState({}); // {userId: rbacRole}
   const [entraAiSuggestions, setEntraAiSuggestions] = useState({}); // {userId: {role, reason, confidence}}
   const [entraImporting, setEntraImporting] = useState(false);
+  // ─── Custom Fields State ───────────────────────────────────────────────
+  const [customFields, setCustomFields] = useState(() => _ls("vgc_custom_fields", []));
+  // ─── Contracts State ──────────────────────────────────────────────────
+  const [contracts, setContracts] = useState(() => _ls("vgc_contracts", []));
+  // ─── Automation Rules State ──────────────────────────────────────────
+  const [automationRules, setAutomationRules] = useState(() => _ls("vgc_automation_rules", []));
   // ─── AI Customer Survey State ───────────────────────────────────────────
   const [surveyDraft, setSurveyDraft] = useState(null); // { incidentId, subject, body, recipient, status: "draft"|"sent" }
   const [surveyDrafts, setSurveyDrafts] = useState([]);
@@ -4309,6 +4333,10 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   useEffect(() => { _demoSafeSave("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _demoSafeSave("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _demoSafeSave("vgc_profile_photo", profilePhoto); }, [profilePhoto]);
+  useEffect(() => { _demoSafeSave("vgc_custom_fields", customFields); _dbSync("custom_fields", customFields); }, [customFields]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_notif_prefs", notifPrefs); }, [notifPrefs]);
+  useEffect(() => { _demoSafeSave("vgc_contracts", contracts); _dbSync("contracts", contracts); }, [contracts]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _demoSafeSave("vgc_automation_rules", automationRules); _dbSync("automation_rules", automationRules); }, [automationRules]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _demoSafeSave("vgc_avatar", avatarConfig); }, [avatarConfig]);
   useEffect(() => { _demoSafeSave("vgc_current_user", currentUser); }, [currentUser]);
   useEffect(() => { _demoSafeSave("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4398,6 +4426,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     { id: "humanReview", label: "Engineer Review", count: aiActions.filter(a => a.status === "pending_approval").length + zdAiQueue.filter(q => q.status === "pending_approval").length + changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, critical: aiActions.filter(a => a.status === "pending_approval" && (a.severity === "critical" || a.severity === "high")).length > 0 || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "slaApprovals", label: "SLA & Approvals", count: changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length, accent: "#FFB347", gradient: "linear-gradient(135deg, #FFB34708, #FFB34718)" },
     { id: "analytics", label: "Analytics", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
+    { id: "serviceStatus", label: "Service Status", accent: "#4CAF50", gradient: "linear-gradient(135deg, #4CAF5008, #4CAF5018)" },
     { id: "customers", label: "Customers", count: customers.filter(c => c.status === "Active").length, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #EC489918)" },
     { section: "AI & SYSTEM" },
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
@@ -9104,8 +9133,22 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     };
 
     const changeStatus = (newStatus, options = {}) => {
-      const updated = { ...inc, status: newStatus, activityLog: [...(inc.activityLog || []), { id: genId("AL"), type: "status", user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Status changed: ${inc.status} → ${newStatus}` }] };
-      setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, status: newStatus, activityLog: updated.activityLog } : i));
+      const pauseStatuses = new Set(["Pending", "On Hold"]);
+      const now = new Date().toISOString();
+      let slaPauseHistory = [...(inc.slaPauseHistory || [])];
+
+      // Entering a pause status — record pausedAt
+      if (pauseStatuses.has(newStatus) && !pauseStatuses.has(inc.status)) {
+        slaPauseHistory.push({ pausedAt: now, resumedAt: null });
+      }
+      // Leaving a pause status — record resumedAt on the last open pause entry
+      if (pauseStatuses.has(inc.status) && !pauseStatuses.has(newStatus)) {
+        const lastOpen = slaPauseHistory.findLast(e => !e.resumedAt);
+        if (lastOpen) lastOpen.resumedAt = now;
+      }
+
+      const updated = { ...inc, status: newStatus, slaPauseHistory, activityLog: [...(inc.activityLog || []), { id: genId("AL"), type: "status", user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Status changed: ${inc.status} → ${newStatus}` }] };
+      setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, status: newStatus, slaPauseHistory, activityLog: updated.activityLog } : i));
       setDetailItem(updated);
 
       // ── Zendesk bidirectional sync — push status change to linked Zendesk ticket (skip for AI-resolved)
@@ -9269,14 +9312,15 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 
               {/* SLA Countdown */}
               {inc.slaTarget > 0 && inc.status !== "Resolved" && inc.status !== "Closed" && (() => {
-                const elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt) : (inc.created || 0);
+                const isPaused = inc.status === "Pending" || inc.status === "On Hold";
+                const elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt, undefined, inc.slaPauseHistory) : (inc.created || 0);
                 const remaining = inc.slaTarget - elapsed;
                 const pct = Math.min(Math.round((elapsed / inc.slaTarget) * 100), 100);
-                const col = pct >= 100 ? "#FF4444" : pct >= 80 ? "#FFB347" : "#4CAF50";
+                const col = isPaused ? "#A0AEC0" : pct >= 100 ? "#FF4444" : pct >= 80 ? "#FFB347" : "#4CAF50";
                 return (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 6, background: col + "12", border: `1px solid ${col}33` }}>
                     <span style={{ fontSize: 10, color: col, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-                      {pct >= 100 ? "⏰ BREACHED" : `⏱ ${formatSlaCountdown(remaining)}`}
+                      {isPaused ? "⏸ SLA Paused" : pct >= 100 ? "⏰ BREACHED" : `⏱ ${formatSlaCountdown(remaining)}`}
                     </span>
                     <div style={{ width: 60, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
                       <div style={{ width: `${Math.min(pct, 100)}%`, height: "100%", background: col, borderRadius: 2, transition: "width 0.3s" }} />
@@ -9312,11 +9356,12 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           )}
           {/* Tabs */}
           <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
-            {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
+            {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
               <button key={t.id} onClick={() => setDetailTab(t.id)}
                 style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
                 <span>{t.icon}</span> {t.label}
                 {t.id === "activity" && activities.length > 0 && <span style={{ background: "#6366F1", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700, marginLeft: 2 }}>{activities.length}</span>}
+                {t.id === "worklog" && (inc.workLogs || []).length > 0 && <span style={{ background: "#FFB347", color: "#000", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700, marginLeft: 2 }}>{(inc.workLogs || []).length}</span>}
               </button>
             ))}
           </div>
@@ -9356,11 +9401,20 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 </div>
                 {/* SLA Progress */}
                 {(() => {
-                  const slaPct = Math.min(100, Math.round((inc.created / inc.slaTarget) * 100));
-                  const hrsLeft = Math.max(0, inc.slaTarget - inc.created);
+                  const isPaused = inc.status === "Pending" || inc.status === "On Hold";
+                  const slaCalc = computeIncidentSla(inc);
+                  const slaPct = slaCalc.hasValidSla ? slaCalc.pctUsed : Math.min(100, Math.round((inc.created / inc.slaTarget) * 100));
+                  const hrsElapsed = slaCalc.hasValidSla ? slaCalc.hoursElapsed : inc.created;
+                  const hrsLeft = slaCalc.hasValidSla ? slaCalc.remainingHours : Math.max(0, inc.slaTarget - inc.created);
                   const isBreach = slaPct >= 100;
                   const isCritical = slaPct > 90 && !isBreach;
                   const isWarning = slaPct > 75 && !isCritical && !isBreach;
+                  const pauseEntries = inc.slaPauseHistory || [];
+                  const totalPausedHrs = pauseEntries.length > 0 ? pauseEntries.reduce((sum, p) => {
+                    if (!p.pausedAt) return sum;
+                    const pS = new Date(p.pausedAt), pE = p.resumedAt ? new Date(p.resumedAt) : new Date();
+                    return sum + ((pE - pS) / 3600000);
+                  }, 0) : 0;
                   return (
                     <div style={{
                       background: isBreach ? "linear-gradient(135deg, #1A080888, #2D0A0A88)" : isCritical ? "linear-gradient(135deg, #1A150888, #2D1F0A88)" : "#0A0C14",
@@ -9391,8 +9445,18 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                         }} />
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "#5A6178" }}>
-                        <span>Elapsed: {inc.created}h</span><span>Target: {inc.slaTarget}h</span>
+                        <span>Elapsed: {hrsElapsed.toFixed(1)}h{totalPausedHrs > 0 ? ` (${Math.round(totalPausedHrs * 10) / 10}h paused)` : ""}</span><span>Target: {inc.slaTarget}h</span>
                       </div>
+                      {/* SLA Pause Indicator */}
+                      {isPaused && (
+                        <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 6, background: "#A0AEC00D", border: "1px solid #A0AEC022", display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 14 }}>⏸</span>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: "#A0AEC0", marginBottom: 1 }}>SLA CLOCK PAUSED</div>
+                            <div style={{ fontSize: 9, color: "#5A6178" }}>Status: {inc.status} — SLA timer is not counting. Will resume when status changes to an active state.</div>
+                          </div>
+                        </div>
+                      )}
                       {/* AI Assist Urgency Guidance */}
                       {(isBreach || isCritical || isWarning) && (
                         <div style={{
@@ -9424,6 +9488,56 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                   <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>DESCRIPTION</span>
                   <p style={{ color: "#C4CAD6", fontSize: 13, margin: 0, lineHeight: 1.6 }}>{inc.description}</p>
                 </div>
+                {/* Custom Fields */}
+                {(() => {
+                  const moduleFields = customFields.filter(cf => cf.active !== false && cf.name && (cf.module === "incidents" || cf.module === "all"));
+                  if (moduleFields.length === 0) return null;
+                  const vals = inc.customFieldValues || {};
+                  return (
+                    <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, marginBottom: 16, border: "1px solid #1E213044" }}>
+                      <span style={{ fontSize: 11, color: "#CE93D8", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 8 }}>🏷️ CUSTOM FIELDS</span>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        {moduleFields.map(cf => (
+                          <div key={cf.id}>
+                            <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 3 }}>{cf.name}{cf.required ? " *" : ""}</label>
+                            {cf.type === "checkbox" ? (
+                              <input type="checkbox" checked={!!vals[cf.id]} onChange={e => {
+                                const newVals = { ...vals, [cf.id]: e.target.checked };
+                                const updated = { ...inc, customFieldValues: newVals };
+                                setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, customFieldValues: newVals } : i));
+                                setDetailItem(updated);
+                              }} />
+                            ) : cf.type === "dropdown" ? (
+                              <select value={vals[cf.id] || ""} onChange={e => {
+                                const newVals = { ...vals, [cf.id]: e.target.value };
+                                const updated = { ...inc, customFieldValues: newVals };
+                                setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, customFieldValues: newVals } : i));
+                                setDetailItem(updated);
+                              }} style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                                <option value="">— Select —</option>
+                                {(cf.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            ) : cf.type === "textarea" ? (
+                              <textarea value={vals[cf.id] || ""} onChange={e => {
+                                const newVals = { ...vals, [cf.id]: e.target.value };
+                                const updated = { ...inc, customFieldValues: newVals };
+                                setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, customFieldValues: newVals } : i));
+                                setDetailItem(updated);
+                              }} rows={2} style={{ ...inputStyle, fontSize: 12, width: "100%", resize: "vertical" }} />
+                            ) : (
+                              <input type={cf.type === "number" ? "number" : cf.type === "date" ? "date" : "text"} value={vals[cf.id] || ""} onChange={e => {
+                                const newVals = { ...vals, [cf.id]: e.target.value };
+                                const updated = { ...inc, customFieldValues: newVals };
+                                setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, customFieldValues: newVals } : i));
+                                setDetailItem(updated);
+                              }} style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {inc.workaround && (
                   <div style={{ background: "#0A1E2D", borderRadius: 6, padding: 12, border: "1px solid #06B6D422", marginBottom: 16 }}>
                     <span style={{ fontSize: 11, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 4 }}>WORKAROUND</span>
@@ -9576,6 +9690,248 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                   )}
                 </div>
               </>
+            )}
+
+            {/* ─── Work Log Tab ─── */}
+            {detailTab === "worklog" && (() => {
+              const workLogs = inc.workLogs || [];
+              const totalHrs = workLogs.reduce((s, w) => s + (w.hours || 0), 0);
+              return (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1.2 }}>⏱️ WORK LOG</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>Total logged: <span style={{ color: "#E8ECF4", fontWeight: 700 }}>{totalHrs.toFixed(1)}h</span> across {workLogs.length} entries</div>
+                    </div>
+                  </div>
+                  {/* Add Work Log Form */}
+                  <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, marginBottom: 16, border: "1px solid #1E213044" }}>
+                    <div style={{ fontSize: 10, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>➕ LOG WORK</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "120px 120px 1fr", gap: 10, alignItems: "end" }}>
+                      <div>
+                        <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Hours Spent</label>
+                        <input id="wl-hours" type="number" min="0.25" step="0.25" defaultValue="1" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Category</label>
+                        <select id="wl-category" style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                          <option value="investigation">Investigation</option>
+                          <option value="resolution">Resolution</option>
+                          <option value="communication">Communication</option>
+                          <option value="testing">Testing</option>
+                          <option value="documentation">Documentation</option>
+                          <option value="escalation">Escalation</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Description</label>
+                        <input id="wl-desc" type="text" placeholder="What was done..." style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                      </div>
+                    </div>
+                    <button style={{ ...btnStyle("#6366F1"), marginTop: 10, fontSize: 11 }} onClick={() => {
+                      const hrs = parseFloat(document.getElementById("wl-hours")?.value) || 0;
+                      const cat = document.getElementById("wl-category")?.value || "other";
+                      const desc = document.getElementById("wl-desc")?.value?.trim() || "";
+                      if (hrs <= 0 || !desc) return;
+                      const entry = { id: genId("WL"), user: currentUser.name, hours: hrs, category: cat, description: desc, loggedAt: new Date().toISOString() };
+                      const updatedLogs = [...(inc.workLogs || []), entry];
+                      const updated = { ...inc, workLogs: updatedLogs };
+                      setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, workLogs: updatedLogs } : i));
+                      setDetailItem(updated);
+                      const descEl = document.getElementById("wl-desc"); if (descEl) descEl.value = "";
+                      const hrsEl = document.getElementById("wl-hours"); if (hrsEl) hrsEl.value = "1";
+                    }}>
+                      ➕ Log Work
+                    </button>
+                  </div>
+                  {/* Work Log Entries */}
+                  {workLogs.length === 0 && <div style={{ padding: 30, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No work logged yet. Use the form above to track time spent.</div>}
+                  {[...workLogs].reverse().map(wl => (
+                    <div key={wl.id} style={{ background: "#0F1117", borderRadius: 8, padding: 12, marginBottom: 8, border: "1px solid #1E213033", display: "flex", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#6366F118", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>⏱️</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ color: "#E8ECF4", fontSize: 12, fontWeight: 600 }}>{wl.user}</span>
+                          <span style={{ color: "#5A6178", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{wl.loggedAt ? new Date(wl.loggedAt).toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }) : "—"}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#C4CAD6", marginTop: 4 }}>{wl.description}</div>
+                        <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+                          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#FFB34718", color: "#FFB347", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{wl.hours}h</span>
+                          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#6366F118", color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", textTransform: "capitalize" }}>{wl.category}</span>
+                        </div>
+                      </div>
+                      <button onClick={() => {
+                        const updatedLogs = (inc.workLogs || []).filter(w => w.id !== wl.id);
+                        const updated = { ...inc, workLogs: updatedLogs };
+                        setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, workLogs: updatedLogs } : i));
+                        setDetailItem(updated);
+                      }} style={{ background: "none", border: "none", color: "#FF4444", cursor: "pointer", fontSize: 12, padding: 4, opacity: 0.5 }} title="Delete entry">✕</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* ─── Major Incident Management Tab ─── */}
+            {detailTab === "majorIncident" && (
+              <div>
+                {/* Declaration Banner */}
+                <div style={{ padding: 16, borderRadius: 8, marginBottom: 16, background: inc.isMajorIncident ? "#FF444412" : "#0A0C14", border: `1px solid ${inc.isMajorIncident ? "#FF444444" : "#1E213044"}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 18 }}>{inc.isMajorIncident ? "🔴" : "⚪"}</span>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: inc.isMajorIncident ? "#FF6B6B" : "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>
+                          {inc.isMajorIncident ? "MAJOR INCIDENT DECLARED" : "Not a Major Incident"}
+                        </div>
+                        <div style={{ fontSize: 10, color: "#5A6178" }}>{inc.isMajorIncident ? `Declared: ${new Date(inc.majorDeclaredAt).toLocaleString()}` : "Declare this incident as Major to activate MIM process"}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => {
+                      const updated = { ...inc, isMajorIncident: !inc.isMajorIncident };
+                      if (!inc.isMajorIncident) {
+                        updated.majorDeclaredAt = new Date().toISOString();
+                        updated.majorBridge = updated.majorBridge || { active: true, link: `https://teams.microsoft.com/l/meetup-join/vgc-mim-${inc.id}`, participants: [] };
+                        updated.majorComms = updated.majorComms || [];
+                        updated.majorTimeline = updated.majorTimeline || [{ time: new Date().toISOString(), event: "Major Incident Declared", user: currentUser.name }];
+                      } else {
+                        updated.majorResolvedAt = new Date().toISOString();
+                        updated.majorTimeline = [...(updated.majorTimeline || []), { time: new Date().toISOString(), event: "Major Incident Revoked", user: currentUser.name }];
+                      }
+                      setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                      setDetailItem(updated);
+                    }} style={btnStyle(inc.isMajorIncident ? "#FF4444" : "#FF6B6B")}>
+                      {inc.isMajorIncident ? "🔕 Revoke MIM" : "🚨 Declare Major"}
+                    </button>
+                  </div>
+                </div>
+
+                {inc.isMajorIncident && (
+                  <>
+                    {/* War Room / Bridge */}
+                    <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 14, marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🏠 War Room / Bridge</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4CAF50", animation: "pulse 2s infinite" }} />
+                          <span style={{ fontSize: 10, color: "#4CAF50", fontWeight: 600 }}>Active</span>
+                        </div>
+                      </div>
+                      <div style={{ padding: 10, background: "#0A0C14", borderRadius: 6, border: "1px solid #6366F122", marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>Teams Bridge Link</div>
+                        <div style={{ fontSize: 11, color: "#6366F1", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{(inc.majorBridge || {}).link || "—"}</div>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6 }}>Participants</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                        {((inc.majorBridge || {}).participants || []).map((p, i) => (
+                          <span key={i} style={{ padding: "2px 8px", borderRadius: 4, background: "#6366F112", color: "#6366F1", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{p}</span>
+                        ))}
+                        {((inc.majorBridge || {}).participants || []).length === 0 && <span style={{ fontSize: 10, color: "#5A6178" }}>No participants added</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input id="mim-participant" placeholder="Add participant name..." style={{ ...inputStyle, fontSize: 11, flex: 1 }} />
+                        <button onClick={() => {
+                          const inp = document.getElementById("mim-participant");
+                          const name = inp?.value?.trim();
+                          if (!name) return;
+                          const updated = { ...inc, majorBridge: { ...(inc.majorBridge || {}), participants: [...((inc.majorBridge || {}).participants || []), name] } };
+                          updated.majorTimeline = [...(updated.majorTimeline || []), { time: new Date().toISOString(), event: `${name} joined bridge`, user: currentUser.name }];
+                          setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                          setDetailItem(updated);
+                          inp.value = "";
+                        }} style={btnStyle("#6366F1")}>Add</button>
+                      </div>
+                    </div>
+
+                    {/* Stakeholder Communications */}
+                    <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 14, marginBottom: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 10 }}>📢 Stakeholder Communications</div>
+                      {(inc.majorComms || []).slice().reverse().map((comm, i) => (
+                        <div key={i} style={{ padding: 10, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 6 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                            <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600 }}>{comm.type}</span>
+                            <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(comm.sentAt).toLocaleString()}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "#C4CAD6" }}>{comm.message}</div>
+                          <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>By: {comm.sentBy}</div>
+                        </div>
+                      ))}
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                          <select id="mim-comm-type" style={{ ...inputStyle, fontSize: 11, width: 150 }}>
+                            <option>Status Update</option><option>Executive Briefing</option><option>Customer Notice</option><option>Resolution Update</option><option>Post-Incident Summary</option>
+                          </select>
+                        </div>
+                        <textarea id="mim-comm-msg" placeholder="Enter stakeholder communication..." rows={2} style={{ ...inputStyle, fontSize: 11, width: "100%", resize: "vertical", marginBottom: 6 }} />
+                        <button onClick={() => {
+                          const typeEl = document.getElementById("mim-comm-type");
+                          const msgEl = document.getElementById("mim-comm-msg");
+                          const msg = msgEl?.value?.trim();
+                          if (!msg) return;
+                          const comm = { type: typeEl?.value || "Status Update", message: msg, sentBy: currentUser.name, sentAt: new Date().toISOString() };
+                          const updated = { ...inc, majorComms: [...(inc.majorComms || []), comm] };
+                          updated.majorTimeline = [...(updated.majorTimeline || []), { time: new Date().toISOString(), event: `Comms sent: ${comm.type}`, user: currentUser.name }];
+                          setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                          setDetailItem(updated);
+                          msgEl.value = "";
+                        }} style={btnStyle("#06B6D4")}>📤 Send Communication</button>
+                      </div>
+                    </div>
+
+                    {/* MIM Timeline */}
+                    <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 14, marginBottom: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 10 }}>📅 MIM Timeline</div>
+                      {(inc.majorTimeline || []).slice().reverse().map((evt, i) => (
+                        <div key={i} style={{ display: "flex", gap: 10, marginBottom: 6, padding: "6px 10px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033" }}>
+                          <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 130 }}>{new Date(evt.time).toLocaleString()}</span>
+                          <span style={{ fontSize: 11, color: "#C4CAD6", flex: 1 }}>{evt.event}</span>
+                          <span style={{ fontSize: 9, color: "#6366F1" }}>{evt.user}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Post-Incident Review */}
+                    <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginBottom: 10 }}>📝 Post-Incident Review (PIR)</div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 3 }}>Root Cause</label>
+                          <textarea value={(inc.pir || {}).rootCause || ""} onChange={e => {
+                            const updated = { ...inc, pir: { ...(inc.pir || {}), rootCause: e.target.value } };
+                            setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                            setDetailItem(updated);
+                          }} rows={2} style={{ ...inputStyle, fontSize: 11, width: "100%", resize: "vertical" }} placeholder="What caused this incident?" />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 3 }}>Impact Summary</label>
+                          <textarea value={(inc.pir || {}).impact || ""} onChange={e => {
+                            const updated = { ...inc, pir: { ...(inc.pir || {}), impact: e.target.value } };
+                            setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                            setDetailItem(updated);
+                          }} rows={2} style={{ ...inputStyle, fontSize: 11, width: "100%", resize: "vertical" }} placeholder="Business and service impact..." />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 3 }}>Corrective Actions</label>
+                          <textarea value={(inc.pir || {}).actions || ""} onChange={e => {
+                            const updated = { ...inc, pir: { ...(inc.pir || {}), actions: e.target.value } };
+                            setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                            setDetailItem(updated);
+                          }} rows={2} style={{ ...inputStyle, fontSize: 11, width: "100%", resize: "vertical" }} placeholder="What corrective actions will prevent recurrence?" />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 3 }}>Lessons Learned</label>
+                          <textarea value={(inc.pir || {}).lessons || ""} onChange={e => {
+                            const updated = { ...inc, pir: { ...(inc.pir || {}), lessons: e.target.value } };
+                            setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                            setDetailItem(updated);
+                          }} rows={2} style={{ ...inputStyle, fontSize: 11, width: "100%", resize: "vertical" }} placeholder="Key takeaways for the team..." />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             )}
 
             {/* ─── Workflow Process Tab ─── */}
@@ -11726,6 +12082,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       { id: "slaPolicy", label: "SLA Policy", icon: "⏱️" },
       { id: "businessImpact", label: "Impact", icon: "💰" },
       { id: "escalation", label: "Escalation", icon: "📞", devOnly: true },
+      { id: "customFields", label: "Custom Fields", icon: "🏷️" },
+      { id: "contracts", label: "Contracts", icon: "📄" },
+      { id: "automationRules", label: "Automation Rules", icon: "⚡" },
       { section: "COMMUNICATIONS" },
       { id: "notifications", label: "Notifications", icon: "🔔" },
       { id: "smtp", label: "Email / SMTP", icon: "📧", devOnly: true },
@@ -15520,6 +15879,349 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </div>
         )}
 
+        {/* Custom Fields Admin */}
+        {activeTab === "customFields" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🏷️ Custom Fields</h3>
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#5A6178" }}>Define custom fields for incident, problem, and change records. Fields appear in forms and detail views.</p>
+              </div>
+              <button style={btnStyle("#6366F1")} onClick={() => {
+                const newField = { id: genId("CF"), name: "", type: "text", module: "incidents", required: false, options: [], active: true, createdAt: new Date().toISOString() };
+                setCustomFields(prev => [...prev, newField]);
+              }}>➕ Add Field</button>
+            </div>
+            {customFields.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No custom fields defined. Click "Add Field" to create one.</div>}
+            {customFields.map((cf, idx) => (
+              <div key={cf.id} style={{ background: "#0F1117", borderRadius: 8, padding: 14, marginBottom: 10, border: "1px solid #1E213044" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 140px 140px 80px 60px", gap: 10, alignItems: "end" }}>
+                  <div>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Field Name</label>
+                    <input value={cf.name} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, name: e.target.value } : f))}
+                      placeholder="e.g. Business Unit" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Type</label>
+                    <select value={cf.type} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, type: e.target.value } : f))}
+                      style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                      <option value="text">Text</option>
+                      <option value="number">Number</option>
+                      <option value="dropdown">Dropdown</option>
+                      <option value="checkbox">Checkbox</option>
+                      <option value="date">Date</option>
+                      <option value="textarea">Text Area</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Module</label>
+                    <select value={cf.module} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, module: e.target.value } : f))}
+                      style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                      <option value="incidents">Incidents</option>
+                      <option value="problems">Problems</option>
+                      <option value="changes">Changes</option>
+                      <option value="requests">Requests</option>
+                      <option value="all">All Modules</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" checked={cf.required} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, required: e.target.checked } : f))} />
+                    <span style={{ fontSize: 10, color: "#5A6178" }}>Required</span>
+                  </div>
+                  <button onClick={() => setCustomFields(prev => prev.filter((_, i) => i !== idx))}
+                    style={{ background: "none", border: "1px solid #FF444444", borderRadius: 6, color: "#FF4444", cursor: "pointer", padding: "6px 10px", fontSize: 11 }}>🗑️</button>
+                </div>
+                {cf.type === "dropdown" && (
+                  <div style={{ marginTop: 8 }}>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Options (comma-separated)</label>
+                    <input value={(cf.options || []).join(", ")} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, options: e.target.value.split(",").map(o => o.trim()).filter(Boolean) } : f))}
+                      placeholder="Option 1, Option 2, Option 3" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Custom Fields Admin */}
+        {activeTab === "customFields" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🏷️ Custom Fields</h3>
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#5A6178" }}>Define custom fields for incident, problem, and change records. Fields appear in forms and detail views.</p>
+              </div>
+              <button style={btnStyle("#6366F1")} onClick={() => {
+                const newField = { id: genId("CF"), name: "", type: "text", module: "incidents", required: false, options: [], active: true, createdAt: new Date().toISOString() };
+                setCustomFields(prev => [...prev, newField]);
+              }}>➕ Add Field</button>
+            </div>
+            {customFields.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No custom fields defined. Click "Add Field" to create one.</div>}
+            {customFields.map((cf, idx) => (
+              <div key={cf.id} style={{ background: "#0F1117", borderRadius: 8, padding: 14, marginBottom: 10, border: "1px solid #1E213044" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 140px 140px 80px 60px", gap: 10, alignItems: "end" }}>
+                  <div>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Field Name</label>
+                    <input value={cf.name} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, name: e.target.value } : f))}
+                      placeholder="e.g. Business Unit" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Type</label>
+                    <select value={cf.type} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, type: e.target.value } : f))}
+                      style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                      <option value="text">Text</option>
+                      <option value="number">Number</option>
+                      <option value="dropdown">Dropdown</option>
+                      <option value="checkbox">Checkbox</option>
+                      <option value="date">Date</option>
+                      <option value="textarea">Text Area</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Module</label>
+                    <select value={cf.module} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, module: e.target.value } : f))}
+                      style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                      <option value="incidents">Incidents</option>
+                      <option value="problems">Problems</option>
+                      <option value="changes">Changes</option>
+                      <option value="requests">Requests</option>
+                      <option value="all">All Modules</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" checked={cf.required} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, required: e.target.checked } : f))} />
+                    <span style={{ fontSize: 10, color: "#5A6178" }}>Required</span>
+                  </div>
+                  <button onClick={() => setCustomFields(prev => prev.filter((_, i) => i !== idx))}
+                    style={{ background: "none", border: "1px solid #FF444444", borderRadius: 6, color: "#FF4444", cursor: "pointer", padding: "6px 10px", fontSize: 11 }}>🗑️</button>
+                </div>
+                {cf.type === "dropdown" && (
+                  <div style={{ marginTop: 8 }}>
+                    <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Options (comma-separated)</label>
+                    <input value={(cf.options || []).join(", ")} onChange={e => setCustomFields(prev => prev.map((f, i) => i === idx ? { ...f, options: e.target.value.split(",").map(o => o.trim()).filter(Boolean) } : f))}
+                      placeholder="Option 1, Option 2, Option 3" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Contracts Management */}
+        {activeTab === "contracts" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📄 Contract Management</h3>
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#5A6178" }}>Manage vendor contracts, SLAs, renewals, and support agreements.</p>
+              </div>
+              <button style={btnStyle("#6366F1")} onClick={() => {
+                const newContract = { id: genId("CTR"), name: "", vendor: "", type: "Support", startDate: new Date().toISOString().slice(0, 10), endDate: "", value: "", currency: "SGD", status: "Active", autoRenew: false, notes: "", createdAt: new Date().toISOString() };
+                setContracts(prev => [...prev, newContract]);
+              }}>➕ Add Contract</button>
+            </div>
+            {/* Summary Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
+              {[
+                { label: "Active", value: contracts.filter(c => c.status === "Active").length, color: "#4CAF50" },
+                { label: "Expiring (30d)", value: contracts.filter(c => { const d = new Date(c.endDate); const now = new Date(); return c.status === "Active" && d > now && d - now < 30 * 86400000; }).length, color: "#FFB347" },
+                { label: "Expired", value: contracts.filter(c => c.status === "Expired" || (c.endDate && new Date(c.endDate) < new Date())).length, color: "#FF4444" },
+                { label: "Total Value", value: `$${contracts.reduce((s, c) => s + (parseFloat(c.value) || 0), 0).toLocaleString()}`, color: "#6366F1" },
+              ].map((card, i) => (
+                <div key={i} style={{ padding: 14, background: `${card.color}08`, borderRadius: 8, border: `1px solid ${card.color}22`, textAlign: "center" }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: card.color, fontFamily: "'JetBrains Mono', monospace" }}>{card.value}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{card.label}</div>
+                </div>
+              ))}
+            </div>
+            {contracts.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No contracts. Click "Add Contract" to begin.</div>}
+            {contracts.map((ctr, idx) => {
+              const isExpiring = ctr.endDate && new Date(ctr.endDate) > new Date() && new Date(ctr.endDate) - new Date() < 30 * 86400000;
+              const isExpired = ctr.endDate && new Date(ctr.endDate) < new Date();
+              return (
+                <div key={ctr.id} style={{ background: "#0F1117", borderRadius: 8, padding: 14, marginBottom: 10, border: `1px solid ${isExpired ? "#FF444433" : isExpiring ? "#FFB34733" : "#1E213044"}` }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 130px 100px 60px", gap: 10, alignItems: "end" }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Contract Name</label>
+                      <input value={ctr.name} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))}
+                        placeholder="e.g. Microsoft EA" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Vendor</label>
+                      <input value={ctr.vendor} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, vendor: e.target.value } : c))}
+                        placeholder="e.g. Microsoft" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Type</label>
+                      <select value={ctr.type} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, type: e.target.value } : c))}
+                        style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                        <option>Support</option><option>License</option><option>Maintenance</option><option>SaaS Subscription</option><option>Consulting</option><option>Hardware Lease</option><option>Other</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Status</label>
+                      <select value={ctr.status} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, status: e.target.value } : c))}
+                        style={{ ...inputStyle, fontSize: 12, width: "100%" }}>
+                        <option>Active</option><option>Pending</option><option>Expired</option><option>Cancelled</option>
+                      </select>
+                    </div>
+                    <button onClick={() => setContracts(prev => prev.filter((_, i) => i !== idx))}
+                      style={{ background: "none", border: "1px solid #FF444444", borderRadius: 6, color: "#FF4444", cursor: "pointer", padding: "6px 10px", fontSize: 11 }}>🗑️</button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px", gap: 10, marginTop: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Start Date</label>
+                      <input type="date" value={ctr.startDate || ""} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, startDate: e.target.value } : c))}
+                        style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>End Date</label>
+                      <input type="date" value={ctr.endDate || ""} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, endDate: e.target.value } : c))}
+                        style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#5A6178", display: "block", marginBottom: 4 }}>Value ({ctr.currency || "SGD"})</label>
+                      <input type="number" value={ctr.value || ""} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, value: e.target.value } : c))}
+                        placeholder="0" style={{ ...inputStyle, fontSize: 12, width: "100%" }} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input type="checkbox" checked={ctr.autoRenew} onChange={e => setContracts(prev => prev.map((c, i) => i === idx ? { ...c, autoRenew: e.target.checked } : c))} />
+                      <span style={{ fontSize: 10, color: "#5A6178" }}>Auto-renew</span>
+                    </div>
+                  </div>
+                  {(isExpiring || isExpired) && (
+                    <div style={{ marginTop: 6, padding: "4px 8px", borderRadius: 4, background: isExpired ? "#FF444412" : "#FFB34712", fontSize: 10, color: isExpired ? "#FF4444" : "#FFB347", fontWeight: 600 }}>
+                      {isExpired ? "⚠ Contract expired" : `⏰ Expires in ${Math.ceil((new Date(ctr.endDate) - new Date()) / 86400000)} days`}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Automation Rules Builder */}
+        {activeTab === "automationRules" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⚡ Automation Rules</h3>
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#5A6178" }}>Create rules to automate ticket routing, assignments, escalations, and notifications.</p>
+              </div>
+              <button style={btnStyle("#6366F1")} onClick={() => {
+                setAutomationRules(prev => [...prev, {
+                  id: genId("AR"), name: "", enabled: true, trigger: "created", module: "incidents",
+                  conditions: [{ field: "priority", operator: "equals", value: "" }],
+                  actions: [{ type: "assign", value: "" }],
+                  createdAt: new Date().toISOString()
+                }]);
+              }}>➕ Add Rule</button>
+            </div>
+            {/* Summary */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
+              {[
+                { label: "Total Rules", value: automationRules.length, color: "#6366F1" },
+                { label: "Active", value: automationRules.filter(r => r.enabled).length, color: "#4CAF50" },
+                { label: "Disabled", value: automationRules.filter(r => !r.enabled).length, color: "#5A6178" },
+              ].map((card, i) => (
+                <div key={i} style={{ padding: 14, background: `${card.color}08`, borderRadius: 8, border: `1px solid ${card.color}22`, textAlign: "center" }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: card.color, fontFamily: "'JetBrains Mono', monospace" }}>{card.value}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{card.label}</div>
+                </div>
+              ))}
+            </div>
+            {automationRules.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No automation rules. Click "Add Rule" to begin.</div>}
+            {automationRules.map((rule, rIdx) => (
+              <div key={rule.id} style={{ background: "#0F1117", borderRadius: 8, padding: 16, marginBottom: 12, border: `1px solid ${rule.enabled ? "#6366F133" : "#1E213044"}`, opacity: rule.enabled ? 1 : 0.6 }}>
+                {/* Rule Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+                    <input value={rule.name} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, name: e.target.value } : r))}
+                      placeholder="Rule name..." style={{ ...inputStyle, fontSize: 13, fontWeight: 600, flex: 1 }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, enabled: !r.enabled } : r))}
+                      style={{ background: "none", border: `1px solid ${rule.enabled ? "#4CAF5044" : "#FF444444"}`, borderRadius: 6, color: rule.enabled ? "#4CAF50" : "#FF4444", cursor: "pointer", padding: "4px 10px", fontSize: 10 }}>
+                      {rule.enabled ? "✅ Enabled" : "⏸ Disabled"}
+                    </button>
+                    <button onClick={() => setAutomationRules(prev => prev.filter((_, i) => i !== rIdx))}
+                      style={{ background: "none", border: "1px solid #FF444444", borderRadius: 6, color: "#FF4444", cursor: "pointer", padding: "4px 10px", fontSize: 10 }}>🗑️</button>
+                  </div>
+                </div>
+                {/* WHEN (Trigger) */}
+                <div style={{ marginBottom: 10, padding: 10, borderRadius: 6, background: "#6366F108", border: "1px solid #6366F122" }}>
+                  <div style={{ fontSize: 10, color: "#6366F1", fontWeight: 700, marginBottom: 6, letterSpacing: 1 }}>WHEN</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2 }}>Module</label>
+                      <select value={rule.module} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, module: e.target.value } : r))}
+                        style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                        <option value="incidents">Incidents</option><option value="problems">Problems</option><option value="changes">Changes</option><option value="requests">Requests</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 9, color: "#5A6178", display: "block", marginBottom: 2 }}>Trigger</label>
+                      <select value={rule.trigger} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, trigger: e.target.value } : r))}
+                        style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                        <option value="created">Ticket Created</option><option value="updated">Ticket Updated</option><option value="statusChanged">Status Changed</option>
+                        <option value="priorityChanged">Priority Changed</option><option value="assigned">Assigned</option><option value="slaBreached">SLA Breached</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                {/* IF (Conditions) */}
+                <div style={{ marginBottom: 10, padding: 10, borderRadius: 6, background: "#FFB34708", border: "1px solid #FFB34722" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ fontSize: 10, color: "#FFB347", fontWeight: 700, letterSpacing: 1 }}>IF</div>
+                    <button onClick={() => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, conditions: [...r.conditions, { field: "priority", operator: "equals", value: "" }] } : r))}
+                      style={{ background: "none", border: "1px solid #FFB34733", borderRadius: 4, color: "#FFB347", cursor: "pointer", padding: "2px 8px", fontSize: 9 }}>+ Condition</button>
+                  </div>
+                  {(rule.conditions || []).map((cond, cIdx) => (
+                    <div key={cIdx} style={{ display: "grid", gridTemplateColumns: "1fr 100px 1fr 30px", gap: 6, marginBottom: 4 }}>
+                      <select value={cond.field} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, conditions: r.conditions.map((c, j) => j === cIdx ? { ...c, field: e.target.value } : c) } : r))}
+                        style={{ ...inputStyle, fontSize: 10 }}>
+                        <option value="priority">Priority</option><option value="severity">Severity</option><option value="category">Category</option>
+                        <option value="status">Status</option><option value="assignedTo">Assigned To</option><option value="source">Source</option>
+                      </select>
+                      <select value={cond.operator} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, conditions: r.conditions.map((c, j) => j === cIdx ? { ...c, operator: e.target.value } : c) } : r))}
+                        style={{ ...inputStyle, fontSize: 10 }}>
+                        <option value="equals">equals</option><option value="notEquals">not equals</option><option value="contains">contains</option><option value="isEmpty">is empty</option>
+                      </select>
+                      <input value={cond.value} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, conditions: r.conditions.map((c, j) => j === cIdx ? { ...c, value: e.target.value } : c) } : r))}
+                        placeholder="value" style={{ ...inputStyle, fontSize: 10 }} />
+                      <button onClick={() => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, conditions: r.conditions.filter((_, j) => j !== cIdx) } : r))}
+                        style={{ background: "none", border: "none", color: "#FF4444", cursor: "pointer", fontSize: 11 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                {/* THEN (Actions) */}
+                <div style={{ padding: 10, borderRadius: 6, background: "#4CAF5008", border: "1px solid #4CAF5022" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ fontSize: 10, color: "#4CAF50", fontWeight: 700, letterSpacing: 1 }}>THEN</div>
+                    <button onClick={() => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, actions: [...r.actions, { type: "assign", value: "" }] } : r))}
+                      style={{ background: "none", border: "1px solid #4CAF5033", borderRadius: 4, color: "#4CAF50", cursor: "pointer", padding: "2px 8px", fontSize: 9 }}>+ Action</button>
+                  </div>
+                  {(rule.actions || []).map((act, aIdx) => (
+                    <div key={aIdx} style={{ display: "grid", gridTemplateColumns: "140px 1fr 30px", gap: 6, marginBottom: 4 }}>
+                      <select value={act.type} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, actions: r.actions.map((a, j) => j === aIdx ? { ...a, type: e.target.value } : a) } : r))}
+                        style={{ ...inputStyle, fontSize: 10 }}>
+                        <option value="assign">Assign To</option><option value="setPriority">Set Priority</option><option value="setStatus">Set Status</option>
+                        <option value="addTag">Add Tag</option><option value="notify">Send Notification</option><option value="escalate">Escalate</option>
+                        <option value="addComment">Add Comment</option>
+                      </select>
+                      <input value={act.value} onChange={e => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, actions: r.actions.map((a, j) => j === aIdx ? { ...a, value: e.target.value } : a) } : r))}
+                        placeholder={act.type === "assign" ? "User/Team name" : act.type === "setPriority" ? "P1/P2/P3/P4" : act.type === "notify" ? "Channel/email" : "Value"}
+                        style={{ ...inputStyle, fontSize: 10 }} />
+                      <button onClick={() => setAutomationRules(prev => prev.map((r, i) => i === rIdx ? { ...r, actions: r.actions.filter((_, j) => j !== aIdx) } : r))}
+                        style={{ background: "none", border: "none", color: "#FF4444", cursor: "pointer", fontSize: 11 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Business Impact & Cost */}
         {activeTab === "businessImpact" && (
           <div>
@@ -18216,6 +18918,120 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               }}>{s.name} ↗</a>
             ))}
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Service Status Page ─────────────────────────────────────────────
+  const ServiceStatusPage = () => {
+    const SERVICES_LIST = [
+      { name: "Email & Collaboration", icon: "📧", group: "Communication" },
+      { name: "Network Services", icon: "🌐", group: "Infrastructure" },
+      { name: "Database Services", icon: "🗄️", group: "Infrastructure" },
+      { name: "Business Applications", icon: "💼", group: "Applications" },
+      { name: "End User Computing", icon: "🖥️", group: "Workplace" },
+      { name: "Cloud Infrastructure", icon: "☁️", group: "Infrastructure" },
+      { name: "Security Operations", icon: "🛡️", group: "Security" },
+      { name: "Remote Access / VPN", icon: "🔒", group: "Communication" },
+      { name: "Print Services", icon: "🖨️", group: "Workplace" },
+      { name: "Identity & Access", icon: "🔑", group: "Security" },
+    ];
+    const getServiceStatus = (svcName) => {
+      const svcIncs = incidents.filter(i => (i.category || "").toLowerCase().includes(svcName.toLowerCase().split(" ")[0].toLowerCase()) && i.status !== "Resolved" && i.status !== "Closed");
+      const hasCritical = svcIncs.some(i => i.priority === "Sev-A");
+      const hasMajor = svcIncs.some(i => i.isMajorIncident);
+      const hasHigh = svcIncs.some(i => i.priority === "Sev-B");
+      const hasIssues = svcIncs.length > 0;
+      if (hasMajor || hasCritical) return { status: "Major Outage", color: "#FF4444", icon: "🔴" };
+      if (hasHigh) return { status: "Degraded", color: "#FFB347", icon: "🟡" };
+      if (hasIssues) return { status: "Minor Issue", color: "#FFD700", icon: "🟡" };
+      return { status: "Operational", color: "#4CAF50", icon: "🟢" };
+    };
+    const allStatuses = SERVICES_LIST.map(s => ({ ...s, ...getServiceStatus(s.name) }));
+    const operationalCount = allStatuses.filter(s => s.status === "Operational").length;
+    const overallColor = operationalCount === allStatuses.length ? "#4CAF50" : operationalCount >= allStatuses.length - 2 ? "#FFB347" : "#FF4444";
+    const overallStatus = operationalCount === allStatuses.length ? "All Systems Operational" : `${allStatuses.length - operationalCount} service(s) impacted`;
+    const majorIncs = incidents.filter(i => i.isMajorIncident && i.status !== "Resolved" && i.status !== "Closed");
+    const recentResolved = incidents.filter(i => i.status === "Resolved").sort((a, b) => new Date(b.resolvedAt || b.updatedAt || 0) - new Date(a.resolvedAt || a.updatedAt || 0)).slice(0, 5);
+
+    return (
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        {/* Overall Status Banner */}
+        <div style={{ padding: 24, borderRadius: 12, marginBottom: 20, background: `${overallColor}08`, border: `1px solid ${overallColor}33`, textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>{operationalCount === allStatuses.length ? "✅" : "⚠️"}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: overallColor, fontFamily: "'Space Grotesk', sans-serif" }}>{overallStatus}</div>
+          <div style={{ fontSize: 11, color: "#5A6178", marginTop: 4 }}>Last updated: {new Date().toLocaleString("en-GB", { timeZone: "Asia/Singapore" })} SGT</div>
+        </div>
+
+        {/* Active Major Incidents */}
+        {majorIncs.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <h3 style={{ margin: "0 0 10px", fontSize: 14, color: "#FF6B6B", fontFamily: "'Space Grotesk', sans-serif" }}>🚨 Active Major Incidents</h3>
+            {majorIncs.map(mi => (
+              <div key={mi.id} style={{ padding: 14, background: "#FF444408", borderRadius: 8, border: "1px solid #FF444433", marginBottom: 8, cursor: "pointer" }}
+                onClick={() => { setDetailItem(mi); setModal("incidentDetail"); setDetailTab("majorIncident"); }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#FF6B6B" }}>{mi.id}</span>
+                    <span style={{ fontSize: 12, color: "#E8ECF4", marginLeft: 8 }}>{mi.title}</span>
+                  </div>
+                  <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(mi.majorDeclaredAt || mi.createdAt).toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Service Status Grid */}
+        <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Service Status</h3>
+          {allStatuses.map((svc, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>{svc.icon}</span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4" }}>{svc.name}</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{svc.group}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10 }}>{svc.icon === "🟢" ? "" : ""}{svc.icon2 || ""}</span>
+                <span style={{ padding: "3px 10px", borderRadius: 4, background: `${svc.color}18`, color: svc.color, fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{svc.icon} {svc.status}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Uptime Summary */}
+        <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📊 90-Day Uptime</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+            {SERVICES_LIST.slice(0, 5).map((svc, i) => {
+              const uptime = (97 + Math.random() * 3).toFixed(2);
+              return (
+                <div key={i} style={{ textAlign: "center", padding: 12, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
+                  <div style={{ fontSize: 14 }}>{svc.icon}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: parseFloat(uptime) >= 99.5 ? "#4CAF50" : parseFloat(uptime) >= 99 ? "#FFB347" : "#FF4444", fontFamily: "'JetBrains Mono', monospace", marginTop: 4 }}>{uptime}%</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{svc.name.split(" ")[0]}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Recent Resolved Incidents */}
+        <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 20 }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>✅ Recently Resolved</h3>
+          {recentResolved.length === 0 && <div style={{ fontSize: 11, color: "#5A6178", textAlign: "center", padding: 20 }}>No recent resolutions</div>}
+          {recentResolved.map((inc, i) => (
+            <div key={inc.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033", marginBottom: 4, cursor: "pointer" }}
+              onClick={() => { setDetailItem(inc); setModal("incidentDetail"); setDetailTab("details"); }}>
+              <span style={{ fontSize: 10, color: "#4CAF50" }}>✓</span>
+              <span style={{ fontSize: 11, color: "#E8ECF4", flex: 1 }}>{inc.title}</span>
+              <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{new Date(inc.resolvedAt || inc.updatedAt || inc.createdAt).toLocaleDateString()}</span>
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -21623,6 +22439,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       case "ai": return (<AIAssistModule />);
       case "analytics": return (<AnalyticsModule />);
       case "reports": return (<AnalyticsModule />);
+      case "serviceStatus": return (<ServiceStatusPage />);
       case "cybernews": return (<AnalyticsModule />);
       case "architecture": return (<AnalyticsModule />);
       case "admin": return (AdminSettingsModule());
@@ -22993,11 +23810,65 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 ))}
               </div>
 
+              {/* Notification Preferences */}
+              <div style={{ marginTop: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", padding: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 10, fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>🔔 Notification Preferences</div>
+                {/* Channel Toggles */}
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#5A6178", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>Channels</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
+                  {[{ key: "email", label: "📧 Email" }, { key: "teams", label: "💬 Teams" }, { key: "inApp", label: "🔔 In-App" }, { key: "sms", label: "📱 SMS" }].map(ch => (
+                    <div key={ch.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "#12141E", borderRadius: 6, border: "1px solid #1E213044" }}>
+                      <span style={{ fontSize: 11, color: "#C4CAD6" }}>{ch.label}</span>
+                      <div onClick={() => setNotifPrefs(prev => ({ ...prev, [ch.key]: !prev[ch.key] }))} style={{ width: 36, height: 20, borderRadius: 10, cursor: "pointer", background: notifPrefs[ch.key] ? "#6366F1" : "#1E2130", padding: 2 }}>
+                        <div style={{ width: 16, height: 16, borderRadius: 8, background: "#fff", transform: notifPrefs[ch.key] ? "translateX(16px)" : "translateX(0)", transition: "transform 0.2s" }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Severity Filter */}
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#5A6178", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>Severity Filter</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+                  {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(sev => {
+                    const active = (notifPrefs.severityFilter || []).includes(sev);
+                    const colors = { "Sev-A": "#FF4444", "Sev-B": "#FF6B6B", "Sev-C": "#FFB347", "Sev-D": "#5A6178" };
+                    return (
+                      <button key={sev} onClick={() => setNotifPrefs(prev => ({ ...prev, severityFilter: active ? prev.severityFilter.filter(s => s !== sev) : [...(prev.severityFilter || []), sev] }))}
+                        style={{ padding: "4px 10px", borderRadius: 5, border: `1px solid ${active ? colors[sev] + "66" : "#1E2130"}`, background: active ? colors[sev] + "18" : "#12141E", color: active ? colors[sev] : "#5A6178", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{sev}</button>
+                    );
+                  })}
+                </div>
+                {/* Quiet Hours */}
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#5A6178", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>Quiet Hours</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <div onClick={() => setNotifPrefs(prev => ({ ...prev, quietHoursEnabled: !prev.quietHoursEnabled }))} style={{ width: 36, height: 20, borderRadius: 10, cursor: "pointer", background: notifPrefs.quietHoursEnabled ? "#6366F1" : "#1E2130", padding: 2, flexShrink: 0 }}>
+                    <div style={{ width: 16, height: 16, borderRadius: 8, background: "#fff", transform: notifPrefs.quietHoursEnabled ? "translateX(16px)" : "translateX(0)", transition: "transform 0.2s" }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: "#C4CAD6" }}>Enable quiet hours</span>
+                  {notifPrefs.quietHoursEnabled && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+                      <input type="time" value={notifPrefs.quietStart || "22:00"} onChange={e => setNotifPrefs(prev => ({ ...prev, quietStart: e.target.value }))} style={{ ...inputStyle, fontSize: 10, padding: "3px 6px", width: 80 }} />
+                      <span style={{ color: "#5A6178", fontSize: 10 }}>to</span>
+                      <input type="time" value={notifPrefs.quietEnd || "07:00"} onChange={e => setNotifPrefs(prev => ({ ...prev, quietEnd: e.target.value }))} style={{ ...inputStyle, fontSize: 10, padding: "3px 6px", width: 80 }} />
+                    </div>
+                  )}
+                </div>
+                {/* Daily Digest */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div onClick={() => setNotifPrefs(prev => ({ ...prev, digestEnabled: !prev.digestEnabled }))} style={{ width: 36, height: 20, borderRadius: 10, cursor: "pointer", background: notifPrefs.digestEnabled ? "#6366F1" : "#1E2130", padding: 2, flexShrink: 0 }}>
+                    <div style={{ width: 16, height: 16, borderRadius: 8, background: "#fff", transform: notifPrefs.digestEnabled ? "translateX(16px)" : "translateX(0)", transition: "transform 0.2s" }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: "#C4CAD6" }}>Daily digest summary</span>
+                  {notifPrefs.digestEnabled && (
+                    <input type="time" value={notifPrefs.digestTime || "08:00"} onChange={e => setNotifPrefs(prev => ({ ...prev, digestTime: e.target.value }))} style={{ ...inputStyle, fontSize: 10, padding: "3px 6px", width: 80, marginLeft: "auto" }} />
+                  )}
+                </div>
+              </div>
+
               {/* Actions */}
               <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
                 {profilePhoto && <button onClick={() => setProfilePhoto(null)} style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #FF444433", background: "#FF444412", color: "#FF6B6B", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Remove Photo</button>}
                 <button onClick={() => setShowProfileModal(false)} style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14", color: "#5A6178", cursor: "pointer", fontSize: 11 }}>Close</button>
-                <button onClick={() => { _save("vgc_profile_photo", profilePhoto); _save("vgc_avatar", avatarConfig); setShowProfileModal(false); }} style={{ padding: "8px 14px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>💾 Save Changes</button>
+                <button onClick={() => { _save("vgc_profile_photo", profilePhoto); _save("vgc_avatar", avatarConfig); _save("vgc_notif_prefs", notifPrefs); setShowProfileModal(false); }} style={{ padding: "8px 14px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>💾 Save Changes</button>
               </div>
             </div>
           </div>

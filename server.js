@@ -1045,6 +1045,9 @@ const VALID_COLLECTIONS = new Set([
   "csat_responses",
   "change_freeze_windows",
   "ai_learning_feedback",
+  "custom_fields",
+  "contracts",
+  "automation_rules",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────

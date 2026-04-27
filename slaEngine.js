@@ -24,6 +24,7 @@ function getBusinessHoursElapsed(createdAt, now, options = {}) {
   const daysStr = options.days || "Mon-Fri";
   const holidays = options.holidays || [];
   const holidaySet = new Set(holidays.map(h => typeof h === "string" ? h : h.date));
+  const slaPauseHistory = options.slaPauseHistory || [];
 
   // Parse working days
   let workingDays;
@@ -42,43 +43,62 @@ function getBusinessHoursElapsed(createdAt, now, options = {}) {
     }
   }
 
-  let elapsed = 0;
-  let cursor = new Date(start);
-  const maxIter = 366 * 24; // safety limit
-  let iter = 0;
-  while (cursor < end && iter++ < maxIter) {
-    const day = cursor.getDay();
-    const dateStr = cursor.toISOString().slice(0, 10);
-    const isWorkDay = workingDays.has(day) && !holidaySet.has(dateStr);
+  const calcBH = (from, to) => {
+    let elapsed = 0;
+    let cursor = new Date(from);
+    const maxIter = 366 * 24;
+    let iter = 0;
+    while (cursor < to && iter++ < maxIter) {
+      const day = cursor.getDay();
+      const dateStr = cursor.toISOString().slice(0, 10);
+      const isWorkDay = workingDays.has(day) && !holidaySet.has(dateStr);
 
-    if (daysStr === "24/7") {
-      // 24/7 mode — all hours count, skip holidays only
-      if (holidaySet.has(dateStr)) {
-        cursor.setDate(cursor.getDate() + 1); cursor.setHours(0, 0, 0, 0);
-      } else {
-        const endOfDay = new Date(cursor); endOfDay.setDate(endOfDay.getDate() + 1); endOfDay.setHours(0, 0, 0, 0);
-        const chunkEnd = endOfDay < end ? endOfDay : end;
-        elapsed += (chunkEnd - cursor) / 3600000;
-        cursor = new Date(chunkEnd);
-      }
-    } else if (isWorkDay) {
-      const hrs = cursor.getHours() + cursor.getMinutes() / 60;
-      if (hrs >= BH_START && hrs < BH_END) {
-        const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
-        const chunkEnd = endOfBH < end ? endOfBH : end;
-        elapsed += (chunkEnd - cursor) / 3600000;
-        cursor = new Date(chunkEnd);
-      } else if (hrs < BH_START) {
-        cursor.setHours(BH_START, 0, 0, 0);
+      if (daysStr === "24/7") {
+        if (holidaySet.has(dateStr)) {
+          cursor.setDate(cursor.getDate() + 1); cursor.setHours(0, 0, 0, 0);
+        } else {
+          const endOfDay = new Date(cursor); endOfDay.setDate(endOfDay.getDate() + 1); endOfDay.setHours(0, 0, 0, 0);
+          const chunkEnd = endOfDay < to ? endOfDay : to;
+          elapsed += (chunkEnd - cursor) / 3600000;
+          cursor = new Date(chunkEnd);
+        }
+      } else if (isWorkDay) {
+        const hrs = cursor.getHours() + cursor.getMinutes() / 60;
+        if (hrs >= BH_START && hrs < BH_END) {
+          const endOfBH = new Date(cursor); endOfBH.setHours(BH_END, 0, 0, 0);
+          const chunkEnd = endOfBH < to ? endOfBH : to;
+          elapsed += (chunkEnd - cursor) / 3600000;
+          cursor = new Date(chunkEnd);
+        } else if (hrs < BH_START) {
+          cursor.setHours(BH_START, 0, 0, 0);
+        } else {
+          cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+        }
       } else {
         cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
       }
-    } else {
-      cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0);
+      if (cursor >= to) break;
     }
-    if (cursor >= end) break;
+    return elapsed;
+  };
+
+  let elapsed = calcBH(start, end);
+
+  // Subtract paused business hours
+  if (Array.isArray(slaPauseHistory) && slaPauseHistory.length > 0) {
+    for (const pause of slaPauseHistory) {
+      if (!pause.pausedAt) continue;
+      const pStart = new Date(pause.pausedAt);
+      const pEnd = pause.resumedAt ? new Date(pause.resumedAt) : end;
+      if (pStart < end && pEnd > start) {
+        const effStart = pStart < start ? start : pStart;
+        const effEnd = pEnd > end ? end : pEnd;
+        elapsed -= calcBH(effStart, effEnd);
+      }
+    }
   }
-  return Math.round(elapsed * 100) / 100;
+
+  return Math.max(0, Math.round(elapsed * 100) / 100);
 }
 
 // ─── Compute SLA status for a single incident ──────────────────────────
@@ -92,7 +112,7 @@ function computeSlaStatus(incident, policy) {
   if (typeof createdAt === "number") {
     hoursElapsed = createdAt;
   } else {
-    const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [] } : {};
+    const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [], slaPauseHistory: incident.slaPauseHistory || [] } : { slaPauseHistory: incident.slaPauseHistory || [] };
     hoursElapsed = getBusinessHoursElapsed(createdAt, now, bhOptions);
   }
 
