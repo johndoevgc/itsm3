@@ -139,13 +139,18 @@ const SOPHOS_CLIENT_SECRET = process.env.SOPHOS_CLIENT_SECRET || "";
 // M365 Mail sending via Managed Identity
 const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 
-// ─── Production Test Mode ───────────────────────────────────────────────
-// When true, ALL outbound emails are redirected to PROD_TEST_EMAIL
+// ─── Production Mode ────────────────────────────────────────────────────
+// PROD_TEST_MODE=false: AI thresholds at production levels, Zendesk bidirectional sync enabled
+const PROD_TEST_MODE = false;
+// ─── Email Redirect (safety net) ────────────────────────────────────────
+// When true, ALL outbound emails are redirected to EMAIL_REDIRECT_TARGET
 // Flip to false when ready to send to real customers
-const PROD_TEST_MODE = true;
-const PROD_TEST_EMAIL = "hlaing@vgctechnology.com";
-// Customer-facing emails go here (never to real customers until go-live)
-const CUSTOMER_TEST_EMAIL = "johndoe@vgcsg.com";
+const EMAIL_REDIRECT_MODE = true;
+const EMAIL_REDIRECT_TARGET = "hlaing@vgctechnology.com";
+// Customer-facing emails go here when redirect is active
+const CUSTOMER_REDIRECT_TARGET = "johndoe@vgcsg.com";
+// Legacy aliases (referenced elsewhere)
+const PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
 const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
 
@@ -1230,20 +1235,20 @@ async function graphSendMail({ to, subject, body, from, isCustomerEmail }) {
   const token = await getManagedIdentityToken();
   const sender = from || MAIL_FROM;
 
-  // ─── Production Test Mode: redirect ALL emails to test inbox ──────
+  // ─── Email Redirect Mode: redirect ALL emails to safe inbox ───────
   let finalTo = Array.isArray(to) ? to : [to];
   let finalSubject = subject;
   let finalBody = body;
-  if (PROD_TEST_MODE) {
+  if (EMAIL_REDIRECT_MODE) {
     const originalRecipients = finalTo.join(", ");
-    const testTarget = isCustomerEmail ? CUSTOMER_TEST_EMAIL : PROD_TEST_EMAIL;
-    finalSubject = `[TEST → ${originalRecipients}] ${subject}`;
+    const testTarget = isCustomerEmail ? CUSTOMER_REDIRECT_TARGET : EMAIL_REDIRECT_TARGET;
+    finalSubject = `[REDIRECT → ${originalRecipients}] ${subject}`;
     finalBody = `<div style="background:#FFF3CD;border:1px solid #FFD700;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-family:Arial,sans-serif;">
-      <strong style="color:#856404;">⚠️ PRODUCTION TEST MODE${isCustomerEmail ? " (CUSTOMER EMAIL)" : ""}</strong><br/>
+      <strong style="color:#856404;">⚠️ EMAIL REDIRECT ACTIVE${isCustomerEmail ? " (CUSTOMER EMAIL)" : ""}</strong><br/>
       <span style="color:#856404;font-size:13px;">Original recipient(s): <code>${originalRecipients}</code></span>
     </div>\n${body}`;
     finalTo = [testTarget];
-    console.log(`[M365 Mail] PROD_TEST_MODE: Redirected email from [${originalRecipients}] → ${testTarget}`);
+    console.log(`[M365 Mail] EMAIL_REDIRECT: Redirected email from [${originalRecipients}] → ${testTarget}`);
   }
 
   const mailPayload = JSON.stringify({
@@ -8402,6 +8407,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       mailFrom: MAIL_FROM,
       prodTestMode: PROD_TEST_MODE,
       prodTestEmail: PROD_TEST_MODE ? PROD_TEST_EMAIL : null,
+      emailRedirectMode: EMAIL_REDIRECT_MODE,
+      emailRedirectTarget: EMAIL_REDIRECT_MODE ? EMAIL_REDIRECT_TARGET : null,
       timestamp: new Date().toISOString(),
     });
   }

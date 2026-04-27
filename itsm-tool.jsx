@@ -119,14 +119,8 @@ const USERS = [
   { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@demo-itsm.local", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
 ];
 
-// ─── Initial Customer Data ────────────────────────────────────────────
-const INITIAL_CUSTOMERS = [
-  { id: "DCUS-001", name: "Demo Corp Pte Ltd", category: "CSP", contactPerson: "Sarah Lim", email: "sarah.lim@democorp.local", phone: "+65 6100 0001", address: "1 Raffles Place, Tower One, Singapore 048616", status: "Active", contractStart: "2025-01-01", contractEnd: "2026-12-31", services: ["Managed IT", "Cloud Hosting", "Security"], notes: "Tier-1 CSP customer — 120 endpoints", createdBy: "Demo Seed", createdAt: "2025-01-01" },
-  { id: "DCUS-002", name: "TechFlow Solutions Pte Ltd", category: "CSP", contactPerson: "Marcus Tan", email: "marcus.tan@techflow.local", phone: "+65 6200 0002", address: "10 Anson Road, International Plaza, Singapore 079903", status: "Active", contractStart: "2025-03-01", contractEnd: "2027-02-28", services: ["Managed IT", "Network Security", "Cloud Hosting", "Endpoint Management"], notes: "Tier-1 CSP customer — 85 endpoints, FortiGate managed", createdBy: "Demo Seed", createdAt: "2025-03-01" },
-  { id: "DCUS-003", name: "Skyline Industries Pte Ltd", category: "Enterprise", contactPerson: "Daniel Lim", email: "daniel.lim@skyline.local", phone: "+65 6300 0003", address: "8 Marina View, Asia Square Tower 1, Singapore 018960", status: "Active", contractStart: "2025-06-01", contractEnd: "2026-05-31", services: ["Cloud Hosting", "Backup & DR", "M365 Management"], notes: "Enterprise customer — 45 endpoints, Azure-primary", createdBy: "Demo Seed", createdAt: "2025-06-01" },
-  { id: "DCUS-004", name: "Pacific Digital Pte Ltd", category: "SMB", contactPerson: "Priya Nair", email: "priya.nair@pacificdigital.local", phone: "+65 6400 0004", address: "71 Robinson Road, Singapore 068895", status: "Active", contractStart: "2025-09-01", contractEnd: "2026-08-31", services: ["Managed IT", "Email Security"], notes: "SMB customer — 25 endpoints, basic managed services", createdBy: "Demo Seed", createdAt: "2025-09-01" },
-  { id: "DCUS-005", name: "GreenField Engineering Pte Ltd", category: "Enterprise", contactPerson: "Kevin Ong", email: "kevin.ong@greenfield.local", phone: "+65 6500 0005", address: "3 Church Street, Samsung Hub, Singapore 049483", status: "Active", contractStart: "2024-11-01", contractEnd: "2026-10-31", services: ["Network Security", "Endpoint Management", "Cloud Hosting", "SOC Monitoring"], notes: "Enterprise customer — 200 endpoints, SOC managed, Sophos WAF", createdBy: "Demo Seed", createdAt: "2024-11-01" },
-];
+// ─── Initial Customer Data (loaded from DB in production) ─────────────
+const INITIAL_CUSTOMERS = [];
 
 // ─── RBAC Enterprise Roles & Permissions ─────────────────────────────────
 const RBAC_ROLES = [
@@ -1064,34 +1058,10 @@ const INTEGRATION_CATALOG = [
   { id: "INT15", name: "Sophos Central", category: "Security", icon: "🛡️", status: "connected", description: "Firewall management — groups, firewalls, alerts & threat intelligence" },
 ];
 
-const INITIAL_INCIDENTS = [
-  { id: "INC-D001", title: "Outlook crashes when opening large attachments (>25MB)", status: "In Progress", priority: "Sev-B", category: "Software", subcategory: "Email", urgency: "High", impact: "Department", assignee: "L1 Support", assignmentGroup: "Service Desk", reporter: "Sarah Lim", reporterEmail: "sarah.lim@democorp.local", customer: "Demo Corp Pte Ltd", description: "Multiple users on Floor 2 report Outlook 365 crashes consistently when opening attachments larger than 25MB. Occurs in both desktop and web versions.", contactMethod: "Portal", created: 4, createdAt: "2026-04-22T05:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 92, zdTicketId: null, workaround: "Download attachment to local drive before opening", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D001", type: "status", user: "System", time: "22/04/2026, 09:00:00", detail: "Ticket created via Portal" }] },
-  { id: "INC-D002", title: "WiFi connectivity drops on Floor 3 meeting rooms", status: "New", priority: "Sev-C", category: "Network", subcategory: "WiFi", urgency: "Medium", impact: "Multiple Users", assignee: "Network Engineering", assignmentGroup: "Network Engineering", reporter: "James Wong", reporterEmail: "james.wong@democorp.local", customer: "Demo Corp Pte Ltd", description: "WiFi disconnects every 15-20 minutes in Floor 3 meeting rooms B and C. Affects both corporate and guest SSIDs.", contactMethod: "Email", created: 8, createdAt: "2026-04-21T21:00:00Z", slaTarget: 9, aiTriaged: true, aiConfidence: 87, zdTicketId: null, workaround: "", linkedProblem: "PRB0003", affectedAssets: ["AST-008"], activityLog: [{ id: "AL-D002", type: "status", user: "System", time: "21/04/2026, 21:00:00", detail: "Ticket created via Email" }] },
-  { id: "INC-D003", title: "VPN connection timeout for remote workers (FortiClient)", status: "Open", priority: "Sev-B", category: "Network", subcategory: "VPN", urgency: "High", impact: "Multiple Users", assignee: "Network Engineering", assignmentGroup: "Network Engineering", reporter: "David Chen", reporterEmail: "david.chen@democorp.local", customer: "Demo Corp Pte Ltd", description: "Remote workers in Malaysia and Indonesia experiencing VPN timeout after 5 minutes of inactivity. FortiClient v7.2 SSL-VPN tunnel drops.", contactMethod: "Teams", created: 6, createdAt: "2026-04-22T03:00:00Z", slaTarget: 4, aiTriaged: false, aiConfidence: 0, zdTicketId: null, workaround: "Increase keepalive interval in FortiClient settings to 30s", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D003", type: "status", user: "System", time: "22/04/2026, 03:00:00", detail: "Ticket created via Teams" }] },
-  { id: "INC-D004", title: "Shared printer on Floor 1 printing blank pages", status: "In Progress", priority: "Sev-D", category: "Hardware", subcategory: "Printer", urgency: "Low", impact: "Single User", assignee: "IT Support", assignmentGroup: "End User Computing", reporter: "Lisa Tan", reporterEmail: "lisa.tan@democorp.local", customer: "Demo Corp Pte Ltd", description: "HP LaserJet Pro M404 on Floor 1 printing blank pages intermittently. Toner level shows 45%.", contactMethod: "Portal", created: 24, createdAt: "2026-04-21T09:00:00Z", slaTarget: 27, aiTriaged: true, aiConfidence: 78, zdTicketId: null, workaround: "Use Floor 2 printer temporarily", linkedProblem: "PRB0004", affectedAssets: ["AST-010"], activityLog: [{ id: "AL-D004", type: "status", user: "System", time: "21/04/2026, 09:00:00", detail: "Ticket created via Portal" }] },
-  { id: "INC-D005", title: "Azure AD sync failure — new users not appearing in M365", status: "Resolved", priority: "Sev-A", category: "Cloud", subcategory: "Identity", urgency: "Critical", impact: "Enterprise", assignee: "Cloud Engineering", assignmentGroup: "Cloud Engineering", reporter: "IT Admin", reporterEmail: "admin@democorp.local", customer: "Demo Corp Pte Ltd", description: "Azure AD Connect sync failing since 20/04. Delta sync error: stopped-deletion-threshold-exceeded. 12 new hires cannot access M365.", contactMethod: "Portal", created: 48, createdAt: "2026-04-20T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 95, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: ["AST-007"], activityLog: [{ id: "AL-D005a", type: "status", user: "System", time: "20/04/2026, 09:00:00", detail: "Ticket created — Sev-A escalation" }, { id: "AL-D005b", type: "status", user: "Cloud Engineering", time: "20/04/2026, 10:30:00", detail: "Root cause: deletion threshold too low (50). Increased to 500, re-ran sync." }, { id: "AL-D005c", type: "status", user: "Cloud Engineering", time: "20/04/2026, 11:00:00", detail: "Status changed: Open → Resolved" }] },
-  { id: "INC-D006", title: "Password reset request — locked AD account", status: "Closed", priority: "Sev-D", category: "Access", subcategory: "Password", urgency: "Low", impact: "Single User", assignee: "Service Desk", assignmentGroup: "Service Desk", reporter: "Michael Ng", reporterEmail: "michael.ng@democorp.local", customer: "Demo Corp Pte Ltd", description: "User locked out after 5 failed login attempts. Needs AD password reset and MFA re-enrollment.", contactMethod: "Phone", created: 72, createdAt: "2026-04-19T09:00:00Z", slaTarget: 4, aiTriaged: true, aiConfidence: 99, zdTicketId: null, workaround: "", linkedProblem: "", affectedAssets: [], activityLog: [{ id: "AL-D006a", type: "status", user: "System", time: "19/04/2026, 09:00:00", detail: "Ticket created via Phone" }, { id: "AL-D006b", type: "status", user: "Service Desk", time: "19/04/2026, 09:15:00", detail: "Password reset completed. MFA re-enrolled." }, { id: "AL-D006c", type: "status", user: "System", time: "19/04/2026, 09:20:00", detail: "Status changed: Open → Closed" }] },
-];
-const INITIAL_PROBLEMS = [
-  { id: "PRB0003", title: "Intermittent DNS resolution failures on SG-HQ WiFi", status: "Under Investigation", priority: "Sev-C", category: "Network", assignee: "Network Engineering", reporter: "L1 Support", created: 72, linkedIncidents: [], rootCause: "", workaround: "Users can manually set DNS to 8.8.8.8 as temporary fix", description: "WiFi clients on Floor 1-2 experience DNS timeouts during peak hours (10AM-12PM). Meraki dashboard shows high client density.", affectedAssets: ["AST-008", "AST-009"], customer: "TechFlow Solutions Pte Ltd", zdTicketId: null },
-  { id: "PRB0004", title: "Printer spooler crashes on shared print server", status: "Known Error", priority: "Sev-D", category: "Hardware", assignee: "Server Team", reporter: "Facilities", created: 240, linkedIncidents: [], rootCause: "HP Universal Print Driver v7.1 incompatible with Windows Server 2022 spooler service", workaround: "Restart Print Spooler service — automated via Task Scheduler every 6 hours", description: "Print spooler crashes 2-3 times daily affecting Floor 2 shared printer. HP driver update pending.", affectedAssets: ["AST-010"], customer: "TechFlow Solutions Pte Ltd", zdTicketId: null },
-];
-const INITIAL_CHANGES = [
-  { id: "CHG0001", title: "Emergency patch Exchange Server — CVE-2026-21413 (Critical RCE)", type: "Emergency", status: "Awaiting Approval", risk: "High", impact: "Enterprise", category: "Security", description: "Apply Microsoft emergency security patch for Exchange Server 2019 to mitigate CVE-2026-21413 remote code execution vulnerability. CVSS 9.8. Active exploitation detected in the wild. Requires 30-minute maintenance window.", assignee: "Server Team", requester: "Security Team", scheduledStart: "2026-04-19 22:00", scheduledEnd: "2026-04-19 23:00", backoutPlan: "Restore from pre-patch snapshot if patch causes service disruption", linkedIncident: "", linkedProblem: "PRB0002", affectedAssets: ["AST-004"], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "Daniel Lim", status: "Pending" }, { name: "IT Manager", status: "Pending" }], zdTicketId: null, created: 2 },
-  { id: "CHG0003", title: "Deploy phishing-resistant MFA (FIDO2 keys) for admin accounts", type: "Normal", status: "Awaiting Approval", risk: "Medium", impact: "Department", category: "Security", description: "Replace SMS-based MFA with FIDO2 security keys for all administrator and privileged accounts (15 users). Part of Cybertrust Mark CSA compliance roadmap.", assignee: "Security Team", requester: "CISO", scheduledStart: "2026-04-22 14:00", scheduledEnd: "2026-04-22 17:00", backoutPlan: "Revert to SMS MFA if FIDO2 enrollment fails — conditional access policy rollback", linkedIncident: "", linkedProblem: "", affectedAssets: [], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "IT Manager", status: "Pending" }, { name: "CISO", status: "Approved" }], zdTicketId: null, created: 48 },
-  { id: "CHG0005", title: "Migrate ITSM database to Azure SQL Managed Instance", type: "Normal", status: "Implementing", risk: "Medium", impact: "Enterprise", category: "Cloud", description: "Migrate ITSM MSSQL database from on-prem PowerEdge R750 to Azure SQL Managed Instance for improved HA, auto-patching, and geo-redundancy. Includes data migration, connection string updates, and validation.", assignee: "Cloud Engineering", requester: "Cloud Engineering", scheduledStart: "2026-04-18 22:00", scheduledEnd: "2026-04-19 04:00", backoutPlan: "Revert connection strings to on-prem server — data sync back if needed", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-007", "AST-013"], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "IT Manager", status: "Approved" }, { name: "DBA Lead", status: "Approved" }], zdTicketId: null, created: 18 },
-  { id: "CHG0006", title: "Replace SonicWall TZ470 with Sophos XGS at branch", type: "Normal", status: "Closed", risk: "Medium", impact: "Department", category: "Network", description: "Decommission legacy SonicWall TZ470 at branch office. Replace with Sophos XGS 3300 — already procured and pre-configured.", assignee: "Network Engineering", requester: "IT Manager", scheduledStart: "2026-04-10 09:00", scheduledEnd: "2026-04-10 17:00", backoutPlan: "Re-install SonicWall if Sophos config has issues", linkedIncident: "", linkedProblem: "", affectedAssets: ["AST-019", "AST-012"], customer: "TechFlow Solutions Pte Ltd", approvers: [{ name: "Change Manager", status: "Approved" }], zdTicketId: null, created: 216 },
-];
-const INITIAL_REQUESTS = [
-  { id: "REQ0001", service: "New Laptop Setup — Marketing Team Hire", status: "Pending Approval", priority: "Sev-C", category: "Hardware", requester: "HR Manager", requesterEmail: "hr@techflow.local", assignee: "IT Support", assignmentGroup: "End User Computing", description: "New Dell Latitude 5540 needed for marketing hire starting 2026-04-22. Requires M365 E3, Adobe CC, VPN access, and standard security policy.", customer: "TechFlow Solutions Pte Ltd", created: 12, slaTarget: 24, zdTicketId: null },
-  { id: "REQ0002", service: "VPN Access Request — Remote Worker", status: "Pending Approval", priority: "Sev-C", category: "Access", requester: "Daniel Lim", requesterEmail: "daniel.lim@democorp.local", assignee: "", assignmentGroup: "Network Engineering", description: "Request permanent VPN access for new remote staff member. Requires FortiClient setup with MFA enrollment.", customer: "Demo Corp Pte Ltd", created: 6, slaTarget: 8, zdTicketId: null },
-  { id: "REQ0003", service: "Microsoft 365 License Upgrade — E3 to E5", status: "Pending Approval", priority: "Sev-D", category: "Software", requester: "CISO", requesterEmail: "security@techflow.local", assignee: "IT Admin", assignmentGroup: "License Management", description: "Upgrade 15 security team M365 licenses from E3 to E5 for Microsoft Defender for Endpoint P2, eDiscovery Premium, and Information Protection.", customer: "TechFlow Solutions Pte Ltd", created: 48, slaTarget: 72, zdTicketId: null },
-  { id: "REQ0004", service: "Conference Room AV Setup — Floor 3", status: "In Progress", priority: "Sev-D", category: "Hardware", requester: "Facilities Manager", requesterEmail: "facilities@techflow.local", assignee: "IT Support", assignmentGroup: "End User Computing", description: "Install Zoom Rooms setup in Floor 3 conference room B. Includes Poly Studio X30 bar, Logitech Tap controller, and Dell 55\" display.", customer: "TechFlow Solutions Pte Ltd", created: 96, slaTarget: 120, zdTicketId: null },
-  { id: "REQ0005", service: "Password Reset — Staff", status: "Fulfilled", priority: "Sev-D", category: "Access", requester: "Sarah Tan", requesterEmail: "sarah.tan@democorp.local", assignee: "Marcus Chen", assignmentGroup: "Service Desk", description: "Password reset for Active Directory and M365 account. User locked out after 5 failed attempts.", customer: "Demo Corp Pte Ltd", created: 168, slaTarget: 4, zdTicketId: null },
-  { id: "REQ0006", service: "Firewall Rule Change — Allow SaaS App", status: "Pending Approval", priority: "Sev-C", category: "Network", requester: "Application Team", requesterEmail: "apps@techflow.local", assignee: "Network Engineering", assignmentGroup: "Network Engineering", description: "Open outbound HTTPS (443) to api.newcrm.io and cdn.newcrm.io on FortiGate for new CRM SaaS evaluation. Security review completed.", customer: "TechFlow Solutions Pte Ltd", created: 24, slaTarget: 48, zdTicketId: null },
-  { id: "REQ0007", service: "User Offboarding — Ex-Employee", status: "In Progress", priority: "Sev-B", category: "Access", requester: "HR Manager", requesterEmail: "hr@techflow.local", assignee: "IT Admin", assignmentGroup: "Identity & Access", description: "Full offboarding for departed employee: disable AD account, revoke MFA, forward email to manager, backup OneDrive, collect laptop (AST-019 area), revoke all app access.", customer: "TechFlow Solutions Pte Ltd", created: 4, slaTarget: 8, zdTicketId: null },
-  { id: "REQ0008", service: "Database Backup Verification", status: "Open", priority: "Sev-C", category: "Database", requester: "DBA Lead", requesterEmail: "dba@techflow.local", assignee: "Database Team", assignmentGroup: "Database", description: "Verify all production database backups from the past 7 days are restorable. Part of quarterly DR testing procedure.", customer: "TechFlow Solutions Pte Ltd", created: 2, slaTarget: 24, zdTicketId: null },
-];
+const INITIAL_INCIDENTS = [];
+const INITIAL_PROBLEMS = [];
+const INITIAL_CHANGES = [];
+const INITIAL_REQUESTS = [];
 
 // ─── Style Constants ─────────────────────────────────────────────────────
 const PRIORITY_COLORS = {
@@ -1555,10 +1525,9 @@ const SearchBar = ({ value, onChange, placeholder }) => (
 
 // ─── Main App ────────────────────────────────────────────────────────────
 export default function ITSMApp() {
-  // ─── HARD RULE: Demo mode detection (computed FIRST, before any data loading) ───
-  const isDemoMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "true";
-  const isDemoModeRef = useRef(isDemoMode);
-  isDemoModeRef.current = isDemoMode;
+  // Demo mode removed — production only
+  const isDemoMode = false;
+  const isDemoModeRef = useRef(false);
 
   const [activeModule, setActiveModule] = useState("dashboard");
   const [ticketsSubTab, setTicketsSubTab] = useState("incidents");
@@ -1571,9 +1540,7 @@ export default function ITSMApp() {
   const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers"];
   const _ls = (key, fallback) => {
     try {
-      // HARD RULE: Demo mode ALWAYS returns fallback (seed data) — NEVER reads localStorage
-      if (isDemoMode && PRODUCTION_COLLECTIONS.includes(key)) return fallback;
-      // HARD RULE: Entra users must NEVER see seed/demo data — start empty, hydrate from DB
+      // Entra users: start empty, hydrate from DB
       const savedUser = localStorage.getItem("vgc_current_user");
       if (savedUser) {
         try {
@@ -2024,30 +1991,15 @@ export default function ITSMApp() {
   const [zdComments, setZdComments] = useState([]);
   const [zdFilter, setZdFilter] = useState("open");
   const [zdPage, setZdPage] = useState(1);
-  const [zdAiQueue, setZdAiQueue] = useState(() => _ls("vgc_zd_ai_queue", [
-    { id: "ZDAI-1001", ticketId: 48201, ticketSubject: "Cannot access VPN from home network", ticketStatus: "open", requesterName: "Sarah Tan", requesterEmail: "sarah.tan@vgctechnology.com", category: "Network", suggestedPriority: "High", suggestedTags: ["vpn","remote-access","network"], draftResponse: "Hi Sarah,\n\nThank you for reporting this. I understand VPN connectivity from your home network is not working. Here are a few steps:\n\n1. Please restart your VPN client (GlobalProtect/FortiClient)\n2. Check if your home router is blocking UDP ports 500/4500\n3. Try connecting via a mobile hotspot to isolate the issue\n\nIf the issue persists, we'll schedule a remote session to diagnose further.\n\nBest regards,\nIT Support", internalNote: "Likely home router firewall blocking VPN ports. May need to whitelist or use SSL VPN fallback.", confidence: 88, suggestedAssignee: "Network Engineering", autoSendable: true, itsmCategory: "Network", slaPriority: "Sev-B", status: "pending_approval", createdAt: "2026-04-15T09:30:00Z", itsmIncidentId: "INC0021" },
-    { id: "ZDAI-1002", ticketId: 48202, ticketSubject: "Outlook keeps crashing on startup", ticketStatus: "open", requesterName: "James Lim", requesterEmail: "james.lim@vgctechnology.com", category: "Software", suggestedPriority: "Medium", suggestedTags: ["outlook","crash","email"], draftResponse: "Hi James,\n\nSorry to hear about the Outlook crashes. Let's try these steps:\n\n1. Open Outlook in Safe Mode: Press Win+R, type 'outlook.exe /safe'\n2. If it works in Safe Mode, disable add-ins one by one\n3. Run the Office repair tool from Control Panel\n\nPlease let me know if any of these resolve the issue.\n\nBest regards,\nIT Support", internalNote: "Common issue — usually caused by a faulty add-in or corrupted profile. Safe mode test will confirm.", confidence: 92, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Software", slaPriority: "Sev-C", status: "pending_approval", createdAt: "2026-04-15T10:15:00Z", itsmIncidentId: "INC0022" },
-    { id: "ZDAI-1003", ticketId: 48203, ticketSubject: "Suspicious phishing email received", ticketStatus: "open", requesterName: "Wei Ming Ng", requesterEmail: "weiming.ng@vgctechnology.com", category: "Security", suggestedPriority: "Critical", suggestedTags: ["phishing","security","email-threat"], draftResponse: "Hi Wei Ming,\n\nThank you for reporting this immediately — you did the right thing. Our security team will investigate this phishing attempt.\n\n⚠️ Please do NOT:\n- Click any links in the email\n- Download any attachments\n- Reply to the sender\n\nWe will block the sender domain and scan all mailboxes for similar messages. You'll receive an update within 30 minutes.\n\nBest regards,\nIT Security Team", internalNote: "URGENT: Potential phishing campaign. Need to check if other users received similar emails. Block sender domain immediately.", confidence: 95, suggestedAssignee: "Network Engineering", autoSendable: false, itsmCategory: "Security", slaPriority: "Sev-A", status: "pending_approval", createdAt: "2026-04-15T11:00:00Z", itsmIncidentId: "INC0023" },
-    { id: "ZDAI-1004", ticketId: 48195, ticketSubject: "New laptop setup request", ticketStatus: "solved", requesterName: "Amy Chen", requesterEmail: "amy.chen@vgctechnology.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["hardware","laptop","onboarding"], draftResponse: "Hi Amy,\n\nYour new laptop has been configured and is ready for collection at the IT office (Level 3). Please bring your employee ID.\n\nSetup includes: Windows 11, Office 365, VPN, Sophos AV, and all standard applications.\n\nBest regards,\nIT Support", internalNote: "Standard onboarding. Laptop pre-configured with standard image.", confidence: 97, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-14T15:00:00Z", createdAt: "2026-04-14T14:30:00Z", itsmIncidentId: "INC0020" },
-    { id: "ZDAI-1005", ticketId: 48198, ticketSubject: "Printer not printing — HP LaserJet 5th floor", ticketStatus: "solved", requesterName: "David Koh", requesterEmail: "david.koh@vgctechnology.com", category: "Hardware", suggestedPriority: "Low", suggestedTags: ["printer","hardware","5th-floor"], draftResponse: "Hi David,\n\nThe HP LaserJet on the 5th floor has been fixed. The issue was a paper jam in tray 2. I've cleared the jam and run a test print.\n\nPlease try printing again and let me know if it works.\n\nBest regards,\nIT Support", internalNote: "Simple paper jam. Cleared and tested.", confidence: 96, suggestedAssignee: "L1 Support", autoSendable: true, itsmCategory: "Hardware", slaPriority: "Sev-D", status: "sent", reviewedBy: "Marcus Chen", reviewedAt: "2026-04-13T11:00:00Z", createdAt: "2026-04-13T10:30:00Z", itsmIncidentId: "INC0019" },
-  ]));
+  const [zdAiQueue, setZdAiQueue] = useState(() => _ls("vgc_zd_ai_queue", []));
   const [zdAiProcessing, setZdAiProcessing] = useState(false);
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
   const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", true));
   const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(() => _ls("vgc_zd_require_human_approval", true));
-  const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", [
-    { id: "LOG-demo-001", type: "auto_send", message: "AI triaged ticket #48201 — VPN access issue → Network Engineering (88% confidence)", timestamp: "2026-04-15T09:31:00Z" },
-    { id: "LOG-demo-002", type: "incident_created", message: "ITSM Incident INC0021 created from Zendesk #48201 (Critical — VPN access)", timestamp: "2026-04-15T09:31:05Z" },
-    { id: "LOG-demo-003", type: "human_review", message: "Ticket #48202 queued for engineer review — Outlook crash (92% confidence)", timestamp: "2026-04-15T10:16:00Z" },
-    { id: "LOG-demo-004", type: "auto_send", message: "AI triaged ticket #48203 — Phishing alert → Security Team (95% confidence, flagged CRITICAL)", timestamp: "2026-04-15T11:01:00Z" },
-    { id: "LOG-demo-005", type: "human_approved", message: "Engineer Marcus Chen approved AI response for #48195 — Laptop setup (97% confidence)", timestamp: "2026-04-14T15:00:00Z" },
-    { id: "LOG-demo-006", type: "human_approved", message: "Engineer Marcus Chen approved AI response for #48198 — Printer fix (96% confidence)", timestamp: "2026-04-13T11:00:00Z" },
-    { id: "LOG-demo-007", type: "config", message: "AI Auto-Triage ENABLED — tickets triaged automatically, all responses require engineer approval", timestamp: "2026-04-13T08:00:00Z" },
-    { id: "LOG-demo-008", type: "info", message: "Connected to Zendesk: vgctech.zendesk.com — 67 tickets synced, 15 agents loaded", timestamp: "2026-04-13T07:55:00Z" },
-  ]));
+  const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", []));
   const [zdTriagedIds, setZdTriagedIds] = useState(() => { try { const v = JSON.parse(localStorage.getItem("vgc_zd_triaged_ids")); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); } });
-  const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 23, autoSent: 18, humanReview: 5, incidentsCreated: 14, avgConfidence: 89 }));
+  const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 }));
   const [zdAgents, setZdAgents] = useState([]);
   const [zdGroups, setZdGroups] = useState([]);
   const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings | analytics
@@ -2202,8 +2154,8 @@ export default function ITSMApp() {
   // Demo mode: ?demo=true in URL → forces demo seed data only (no production data exposure)
   // Production mode = Entra ID users (without ?demo=true) → only real Zendesk/API data
   // isDemoMode already declared at top of component (before _ls, so localStorage is bypassed for demo)
-  const isLocalDemoUser = isDemoMode || !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
-  const isEntraProductionUser = !isDemoMode && !!(currentUser && currentUser.authType === "entra");
+  const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
+  const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
 
   const [localUsername, setLocalUsername] = useState("");
@@ -2291,24 +2243,7 @@ export default function ITSMApp() {
     }
   }, [currentUser, isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── DEMO MODE: Force seed data only — no production data leakage ─────
-  useEffect(() => {
-    if (!isDemoMode) return;
-    // Clear any cached production data from localStorage so seed defaults take effect
-    ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_customers",
-     "vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats",
-     "vgc_azure_openai","vgc_zd_queue_v2","vgc_managed_users","vgc_service_reports",
-     "vgc_current_user","vgc_ai_feedback","vgc_zd_triaged_ids","vgc_rbac_audit",
-     "vgc_recycle_bin","vgc_integrations"].forEach(k => localStorage.removeItem(k));
-    // Force-reset ITSM data to demo seed values (overrides any production data from prior Entra session)
-    setIncidents(INITIAL_INCIDENTS.filter(i => i.id !== "INC0001"));
-    setProblems(INITIAL_PROBLEMS.filter(p => p.id !== "PRB0001" && !p.title?.includes("Problem from INC000")));
-    setChanges(INITIAL_CHANGES.filter(c => c.id !== "CHG0002"));
-    setRequests(INITIAL_REQUESTS);
-    setAssets(ASSETS);
-    setCustomers(INITIAL_CUSTOMERS);
-    console.log("[DEMO MODE] Data isolation active — showing only demo seed data, production data hidden");
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ─── DEMO MODE REMOVED ─── Production data only, loaded from DB
 
   // Fetch live cyber news for dashboard threat feed
   useEffect(() => {
@@ -4222,7 +4157,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
   useEffect(() => {
     if (dbInitRef.current) return;
     dbInitRef.current = true;
-    // HARD RULE: Demo mode must NEVER touch the production DB (read or write)
+    // HARD RULE: Always load from production DB
     if (isDemoMode) return;
     fetch(`${DB_API}-stats`).then(r => r.json()).then(async (stats) => {
       // Hydrate state from DB if localStorage was empty (new browser/device)
@@ -4349,8 +4284,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
     }
     _dbSync(coll, data);
   };
-  // HARD RULE: Demo mode must NEVER pollute localStorage with demo data (prevents prod user from seeing stale demo data)
-  const _demoSafeSave = (key, data) => { if (!isDemoMode) _save(key, data); };
+  const _demoSafeSave = (key, data) => { _save(key, data); };
   useEffect(() => { _demoSafeSave("vgc_incidents", incidents); _safeDbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _demoSafeSave("vgc_problems", problems); _safeDbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _demoSafeSave("vgc_changes", changes); _safeDbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
