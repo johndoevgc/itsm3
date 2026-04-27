@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "customerName": { "value": "acme" },
+    "appServiceSku": { "value": "B1" },
+    "mysqlSku": { "value": "Standard_B1ms" },
+    "mysqlAdminLogin": { "value": "itsmadmin" },
+    "mysqlAdminPassword": { "value": "" },
+    "entraClientId": { "value": "" },
+    "entraTenantId": { "value": "" },
+    "orgName": { "value": "ACME Pte Ltd" },
+    "orgShortName": { "value": "ACME" },
+    "helpdeskMailbox": { "value": "helpdesk@acme.com" },
+    "mailFrom": { "value": "itsupport@acme.com" },
+    "azureOpenAiEndpoint": { "value": "" },
+    "azureOpenAiKey": { "value": "" },
+    "useSharedMysql": { "value": false },
+    "sharedMysqlServer": { "value": "" },
+    "sharedMysqlResourceGroup": { "value": "" }
+  }
+}
