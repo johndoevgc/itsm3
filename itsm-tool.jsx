@@ -1536,7 +1536,7 @@ export default function ITSMApp() {
   const [aiTrainingTab, setAiTrainingTab] = useState("documents");
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
-  const DATA_VERSION = "v2.5";
+  const DATA_VERSION = "v2.6";
   const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers"];
   const _ls = (key, fallback) => {
     try {
@@ -1549,7 +1549,7 @@ export default function ITSMApp() {
             const s = localStorage.getItem(key);
             if (s) {
               const parsed = JSON.parse(s);
-              if (Array.isArray(parsed) && parsed.length > 0 && !parsed.some(r => /^(INC-D|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d/.test(r.id))) return parsed;
+              if (Array.isArray(parsed) && parsed.length > 0 && !parsed.some(r => /^(INC-D|INC-[A-Z]|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)/.test(r.id))) return parsed;
             }
             return [];
           }
@@ -1583,8 +1583,8 @@ export default function ITSMApp() {
 
   const [incidents, setIncidents] = useState(() => {
     const stored = _ls("vgc_incidents", INITIAL_INCIDENTS);
-    // Clean up seed INC0001 and any linked records from prior versions
-    return stored.filter(i => i.id !== "INC0001");
+    // Clean up seed/E2E test records
+    return stored.filter(i => i.id !== "INC0001" && !/^INC-[A-Z]{6,}/.test(i.id));
   });
   const [problems, setProblems] = useState(() => {
     const stored = _ls("vgc_problems", INITIAL_PROBLEMS);
