@@ -1051,6 +1051,11 @@ const VALID_COLLECTIONS = new Set([
   "sla_calendars",
   "notification_templates",
   "i18n_packs",
+  "worklogs",
+  "known_errors",
+  "field_visibility_rules",
+  "notification_preferences",
+  "mim_records",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -1721,6 +1726,7 @@ const server = http.createServer(async (req, res) => {
     authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID);
     if (authResult.blocked) return; // 429 already sent
   }
+  const auth = { authenticated: authResult.authenticated, name: authResult.user, role: authResult.role };
 
   // ─── SLA Engine API ────────────────────────────────────────────────
   if (pathname === "/api/sla/status" && req.method === "GET") {
@@ -10336,6 +10342,323 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ─── PHASE 1: Core ITIL Gaps & Data Accuracy ─────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── Step 1: Work Logs CRUD ───────────────────────────────────────────
+  // GET /api/incidents/:id/worklogs
+  if (/^\/api\/incidents\/([^/]+)\/worklogs$/.test(pathname) && req.method === "GET") {
+    const incId = pathname.split("/")[3];
+    try {
+      const rows = await db.getAll("worklogs");
+      const logs = rows.filter(r => { const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return d.incidentId === incId; }).map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      return json(res, 200, logs);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/incidents/:id/worklogs
+  if (/^\/api\/incidents\/([^/]+)\/worklogs$/.test(pathname) && req.method === "POST") {
+    const incId = pathname.split("/")[3];
+    const body = await parseBody(req);
+    if (!body.description || !body.hours) return json(res, 400, { error: "description and hours required" });
+    const id = `WL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const entry = { id, incidentId: incId, user: auth.name || "System", hours: parseFloat(body.hours) || 0, category: body.category || "other", description: body.description, billable: !!body.billable, loggedAt: new Date().toISOString() };
+    await db.upsert("worklogs", id, entry);
+    await db.audit("worklogs", id, "create", `Work log: ${entry.hours}h - ${entry.description}`, auth.name || "System");
+    if (wsServer) wsServer.broadcast("worklog", { action: "created", incidentId: incId, entry });
+    return json(res, 201, entry);
+  }
+  // DELETE /api/incidents/:id/worklogs/:wlId
+  if (/^\/api\/incidents\/([^/]+)\/worklogs\/([^/]+)$/.test(pathname) && req.method === "DELETE") {
+    const wlId = pathname.split("/")[5];
+    await db.delete("worklogs", wlId);
+    await db.audit("worklogs", wlId, "delete", "Work log entry deleted", auth.name || "System");
+    return json(res, 200, { success: true });
+  }
+
+  // ─── Step 2: SLA Pause/Resume API ─────────────────────────────────────
+  // POST /api/incidents/:id/sla-pause  — pause SLA clock
+  if (/^\/api\/incidents\/([^/]+)\/sla-pause$/.test(pathname) && req.method === "POST") {
+    const incId = pathname.split("/")[3];
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("incidents", incId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const now = new Date().toISOString();
+      inc.slaPauseHistory = inc.slaPauseHistory || [];
+      const lastOpen = inc.slaPauseHistory.findLast(e => !e.resumedAt);
+      if (lastOpen) return json(res, 400, { error: "SLA already paused" });
+      inc.slaPauseHistory.push({ pausedAt: now, resumedAt: null, reason: body.reason || "Status change" });
+      inc.slaPaused = true;
+      await db.upsert("incidents", incId, inc);
+      await db.audit("incidents", incId, "sla_pause", "SLA clock paused", auth.name || "System");
+      return json(res, 200, { success: true, slaPauseHistory: inc.slaPauseHistory });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/incidents/:id/sla-resume  — resume SLA clock
+  if (/^\/api\/incidents\/([^/]+)\/sla-resume$/.test(pathname) && req.method === "POST") {
+    const incId = pathname.split("/")[3];
+    try {
+      const row = await db.getOne("incidents", incId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      inc.slaPauseHistory = inc.slaPauseHistory || [];
+      const lastOpen = inc.slaPauseHistory.findLast(e => !e.resumedAt);
+      if (!lastOpen) return json(res, 400, { error: "SLA is not paused" });
+      lastOpen.resumedAt = new Date().toISOString();
+      inc.slaPaused = false;
+      await db.upsert("incidents", incId, inc);
+      await db.audit("incidents", incId, "sla_resume", "SLA clock resumed", auth.name || "System");
+      return json(res, 200, { success: true, slaPauseHistory: inc.slaPauseHistory });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 3: Major Incident Management (MIM) API ──────────────────────
+  // POST /api/mim/declare
+  if (pathname === "/api/mim/declare" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId) return json(res, 400, { error: "incidentId required" });
+    try {
+      const row = await db.getOne("incidents", body.incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const now = new Date().toISOString();
+      inc.isMajorIncident = true;
+      inc.majorDeclaredAt = now;
+      inc.majorBridge = body.bridge || { active: true, link: `https://teams.microsoft.com/l/meetup-join/vgc-mim-${body.incidentId}`, participants: [] };
+      inc.majorTimeline = [{ time: now, event: "Major Incident Declared", user: auth.name || "System" }];
+      inc.majorComms = [];
+      await db.upsert("incidents", body.incidentId, inc);
+      const mimRecord = { id: `MIM-${Date.now()}`, incidentId: body.incidentId, declaredAt: now, declaredBy: auth.name || "System", status: "active", affectedServices: body.affectedServices || [], severity: inc.priority };
+      await db.upsert("mim_records", mimRecord.id, mimRecord);
+      await db.audit("incidents", body.incidentId, "mim_declare", "Major Incident declared", auth.name || "System");
+      if (wsServer) wsServer.broadcast("mim", { action: "declared", incidentId: body.incidentId, mimId: mimRecord.id });
+      return json(res, 201, { success: true, mim: mimRecord });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/mim/revoke
+  if (pathname === "/api/mim/revoke" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId) return json(res, 400, { error: "incidentId required" });
+    try {
+      const row = await db.getOne("incidents", body.incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      inc.isMajorIncident = false;
+      inc.majorResolvedAt = new Date().toISOString();
+      inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: "Major Incident Revoked", user: auth.name || "System" }];
+      await db.upsert("incidents", body.incidentId, inc);
+      await db.audit("incidents", body.incidentId, "mim_revoke", "Major Incident revoked", auth.name || "System");
+      return json(res, 200, { success: true });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/mim — list all MIM records
+  if (pathname === "/api/mim" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("mim_records");
+      const records = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      return json(res, 200, records);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/mim/comms — add stakeholder communication
+  if (pathname === "/api/mim/comms" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId || !body.message) return json(res, 400, { error: "incidentId and message required" });
+    try {
+      const row = await db.getOne("incidents", body.incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const comm = { type: body.type || "Status Update", message: body.message, sentBy: auth.name || "System", sentAt: new Date().toISOString() };
+      inc.majorComms = [...(inc.majorComms || []), comm];
+      inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: `Comms sent: ${comm.type}`, user: auth.name || "System" }];
+      await db.upsert("incidents", body.incidentId, inc);
+      return json(res, 201, { success: true, communication: comm });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 4: Known Error Database (KEDB) ──────────────────────────────
+  // POST /api/kb/:id/known-error — flag a KB article as a Known Error
+  if (/^\/api\/kb\/([^/]+)\/known-error$/.test(pathname) && req.method === "POST") {
+    const kbId = pathname.split("/")[3];
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("kb", kbId);
+      if (!row) return json(res, 404, { error: "KB article not found" });
+      const kb = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      kb.isKnownError = true;
+      kb.linkedProblem = body.problemId || kb.linkedProblem || null;
+      kb.workaround = body.workaround || kb.workaround || "";
+      kb.knownErrorAt = new Date().toISOString();
+      kb.knownErrorBy = auth.name || "System";
+      await db.upsert("kb", kbId, kb);
+      await db.upsert("known_errors", kbId, { kbId, problemId: kb.linkedProblem, workaround: kb.workaround, createdAt: kb.knownErrorAt, createdBy: kb.knownErrorBy });
+      await db.audit("kb", kbId, "known_error", `Flagged as Known Error, linked to ${kb.linkedProblem || "none"}`, auth.name || "System");
+      return json(res, 200, { success: true, kb });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/known-errors — list all Known Errors
+  if (pathname === "/api/known-errors" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("known_errors");
+      const errors = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      return json(res, 200, errors);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 5: AI Recurring Ticket Detection ────────────────────────────
+  if (pathname === "/api/ai/detect-recurring" && req.method === "POST") {
+    try {
+      const allInc = await db.getAll("incidents");
+      const incidents = allInc.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const recent = incidents.filter(i => { const d = new Date(i.createdAt || i.created_at); return !isNaN(d) && (Date.now() - d.getTime()) < 30 * 86400000; });
+      if (recent.length < 3) return json(res, 200, { groups: [], message: "Not enough recent incidents for pattern detection" });
+      const systemPrompt = "You are an IT pattern detection engine. Analyze the incidents and find recurring patterns — tickets with similar titles, descriptions, categories, or affected systems. Group them and suggest linking to a Problem record. Return JSON: { groups: [{ pattern: string, confidence: number, incidentIds: string[], suggestedProblem: string, category: string }] }";
+      const userPrompt = `Analyze these ${recent.length} recent incidents for recurring patterns:\n${recent.map(i => `${i.id}: [${i.category}/${i.subcategory}] ${i.title} - ${(i.description || "").substring(0, 100)}`).join("\n")}`;
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 1500 });
+      let groups = [];
+      try { const parsed = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); groups = parsed.groups || []; } catch { groups = []; }
+      return json(res, 200, { groups, model: aiResult.model, tier: aiResult.tier });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 6: AI Change Risk Assessment ────────────────────────────────
+  if (pathname === "/api/ai/change-risk" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.title && !body.description) return json(res, 400, { error: "title or description required" });
+    try {
+      const allChanges = await db.getAll("changes");
+      const changes = allChanges.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const failed = changes.filter(c => c.status === "Failed" || c.backoutExecuted);
+      const systemPrompt = "You are an IT Change Risk Assessment engine. Score the proposed change from 1 (minimal risk) to 10 (extreme risk). Consider: complexity, blast radius, rollback difficulty, timing, and historical failure rate of similar changes. Return JSON: { riskScore: number, riskLevel: string, factors: string[], mitigations: string[], recommendation: string }";
+      const userPrompt = `Proposed change:\nTitle: ${body.title}\nDescription: ${body.description || ""}\nType: ${body.type || "Normal"}\nAffected services: ${(body.affectedServices || []).join(", ") || "unspecified"}\nScheduled: ${body.scheduledAt || "unspecified"}\n\nHistorical context: ${failed.length} of ${changes.length} past changes failed.`;
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 800 });
+      let assessment = { riskScore: 5, riskLevel: "Medium", factors: [], mitigations: [], recommendation: "" };
+      try { assessment = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch {}
+      return json(res, 200, { ...assessment, model: aiResult.model, tier: aiResult.tier });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 7: Change Collision Detection ───────────────────────────────
+  if (pathname === "/api/changes/collision-check" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.startTime || !body.endTime) return json(res, 400, { error: "startTime and endTime required" });
+    try {
+      const allChanges = await db.getAll("changes");
+      const changes = allChanges.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const reqStart = new Date(body.startTime);
+      const reqEnd = new Date(body.endTime);
+      const collisions = changes.filter(c => {
+        if (c.id === body.excludeId) return false;
+        if (!["Approved", "Scheduled", "In Progress"].includes(c.status)) return false;
+        const cStart = new Date(c.scheduledStart || c.startTime || c.scheduledAt);
+        const cEnd = new Date(c.scheduledEnd || c.endTime || new Date(cStart.getTime() + 3600000));
+        if (isNaN(cStart) || isNaN(cEnd)) return false;
+        return cStart < reqEnd && cEnd > reqStart;
+      });
+      // Check freeze windows
+      const freezeRows = await db.getAll("change_freeze_windows");
+      const freezes = freezeRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const activeFreezes = freezes.filter(f => {
+        const fStart = new Date(f.startDate || f.start);
+        const fEnd = new Date(f.endDate || f.end);
+        return fStart < reqEnd && fEnd > reqStart;
+      });
+      return json(res, 200, { collisions, freezeConflicts: activeFreezes, hasConflicts: collisions.length > 0 || activeFreezes.length > 0 });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 8: Custom Fields CRUD ───────────────────────────────────────
+  // GET /api/admin/custom-fields
+  if (pathname === "/api/admin/custom-fields" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("custom_fields");
+      const fields = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      return json(res, 200, fields);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/admin/custom-fields
+  if (pathname === "/api/admin/custom-fields" && req.method === "POST") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin", "Administrator"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    const body = await parseBody(req);
+    if (!body.name || !body.type) return json(res, 400, { error: "name and type required" });
+    const id = `CF-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const field = { id, name: body.name, label: body.label || body.name, type: body.type, module: body.module || "incidents", required: !!body.required, options: body.options || [], defaultValue: body.defaultValue || null, position: body.position || 999, visible: body.visible !== false, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
+    await db.upsert("custom_fields", id, field);
+    await db.audit("custom_fields", id, "create", `Custom field: ${field.name} (${field.type})`, auth.name || "System");
+    return json(res, 201, field);
+  }
+  // PUT /api/admin/custom-fields/:id
+  if (/^\/api\/admin\/custom-fields\/([^/]+)$/.test(pathname) && req.method === "PUT") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin", "Administrator"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    const cfId = pathname.split("/")[4];
+    const body = await parseBody(req);
+    const row = await db.getOne("custom_fields", cfId);
+    if (!row) return json(res, 404, { error: "Custom field not found" });
+    const existing = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    const updated = { ...existing, ...body, id: cfId, updatedAt: new Date().toISOString() };
+    await db.upsert("custom_fields", cfId, updated);
+    await db.audit("custom_fields", cfId, "update", `Custom field updated: ${updated.name}`, auth.name || "System");
+    return json(res, 200, updated);
+  }
+  // DELETE /api/admin/custom-fields/:id
+  if (/^\/api\/admin\/custom-fields\/([^/]+)$/.test(pathname) && req.method === "DELETE") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin", "Administrator"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    const cfId = pathname.split("/")[4];
+    await db.delete("custom_fields", cfId);
+    await db.audit("custom_fields", cfId, "delete", "Custom field deleted", auth.name || "System");
+    return json(res, 200, { success: true });
+  }
+
+  // ─── Step 9: Notification Preferences per User ────────────────────────
+  // GET /api/users/:id/notification-prefs
+  if (/^\/api\/users\/([^/]+)\/notification-prefs$/.test(pathname) && req.method === "GET") {
+    const userId = decodeURIComponent(pathname.split("/")[3]);
+    try {
+      const row = await db.getOne("notification_preferences", userId);
+      if (!row) return json(res, 200, { userId, channels: { inapp: true, email: true }, types: { sla_breach: true, assignment: true, status_change: true, escalation: true, mim: true, mention: true } });
+      return json(res, 200, typeof row.data === "string" ? JSON.parse(row.data) : row.data);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // PUT /api/users/:id/notification-prefs
+  if (/^\/api\/users\/([^/]+)\/notification-prefs$/.test(pathname) && req.method === "PUT") {
+    const userId = decodeURIComponent(pathname.split("/")[3]);
+    const body = await parseBody(req);
+    const prefs = { userId, channels: body.channels || { inapp: true, email: true }, types: body.types || {}, updatedAt: new Date().toISOString() };
+    await db.upsert("notification_preferences", userId, prefs);
+    await db.audit("notification_preferences", userId, "update", "Notification preferences updated", auth.name || userId);
+    return json(res, 200, prefs);
+  }
+
+  // ─── Step 10: Role-Based Field Visibility ─────────────────────────────
+  // GET /api/admin/field-visibility
+  if (pathname === "/api/admin/field-visibility" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("field_visibility_rules");
+      const rules = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      return json(res, 200, rules);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/admin/field-visibility
+  if (pathname === "/api/admin/field-visibility" && req.method === "POST") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin", "Administrator"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    const body = await parseBody(req);
+    if (!body.role || !body.fields) return json(res, 400, { error: "role and fields required" });
+    const id = `FV-${body.role}`;
+    const rule = { id, role: body.role, module: body.module || "incidents", fields: body.fields, updatedAt: new Date().toISOString(), updatedBy: auth.name || "System" };
+    await db.upsert("field_visibility_rules", id, rule);
+    await db.audit("field_visibility_rules", id, "upsert", `Field visibility for ${body.role}`, auth.name || "System");
+    return json(res, 200, rule);
   }
 
   // ─── Static File Serving ──────────────────────────────────────────────

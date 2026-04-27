@@ -531,6 +531,73 @@ async function main() {
   assert("Monthly trends returns 200", alTrendsMonthly.status === 200, `Status: ${alTrendsMonthly.status}`);
   assert("Monthly trends period is monthly", alTrendsMonthly.json.period === "monthly", `Period: ${alTrendsMonthly.json.period}`);
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Phase 1: Core ITIL Gaps Tests
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log("\n--- Phase 1: Work Logs ---");
+  const testIncId = incidents.json.data && incidents.json.data[0] ? incidents.json.data[0].id : "INC-TEST";
+  const wlList = await getJson(`/api/incidents/${testIncId}/worklogs`);
+  assert("Work logs GET returns 200", wlList.status === 200, `Status: ${wlList.status}`);
+  assert("Work logs returns array", Array.isArray(wlList.json), `Got: ${typeof wlList.json}`);
+  const wlCreate = await postJson(`/api/incidents/${testIncId}/worklogs`, { description: "E2E test log entry", hours: 1.5, category: "testing", billable: true });
+  assert("Work log create returns 201", wlCreate.status === 201, `Status: ${wlCreate.status}`);
+  assert("Work log has id", !!wlCreate.json.id, `Got: ${wlCreate.json.id}`);
+  assert("Work log hours correct", wlCreate.json.hours === 1.5, `Got: ${wlCreate.json.hours}`);
+  const wlList2 = await getJson(`/api/incidents/${testIncId}/worklogs`);
+  assert("Work logs list updated", wlList2.json.length > wlList.json.length, `Before: ${wlList.json.length}, After: ${wlList2.json.length}`);
+
+  console.log("--- Phase 1: Known Errors ---");
+  const keList = await getJson("/api/known-errors");
+  assert("Known errors GET returns 200", keList.status === 200, `Status: ${keList.status}`);
+  assert("Known errors returns array", Array.isArray(keList.json), `Got: ${typeof keList.json}`);
+
+  console.log("--- Phase 1: Custom Fields ---");
+  const cfList = await getJson("/api/admin/custom-fields");
+  assert("Custom fields GET returns 200", cfList.status === 200, `Status: ${cfList.status}`);
+  assert("Custom fields returns array", Array.isArray(cfList.json), `Got: ${typeof cfList.json}`);
+  const cfCreate = await postJson("/api/admin/custom-fields", { name: "e2e_test_field", label: "E2E Test Field", type: "text", module: "incidents" });
+  assert("Custom field create returns 201 or 403", [201, 403].includes(cfCreate.status), `Status: ${cfCreate.status}`);
+
+  console.log("--- Phase 1: Notification Preferences ---");
+  const npGet = await getJson("/api/users/e2e-test/notification-prefs");
+  assert("Notification prefs GET returns 200", npGet.status === 200, `Status: ${npGet.status}`);
+  assert("Notification prefs has userId", npGet.json.userId === "e2e-test", `Got: ${npGet.json.userId}`);
+  assert("Notification prefs has defaults", npGet.json.channels != null, `Got: ${JSON.stringify(npGet.json.channels)}`);
+
+  console.log("--- Phase 1: Field Visibility ---");
+  const fvList = await getJson("/api/admin/field-visibility");
+  assert("Field visibility GET returns 200", fvList.status === 200, `Status: ${fvList.status}`);
+  assert("Field visibility returns array", Array.isArray(fvList.json), `Got: ${typeof fvList.json}`);
+
+  console.log("--- Phase 1: Change Collision Detection ---");
+  const ccCheck = await postJson("/api/changes/collision-check", { startTime: new Date().toISOString(), endTime: new Date(Date.now() + 3600000).toISOString() });
+  assert("Collision check returns 200", ccCheck.status === 200, `Status: ${ccCheck.status}`);
+  assert("Collision check has collisions array", Array.isArray(ccCheck.json.collisions), `Got: ${typeof ccCheck.json.collisions}`);
+  assert("Collision check has hasConflicts flag", typeof ccCheck.json.hasConflicts === "boolean", `Got: ${typeof ccCheck.json.hasConflicts}`);
+
+  console.log("--- Phase 1: AI Change Risk Assessment ---");
+  const crRisk = await postJson("/api/ai/change-risk", { title: "E2E Test Change", description: "Upgrade test server firmware", type: "Normal" });
+  assert("Change risk returns 200", crRisk.status === 200, `Status: ${crRisk.status}`);
+  assert("Change risk has riskScore", typeof crRisk.json.riskScore === "number", `Got: ${typeof crRisk.json.riskScore}`);
+
+  console.log("--- Phase 1: AI Recurring Detection ---");
+  const rdDetect = await postJson("/api/ai/detect-recurring", {});
+  assert("Recurring detection returns 200", rdDetect.status === 200, `Status: ${rdDetect.status}`);
+  assert("Recurring detection has groups", Array.isArray(rdDetect.json.groups), `Got: ${typeof rdDetect.json.groups}`);
+
+  console.log("--- Phase 1: MIM API ---");
+  const mimList = await getJson("/api/mim");
+  assert("MIM list returns 200", mimList.status === 200, `Status: ${mimList.status}`);
+  assert("MIM list returns array", Array.isArray(mimList.json), `Got: ${typeof mimList.json}`);
+
+  console.log("--- Phase 1: SLA Pause/Resume ---");
+  const slaPause = await postJson(`/api/incidents/${testIncId}/sla-pause`, { reason: "E2E test pause" });
+  assert("SLA pause returns 200 or 400", [200, 400].includes(slaPause.status), `Status: ${slaPause.status}`);
+  if (slaPause.status === 200) {
+    const slaResume = await postJson(`/api/incidents/${testIncId}/sla-resume`, {});
+    assert("SLA resume returns 200", slaResume.status === 200, `Status: ${slaResume.status}`);
+  }
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));
