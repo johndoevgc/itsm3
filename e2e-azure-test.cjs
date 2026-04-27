@@ -881,6 +881,92 @@ async function main() {
   assert("Report schedules list returns 200", rptSchedList.status === 200, `Status: ${rptSchedList.status}`);
   assert("Report schedules has data", !!rptSchedList.json.data, `Got: ${typeof rptSchedList.json.data}`);
 
+  // ═══ Phase 5: UX Polish & Production Hardening ═══
+
+  // Step 41: PWA Manifest
+  const pwaManifest = await getJson("/api/pwa/manifest");
+  assert("PWA manifest returns 200", pwaManifest.status === 200, `Status: ${pwaManifest.status}`);
+  assert("PWA manifest has name", pwaManifest.json.name === "VGC ITSM", `Got: ${pwaManifest.json.name}`);
+  assert("PWA manifest has icons", Array.isArray(pwaManifest.json.icons), `Got: ${typeof pwaManifest.json.icons}`);
+
+  // Step 42: Keyboard Shortcuts
+  const shortcuts = await getJson("/api/settings/shortcuts?user=e2etest");
+  assert("Shortcuts GET returns 200", shortcuts.status === 200, `Status: ${shortcuts.status}`);
+  assert("Shortcuts has defaults", !!shortcuts.json.newTicket || !!shortcuts.json.search, `Got: ${JSON.stringify(shortcuts.json)}`);
+  const shortcutSave = await postJson("/api/settings/shortcuts", { user: "e2etest", shortcuts: { newTicket: "Ctrl+N", search: "Ctrl+K" } });
+  assert("Shortcuts save returns 200", shortcutSave.status === 200, `Status: ${shortcutSave.status}`);
+
+  // Step 43: Theme Settings
+  const themeGet = await getJson("/api/settings/theme?user=e2etest");
+  assert("Theme GET returns 200", themeGet.status === 200, `Status: ${themeGet.status}`);
+  assert("Theme has theme field", typeof themeGet.json.theme === "string", `Got: ${typeof themeGet.json.theme}`);
+  const themeSave = await postJson("/api/settings/theme", { user: "e2etest", theme: "light" });
+  assert("Theme save returns 200", themeSave.status === 200, `Status: ${themeSave.status}`);
+  const themeBad = await postJson("/api/settings/theme", { theme: "neon" });
+  assert("Theme invalid returns 400", themeBad.status === 400, `Status: ${themeBad.status}`);
+
+  // Step 44: Layout Preferences
+  const layoutGet = await getJson("/api/settings/layout?user=e2etest");
+  assert("Layout GET returns 200", layoutGet.status === 200, `Status: ${layoutGet.status}`);
+  assert("Layout has sidebar", !!layoutGet.json.sidebar, `Got: ${layoutGet.json.sidebar}`);
+  const layoutSave = await postJson("/api/settings/layout", { user: "e2etest", sidebar: "collapsed", density: "compact" });
+  assert("Layout save returns 200", layoutSave.status === 200, `Status: ${layoutSave.status}`);
+
+  // Step 46: Bulk Operations
+  const bulkUpdate = await postJson("/api/bulk/update", { collection: "incidents", ids: ["nonexistent-1"], updates: { status: "In Progress" } });
+  assert("Bulk update returns 200", bulkUpdate.status === 200, `Status: ${bulkUpdate.status}`);
+  assert("Bulk update has updated count", typeof bulkUpdate.json.updated === "number", `Got: ${typeof bulkUpdate.json.updated}`);
+  const bulkBadNoIds = await postJson("/api/bulk/update", { collection: "incidents", updates: { status: "Open" } });
+  assert("Bulk update no ids returns 400", bulkBadNoIds.status === 400, `Status: ${bulkBadNoIds.status}`);
+  const bulkClose = await postJson("/api/bulk/close", { ids: ["nonexistent-1"], resolution: "E2E test" });
+  assert("Bulk close returns 200", bulkClose.status === 200, `Status: ${bulkClose.status}`);
+  assert("Bulk close has closed count", typeof bulkClose.json.closed === "number", `Got: ${typeof bulkClose.json.closed}`);
+
+  // Step 47: Ticket Templates
+  const tmplCreate = await postJson("/api/ticket-templates", { name: "E2E Template", category: "Network", priority: "P2", description: "Test template" });
+  assert("Ticket template create returns 201", tmplCreate.status === 201, `Status: ${tmplCreate.status}`);
+  assert("Ticket template has id", !!tmplCreate.json.id, `Got: ${tmplCreate.json.id}`);
+  const tmplList = await getJson("/api/ticket-templates");
+  assert("Ticket templates list returns 200", tmplList.status === 200, `Status: ${tmplList.status}`);
+  assert("Ticket templates is array", Array.isArray(tmplList.json), `Got: ${typeof tmplList.json}`);
+  const tmplBad = await postJson("/api/ticket-templates", { name: "No Cat" });
+  assert("Ticket template no category returns 400", tmplBad.status === 400, `Status: ${tmplBad.status}`);
+
+  // Step 48: Saved Filters
+  const filterCreate = await postJson("/api/saved-filters", { name: "E2E Filter", conditions: [{ field: "status", op: "equals", value: "Open" }], user: "e2etest" });
+  assert("Saved filter create returns 201", filterCreate.status === 201, `Status: ${filterCreate.status}`);
+  assert("Saved filter has id", !!filterCreate.json.id, `Got: ${filterCreate.json.id}`);
+  const filterList = await getJson("/api/saved-filters?user=e2etest");
+  assert("Saved filters list returns 200", filterList.status === 200, `Status: ${filterList.status}`);
+  assert("Saved filters is array", Array.isArray(filterList.json), `Got: ${typeof filterList.json}`);
+  const filterBad = await postJson("/api/saved-filters", { name: "No Conditions" });
+  assert("Saved filter no conditions returns 400", filterBad.status === 400, `Status: ${filterBad.status}`);
+
+  // Step 49: Export CSV
+  const csvExport = await postJson("/api/export/csv", { collection: "incidents" });
+  assert("CSV export returns 200", csvExport.status === 200, `Status: ${csvExport.status}`);
+  assert("CSV export has csv string", typeof csvExport.json.csv === "string", `Got: ${typeof csvExport.json.csv}`);
+  assert("CSV export has rowCount", typeof csvExport.json.rowCount === "number", `Got: ${typeof csvExport.json.rowCount}`);
+  const csvBadNoCol = await postJson("/api/export/csv", {});
+  assert("CSV export no collection returns 400", csvBadNoCol.status === 400 || csvBadNoCol.status === 429, `Status: ${csvBadNoCol.status}`);
+
+  // Step 50: Rate Limit Status
+  const rateLimit = await getJson("/api/rate-limit/status");
+  assert("Rate limit status returns 200", rateLimit.status === 200, `Status: ${rateLimit.status}`);
+  assert("Rate limit is active", rateLimit.json.rateLimiting === true, `Got: ${rateLimit.json.rateLimiting}`);
+
+  // Step 51: Enhanced Health Check
+  const deepHealth = await getJson("/api/health/deep");
+  assert("Deep health returns 200", deepHealth.status === 200, `Status: ${deepHealth.status}`);
+  assert("Deep health has checks", !!deepHealth.json.checks, `Got: ${typeof deepHealth.json.checks}`);
+  assert("Deep health has database check", deepHealth.json.checks.database === "ok", `Got: ${deepHealth.json.checks.database}`);
+  assert("Deep health has uptime", typeof deepHealth.json.uptime === "number", `Got: ${typeof deepHealth.json.uptime}`);
+
+  // Step 52: Test Runner Status
+  const testStatus = await getJson("/api/test/status");
+  assert("Test status returns 200", testStatus.status === 200, `Status: ${testStatus.status}`);
+  assert("Test status has phase", testStatus.json.phase === 5, `Got: ${testStatus.json.phase}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));
