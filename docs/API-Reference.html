@@ -38,12 +38,12 @@
   .base-url { background: #e8eaf6; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 13px; margin: 12px 0; }
 </style>
 </head>
-<body data-version="2.0" data-doc="api-reference">
+<body data-version="3.0" data-doc="api-reference">
 
 <div class="header">
   <h1>API Reference</h1>
   <div class="subtitle">VGC-ITSM — Complete REST API Documentation (250+ Endpoints)</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="meta-bar">
@@ -522,11 +522,111 @@
       <tr><td><span class="method get">GET</span></td><td><code>/api/ws/stats</code></td><td>WebSocket connection stats</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/i18n/languages</code></td><td>Available languages</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/i18n/pack</code></td><td>Language pack</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/healthz</code></td><td>Liveness probe (v3.0)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/readyz</code></td><td>Readiness probe — DB + AI status (v3.0)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td>Client config — feature flags, region, branding (v3.0)</td></tr>
+    </table>
+  </div>
+
+  <!-- Setup Wizard (v3.0) -->
+  <div class="section" id="setup">
+    <h2>Setup Wizard (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/setup/status</code></td><td>Check if initial setup is complete</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/setup/company</code></td><td>Set company info (name, industry, size)</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/setup/admin</code></td><td>Create initial admin user</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/setup/entra</code></td><td>Configure Entra ID settings</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/setup/complete</code></td><td>Finalize setup wizard</td></tr>
+    </table>
+  </div>
+
+  <!-- PDPA (v3.0) -->
+  <div class="section" id="pdpa">
+    <h2>PDPA Compliance (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/pdpa/config</code></td><td>Get PDPA configuration</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/pdpa/config</code></td><td>Update PDPA settings (retention, DPO, consent purposes)</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/pdpa/dsar</code></td><td>Submit Data Subject Access Request</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/pdpa/dsar</code></td><td>List DSAR requests</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/pdpa/retention</code></td><td>Data retention policies</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/pdpa/consents</code></td><td>Consent records audit trail</td></tr>
+    </table>
+  </div>
+
+  <!-- Portal (v3.0) -->
+  <div class="section" id="portal">
+    <h2>Customer Portal (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/portal/login</code></td><td>Portal user login</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/portal/tickets</code></td><td>List user's tickets</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/portal/tickets</code></td><td>Create ticket via portal</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/portal/kb</code></td><td>Search knowledge base</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/portal/branding</code></td><td>Get portal branding config</td></tr>
+    </table>
+  </div>
+
+  <!-- Billing (v3.0) -->
+  <div class="section" id="billing">
+    <h2>Billing Engine (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/billing/entries</code></td><td>List billing entries</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/billing/entries</code></td><td>Create billing entry</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/billing/invoice</code></td><td>Generate invoice for period</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/billing/summary</code></td><td>Billing summary and totals</td></tr>
+    </table>
+  </div>
+
+  <!-- SG Holidays (v3.0) -->
+  <div class="section" id="sg-holidays">
+    <h2>Singapore Holidays (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/sg-holidays</code></td><td>List all SG public holidays</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/sg-holidays</code></td><td>Add custom holiday</td></tr>
+      <tr><td><span class="method delete">DELETE</span></td><td><code>/api/sg-holidays/:id</code></td><td>Remove custom holiday</td></tr>
+    </table>
+  </div>
+
+  <!-- AI Governance (v3.0) -->
+  <div class="section" id="ai-governance">
+    <h2>AI Governance (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/usage</code></td><td>Current month AI usage — tokens, cost, budget remaining</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/audit</code></td><td>AI audit log — all decisions with model, cost, timestamp</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/governance</code></td><td>Get governance settings</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/ai/governance</code></td><td>Update governance (autonomy, budget, thresholds)</td></tr>
+    </table>
+  </div>
+
+  <!-- Automation Rules (v3.0) -->
+  <div class="section" id="automation-rules">
+    <h2>Automation Rules (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/automation/rules</code></td><td>List all automation rules</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/automation/rules</code></td><td>Create automation rule</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/automation/rules/:id</code></td><td>Update rule</td></tr>
+      <tr><td><span class="method delete">DELETE</span></td><td><code>/api/automation/rules/:id</code></td><td>Delete rule</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/automation/rules/:id/toggle</code></td><td>Enable/disable rule</td></tr>
+    </table>
+  </div>
+
+  <!-- Compliance Report (v3.0) -->
+  <div class="section" id="compliance-report">
+    <h2>Compliance Report (v3.0)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/compliance/report</code></td><td>Consolidated compliance report (PDPA + SLA + AI governance)</td></tr>
     </table>
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM API Reference · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM API Reference · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>

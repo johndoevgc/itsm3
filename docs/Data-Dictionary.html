@@ -36,12 +36,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="2.0" data-doc="data-dictionary">
+<body data-version="3.0" data-doc="data-dictionary">
 
 <div class="header">
   <h1>Data Dictionary</h1>
   <div class="subtitle">VGC-ITSM — 67 Collections & Schema Reference</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="meta-bar">
@@ -134,8 +134,15 @@
       <tr><td>65</td><td><code>compliance_evidence</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Compliance evidence artifacts</td></tr>
       <tr><td>66</td><td><code>teams_webhooks</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Microsoft Teams webhook configs</td></tr>
       <tr><td>67</td><td><code>cmdb_discovery</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>CMDB discovery scan results</td></tr>
+      <tr><td>68</td><td><code>pdpa_config</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>PDPA consent purposes, retention policies, DPO settings (v3.0)</td></tr>
+      <tr><td>69</td><td><code>dsar_requests</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Data Subject Access Requests — submit, track, fulfill (v3.0)</td></tr>
+      <tr><td>70</td><td><code>billing_entries</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Per-user billing records, invoice line items (v3.0)</td></tr>
+      <tr><td>71</td><td><code>sg_holidays</code></td><td><span class="cat-tag cat-sla">SLA</span></td><td>Singapore public holidays for SLA business-hours (v3.0)</td></tr>
+      <tr><td>72</td><td><code>portal_sessions</code></td><td><span class="cat-tag cat-ux">UX</span></td><td>Customer portal user sessions (v3.0)</td></tr>
+      <tr><td>73</td><td><code>ai_usage</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>Per-request AI token usage and cost tracking (v3.0)</td></tr>
+      <tr><td>74</td><td><code>ai_audit_log</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>AI governance audit — decisions, models, costs (v3.0)</td></tr>
     </table>
-    <p><em>Additional runtime collections:</em> <code>status_subscribers</code>, <code>saved_reports</code>, <code>anomaly_alerts</code>, <code>benchmarks</code>, <code>ticket_templates</code></p>
+    <p><em>Additional runtime collections:</em> <code>status_subscribers</code>, <code>saved_reports</code>, <code>anomaly_alerts</code>, <code>benchmarks</code>, <code>ticket_templates</code>, <code>automation_rules</code></p>
   </div>
 
   <div class="section">
@@ -143,17 +150,17 @@
     <table>
       <tr><th>Category</th><th>Count</th><th>Description</th></tr>
       <tr><td><span class="cat-tag cat-core">Core</span></td><td>~20</td><td>ITIL core processes: incidents, problems, changes, requests, KB, assets</td></tr>
-      <tr><td><span class="cat-tag cat-ai">AI</span></td><td>~9</td><td>AI engine state: actions, triage, briefings, patterns, chat sessions, drafts</td></tr>
+      <tr><td><span class="cat-tag cat-ai">AI</span></td><td>~11</td><td>AI engine state: actions, triage, briefings, patterns, chat sessions, drafts, usage, audit</td></tr>
       <tr><td><span class="cat-tag cat-int">Integration</span></td><td>~8</td><td>External system data: Zendesk, Teams, CMDB discovery</td></tr>
-      <tr><td><span class="cat-tag cat-sla">SLA</span></td><td>~5</td><td>SLA tracking, config, calendars, escalation</td></tr>
+      <tr><td><span class="cat-tag cat-sla">SLA</span></td><td>~6</td><td>SLA tracking, config, calendars, escalation, SG holidays</td></tr>
       <tr><td><span class="cat-tag cat-admin">Admin</span></td><td>~13</td><td>System config: rules, templates, custom fields, schedules</td></tr>
-      <tr><td><span class="cat-tag cat-ent">Enterprise</span></td><td>~6</td><td>Enterprise modules: releases, contracts, costs, compliance</td></tr>
-      <tr><td><span class="cat-tag cat-ux">UX</span></td><td>~5</td><td>User preferences: filters, layouts, gamification, notifications</td></tr>
+      <tr><td><span class="cat-tag cat-ent">Enterprise</span></td><td>~9</td><td>Enterprise modules: releases, contracts, costs, compliance, PDPA, billing</td></tr>
+      <tr><td><span class="cat-tag cat-ux">UX</span></td><td>~6</td><td>User preferences: filters, layouts, gamification, notifications, portal sessions</td></tr>
     </table>
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Data Dictionary · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Data Dictionary · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>

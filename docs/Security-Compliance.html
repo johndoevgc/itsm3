@@ -27,12 +27,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="2.0" data-doc="security-compliance">
+<body data-version="3.0" data-doc="security-compliance">
 
 <div class="header">
   <h1>Security & Compliance</h1>
   <div class="subtitle">VGC-ITSM — Authentication, Authorization & Audit</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="container">
@@ -45,6 +45,14 @@
       <li>Token validation via JWKS endpoint</li>
       <li>Automatic token refresh with silent acquisition</li>
       <li>Supported: single-tenant and multi-tenant configurations</li>
+    </ul>
+    <h3>Multi-Tenant Authentication (v3.0)</h3>
+    <ul>
+      <li><code>ALLOWED_TENANT_IDS</code> — comma-separated list of authorized M365 tenant IDs</li>
+      <li><code>AUTHORITY_MODE=multi</code> — uses <code>https://login.microsoftonline.com/common</code> authority</li>
+      <li>Token <code>tid</code> (tenant ID) claim validated against allowed list</li>
+      <li>Per-customer Entra app registration via <code>scripts/provision-customer.sh</code></li>
+      <li><code>authMiddleware.js</code> — centralized token validation middleware</li>
     </ul>
     <h3>Local Authentication</h3>
     <ul>
@@ -114,18 +122,47 @@
       <li>TLS 1.2+ enforced for all connections (Azure App Service)</li>
       <li>Azure MySQL SSL required (<code>ssl: { rejectUnauthorized: true }</code>)</li>
       <li>Environment variables for all secrets (no hardcoded credentials)</li>
+      <li>Azure Key Vault integration for secret management (v3.0)</li>
       <li>CORS restricted to configured origins</li>
-      <li>HTTP security headers: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection</li>
+      <li>HTTP security headers: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Strict-Transport-Security</li>
       <li>Input validation and JSON sanitization on all endpoints</li>
+      <li>Managed Identity for service-to-service auth (v3.0)</li>
     </ul>
   </div>
 
   <div class="section">
-    <h2>7. Security Checklist</h2>
+    <h2>7. PDPA Compliance (v3.0)</h2>
+    <p>Singapore Personal Data Protection Act 2012 compliance features:</p>
+    <table>
+      <tr><th>Feature</th><th>Endpoint</th><th>Description</th></tr>
+      <tr><td>Consent Management</td><td><code>GET/POST /api/pdpa/config</code></td><td>Configure consent purposes, retention periods, DPO details</td></tr>
+      <tr><td>DSAR Workflow</td><td><code>POST /api/pdpa/dsar</code></td><td>Data Subject Access Requests — submit, track, fulfill</td></tr>
+      <tr><td>Data Retention</td><td><code>GET /api/pdpa/retention</code></td><td>Configurable retention policies per data type</td></tr>
+      <tr><td>Consent Records</td><td><code>GET /api/pdpa/consents</code></td><td>Audit trail of all consent grants/withdrawals</td></tr>
+    </table>
+    <ul>
+      <li>Enabled via <code>FEATURE_PDPA=true</code> environment variable</li>
+      <li>Data stored in <code>pdpa_config</code> and <code>dsar_requests</code> collections</li>
+      <li>DPO (Data Protection Officer) contact configured in setup wizard</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>8. Compliance Report (v3.0)</h2>
+    <p>Consolidated compliance reporting across all governance domains:</p>
+    <ul>
+      <li><code>GET /api/compliance/report</code> — exportable report covering PDPA, SLA, AI governance, audit metrics</li>
+      <li>Includes: data retention compliance, DSAR response times, AI budget adherence, SLA achievement rates</li>
+      <li>PDF-ready format for regulatory submission</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>9. Security Checklist</h2>
     <table>
       <tr><th>Control</th><th>Status</th></tr>
       <tr><td>SSO with PKCE (no implicit flow)</td><td class="status-pass">✓ Implemented</td></tr>
-      <tr><td>RBAC with 11 role levels</td><td class="status-pass">✓ Implemented</td></tr>
+      <tr><td>RBAC with 12 role levels</td><td class="status-pass">✓ Implemented</td></tr>
       <tr><td>Rate limiting (IP + user)</td><td class="status-pass">✓ Implemented</td></tr>
       <tr><td>Immutable audit trail</td><td class="status-pass">✓ Implemented</td></tr>
       <tr><td>Input validation</td><td class="status-pass">✓ Implemented</td></tr>
@@ -134,11 +171,16 @@
       <tr><td>No hardcoded secrets</td><td class="status-pass">✓ Implemented</td></tr>
       <tr><td>CORS restrictions</td><td class="status-pass">✓ Implemented</td></tr>
       <tr><td>Compliance evidence collection</td><td class="status-pass">✓ Implemented</td></tr>
+      <tr><td>Multi-tenant Entra ID isolation</td><td class="status-pass">✓ Implemented (v3.0)</td></tr>
+      <tr><td>PDPA consent management</td><td class="status-pass">✓ Implemented (v3.0)</td></tr>
+      <tr><td>AI governance &amp; budget control</td><td class="status-pass">✓ Implemented (v3.0)</td></tr>
+      <tr><td>Key Vault secret management</td><td class="status-pass">✓ Implemented (v3.0)</td></tr>
+      <tr><td>Managed Identity (no secrets in config)</td><td class="status-pass">✓ Implemented (v3.0)</td></tr>
     </table>
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Security & Compliance · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Security & Compliance · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>

@@ -30,12 +30,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="2.0" data-doc="integration-guide">
+<body data-version="3.0" data-doc="integration-guide">
 
 <div class="header">
   <h1>Integration Guide</h1>
   <div class="subtitle">VGC-ITSM — External Systems & APIs</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="container">
@@ -182,8 +182,42 @@
     </ul>
   </div>
 
+  <div class="section">
+    <h2>8. Multi-Tenant Entra ID (v3.0)</h2>
+    <p>Per-customer M365 tenant integration for SaaS deployments:</p>
+    <ul>
+      <li>Set <code>AUTHORITY_MODE=multi</code> for multi-tenant authority</li>
+      <li>Add customer tenant IDs to <code>ALLOWED_TENANT_IDS</code> (comma-separated)</li>
+      <li>Each customer registers their own Entra app via <code>scripts/provision-customer.sh</code></li>
+      <li><code>authMiddleware.js</code> validates token <code>tid</code> claim against allowed list</li>
+      <li>Graph API calls scoped to each tenant for email, user management</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>9. Customer Portal Integration (v3.0)</h2>
+    <p>White-label portal endpoints for end-user self-service:</p>
+    <ul>
+      <li><code>POST /api/portal/login</code> — portal-specific authentication</li>
+      <li><code>GET /api/portal/tickets</code> — user's tickets (filtered by tenant)</li>
+      <li><code>POST /api/portal/tickets</code> — create ticket from portal</li>
+      <li><code>GET /api/portal/kb</code> — search published knowledge base</li>
+      <li><code>GET /api/portal/branding</code> — tenant-specific branding config</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>10. Billing Integration (v3.0)</h2>
+    <p>Stripe-ready billing integration for per-user monthly billing:</p>
+    <ul>
+      <li><code>GET /api/billing/entries</code> — list billing records</li>
+      <li><code>GET /api/billing/invoice</code> — generate invoices for any period</li>
+      <li>Webhook-ready for Stripe payment processing</li>
+    </ul>
+  </div>
+
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Integration Guide · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Integration Guide · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>

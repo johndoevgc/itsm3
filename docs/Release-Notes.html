@@ -40,17 +40,17 @@
   .stat .lbl { font-size: 11px; color: #888; text-transform: uppercase; }
 </style>
 </head>
-<body data-version="2.0" data-doc="release-notes">
+<body data-version="3.0" data-doc="release-notes">
 
 <div class="header">
   <h1>Release Notes</h1>
   <div class="subtitle">VGC-ITSM — All Phases Changelog</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="meta-bar">
   <div class="item"><span class="label">Period</span><span class="value">April 2026</span></div>
-  <div class="item"><span class="label">Total Steps</span><span class="value">52</span></div>
+  <div class="item"><span class="label">Total Steps</span><span class="value">52 + 5 Productization Phases</span></div>
   <div class="item"><span class="label">E2E Tests</span><span class="value">359 Passing</span></div>
 </div>
 
@@ -59,11 +59,11 @@
   <div class="section">
     <h2>Summary</h2>
     <div class="stats">
-      <div class="stat"><div class="num">5</div><div class="lbl">Phases</div></div>
-      <div class="stat"><div class="num">52</div><div class="lbl">Feature Steps</div></div>
+      <div class="stat"><div class="num">10</div><div class="lbl">Phases</div></div>
+      <div class="stat"><div class="num">52+</div><div class="lbl">Feature Steps</div></div>
       <div class="stat"><div class="num">359</div><div class="lbl">E2E Tests</div></div>
-      <div class="stat"><div class="num">250+</div><div class="lbl">API Endpoints</div></div>
-      <div class="stat"><div class="num">67</div><div class="lbl">Collections</div></div>
+      <div class="stat"><div class="num">300+</div><div class="lbl">API Endpoints</div></div>
+      <div class="stat"><div class="num">74</div><div class="lbl">Collections</div></div>
     </div>
   </div>
 
@@ -175,8 +175,78 @@
     </ul>
   </div>
 
+  <!-- Productization Phase 1 -->
+  <div class="section">
+    <h2>Productization Phase 1 — Multi-Tenant & Containerization</h2>
+    <span class="phase-tag p1">Commit 80319ca</span>
+    <p>Foundation for SaaS deployment with per-customer M365 tenant isolation.</p>
+    <ul class="step-list">
+      <li><strong>Config Externalization:</strong> All settings via environment variables (12-factor app)</li>
+      <li><strong>Dockerfile:</strong> Multi-stage build — Vite frontend build + Node 22 Alpine runtime</li>
+      <li><strong>Multi-Tenant Entra:</strong> <code>ALLOWED_TENANT_IDS</code>, <code>AUTHORITY_MODE=multi</code>, <code>authMiddleware.js</code></li>
+      <li><strong>Health Probes:</strong> <code>/healthz</code> (liveness), <code>/readyz</code> (readiness with DB/AI checks)</li>
+      <li><strong>Client Config:</strong> <code>/api/config</code> — feature flags, region, branding for frontend</li>
+    </ul>
+  </div>
+
+  <!-- Productization Phase 2 -->
+  <div class="section">
+    <h2>Productization Phase 2 — Infrastructure as Code</h2>
+    <span class="phase-tag p2">Commit 7ceab5c</span>
+    <p>Azure Bicep infrastructure and customer provisioning automation.</p>
+    <ul class="step-list">
+      <li><strong>Bicep IaC:</strong> <code>infra/main.bicep</code> — App Service, MySQL, OpenAI, Key Vault, VNet</li>
+      <li><strong>Provisioning Script:</strong> <code>scripts/provision-customer.sh</code> — end-to-end customer setup</li>
+      <li><strong>Update Script:</strong> <code>scripts/update-all-customers.sh</code> — rolling updates across tenants</li>
+      <li><strong>Ops Status:</strong> <code>scripts/ops-status.sh</code> — multi-tenant health dashboard</li>
+      <li><strong>Customer Registry:</strong> <code>scripts/customers.json</code> — centralized tenant inventory</li>
+    </ul>
+  </div>
+
+  <!-- Productization Phase 3 -->
+  <div class="section">
+    <h2>Productization Phase 3 — Singapore SME Features</h2>
+    <span class="phase-tag p3">Commit 47c81a4</span>
+    <p>Localized features for Singapore market compliance and operations.</p>
+    <ul class="step-list">
+      <li><strong>Setup Wizard:</strong> First-run configuration — company, admin, Entra, PDPA, branding (<code>/api/setup/*</code>)</li>
+      <li><strong>PDPA Compliance:</strong> Consent management, DSAR workflow, data retention (<code>/api/pdpa/*</code>)</li>
+      <li><strong>SG Holidays:</strong> Pre-loaded Singapore public holidays for SLA business-hours (<code>/api/sg-holidays/*</code>)</li>
+      <li><strong>Customer Portal:</strong> White-label portal with restricted end-user access (<code>/api/portal/*</code>)</li>
+      <li><strong>Billing Engine:</strong> Per-user billing, invoice generation, Stripe-ready (<code>/api/billing/*</code>)</li>
+    </ul>
+  </div>
+
+  <!-- Productization Phase 4 -->
+  <div class="section">
+    <h2>Productization Phase 4 — AI Governance & Automation</h2>
+    <span class="phase-tag p4">Commit 0cf8103</span>
+    <p>Enterprise AI controls and intelligent automation.</p>
+    <ul class="step-list">
+      <li><strong>AI Budget Control:</strong> Monthly cap (<code>AI_MONTHLY_BUDGET_USD</code>), usage tracking, auto-block on overspend</li>
+      <li><strong>AI Autonomy Levels:</strong> <code>assisted</code> / <code>semi</code> / <code>full</code> automation modes</li>
+      <li><strong>AI Audit Log:</strong> Every AI decision logged with model, tokens, cost, justification</li>
+      <li><strong>Automation Rules:</strong> Trigger-condition-action rules (<code>/api/automation/rules/*</code>)</li>
+      <li><strong>Governance API:</strong> <code>/api/ai/governance</code>, <code>/api/ai/usage</code>, <code>/api/ai/audit</code></li>
+    </ul>
+  </div>
+
+  <!-- Productization Phase 5 -->
+  <div class="section">
+    <h2>Productization Phase 5 — CI/CD & Admin UX</h2>
+    <span class="phase-tag p5">Commit 672d462</span>
+    <p>Production pipeline and admin experience enhancements.</p>
+    <ul class="step-list">
+      <li><strong>CI/CD Pipeline:</strong> <code>.github/workflows/deploy.yml</code> — lint, test, Docker build, ACR push, deploy</li>
+      <li><strong>AI Governance UI:</strong> Admin tab — budget gauge, autonomy selector, audit viewer</li>
+      <li><strong>Branding Editor:</strong> Admin tab — logo, colors, company name customization</li>
+      <li><strong>Compliance Report:</strong> <code>/api/compliance/report</code> — PDPA + SLA + AI governance metrics</li>
+      <li><strong>Feature Flags:</strong> <code>FEATURE_PDPA</code>, <code>FEATURE_PORTAL</code>, <code>FEATURE_BILLING</code>, <code>FEATURE_SETUP_WIZARD</code></li>
+    </ul>
+  </div>
+
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Release Notes · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Release Notes · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>

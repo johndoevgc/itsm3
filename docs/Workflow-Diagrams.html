@@ -21,12 +21,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="2.0" data-doc="workflow-diagrams">
+<body data-version="3.0" data-doc="workflow-diagrams">
 
 <div class="header">
   <h1>Workflow Diagrams</h1>
   <div class="subtitle">VGC-ITSM — Process Flows & Architecture</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="container">
@@ -233,8 +233,62 @@ flowchart LR
     </div>
   </div>
 
+  <div class="section">
+    <h2>Multi-Tenant Authentication Flow (v3.0)</h2>
+    <p>Per-customer M365 tenant validation with allowed tenant list.</p>
+    <div class="mermaid">
+flowchart TD
+  A[User Login] --> B[Entra ID SSO]
+  B --> C[Token Received]
+  C --> D{Extract tenant_id}
+  D --> E{In ALLOWED_TENANT_IDS?}
+  E -->|No| F[403 Tenant Not Authorized]
+  E -->|Yes| G{Map to RBAC Role}
+  G --> H[Grant Session]
+  H --> I[Load Feature Flags]
+  I --> J[Serve App with Tenant Config]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>AI Governance Flow (v3.0)</h2>
+    <p>Budget-controlled AI request processing with audit logging.</p>
+    <div class="mermaid">
+flowchart TD
+  A[AI Request] --> B{Budget Remaining?}
+  B -->|No| C[Block - Budget Exceeded]
+  B -->|Yes| D{Autonomy Level}
+  D -->|assisted| E[Suggest Only]
+  D -->|semi| F{Risk Level?}
+  F -->|Low| G[Auto-Execute]
+  F -->|High| E
+  D -->|full| G
+  G --> H[Execute AI Action]
+  E --> I[Present to User]
+  H --> J[Log to ai_audit_log]
+  I --> J
+  J --> K[Update ai_usage]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Customer Provisioning Flow (v3.0)</h2>
+    <p>End-to-end new customer onboarding via provisioning script.</p>
+    <div class="mermaid">
+flowchart LR
+  A[provision-customer.sh] --> B[Create MySQL DB]
+  B --> C[Register Entra App]
+  C --> D[Deploy Bicep Infra]
+  D --> E[Configure DNS]
+  E --> F[Set Feature Flags]
+  F --> G[Add to customers.json]
+  G --> H[Run Setup Wizard]
+  H --> I[Health Check /readyz]
+    </div>
+  </div>
+
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Workflow Diagrams · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Workflow Diagrams · Version 3.0 · April 2026</div>
 </div>
 
 <script>mermaid.initialize({ startOnLoad: true, theme: 'default' });</script>

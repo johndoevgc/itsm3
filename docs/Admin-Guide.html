@@ -33,12 +33,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="2.0" data-doc="admin-guide">
+<body data-version="3.0" data-doc="admin-guide">
 
 <div class="header">
   <h1>Administrator Guide</h1>
   <div class="subtitle">VGC-ITSM — Setup, Configuration & Troubleshooting</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="meta-bar">
@@ -52,11 +52,13 @@
     <h2>1. Environment Setup</h2>
     <h3>1.1 Prerequisites</h3>
     <ul>
-      <li>Node.js 20.x LTS</li>
+      <li>Node.js 22.x LTS</li>
       <li>Azure MySQL Flexible Server 8.0</li>
-      <li>Azure App Service (Linux, Node 20)</li>
+      <li>Azure App Service (Linux) or Docker-compatible host</li>
       <li>Azure OpenAI Service with GPT-5.4 models deployed</li>
       <li>Microsoft Entra ID tenant with app registration</li>
+      <li>Azure Key Vault (recommended for secret management)</li>
+      <li>Azure Container Registry (for Docker deployments)</li>
     </ul>
 
     <h3>1.2 Environment Variables</h3>
@@ -74,6 +76,20 @@
       <tr><td><code>ZENDESK_SUBDOMAIN</code></td><td>Zendesk subdomain</td><td><code>mycompany</code></td></tr>
       <tr><td><code>ZENDESK_API_TOKEN</code></td><td>Zendesk API token</td><td>(secret)</td></tr>
       <tr><td><code>ZENDESK_EMAIL</code></td><td>Zendesk admin email</td><td><code>admin@example.com</code></td></tr>
+    </table>
+
+    <h3>1.3 v3.0 Environment Variables</h3>
+    <table>
+      <tr><th>Variable</th><th>Purpose</th><th>Example</th></tr>
+      <tr><td><code>ALLOWED_TENANT_IDS</code></td><td>Comma-separated M365 tenant IDs</td><td><code>tid1,tid2,tid3</code></td></tr>
+      <tr><td><code>AUTHORITY_MODE</code></td><td>Entra authority mode</td><td><code>multi</code> (multi-tenant) or <code>single</code></td></tr>
+      <tr><td><code>FEATURE_PDPA</code></td><td>Enable PDPA compliance module</td><td><code>true</code></td></tr>
+      <tr><td><code>FEATURE_PORTAL</code></td><td>Enable customer portal</td><td><code>true</code></td></tr>
+      <tr><td><code>FEATURE_BILLING</code></td><td>Enable billing engine</td><td><code>true</code></td></tr>
+      <tr><td><code>FEATURE_SETUP_WIZARD</code></td><td>Enable first-run setup wizard</td><td><code>true</code></td></tr>
+      <tr><td><code>AI_MONTHLY_BUDGET_USD</code></td><td>Monthly AI spend cap</td><td><code>50</code></td></tr>
+      <tr><td><code>AI_AUTONOMY_LEVEL</code></td><td>AI automation level</td><td><code>assisted</code> / <code>semi</code> / <code>full</code></td></tr>
+      <tr><td><code>AZURE_REGION</code></td><td>Azure deployment region</td><td><code>southeastasia</code></td></tr>
     </table>
 
     <h3>1.3 Local Development</h3>
@@ -172,7 +188,64 @@ az webapp restart --name vgc-itsm1-app --resource-group vgc-itsm-1-RG</pre>
 
     <h3>5.3 Verify</h3>
     <pre>GET https://vgc-itsm1-app.azurewebsites.net/api/health
-GET https://vgc-itsm1-app.azurewebsites.net/api/health/deep</pre>
+GET https://vgc-itsm1-app.azurewebsites.net/api/health/deep
+GET https://vgc-itsm1-app.azurewebsites.net/healthz
+GET https://vgc-itsm1-app.azurewebsites.net/readyz</pre>
+  </div>
+
+  <div class="section">
+    <h2>5A. Docker Deployment (v3.0)</h2>
+    <pre># Build Docker image
+docker build -t vgc-itsm:latest .
+
+# Run locally
+docker run -p 3001:3001 --env-file .env vgc-itsm:latest
+
+# Push to Azure Container Registry
+az acr build --registry &lt;acr-name&gt; --image vgc-itsm:v3.0 .
+
+# Deploy via App Service
+az webapp config container set --name &lt;app-name&gt; --resource-group &lt;rg&gt; \
+  --container-image-name &lt;acr-name&gt;.azurecr.io/vgc-itsm:v3.0</pre>
+  </div>
+
+  <div class="section">
+    <h2>5B. Infrastructure as Code (v3.0)</h2>
+    <pre># Deploy with Bicep
+az deployment group create --resource-group &lt;rg&gt; \
+  --template-file infra/main.bicep \
+  --parameters customerName=&lt;name&gt; environment=prod region=southeastasia
+
+# Provision new customer
+./scripts/provision-customer.sh --name "Acme Pte Ltd" --tenant-id &lt;tid&gt;
+
+# Check all customer status
+./scripts/ops-status.sh</pre>
+  </div>
+
+  <div class="section">
+    <h2>5C. CI/CD Pipeline (v3.0)</h2>
+    <p>GitHub Actions workflow at <code>.github/workflows/deploy.yml</code>:</p>
+    <ol>
+      <li><strong>Lint:</strong> ESLint check on server.js</li>
+      <li><strong>Test:</strong> Run E2E test suite</li>
+      <li><strong>Build:</strong> Docker multi-stage build</li>
+      <li><strong>Push:</strong> Push to Azure Container Registry</li>
+      <li><strong>Deploy:</strong> Update App Service container image</li>
+    </ol>
+    <p>Triggered on push to <code>main</code> or <code>master</code> branch.</p>
+  </div>
+
+  <div class="section">
+    <h2>5D. Multi-Tenant Customer Onboarding (v3.0)</h2>
+    <ol>
+      <li>Add customer to <code>scripts/customers.json</code></li>
+      <li>Run <code>scripts/provision-customer.sh</code> — creates DB, Entra app reg, DNS</li>
+      <li>Set <code>ALLOWED_TENANT_IDS</code> to include customer's M365 tenant ID</li>
+      <li>Configure feature flags (<code>FEATURE_PDPA</code>, etc.) per customer needs</li>
+      <li>Run setup wizard at first login or use <code>POST /api/setup/*</code> endpoints</li>
+      <li>Verify with <code>GET /healthz</code> and <code>GET /readyz</code></li>
+    </ol>
   </div>
 
   <div class="section">
@@ -200,7 +273,7 @@ GET https://vgc-itsm1-app.azurewebsites.net/api/health/deep</pre>
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Admin Guide · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Admin Guide · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>

@@ -34,12 +34,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="2.0" data-doc="ai-capabilities">
+<body data-version="3.0" data-doc="ai-capabilities">
 
 <div class="header">
   <h1>AI Capabilities</h1>
   <div class="subtitle">VGC-ITSM — Three-Tier Azure OpenAI Architecture</div>
-  <span class="badge">Version 2.0</span>
+  <span class="badge">Version 3.0</span>
 </div>
 
 <div class="container">
@@ -48,11 +48,11 @@
     <h2>AI System Overview</h2>
     <div class="stats">
       <div class="stat"><div class="num">3</div><div class="lbl">Model Tiers</div></div>
-      <div class="stat"><div class="num">12</div><div class="lbl">AI Features</div></div>
-      <div class="stat"><div class="num">8</div><div class="lbl">Collections</div></div>
-      <div class="stat"><div class="num">15+</div><div class="lbl">AI Endpoints</div></div>
+      <div class="stat"><div class="num">18+</div><div class="lbl">AI Features</div></div>
+      <div class="stat"><div class="num">10</div><div class="lbl">Collections</div></div>
+      <div class="stat"><div class="num">25+</div><div class="lbl">AI Endpoints</div></div>
     </div>
-    <p>All AI capabilities use Azure OpenAI Service with automatic failover across three model tiers for resilience and cost optimization.</p>
+    <p>All AI capabilities use Azure OpenAI Service with automatic failover across three model tiers for resilience and cost optimization. v3.0 adds AI Governance, Budget Control, Automation Rules, and comprehensive audit logging.</p>
   </div>
 
   <div class="section">
@@ -129,6 +129,8 @@
       <tr><td><code>ai_chat_sessions</code></td><td>Virtual agent conversation state</td></tr>
       <tr><td><code>ai_kb_drafts</code></td><td>AI-generated KB article drafts</td></tr>
       <tr><td><code>ai_learning_feedback</code></td><td>Agent feedback on AI suggestions</td></tr>
+      <tr><td><code>ai_usage</code></td><td>Per-request token usage and cost tracking (v3.0)</td></tr>
+      <tr><td><code>ai_audit_log</code></td><td>AI governance audit trail — all AI decisions with justification (v3.0)</td></tr>
       <tr><td><code>zd_ai_queue</code></td><td>Zendesk AI processing queue</td></tr>
     </table>
   </div>
@@ -144,8 +146,57 @@
     </ul>
   </div>
 
+  <div class="section">
+    <h2>AI Governance &amp; Budget Control (v3.0)</h2>
+    <p>Enterprise-grade AI governance for cost control, compliance, and operational oversight.</p>
+
+    <h3>Budget Control</h3>
+    <table>
+      <tr><th>Setting</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+      <tr><td>Monthly Budget</td><td><code>AI_MONTHLY_BUDGET_USD</code></td><td>50</td><td>Maximum monthly AI spend in USD. Requests blocked when exceeded.</td></tr>
+      <tr><td>Autonomy Level</td><td><code>AI_AUTONOMY_LEVEL</code></td><td>assisted</td><td><code>assisted</code> (suggest only), <code>semi</code> (auto low-risk), <code>full</code> (auto all)</td></tr>
+    </table>
+
+    <h3>Governance Endpoints</h3>
+    <table>
+      <tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+      <tr><td><code>/api/ai/usage</code></td><td>GET</td><td>Current month usage: tokens, cost, budget remaining</td></tr>
+      <tr><td><code>/api/ai/audit</code></td><td>GET</td><td>AI audit log — all decisions with timestamps, models, costs</td></tr>
+      <tr><td><code>/api/ai/governance</code></td><td>GET/PUT</td><td>View/update governance settings (autonomy, budget, thresholds)</td></tr>
+    </table>
+
+    <h3>Admin UI: AI Governance Tab</h3>
+    <ul>
+      <li>Real-time budget gauge showing monthly spend vs. cap</li>
+      <li>Autonomy level selector with instant effect</li>
+      <li>AI audit log viewer with filtering by date, model, action type</li>
+      <li>Usage breakdown by feature (triage, chat, KB generation, etc.)</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Automation Rules Engine (v3.0)</h2>
+    <p>Configurable trigger-condition-action rules for automated ticket processing.</p>
+
+    <h3>Rule Structure</h3>
+    <table>
+      <tr><th>Field</th><th>Description</th><th>Examples</th></tr>
+      <tr><td>Trigger</td><td>Event that activates the rule</td><td><code>ticket_created</code>, <code>sla_warning</code>, <code>status_changed</code></td></tr>
+      <tr><td>Conditions</td><td>Criteria to match</td><td>priority = "critical", category = "network"</td></tr>
+      <tr><td>Actions</td><td>Operations to perform</td><td>assign_team, send_notification, escalate, set_priority</td></tr>
+    </table>
+
+    <h3>Automation Endpoints</h3>
+    <table>
+      <tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+      <tr><td><code>/api/automation/rules</code></td><td>GET/POST</td><td>List all rules / create new rule</td></tr>
+      <tr><td><code>/api/automation/rules/:id</code></td><td>PUT/DELETE</td><td>Update / delete a rule</td></tr>
+      <tr><td><code>/api/automation/rules/:id/toggle</code></td><td>POST</td><td>Enable / disable a rule</td></tr>
+    </table>
+  </div>
+
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM AI Capabilities · Version 2.0 · April 2026</div>
+  <div class="footer">VGC-ITSM AI Capabilities · Version 3.0 · April 2026</div>
 </div>
 </body>
 </html>
