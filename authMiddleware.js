@@ -53,7 +53,7 @@ function verifyJWTSignature(token, key) {
 }
 
 // ─── Full JWT Validation ────────────────────────────────────────────────
-async function validateToken(token, tenantId, clientId) {
+async function validateToken(token, tenantId, clientId, allowedTenantIds) {
   const decoded = decodeJWT(token);
   if (!decoded) return { valid: false, error: "Malformed token" };
 
@@ -73,10 +73,16 @@ async function validateToken(token, tenantId, clientId) {
     }
   }
 
-  // Check issuer
+  // Multi-tenant: validate token's tenant ID against allowed list
+  const tokenTenantId = payload.tid || tenantId;
+  if (allowedTenantIds && allowedTenantIds.length > 0 && !allowedTenantIds.includes(tokenTenantId)) {
+    return { valid: false, error: "Tenant not allowed" };
+  }
+
+  // Check issuer (use token's actual tenant ID for multi-tenant)
   const validIssuers = [
-    `https://login.microsoftonline.com/${tenantId}/v2.0`,
-    `https://sts.windows.net/${tenantId}/`,
+    `https://login.microsoftonline.com/${tokenTenantId}/v2.0`,
+    `https://sts.windows.net/${tokenTenantId}/`,
   ];
   if (payload.iss && !validIssuers.includes(payload.iss)) {
     return { valid: false, error: "Invalid issuer" };
@@ -84,7 +90,7 @@ async function validateToken(token, tenantId, clientId) {
 
   // Verify signature using JWKS
   try {
-    const keys = await getSigningKeys(tenantId);
+    const keys = await getSigningKeys(tokenTenantId);
     const signingKey = keys.find(k => k.kid === header.kid);
     if (!signingKey) return { valid: false, error: "Signing key not found" };
     const verified = verifyJWTSignature(token, signingKey);
@@ -226,7 +232,7 @@ function isPublicRoute(pathname) {
 
 // ─── Main Auth Middleware ───────────────────────────────────────────────
 // Returns: { authenticated, user, role } or writes 401/403 response
-async function authMiddleware(req, res, pathname, tenantId, clientId) {
+async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTenantIds) {
   // Public routes skip auth
   if (isPublicRoute(pathname)) {
     return { authenticated: false, user: null, role: "anonymous", skipped: true };
@@ -287,7 +293,7 @@ async function authMiddleware(req, res, pathname, tenantId, clientId) {
   }
 
   // Full validation
-  const result = await validateToken(token, tenantId, clientId);
+  const result = await validateToken(token, tenantId, clientId, allowedTenantIds);
   if (!result.valid) {
     // Don't block — log warning and allow with limited role (graceful migration)
     console.warn(`[Auth] Token validation failed: ${result.error}`);

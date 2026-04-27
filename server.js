@@ -39,6 +39,8 @@ const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || "";
 const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 const ENTRA_CERT_THUMBPRINT = process.env.ENTRA_CERT_THUMBPRINT || "";
+// Multi-tenant: comma-separated list of allowed tenant IDs. If empty, all tenants allowed.
+const ALLOWED_TENANT_IDS = (process.env.ALLOWED_TENANT_IDS || ENTRA_TENANT_ID).split(",").map(s => s.trim()).filter(Boolean);
 
 // Helper: Build client assertion JWT for certificate-based auth
 let _cachedPrivateKey = null;
@@ -141,14 +143,14 @@ const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 
 // ─── Production Mode ────────────────────────────────────────────────────
 // PROD_TEST_MODE=false: AI thresholds at production levels, Zendesk bidirectional sync enabled
-const PROD_TEST_MODE = false;
+const PROD_TEST_MODE = process.env.PROD_TEST_MODE === "true";
 // ─── Email Redirect (safety net) ────────────────────────────────────────
 // When true, ALL outbound emails are redirected to EMAIL_REDIRECT_TARGET
 // Flip to false when ready to send to real customers
-const EMAIL_REDIRECT_MODE = true;
-const EMAIL_REDIRECT_TARGET = "hlaing@vgctechnology.com";
+const EMAIL_REDIRECT_MODE = process.env.EMAIL_REDIRECT_MODE !== undefined ? process.env.EMAIL_REDIRECT_MODE === "true" : true;
+const EMAIL_REDIRECT_TARGET = process.env.EMAIL_REDIRECT_TARGET || "hlaing@vgctechnology.com";
 // Customer-facing emails go here when redirect is active
-const CUSTOMER_REDIRECT_TARGET = "johndoe@vgcsg.com";
+const CUSTOMER_REDIRECT_TARGET = process.env.CUSTOMER_REDIRECT_TARGET || "johndoe@vgcsg.com";
 // Legacy aliases (referenced elsewhere)
 const PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
@@ -615,7 +617,7 @@ async function initDatabase() {
     };
   } else {
     const Database = require("better-sqlite3");
-    const DB_PATH = path.join(__dirname, "vgc-itsm.db");
+    const DB_PATH = path.join(__dirname, process.env.SQLITE_PATH || "itsm.db");
     const sdb = new Database(DB_PATH);
     sdb.pragma("journal_mode = WAL");
     sdb.pragma("foreign_keys = ON");
@@ -726,7 +728,11 @@ function parseBody(req, maxSize = 50000) {
 // Centralized HTML email builder for all notification types. Outlook-compatible
 // table-based layout with structured sections: header, action banner, details,
 // resolution, impact, next actions, references, AI guidance, footer.
-const PORTAL_URL = "https://vgc-itsm1-app.azurewebsites.net";
+const PORTAL_URL = process.env.PORTAL_URL || "https://vgc-itsm1-app.azurewebsites.net";
+const ORG_NAME = process.env.ORG_NAME || "VGC Technology Pte Ltd";
+const ORG_SHORT_NAME = process.env.ORG_SHORT_NAME || "VGC Technology";
+const ORG_PHONE = process.env.ORG_PHONE || "+65 6000 0000";
+const APP_DISPLAY_NAME = process.env.APP_DISPLAY_NAME || "VGC ITSM";
 const EMAIL_PRESETS = {
   incident_resolved:       { color: "#4CAF50", gradient: "linear-gradient(135deg,#4CAF50,#06B6D4)", icon: "&#9989;", label: "Incident Resolved",           actionRequired: false },
   incident_assigned:       { color: "#F59E0B", gradient: "linear-gradient(135deg,#F59E0B,#EF4444)", icon: "&#128276;", label: "Incident Assigned to You",    actionRequired: true },
@@ -923,7 +929,7 @@ function buildEmailTemplate(opts = {}) {
   // ── Portal link button ──
   const portalBtnHtml = `<table cellpadding="0" cellspacing="0" border="0" style="margin:20px 0 0;">
     <tr><td align="center" style="background:#0078D4;border-radius:6px;padding:0;">
-      <a href="${PORTAL_URL}" style="display:inline-block;padding:12px 28px;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;">Open VGC ITSM Portal</a>
+      <a href="${PORTAL_URL}" style="display:inline-block;padding:12px 28px;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;">Open ${APP_DISPLAY_NAME} Portal</a>
     </td></tr>
   </table>`;
 
@@ -938,7 +944,7 @@ function buildEmailTemplate(opts = {}) {
         <table cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:18px;font-weight:700;color:#ffffff;">${preset.icon} ${preset.label}</td>
-            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.85);">VGC Technology<br/>${dateStr}</td>
+            <td align="right" style="font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.85);">${ORG_SHORT_NAME}<br/>${dateStr}</td>
           </tr>
         </table>
       </td></tr>
@@ -989,9 +995,9 @@ function buildEmailTemplate(opts = {}) {
         <table cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;line-height:1.6;">
-              <strong>VGC Technology Pte Ltd</strong> &middot; IT Service Management<br/>
-              &#128231; <a href="mailto:helpdesk@vgctechnology.com" style="color:#a0aec0;text-decoration:none;">helpdesk@vgctechnology.com</a> &nbsp;|&nbsp; &#128222; +65 6000 0000<br/>
-              This is an automated notification from VGC ITSM. Please do not reply to automated messages.
+              <strong>${ORG_NAME}</strong> &middot; IT Service Management<br/>
+              &#128231; <a href="mailto:${HELPDESK_MAILBOX}" style="color:#a0aec0;text-decoration:none;">${HELPDESK_MAILBOX}</a> &nbsp;|&nbsp; &#128222; ${ORG_PHONE}<br/>
+              This is an automated notification from ${APP_DISPLAY_NAME}. Please do not reply to automated messages.
             </td>
             <td align="right" valign="top" style="font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#a0aec0;">${incidentId ? `Ref: ${esc(incidentId)}` : ""}</td>
           </tr>
@@ -1097,7 +1103,7 @@ let zdSyncStats = { tickets: 0, users: 0, orgs: 0, comments: 0, errors: 0 };
 let zdAutoSyncInterval = null;
 
 // ─── Dynamic Org Name (cached, refreshed every 5 min) ────────────────
-let _cachedOrgName = "VGC Technology Pte Ltd";
+let _cachedOrgName = ORG_NAME;
 let _orgNameCacheTs = 0;
 async function getOrgName() {
   if (Date.now() - _orgNameCacheTs < 300000) return _cachedOrgName;
@@ -1771,7 +1777,7 @@ const server = http.createServer(async (req, res) => {
   // ─── Auth & Rate Limiting (API routes only) ────────────────────────
   let authResult = { authenticated: false, user: null, role: "anonymous", skipped: true };
   if (pathname.startsWith("/api/")) {
-    authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID);
+    authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ALLOWED_TENANT_IDS);
     if (authResult.blocked) return; // 429 already sent
   }
   const auth = { authenticated: authResult.authenticated, name: authResult.user, role: authResult.role };
@@ -8375,6 +8381,33 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
+  // ─── Kubernetes/Container Health Probes ─────────────────────────────
+  if (pathname === "/healthz") {
+    return json(res, 200, { status: "ok" });
+  }
+  if (pathname === "/readyz") {
+    try {
+      await db.ping();
+      return json(res, 200, { status: "ready", database: "connected" });
+    } catch {
+      return json(res, 503, { status: "not ready", database: "disconnected" });
+    }
+  }
+
+  // ─── Frontend Config Endpoint (no auth required) ──────────────────
+  if (pathname === "/api/config" && req.method === "GET") {
+    const orgName = await getOrgName();
+    return json(res, 200, {
+      orgName,
+      orgShortName: ORG_SHORT_NAME,
+      appName: APP_DISPLAY_NAME,
+      aiEngineName: process.env.AI_ENGINE_NAME || "ITSM-AI v4.0",
+      portalUrl: PORTAL_URL,
+      version: APP_VERSION.version,
+      build: APP_VERSION.build,
+    });
+  }
+
   // Health check
   if (pathname === "/api/health") {
     let dbOk = false;
@@ -12600,7 +12633,7 @@ async function start() {
   server.listen(PORT, async () => {
     const stats = {};
     for (const c of VALID_COLLECTIONS) stats[c] = await db.count(c);
-    console.log(`VGC-ITSM v${APP_VERSION.version} (build ${APP_VERSION.build}) serving on port ${PORT}`);
+    console.log(`${APP_DISPLAY_NAME} v${APP_VERSION.version} (build ${APP_VERSION.build}) serving on port ${PORT}`);
     console.log(`Database: ${db.label}`);
     console.log(`Collections:`, stats);
 

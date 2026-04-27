@@ -10,8 +10,8 @@ const APP_VERSION = {
   build: "phase9-ai-learning",
   date: "2026-04-27",
   channel: "Production",
-  name: "VGC-ITSM",
-  engine: "VGC-AI v4.0 (Multi-Model: Pro/Mini/Nano)",
+  name: "ITSM",
+  engine: "ITSM-AI v4.0 (Multi-Model: Pro/Mini/Nano)",
   platform: "Azure App Service (Linux Node 20)",
   region: "AP-Southeast (Singapore)",
   license: "Enterprise — Per User Subscription",
@@ -1528,6 +1528,16 @@ export default function ITSMApp() {
   // Demo mode removed — production only
   const isDemoMode = false;
   const isDemoModeRef = useRef(false);
+
+  // ─── Runtime Config (fetched from server /api/config) ──────────────
+  const [runtimeConfig, setRuntimeConfig] = useState(null);
+  useEffect(() => {
+    fetch("/api/config").then(r => r.json()).then(cfg => {
+      setRuntimeConfig(cfg);
+      if (cfg.appName) APP_VERSION.name = cfg.appName;
+      if (cfg.aiEngineName) APP_VERSION.engine = cfg.aiEngineName + " (Multi-Model: Pro/Mini/Nano)";
+    }).catch(() => {});
+  }, []);
 
   const [activeModule, setActiveModule] = useState("dashboard");
   const [ticketsSubTab, setTicketsSubTab] = useState("incidents");

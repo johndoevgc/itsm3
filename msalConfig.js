@@ -20,10 +20,17 @@ const redirectUri = window.location.origin;
 const ENTRA_CLIENT_ID = window.__ITSM_CONFIG__?.clientId || "7c2be528-9424-4530-9c50-cc97fc6bc793";
 const ENTRA_TENANT_ID = window.__ITSM_CONFIG__?.tenantId || "3994f368-b34e-4722-a56b-92ac87150f00";
 
+// Multi-tenant: use /common/ to allow any M365 tenant, validated server-side via ALLOWED_TENANT_IDS
+// Single-tenant: use specific tenant ID for VGC-only deployments
+const AUTHORITY_MODE = window.__ITSM_CONFIG__?.authorityMode || "single"; // "single" | "multi"
+const authorityBase = AUTHORITY_MODE === "multi"
+  ? "https://login.microsoftonline.com/common"
+  : `https://login.microsoftonline.com/${ENTRA_TENANT_ID}`;
+
 const msalConfig = {
   auth: {
     clientId: ENTRA_CLIENT_ID,
-    authority: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}`,
+    authority: authorityBase,
     redirectUri,
     postLogoutRedirectUri: window.location.origin,
     navigateToLoginRequestUrl: false,
