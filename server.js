@@ -1056,6 +1056,11 @@ const VALID_COLLECTIONS = new Set([
   "field_visibility_rules",
   "notification_preferences",
   "mim_records",
+  "ai_chat_sessions",
+  "ai_kb_drafts",
+  "channel_stats",
+  "gamification_scores",
+  "dashboard_layouts",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -10659,6 +10664,340 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     await db.upsert("field_visibility_rules", id, rule);
     await db.audit("field_visibility_rules", id, "upsert", `Field visibility for ${body.role}`, auth.name || "System");
     return json(res, 200, rule);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ─── PHASE 2: AI Enhancement & Automation ────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── Step 11: AI Virtual Agent / Chat ─────────────────────────────────
+  // POST /api/ai/chat — conversational AI for end users
+  if (pathname === "/api/ai/virtual-agent" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.message) return json(res, 400, { error: "message required" });
+    try {
+      const sessionId = body.sessionId || `CHAT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      let session = null;
+      try { const row = await db.getOne("ai_chat_sessions", sessionId); if (row) session = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch {}
+      if (!session) session = { id: sessionId, userId: auth.name || "anonymous", messages: [], createdAt: new Date().toISOString() };
+      session.messages.push({ role: "user", content: body.message, timestamp: new Date().toISOString() });
+      const recentContext = session.messages.slice(-10).map(m => `${m.role}: ${m.content}`).join("\n");
+      const systemPrompt = `You are VGC-ITSM AI Assistant, a helpful IT service desk virtual agent. You can help users with:
+1. Creating tickets — ask for title, description, priority, category
+2. Checking ticket status — ask for ticket ID
+3. Searching the knowledge base — search for solutions
+4. General IT help — provide guidance
+When users want to create a ticket, extract: title, description, priority (P1-P4), category. Return JSON action: {"action":"create_ticket","title":"...","description":"...","priority":"P3","category":"..."} 
+When users ask about ticket status, return: {"action":"check_status","ticketId":"..."}
+When users search KB, return: {"action":"search_kb","query":"..."}
+Otherwise, provide helpful conversational responses as plain text.`;
+      const aiResult = await callAI(systemPrompt, `Conversation:\n${recentContext}`, { tier: "secondary", maxTokens: 800 });
+      let reply = aiResult.text || "";
+      let action = null;
+      try {
+        const jsonMatch = reply.match(/\{[^{}]*"action"[^{}]*\}/);
+        if (jsonMatch) { action = JSON.parse(jsonMatch[0]); reply = reply.replace(jsonMatch[0], "").trim(); }
+      } catch {}
+      // Execute actions
+      let actionResult = null;
+      if (action) {
+        if (action.action === "create_ticket") {
+          const id = `INC-${Date.now().toString(36).toUpperCase()}`;
+          const ticket = { id, title: action.title || "New ticket via AI Chat", description: action.description || body.message, priority: action.priority || "P3", category: action.category || "General", status: "New", source: "ai_chat", createdBy: auth.name || "anonymous", createdAt: new Date().toISOString() };
+          await db.upsert("incidents", id, ticket);
+          actionResult = { action: "ticket_created", ticketId: id, title: ticket.title };
+          reply = reply || `I've created ticket ${id}: "${ticket.title}". Our team will review it shortly.`;
+        } else if (action.action === "check_status" && action.ticketId) {
+          try { const row = await db.getOne("incidents", action.ticketId); if (row) { const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data; actionResult = { action: "status_found", ticketId: inc.id, status: inc.status, priority: inc.priority, assignee: inc.assignee }; reply = reply || `Ticket ${inc.id} is currently "${inc.status}" (${inc.priority}), assigned to ${inc.assignee || "unassigned"}.`; } else { reply = reply || `I couldn't find ticket ${action.ticketId}. Please check the ID.`; } } catch {}
+        } else if (action.action === "search_kb" && action.query) {
+          try { const kbs = await db.getAll("kb"); const articles = kbs.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).filter(a => (a.title || "").toLowerCase().includes(action.query.toLowerCase()) || (a.content || "").toLowerCase().includes(action.query.toLowerCase())).slice(0, 3); actionResult = { action: "kb_results", count: articles.length, articles: articles.map(a => ({ id: a.id, title: a.title })) }; if (articles.length > 0) { reply = reply || `I found ${articles.length} KB article(s): ${articles.map(a => `"${a.title}"`).join(", ")}. Would you like details?`; } else { reply = reply || `No KB articles found for "${action.query}". Would you like to create a ticket instead?`; } } catch {}
+        }
+      }
+      session.messages.push({ role: "assistant", content: reply, action: actionResult, timestamp: new Date().toISOString() });
+      if (session.messages.length > 50) session.messages = session.messages.slice(-30);
+      await db.upsert("ai_chat_sessions", sessionId, session);
+      return json(res, 200, { sessionId, reply, action: actionResult, model: aiResult.model, tier: aiResult.tier });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/ai/chat/:sessionId — get chat history
+  if (/^\/api\/ai\/virtual-agent\/([^/]+)$/.test(pathname) && req.method === "GET") {
+    const sessionId = pathname.split("/")[4];
+    try {
+      const row = await db.getOne("ai_chat_sessions", sessionId);
+      if (!row) return json(res, 404, { error: "Chat session not found" });
+      return json(res, 200, typeof row.data === "string" ? JSON.parse(row.data) : row.data);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 12: AI KB Article Generation ────────────────────────────────
+  // POST /api/ai/generate-kb — generate KB draft from resolved ticket
+  if (pathname === "/api/ai/generate-kb" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId) return json(res, 400, { error: "incidentId required" });
+    try {
+      const row = await db.getOne("incidents", body.incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const actRows = await db.getAll("worklogs");
+      const worklogs = actRows.filter(r => { const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return d.incidentId === body.incidentId; }).map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const systemPrompt = `You are a technical writer. Generate a Knowledge Base article from the resolved incident. Structure it as:
+Title: Clear, searchable title
+Category: Appropriate category
+Summary: Brief 1-2 sentence summary
+Problem: What the user experienced
+Solution: Step-by-step resolution
+Prevention: How to prevent recurrence
+Tags: Comma-separated relevant tags
+Return as JSON: {"title":"...","category":"...","summary":"...","content":"...","tags":["..."]}`;
+      const userPrompt = `Incident: ${inc.title}\nDescription: ${inc.description || ""}\nCategory: ${inc.category}/${inc.subcategory || ""}\nResolution: ${inc.resolution || inc.resolutionNotes || ""}\nWork logs: ${worklogs.map(w => `${w.category}: ${w.description}`).join("; ") || "none"}`;
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 1200 });
+      let draft = { title: `KB: ${inc.title}`, category: inc.category, summary: "", content: aiResult.text, tags: [] };
+      try { const parsed = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); draft = { ...draft, ...parsed }; } catch {}
+      const draftId = `KBD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const kbDraft = { id: draftId, incidentId: body.incidentId, ...draft, status: "draft", generatedBy: "AI", generatedAt: new Date().toISOString(), model: aiResult.model };
+      await db.upsert("ai_kb_drafts", draftId, kbDraft);
+      await db.audit("ai_kb_drafts", draftId, "create", `AI KB draft from ${body.incidentId}`, auth.name || "System");
+      return json(res, 201, kbDraft);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/ai/generate-kb/:id/publish — publish draft to KB
+  if (/^\/api\/ai\/generate-kb\/([^/]+)\/publish$/.test(pathname) && req.method === "POST") {
+    const draftId = pathname.split("/")[4];
+    try {
+      const row = await db.getOne("ai_kb_drafts", draftId);
+      if (!row) return json(res, 404, { error: "Draft not found" });
+      const draft = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const kbId = `KB-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const article = { id: kbId, title: draft.title, category: draft.category || "General", content: draft.content, summary: draft.summary, tags: draft.tags || [], status: "Published", author: auth.name || "AI", sourceIncident: draft.incidentId, createdAt: new Date().toISOString(), aiGenerated: true };
+      await db.upsert("kb", kbId, article);
+      draft.status = "published"; draft.publishedAs = kbId; draft.publishedAt = new Date().toISOString();
+      await db.upsert("ai_kb_drafts", draftId, draft);
+      await db.audit("kb", kbId, "create", `Published from AI draft ${draftId}`, auth.name || "System");
+      return json(res, 201, { article, draftId });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/ai/kb-drafts — list all AI KB drafts
+  if (pathname === "/api/ai/kb-drafts" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_kb_drafts");
+      return json(res, 200, rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data));
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 13: Automation Rules Execution Engine ───────────────────────
+  // POST /api/automation/evaluate — evaluate all rules against a ticket event
+  if (pathname === "/api/automation/evaluate" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId || !body.event) return json(res, 400, { error: "incidentId and event required" });
+    try {
+      const incRow = await db.getOne("incidents", body.incidentId);
+      if (!incRow) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+      const ruleRows = await db.getAll("automation_rules");
+      const rules = ruleRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).filter(r => r.enabled !== false && r.trigger === body.event);
+      const results = [];
+      for (const rule of rules) {
+        let conditionsMet = true;
+        for (const cond of (rule.conditions || [])) {
+          const fieldVal = inc[cond.field];
+          if (cond.operator === "equals" && fieldVal !== cond.value) conditionsMet = false;
+          if (cond.operator === "contains" && !(fieldVal || "").toString().toLowerCase().includes((cond.value || "").toLowerCase())) conditionsMet = false;
+          if (cond.operator === "not_equals" && fieldVal === cond.value) conditionsMet = false;
+          if (cond.operator === "in" && !(cond.value || []).includes(fieldVal)) conditionsMet = false;
+        }
+        if (!conditionsMet) continue;
+        const actionsApplied = [];
+        for (const action of (rule.actions || [])) {
+          if (action.type === "set_field") { inc[action.field] = action.value; actionsApplied.push(`Set ${action.field}=${action.value}`); }
+          if (action.type === "assign") { inc.assignee = action.value; actionsApplied.push(`Assigned to ${action.value}`); }
+          if (action.type === "set_priority") { inc.priority = action.value; actionsApplied.push(`Priority → ${action.value}`); }
+          if (action.type === "add_tag") { inc.tags = [...(inc.tags || []), action.value]; actionsApplied.push(`Tag added: ${action.value}`); }
+          if (action.type === "escalate") { inc.escalated = true; inc.escalationLevel = (inc.escalationLevel || 0) + 1; actionsApplied.push("Escalated"); }
+          if (action.type === "notify") { actionsApplied.push(`Notify: ${action.value}`); }
+        }
+        if (actionsApplied.length > 0) {
+          await db.upsert("incidents", body.incidentId, inc);
+          results.push({ ruleId: rule.id, ruleName: rule.name, actions: actionsApplied });
+        }
+      }
+      return json(res, 200, { incidentId: body.incidentId, event: body.event, rulesEvaluated: rules.length, rulesTriggered: results.length, results });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/automation/rules — list all automation rules
+  if (pathname === "/api/automation/rules" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("automation_rules");
+      return json(res, 200, rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data));
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/automation/rules — create automation rule
+  if (pathname === "/api/automation/rules" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.name || !body.trigger) return json(res, 400, { error: "name and trigger required" });
+    const id = `AR-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const rule = { id, name: body.name, description: body.description || "", trigger: body.trigger, conditions: body.conditions || [], actions: body.actions || [], enabled: body.enabled !== false, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
+    await db.upsert("automation_rules", id, rule);
+    await db.audit("automation_rules", id, "create", `Automation rule: ${rule.name}`, auth.name || "System");
+    return json(res, 201, rule);
+  }
+
+  // ─── Step 14: Email-to-Ticket Ingest ──────────────────────────────────
+  // POST /api/ingest/email — parse inbound email and create ticket
+  if (pathname === "/api/ingest/email" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.from || !body.subject) return json(res, 400, { error: "from and subject required" });
+    try {
+      const id = `INC-${Date.now().toString(36).toUpperCase()}`;
+      let aiCategory = { category: "General", priority: "P3", subcategory: "" };
+      try {
+        const aiResult = await callAI("You are an IT ticket triage engine. Categorize this email into an IT ticket. Return JSON: {\"category\":\"...\",\"subcategory\":\"...\",\"priority\":\"P1-P4\"}", `From: ${body.from}\nSubject: ${body.subject}\nBody: ${(body.body || "").substring(0, 500)}`, { tier: "tertiary", maxTokens: 200 });
+        try { aiCategory = { ...aiCategory, ...JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()) }; } catch {}
+      } catch {}
+      const ticket = { id, title: body.subject, description: body.body || body.subject, category: aiCategory.category, subcategory: aiCategory.subcategory, priority: aiCategory.priority, status: "New", source: "email", requesterEmail: body.from, requesterName: body.fromName || body.from.split("@")[0], createdAt: new Date().toISOString(), createdBy: "email-ingest", emailMessageId: body.messageId || null };
+      await db.upsert("incidents", id, ticket);
+      await db.audit("incidents", id, "create", `Email-to-ticket from ${body.from}`, "email-ingest");
+      if (wsServer) wsServer.broadcast("incident", { action: "created", incident: ticket });
+      return json(res, 201, { ticketId: id, category: aiCategory.category, priority: aiCategory.priority, source: "email" });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 15: Runbook List (supplemental) ──────────────────────────────
+  // GET /api/runbook/list — list available runbooks from KB
+  if (pathname === "/api/runbook/list" && req.method === "GET") {
+    try {
+      const kbRows = await db.getAll("kb");
+      const runbooks = kbRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).filter(a => a.type === "runbook" || (a.category || "").toLowerCase() === "runbook" || (a.tags || []).includes("runbook"));
+      return json(res, 200, runbooks.map(r => ({ id: r.id, title: r.title, category: r.category, status: r.status, steps: (r.steps || []).length })));
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 16: AI Capacity Planning / Forecast ─────────────────────────
+  if (pathname === "/api/ai/capacity-forecast" && (req.method === "GET" || req.method === "POST")) {
+    try {
+      const allInc = await db.getAll("incidents");
+      const incidents = allInc.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const now = Date.now();
+      const last90 = incidents.filter(i => { const d = new Date(i.createdAt || i.created_at); return !isNaN(d) && (now - d.getTime()) < 90 * 86400000; });
+      if (last90.length < 5) return json(res, 200, { forecast: [], message: "Insufficient data for forecasting" });
+      // Aggregate by week
+      const weekBuckets = {};
+      last90.forEach(i => {
+        const d = new Date(i.createdAt || i.created_at);
+        const weekKey = `${d.getFullYear()}-W${String(Math.ceil((d.getDate() + new Date(d.getFullYear(), d.getMonth(), 1).getDay()) / 7)).padStart(2, "0")}`;
+        const cat = i.category || "Other";
+        if (!weekBuckets[weekKey]) weekBuckets[weekKey] = {};
+        weekBuckets[weekKey][cat] = (weekBuckets[weekKey][cat] || 0) + 1;
+      });
+      const systemPrompt = "You are a capacity planning analyst. Given weekly ticket volumes by category, forecast the next 4 weeks. Return JSON: {\"forecast\":[{\"week\":\"...\",\"total\":number,\"byCategory\":{\"cat\":number},\"trend\":\"up|down|stable\"}],\"insights\":\"...\"}";
+      const userPrompt = `Weekly ticket volumes (last 90 days):\n${Object.entries(weekBuckets).map(([w, cats]) => `${w}: ${JSON.stringify(cats)} (total: ${Object.values(cats).reduce((s, v) => s + v, 0)})`).join("\n")}`;
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 800 });
+      let forecast = { forecast: [], insights: "" };
+      try { forecast = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch {}
+      return json(res, 200, { ...forecast, dataPoints: last90.length, weeksAnalyzed: Object.keys(weekBuckets).length, model: aiResult.model });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 17: AI-Powered Semantic Search ──────────────────────────────
+  if (pathname === "/api/ai/search" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.query) return json(res, 400, { error: "query required" });
+    try {
+      const scope = body.scope || "all";
+      let corpus = [];
+      if (scope === "all" || scope === "incidents") {
+        const rows = await db.getAll("incidents");
+        corpus.push(...rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).slice(0, 200).map(i => ({ type: "incident", id: i.id, title: i.title, snippet: (i.description || "").substring(0, 150), status: i.status, relevance: 0 })));
+      }
+      if (scope === "all" || scope === "kb") {
+        const rows = await db.getAll("kb");
+        corpus.push(...rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).map(k => ({ type: "kb", id: k.id, title: k.title, snippet: (k.content || k.summary || "").substring(0, 150), category: k.category, relevance: 0 })));
+      }
+      if (scope === "all" || scope === "assets") {
+        const rows = await db.getAll("assets");
+        corpus.push(...rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).slice(0, 100).map(a => ({ type: "asset", id: a.id, title: a.name || a.hostname, snippet: `${a.type || ""} - ${a.status || ""}`, relevance: 0 })));
+      }
+      const systemPrompt = "You are a search ranking engine. Given a query and a list of items, rank the top 10 most relevant items. Return JSON: {\"results\":[{\"id\":\"...\",\"relevance\":0-100}]}";
+      const userPrompt = `Query: "${body.query}"\nItems:\n${corpus.slice(0, 100).map(c => `${c.id}: [${c.type}] ${c.title} — ${c.snippet}`).join("\n")}`;
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "tertiary", maxTokens: 500 });
+      let ranked = { results: [] };
+      try { ranked = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch {}
+      const rankedIds = new Map((ranked.results || []).map(r => [r.id, r.relevance]));
+      const enriched = corpus.filter(c => rankedIds.has(c.id)).map(c => ({ ...c, relevance: rankedIds.get(c.id) })).sort((a, b) => b.relevance - a.relevance).slice(0, 10);
+      return json(res, 200, { query: body.query, results: enriched, total: enriched.length, model: aiResult.model });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 18: Multi-Channel Intake Stats ──────────────────────────────
+  if (pathname === "/api/analytics/channel-stats" && req.method === "GET") {
+    try {
+      const allInc = await db.getAll("incidents");
+      const incidents = allInc.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const channels = {};
+      const trends = {};
+      incidents.forEach(i => {
+        const src = i.source || "portal";
+        channels[src] = (channels[src] || 0) + 1;
+        const d = new Date(i.createdAt || i.created_at);
+        if (!isNaN(d)) {
+          const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          if (!trends[monthKey]) trends[monthKey] = {};
+          trends[monthKey][src] = (trends[monthKey][src] || 0) + 1;
+        }
+      });
+      return json(res, 200, { channels, trends, total: incidents.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 19: Agent Gamification / Leaderboard ────────────────────────
+  if (pathname === "/api/gamification/leaderboard" && req.method === "GET") {
+    try {
+      const allInc = await db.getAll("incidents");
+      const incidents = allInc.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const period = urlObj.searchParams.get("period") || "all";
+      const now = Date.now();
+      const filtered = period === "monthly" ? incidents.filter(i => { const d = new Date(i.resolvedAt || i.closedAt || ""); return !isNaN(d) && (now - d.getTime()) < 30 * 86400000; })
+        : period === "weekly" ? incidents.filter(i => { const d = new Date(i.resolvedAt || i.closedAt || ""); return !isNaN(d) && (now - d.getTime()) < 7 * 86400000; })
+        : incidents;
+      const scores = {};
+      filtered.forEach(i => {
+        const agent = i.assignee || i.resolvedBy;
+        if (!agent) return;
+        if (!scores[agent]) scores[agent] = { agent, ticketsResolved: 0, slaMet: 0, slaBreached: 0, avgCsat: 0, csatCount: 0, kbContributions: 0, points: 0 };
+        if (["Resolved", "Closed"].includes(i.status)) { scores[agent].ticketsResolved++; scores[agent].points += 10; }
+        if (i.slaStatus === "met" || i.slaStatus === "within") { scores[agent].slaMet++; scores[agent].points += 5; }
+        if (i.slaStatus === "breached") { scores[agent].slaBreached++; scores[agent].points -= 2; }
+        if (i.csatScore) { scores[agent].avgCsat = ((scores[agent].avgCsat * scores[agent].csatCount) + i.csatScore) / (scores[agent].csatCount + 1); scores[agent].csatCount++; scores[agent].points += Math.round(i.csatScore); }
+      });
+      // Add KB contributions
+      try {
+        const kbRows = await db.getAll("kb");
+        kbRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).forEach(a => {
+          const author = a.author || a.createdBy;
+          if (author && scores[author]) { scores[author].kbContributions++; scores[author].points += 8; }
+        });
+      } catch {}
+      const leaderboard = Object.values(scores).sort((a, b) => b.points - a.points).map((s, i) => ({ rank: i + 1, ...s, avgCsat: Math.round(s.avgCsat * 10) / 10 }));
+      return json(res, 200, { period, leaderboard, totalAgents: leaderboard.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Step 20: Custom Dashboard Layouts ────────────────────────────────
+  // GET /api/dashboard/layout/:userId
+  if (/^\/api\/dashboard\/layout\/([^/]+)$/.test(pathname) && req.method === "GET") {
+    const userId = decodeURIComponent(pathname.split("/")[4]);
+    try {
+      const row = await db.getOne("dashboard_layouts", userId);
+      if (!row) return json(res, 200, { userId, widgets: ["ticketSummary", "slaPie", "recentTickets", "channelStats", "teamPerformance", "csatTrend"], layout: "default" });
+      return json(res, 200, typeof row.data === "string" ? JSON.parse(row.data) : row.data);
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // PUT /api/dashboard/layout/:userId
+  if (/^\/api\/dashboard\/layout\/([^/]+)$/.test(pathname) && req.method === "PUT") {
+    const userId = decodeURIComponent(pathname.split("/")[4]);
+    const body = await parseBody(req);
+    const layout = { userId, widgets: body.widgets || [], layout: body.layout || "custom", positions: body.positions || {}, updatedAt: new Date().toISOString() };
+    await db.upsert("dashboard_layouts", userId, layout);
+    return json(res, 200, layout);
   }
 
   // ─── Static File Serving ──────────────────────────────────────────────

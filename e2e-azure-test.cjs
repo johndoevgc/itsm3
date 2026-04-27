@@ -296,7 +296,7 @@ async function main() {
   }
 
   // 34. Runbook Executions List
-  const rbList = await getJson("/api/runbook/executions?incidentId=INC-E2E-001");
+  let rbList = await getJson("/api/runbook/executions?incidentId=INC-E2E-001");
   assert("Runbook executions list returns 200", rbList.status === 200, `Status: ${rbList.status}`);
 
   // 35. Report Schedules
@@ -597,6 +597,89 @@ async function main() {
     const slaResume = await postJson(`/api/incidents/${testIncId}/sla-resume`, {});
     assert("SLA resume returns 200", slaResume.status === 200, `Status: ${slaResume.status}`);
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Phase 2: AI Enhancement & Automation Tests
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log("\n--- Phase 2: AI Virtual Agent ---");
+  const chatReply = await postJson("/api/ai/virtual-agent", { message: "Hello, I need help with my laptop" });
+  assert("AI chat returns 200", chatReply.status === 200, `Status: ${chatReply.status}`);
+  assert("AI chat has sessionId", !!chatReply.json.sessionId, `Got: ${chatReply.json.sessionId}`);
+  assert("AI chat has reply", typeof chatReply.json.reply === "string" && chatReply.json.reply.length > 0, `Reply length: ${(chatReply.json.reply || "").length}`);
+  if (chatReply.json.sessionId) {
+    const chatHistory = await getJson(`/api/ai/virtual-agent/${chatReply.json.sessionId}`);
+    assert("Chat history returns 200", chatHistory.status === 200, `Status: ${chatHistory.status}`);
+    assert("Chat history has messages", Array.isArray(chatHistory.json.messages) && chatHistory.json.messages.length > 0, `Messages: ${(chatHistory.json.messages || []).length}`);
+  }
+
+  console.log("--- Phase 2: AI KB Article Generation ---");
+  const kbGen = await postJson("/api/ai/generate-kb", { incidentId: testIncId });
+  assert("AI KB generation returns 201", kbGen.status === 201, `Status: ${kbGen.status}`);
+  assert("AI KB draft has id", !!kbGen.json.id, `Got: ${kbGen.json.id}`);
+  assert("AI KB draft has title", !!kbGen.json.title, `Got: ${kbGen.json.title}`);
+  const kbDrafts = await getJson("/api/ai/kb-drafts");
+  assert("KB drafts list returns 200", kbDrafts.status === 200, `Status: ${kbDrafts.status}`);
+  assert("KB drafts returns array", Array.isArray(kbDrafts.json), `Got: ${typeof kbDrafts.json}`);
+  if (kbGen.json.id) {
+    const publishResult = await postJson(`/api/ai/generate-kb/${kbGen.json.id}/publish`, {});
+    assert("KB draft publish returns 201", publishResult.status === 201, `Status: ${publishResult.status}`);
+    assert("Published KB has article", !!publishResult.json.article, `Got: ${!!publishResult.json.article}`);
+  }
+
+  console.log("--- Phase 2: Automation Rules Engine ---");
+  const arList = await getJson("/api/automation/rules");
+  assert("Automation rules list returns 200", arList.status === 200, `Status: ${arList.status}`);
+  const arCreate = await postJson("/api/automation/rules", { name: "E2E Test Rule", trigger: "ticket_created", conditions: [{ field: "priority", operator: "equals", value: "P1" }], actions: [{ type: "add_tag", value: "critical" }] });
+  assert("Automation rule create returns 201", arCreate.status === 201, `Status: ${arCreate.status}`);
+  assert("Automation rule has id", !!arCreate.json.id, `Got: ${arCreate.json.id}`);
+  const arEval = await postJson("/api/automation/evaluate", { incidentId: testIncId, event: "ticket_created" });
+  assert("Automation evaluate returns 200", arEval.status === 200, `Status: ${arEval.status}`);
+  assert("Automation evaluate has rulesEvaluated", typeof arEval.json.rulesEvaluated === "number", `Got: ${arEval.json.rulesEvaluated}`);
+
+  console.log("--- Phase 2: Email-to-Ticket Ingest ---");
+  const emailTicket = await postJson("/api/ingest/email", { from: "user@test.com", fromName: "Test User", subject: "Printer not working in floor 3", body: "The HP printer on floor 3 keeps showing paper jam error even after clearing the tray." });
+  assert("Email ingest returns 201", emailTicket.status === 201, `Status: ${emailTicket.status}`);
+  assert("Email ticket has ticketId", !!emailTicket.json.ticketId, `Got: ${emailTicket.json.ticketId}`);
+  assert("Email ticket source is email", emailTicket.json.source === "email", `Got: ${emailTicket.json.source}`);
+
+  console.log("--- Phase 2: Runbook List & Executions ---");
+  const rbExecs = await getJson("/api/runbook/executions");
+  assert("Runbook executions returns 200", rbExecs.status === 200, `Status: ${rbExecs.status}`);
+  assert("Runbook executions has data", Array.isArray(rbExecs.json.data), `Got: ${typeof rbExecs.json.data}`);
+
+  console.log("--- Phase 2: AI Capacity Forecast ---");
+  const forecast = await postJson("/api/ai/capacity-forecast", {});
+  assert("Capacity forecast returns 200", forecast.status === 200, `Status: ${forecast.status}`);
+  assert("Forecast has data or message", forecast.json.forecast != null || forecast.json.message != null, `Keys: ${Object.keys(forecast.json)}`);
+
+  console.log("--- Phase 2: AI Semantic Search ---");
+  const aiSearch = await postJson("/api/ai/search", { query: "printer issue", scope: "all" });
+  assert("AI search returns 200", aiSearch.status === 200, `Status: ${aiSearch.status}`);
+  assert("AI search has results array", Array.isArray(aiSearch.json.results), `Got: ${typeof aiSearch.json.results}`);
+  assert("AI search has query echo", aiSearch.json.query === "printer issue", `Got: ${aiSearch.json.query}`);
+
+  console.log("--- Phase 2: Multi-Channel Intake Stats ---");
+  const chStats = await getJson("/api/analytics/channel-stats");
+  assert("Channel stats returns 200", chStats.status === 200, `Status: ${chStats.status}`);
+  assert("Channel stats has channels", typeof chStats.json.channels === "object", `Got: ${typeof chStats.json.channels}`);
+  assert("Channel stats has trends", typeof chStats.json.trends === "object", `Got: ${typeof chStats.json.trends}`);
+  assert("Channel stats has total", typeof chStats.json.total === "number", `Got: ${typeof chStats.json.total}`);
+
+  console.log("--- Phase 2: Agent Gamification ---");
+  const leaderboard = await getJson("/api/gamification/leaderboard");
+  assert("Leaderboard returns 200", leaderboard.status === 200, `Status: ${leaderboard.status}`);
+  assert("Leaderboard has array", Array.isArray(leaderboard.json.leaderboard), `Got: ${typeof leaderboard.json.leaderboard}`);
+  const lbMonthly = await getJson("/api/gamification/leaderboard?period=monthly");
+  assert("Monthly leaderboard returns 200", lbMonthly.status === 200, `Status: ${lbMonthly.status}`);
+  assert("Monthly leaderboard period correct", lbMonthly.json.period === "monthly", `Got: ${lbMonthly.json.period}`);
+
+  console.log("--- Phase 2: Custom Dashboard Layouts ---");
+  const dlGet = await getJson("/api/dashboard/layout/e2e-test-user");
+  assert("Dashboard layout GET returns 200", dlGet.status === 200, `Status: ${dlGet.status}`);
+  assert("Dashboard layout has widgets", Array.isArray(dlGet.json.widgets), `Got: ${typeof dlGet.json.widgets}`);
+  const dlPut = await putJson("/api/dashboard/layout/e2e-test-user", { widgets: ["ticketSummary", "slaPie"], layout: "custom" });
+  assert("Dashboard layout PUT returns 200", dlPut.status === 200, `Status: ${dlPut.status}`);
+  assert("Dashboard layout saved widgets", dlPut.json.widgets.length === 2, `Got: ${dlPut.json.widgets.length}`);
 
   // Results
   console.log(`\n====== RESULTS ======`);
