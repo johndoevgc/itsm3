@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Architecture Guide</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .meta-bar { display: flex; gap: 40px; padding: 20px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 15px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 10px 14px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-family: 'Cascadia Code', Consolas, monospace; }
+  .arch-box { background: #f8f9fe; border: 1px solid #e8eaf6; border-radius: 6px; padding: 16px; margin: 12px 0; }
+  .flow-step { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+  .flow-step .num { background: #1a237e; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+  ul { margin: 8px 0 8px 20px; }
+  li { margin: 4px 0; font-size: 14px; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  a { color: #1a237e; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+  .nav-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body data-version="2.0" data-doc="architecture-guide">
+
+<div class="header">
+  <h1>Architecture Guide</h1>
+  <div class="subtitle">VGC-ITSM — AI-Powered IT Service Management Platform</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Last Updated</span><span class="value">April 2026</span></div>
+  <div class="item"><span class="label">Phases Covered</span><span class="value">1–5 (52 Steps)</span></div>
+  <div class="item"><span class="label">Author</span><span class="value">VGC Engineering</span></div>
+  <div class="item"><span class="label">Status</span><span class="value">Production</span></div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>1. System Overview</h2>
+    <p>VGC-ITSM is a full-stack ITIL-aligned service management platform with AI-powered automation, real-time WebSocket communication, and multi-channel integrations. The system handles incident, problem, change, request, asset, and release management with enterprise compliance capabilities.</p>
+
+    <div class="arch-box">
+      <h3>Technology Stack</h3>
+      <table>
+        <tr><th>Layer</th><th>Technology</th><th>Details</th></tr>
+        <tr><td>Frontend</td><td>React 19 + Vite 8.0.2</td><td>Single JSX monolith (<code>itsm-tool.jsx</code>, ~25,000 lines)</td></tr>
+        <tr><td>Backend</td><td>Node.js 20 (Raw HTTP)</td><td>Custom HTTP server (<code>server.js</code>, ~12,300 lines), 250+ API endpoints</td></tr>
+        <tr><td>Database</td><td>Azure MySQL 8.0</td><td>Document-store pattern: <code>itsm_data</code> (collection/id/data JSON) + <code>audit_log</code></td></tr>
+        <tr><td>AI Engine</td><td>Azure OpenAI (GPT-5.4)</td><td>3-tier model cascade: Pro → Mini → Nano</td></tr>
+        <tr><td>Real-time</td><td>WebSocket (ws)</td><td>Live updates, SLA alerts, AI correlation broadcasts</td></tr>
+        <tr><td>Auth</td><td>Microsoft Entra ID + Local</td><td>Certificate-based SSO, SHA-256 local passwords, 11 RBAC roles</td></tr>
+        <tr><td>Hosting</td><td>Azure App Service (Linux)</td><td>Node 20 runtime, site: <code>vgc-itsm1-app.azurewebsites.net</code></td></tr>
+        <tr><td>Caching</td><td>In-memory LRU</td><td>500-entry max, 5-min TTL, prefix invalidation</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>2. Architecture Layers</h2>
+
+    <h3>2.1 Presentation Layer (Frontend)</h3>
+    <ul>
+      <li>Single-page React application built with Vite</li>
+      <li>13 primary modules in left sidebar navigation (grouped: Core, Monitoring, AI & System)</li>
+      <li>End-user portal: restricted to Self-Service, Knowledge Portal, Service Catalog</li>
+      <li>PWA-enabled with offline manifest (<code>/pwa/manifest</code>)</li>
+      <li>Theme engine with customizable layouts and keyboard shortcuts</li>
+    </ul>
+
+    <h3>2.2 API Layer (Backend)</h3>
+    <ul>
+      <li>Raw Node.js HTTP server — no Express/Koa dependency</li>
+      <li>URL-based routing with method checks (GET/POST/PUT/DELETE/PATCH)</li>
+      <li>JWT-style session management with Entra ID token validation</li>
+      <li>Rate limiting: 100 req/min per user, 200 req/min per IP</li>
+      <li>CORS configuration for cross-origin requests</li>
+    </ul>
+
+    <h3>2.3 Data Layer</h3>
+    <div class="arch-box">
+      <p>The database uses a <strong>document-store pattern</strong> on MySQL:</p>
+      <table>
+        <tr><th>Table</th><th>Purpose</th><th>Schema</th></tr>
+        <tr><td><code>itsm_data</code></td><td>All domain data</td><td><code>id</code> (UUID), <code>collection</code> (varchar), <code>data</code> (JSON), <code>created_at</code>, <code>updated_at</code></td></tr>
+        <tr><td><code>audit_log</code></td><td>Compliance audit trail</td><td><code>id</code>, <code>action</code>, <code>collection</code>, <code>record_id</code>, <code>user</code>, <code>details</code> (JSON), <code>timestamp</code></td></tr>
+      </table>
+      <p>67 logical collections stored in <code>itsm_data</code> — each row is a JSON document keyed by collection + UUID.</p>
+    </div>
+
+    <h3>2.4 Engine Layer</h3>
+    <table>
+      <tr><th>Engine</th><th>File</th><th>Purpose</th></tr>
+      <tr><td>Workflow Engine</td><td><code>workflowEngine.js</code></td><td>5-min timer evaluating rules, auto-resolve idle incidents, daily summary emails (6 PM SGT), email-to-ticket inbound processing</td></tr>
+      <tr><td>SLA Engine</td><td><code>slaEngine.js</code></td><td>Business-hours-aware SLA compliance (Mon-Fri 9-18 SGT), severity-based targets (Sev-A to D), pause/resume, auto-escalation on breach</td></tr>
+      <tr><td>Notification Engine</td><td><code>notificationEngine.js</code></td><td>Multi-channel delivery: Email (Graph API), Teams (webhook), Slack (webhook), In-App (WebSocket), generic Webhook</td></tr>
+      <tr><td>Analytics Engine</td><td><code>analyticsEngine.js</code></td><td>KPIs, trends, operational metrics with 5-min cache. Loads from incidents, problems, changes, requests, SLA tracking</td></tr>
+      <tr><td>Cache Layer</td><td><code>cacheLayer.js</code></td><td>In-memory LRU cache, 500 entries max, 5-min TTL, prefix invalidation, hit/miss/eviction stats</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>3. AI Architecture</h2>
+
+    <h3>3.1 Three-Tier Model Cascade</h3>
+    <table>
+      <tr><th>Tier</th><th>Model</th><th>Use Cases</th></tr>
+      <tr><td>Primary</td><td><code>gpt-5.4-pro</code></td><td>Complex triage, risk analysis, KB generation, change risk assessment</td></tr>
+      <tr><td>Secondary</td><td><code>gpt-5.4-mini</code></td><td>Standard triage, chat, summaries, virtual agent</td></tr>
+      <tr><td>Tertiary</td><td><code>gpt-5.4-nano</code></td><td>Lightweight classification, quick lookups</td></tr>
+    </table>
+    <p>Fallback cascade: Primary → Secondary → Tertiary → null. Each tier has independent timeout and token limits.</p>
+
+    <h3>3.2 AI Confidence Thresholds</h3>
+    <table>
+      <tr><th>Threshold</th><th>Value</th><th>Purpose</th></tr>
+      <tr><td>Auto-Apply</td><td>70% / 85%</td><td>Apply AI suggestions automatically when confidence exceeds threshold</td></tr>
+      <tr><td>SLA Risk</td><td>70%</td><td>Flag tickets at risk of SLA breach</td></tr>
+      <tr><td>Pattern Confidence</td><td>70%</td><td>Detect recurring incident patterns</td></tr>
+      <tr><td>Auto-Resolve</td><td>60%</td><td>Resolve tickets automatically with known resolutions</td></tr>
+    </table>
+
+    <h3>3.3 AI Features (18+)</h3>
+    <ul>
+      <li>Auto-triage & assignment</li>
+      <li>Virtual agent / chat (with streaming)</li>
+      <li>KB auto-generation & gap analysis</li>
+      <li>Duplicate detection & incident correlation</li>
+      <li>Change risk assessment</li>
+      <li>Recurring incident detection</li>
+      <li>Capacity forecasting</li>
+      <li>SLA prediction, audit & remediation</li>
+      <li>Workload rebalancing</li>
+      <li>Daily briefings & pattern detection</li>
+      <li>Semantic search</li>
+      <li>Document & guide generation</li>
+      <li>CSAT analysis</li>
+      <li>News advisory generation</li>
+      <li>Workflow assistance</li>
+      <li>AI learning with feedback loop</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>4. Authentication & Authorization</h2>
+
+    <h3>4.1 Authentication Methods</h3>
+    <table>
+      <tr><th>Method</th><th>Mechanism</th><th>Users</th></tr>
+      <tr><td>Microsoft Entra ID SSO</td><td>Certificate-based PFX + client secret, MSAL</td><td>VGC Admins, Engineers</td></tr>
+      <tr><td>Local Authentication</td><td>Username + SHA-256 hashed password</td><td>Dev Admins</td></tr>
+    </table>
+
+    <h3>4.2 RBAC Roles (11)</h3>
+    <table>
+      <tr><th>Role</th><th>Level</th><th>Access Scope</th></tr>
+      <tr><td>VGC Dev Admin</td><td>-1</td><td>Full platform — API keys, billing, system config</td></tr>
+      <tr><td>Tenant Admin</td><td>0</td><td>Customer admin — user management, compliance, SLA policies</td></tr>
+      <tr><td>Administrator</td><td>0</td><td>Full system access — all modules</td></tr>
+      <tr><td>Service Desk Lead</td><td>1</td><td>Team lead — approvals, KB publishing</td></tr>
+      <tr><td>Change Manager</td><td>1</td><td>Change governance — approve/reject, risk assessment</td></tr>
+      <tr><td>Problem Manager</td><td>1</td><td>Root cause analysis, known error database</td></tr>
+      <tr><td>Asset Manager</td><td>1</td><td>CMDB — asset lifecycle, inventory</td></tr>
+      <tr><td>L1 Support Engineer</td><td>2</td><td>First-level support</td></tr>
+      <tr><td>L2 Support Engineer</td><td>2</td><td>Escalated tickets, problem management</td></tr>
+      <tr><td>Network Engineer</td><td>2</td><td>Infrastructure — network, security, cloud</td></tr>
+      <tr><td>End User</td><td>3</td><td>Self-service — raise tickets, view KB</td></tr>
+      <tr><td>Read Only</td><td>4</td><td>View-only dashboards and reports</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>5. Request Pipeline</h2>
+    <div class="flow-step"><div class="num">1</div><div>HTTP request arrives at Node.js server</div></div>
+    <div class="flow-step"><div class="num">2</div><div>Rate limiter checks: 100 req/min per user, 200 req/min per IP</div></div>
+    <div class="flow-step"><div class="num">3</div><div>CORS validation and auth middleware (Entra token or local session)</div></div>
+    <div class="flow-step"><div class="num">4</div><div>URL routing matches endpoint → handler function</div></div>
+    <div class="flow-step"><div class="num">5</div><div>Cache layer checked (LRU, 5-min TTL) for read operations</div></div>
+    <div class="flow-step"><div class="num">6</div><div>MySQL query via document-store pattern (collection + id + JSON)</div></div>
+    <div class="flow-step"><div class="num">7</div><div>Response returned; audit log written for mutations</div></div>
+    <div class="flow-step"><div class="num">8</div><div>WebSocket broadcast for real-time UI updates</div></div>
+  </div>
+
+  <div class="section">
+    <h2>6. Integration Architecture</h2>
+    <table>
+      <tr><th>Integration</th><th>Protocol</th><th>Direction</th><th>Purpose</th></tr>
+      <tr><td>Zendesk</td><td>REST API</td><td>Bidirectional</td><td>Ticket sync, user/org import, auto-triage, webhook events</td></tr>
+      <tr><td>Microsoft Graph</td><td>REST API</td><td>Outbound</td><td>Email send, user profiles, group management, calendar</td></tr>
+      <tr><td>Microsoft Teams</td><td>Webhook</td><td>Outbound</td><td>Incident notifications, approval alerts</td></tr>
+      <tr><td>SolarWinds / N-able</td><td>REST API</td><td>Inbound</td><td>Network monitoring alerts, asset discovery</td></tr>
+      <tr><td>Cisco Meraki</td><td>REST API</td><td>Inbound</td><td>Network device monitoring</td></tr>
+      <tr><td>Sophos Central</td><td>REST API</td><td>Inbound</td><td>Security alerts, endpoint protection</td></tr>
+      <tr><td>Slack</td><td>Webhook</td><td>Outbound</td><td>Notification delivery channel</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>7. Deployment Topology</h2>
+    <div class="arch-box">
+      <table>
+        <tr><th>Component</th><th>Service</th><th>Region</th></tr>
+        <tr><td>Web App</td><td>Azure App Service (Linux, Node 20)</td><td>Southeast Asia</td></tr>
+        <tr><td>Database</td><td>Azure MySQL Flexible Server 8.0</td><td>Southeast Asia</td></tr>
+        <tr><td>AI</td><td>Azure OpenAI Service (GPT-5.4 models)</td><td>Configured endpoint</td></tr>
+        <tr><td>Identity</td><td>Microsoft Entra ID</td><td>Global</td></tr>
+        <tr><td>Source Control</td><td>GitHub (<code>hppmzn-maker/VGC-ITSM-1</code>)</td><td>—</td></tr>
+        <tr><td>CI/CD</td><td>Manual deploy via Kudu VFS API</td><td>—</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM Documentation · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

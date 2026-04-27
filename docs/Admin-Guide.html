@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Admin Guide</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .meta-bar { display: flex; gap: 40px; padding: 20px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-family: 'Cascadia Code', Consolas, monospace; }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; margin: 8px 0; font-family: 'Cascadia Code', Consolas, monospace; }
+  ul { margin: 8px 0 8px 20px; }
+  li { margin: 4px 0; font-size: 14px; }
+  .warn { background: #fff3e0; border-left: 4px solid #ff9800; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .tip { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body data-version="2.0" data-doc="admin-guide">
+
+<div class="header">
+  <h1>Administrator Guide</h1>
+  <div class="subtitle">VGC-ITSM — Setup, Configuration & Troubleshooting</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Audience</span><span class="value">VGC Dev Admin, Tenant Admin</span></div>
+  <div class="item"><span class="label">Last Updated</span><span class="value">April 2026</span></div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>1. Environment Setup</h2>
+    <h3>1.1 Prerequisites</h3>
+    <ul>
+      <li>Node.js 20.x LTS</li>
+      <li>Azure MySQL Flexible Server 8.0</li>
+      <li>Azure App Service (Linux, Node 20)</li>
+      <li>Azure OpenAI Service with GPT-5.4 models deployed</li>
+      <li>Microsoft Entra ID tenant with app registration</li>
+    </ul>
+
+    <h3>1.2 Environment Variables</h3>
+    <table>
+      <tr><th>Variable</th><th>Purpose</th><th>Example</th></tr>
+      <tr><td><code>DB_HOST</code></td><td>MySQL server hostname</td><td><code>myserver.mysql.database.azure.com</code></td></tr>
+      <tr><td><code>DB_USER</code></td><td>Database user</td><td><code>itsm_admin</code></td></tr>
+      <tr><td><code>DB_PASS</code></td><td>Database password</td><td>(secret)</td></tr>
+      <tr><td><code>DB_NAME</code></td><td>Database name</td><td><code>itsm_db</code></td></tr>
+      <tr><td><code>AZURE_OPENAI_ENDPOINT</code></td><td>OpenAI endpoint URL</td><td><code>https://myoai.openai.azure.com</code></td></tr>
+      <tr><td><code>AZURE_OPENAI_KEY</code></td><td>OpenAI API key</td><td>(secret)</td></tr>
+      <tr><td><code>ENTRA_CLIENT_ID</code></td><td>Entra app client ID</td><td>(GUID)</td></tr>
+      <tr><td><code>ENTRA_TENANT_ID</code></td><td>Entra tenant ID</td><td>(GUID)</td></tr>
+      <tr><td><code>ENTRA_CLIENT_SECRET</code></td><td>Entra client secret</td><td>(secret)</td></tr>
+      <tr><td><code>ZENDESK_SUBDOMAIN</code></td><td>Zendesk subdomain</td><td><code>mycompany</code></td></tr>
+      <tr><td><code>ZENDESK_API_TOKEN</code></td><td>Zendesk API token</td><td>(secret)</td></tr>
+      <tr><td><code>ZENDESK_EMAIL</code></td><td>Zendesk admin email</td><td><code>admin@example.com</code></td></tr>
+    </table>
+
+    <h3>1.3 Local Development</h3>
+    <pre>npm install
+node server.js        # Backend on port 3001
+npx vite dev          # Frontend on port 5173 (proxied)</pre>
+  </div>
+
+  <div class="section">
+    <h2>2. AI Configuration</h2>
+    <h3>2.1 Model Tiers</h3>
+    <table>
+      <tr><th>Tier</th><th>Model</th><th>Used For</th></tr>
+      <tr><td>Primary</td><td><code>gpt-5.4-pro</code></td><td>Complex triage, risk analysis, KB generation</td></tr>
+      <tr><td>Secondary</td><td><code>gpt-5.4-mini</code></td><td>Standard triage, chat, summaries</td></tr>
+      <tr><td>Tertiary</td><td><code>gpt-5.4-nano</code></td><td>Classification, quick lookups</td></tr>
+    </table>
+    <p>Configure via Admin Settings → OpenAI, or <code>POST /api/settings/openai</code>.</p>
+
+    <h3>2.2 Confidence Thresholds</h3>
+    <p>Adjustable at <code>GET /api/ai/thresholds</code>:</p>
+    <ul>
+      <li><strong>Auto-Apply:</strong> 70% (suggest) / 85% (auto-apply)</li>
+      <li><strong>SLA Risk:</strong> 70% — flag at-risk tickets</li>
+      <li><strong>Auto-Resolve:</strong> 60% — resolve with known solutions</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>3. Integration Setup</h2>
+
+    <h3>3.1 Zendesk</h3>
+    <ol>
+      <li>Go to Admin Settings → Integrations → Zendesk</li>
+      <li>Enter subdomain, admin email, and API token</li>
+      <li>Test connection with <code>GET /api/zendesk/me</code></li>
+      <li>Run initial import: <code>POST /api/zendesk/full-import</code></li>
+      <li>Enable webhook for real-time sync</li>
+    </ol>
+
+    <h3>3.2 Microsoft Entra ID</h3>
+    <ol>
+      <li>Register app in Azure Portal → Entra ID → App Registrations</li>
+      <li>Add redirect URI: <code>https://vgc-itsm1-app.azurewebsites.net</code></li>
+      <li>Upload PFX certificate or create client secret</li>
+      <li>Grant API permissions: <code>User.Read.All</code>, <code>Group.Read.All</code>, <code>Mail.Send</code></li>
+      <li>Set environment variables</li>
+    </ol>
+
+    <h3>3.3 Microsoft Teams</h3>
+    <ol>
+      <li>Create Incoming Webhook in your Teams channel</li>
+      <li>Copy webhook URL</li>
+      <li>Add via <code>POST /api/db/teams_webhooks</code></li>
+      <li>Test: <code>POST /api/integrations/teams/webhook</code> with test message</li>
+    </ol>
+
+    <h3>3.4 SolarWinds / N-able</h3>
+    <p>Configure API URL and credentials in Admin Settings → SolarWinds. Test with <code>GET /api/solarwinds/test</code>.</p>
+  </div>
+
+  <div class="section">
+    <h2>4. SLA Configuration</h2>
+    <h3>4.1 Business Hours</h3>
+    <p>Default: Monday–Friday, 09:00–18:00 SGT. Create custom calendars via <code>POST /api/sla/calendar</code> for holidays and 24/7 services.</p>
+
+    <h3>4.2 Severity Targets</h3>
+    <p>Modify via <code>POST /api/sla/config</code> or Admin Settings → SLA.</p>
+
+    <h3>4.3 Change Freeze Windows</h3>
+    <p>Create freeze periods via <code>POST /api/changes/freeze-window</code>. Changes submitted during freeze are automatically rejected.</p>
+  </div>
+
+  <div class="section">
+    <h2>5. Deployment</h2>
+    <h3>5.1 Build</h3>
+    <pre>npx vite build                    # Frontend → dist/
+cp dist/* deploy/                 # Copy to deploy folder
+cp dist/assets/* deploy/assets/   # Copy JS bundles</pre>
+
+    <h3>5.2 Deploy to Azure</h3>
+    <p>Upload via Kudu VFS API:</p>
+    <pre># Upload server.js
+PUT https://vgc-itsm1-app.scm.azurewebsites.net/api/vfs/site/wwwroot/server.js
+
+# Upload index.html
+PUT https://vgc-itsm1-app.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html
+
+# Upload JS bundles
+PUT https://vgc-itsm1-app.scm.azurewebsites.net/api/vfs/site/wwwroot/assets/{bundle}.js
+
+# Restart
+az webapp restart --name vgc-itsm1-app --resource-group vgc-itsm-1-RG</pre>
+
+    <div class="warn">⚠️ Always delete old JS bundles from <code>/wwwroot/assets/</code> before uploading new ones. Delete any stale <code>dist/</code> folder on Azure — server.js prefers it over root.</div>
+
+    <h3>5.3 Verify</h3>
+    <pre>GET https://vgc-itsm1-app.azurewebsites.net/api/health
+GET https://vgc-itsm1-app.azurewebsites.net/api/health/deep</pre>
+  </div>
+
+  <div class="section">
+    <h2>6. Troubleshooting</h2>
+    <table>
+      <tr><th>Issue</th><th>Cause</th><th>Fix</th></tr>
+      <tr><td>App shows old version</td><td>Stale <code>dist/</code> folder on Azure</td><td>Delete <code>/home/site/wwwroot/dist</code> via Kudu, restart</td></tr>
+      <tr><td>AI returns errors</td><td>OpenAI API key expired or quota exceeded</td><td>Check key in Admin Settings → OpenAI, verify Azure quota</td></tr>
+      <tr><td>SSO login fails</td><td>Entra redirect URI mismatch</td><td>Verify redirect URI in Entra app registration matches app URL</td></tr>
+      <tr><td>Zendesk sync fails</td><td>API token revoked or rate limited</td><td>Regenerate token in Zendesk admin, check sync status</td></tr>
+      <tr><td>SLA not calculating</td><td>SLA engine timer paused</td><td>Trigger manual run: <code>POST /api/sla/run</code></td></tr>
+      <tr><td>WebSocket disconnects</td><td>Proxy/firewall blocking WS</td><td>Ensure <code>wss://</code> is allowed, check <code>/api/ws/stats</code></td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>7. Database Maintenance</h2>
+    <ul>
+      <li><strong>Stats:</strong> <code>GET /api/db-stats</code> — record counts per collection</li>
+      <li><strong>Clean & Seed:</strong> <code>POST /api/db-clean-seed</code> — reset to demo data (destructive!)</li>
+      <li><strong>Cache:</strong> <code>POST /api/cache/clear</code> — flush in-memory cache</li>
+      <li><strong>Audit Integrity:</strong> <code>GET /api/audit/verify-integrity</code> — verify audit log hasn't been tampered</li>
+    </ul>
+    <div class="warn">⚠️ <code>db-clean-seed</code> deletes ALL production data. Use only in dev/staging.</div>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM Admin Guide · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

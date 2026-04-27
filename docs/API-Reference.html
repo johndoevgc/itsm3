@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM API Reference</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .meta-bar { display: flex; gap: 40px; padding: 20px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+  .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 12px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-family: 'Cascadia Code', Consolas, monospace; }
+  .method { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 700; color: white; min-width: 50px; text-align: center; }
+  .get { background: #4caf50; }
+  .post { background: #2196f3; }
+  .put { background: #ff9800; }
+  .delete { background: #f44336; }
+  .patch { background: #9c27b0; }
+  .toc { columns: 3; column-gap: 24px; }
+  .toc a { display: block; padding: 4px 0; color: #1a237e; text-decoration: none; font-size: 13px; }
+  .toc a:hover { text-decoration: underline; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+  .base-url { background: #e8eaf6; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 13px; margin: 12px 0; }
+</style>
+</head>
+<body data-version="2.0" data-doc="api-reference">
+
+<div class="header">
+  <h1>API Reference</h1>
+  <div class="subtitle">VGC-ITSM — Complete REST API Documentation (250+ Endpoints)</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Last Updated</span><span class="value">April 2026</span></div>
+  <div class="item"><span class="label">Total Endpoints</span><span class="value">250+</span></div>
+  <div class="item"><span class="label">Auth</span><span class="value">Entra ID / Local Token</span></div>
+  <div class="item"><span class="label">Rate Limit</span><span class="value">100 req/min/user</span></div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>Base URL</h2>
+    <div class="base-url">https://vgc-itsm1-app.azurewebsites.net</div>
+    <p style="margin-top:8px;font-size:13px;">All endpoints are prefixed with <code>/api</code>. Authentication required unless noted. Responses are JSON.</p>
+  </div>
+
+  <div class="section">
+    <h2>Table of Contents</h2>
+    <div class="toc">
+      <a href="#generic-crud">Generic CRUD</a>
+      <a href="#auth">Authentication & Users</a>
+      <a href="#sla">SLA & Compliance</a>
+      <a href="#analytics">Analytics & Reports</a>
+      <a href="#workflow">Workflow Engine</a>
+      <a href="#notifications">Notifications</a>
+      <a href="#email">Email</a>
+      <a href="#approvals">Approvals</a>
+      <a href="#cmdb">CMDB & Assets</a>
+      <a href="#audit">Audit & Compliance</a>
+      <a href="#runbook">Runbook Automation</a>
+      <a href="#reports">Report Builder</a>
+      <a href="#zendesk">Zendesk Integration</a>
+      <a href="#ai-knowledge">AI Knowledge Base</a>
+      <a href="#ai-core">AI Core Engine</a>
+      <a href="#csat">CSAT Surveys</a>
+      <a href="#incidents">Incident Management</a>
+      <a href="#changes">Change Management</a>
+      <a href="#mim">Major Incident Mgmt</a>
+      <a href="#admin">Admin & Config</a>
+      <a href="#automation">Automation Rules</a>
+      <a href="#enterprise">Enterprise Modules</a>
+      <a href="#ux">UX & Production</a>
+      <a href="#settings">Settings</a>
+      <a href="#system">System & Health</a>
+    </div>
+  </div>
+
+  <!-- Generic CRUD -->
+  <div class="section" id="generic-crud">
+    <h2>Generic CRUD — <code>/api/db/:collection</code></h2>
+    <p>67 collections share a unified CRUD interface on the <code>itsm_data</code> table.</p>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/db/:collection</code></td><td>List all records in collection (supports <code>?search=</code>, <code>?status=</code>, <code>?limit=</code>, <code>?offset=</code>)</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/db/:collection</code></td><td>Create new record (auto-generates UUID, timestamps, audit log)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/db/:collection/:id</code></td><td>Get single record by ID</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/db/:collection/:id</code></td><td>Full replace record</td></tr>
+      <tr><td><span class="method patch">PATCH</span></td><td><code>/api/db/:collection/:id</code></td><td>Partial update (merge JSON)</td></tr>
+      <tr><td><span class="method delete">DELETE</span></td><td><code>/api/db/:collection/:id</code></td><td>Soft-delete (moves to recycle bin)</td></tr>
+    </table>
+  </div>
+
+  <!-- Auth -->
+  <div class="section" id="auth">
+    <h2>Authentication & Users</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/auth/local</code></td><td>Local username/password login</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/entra/users</code></td><td>List Entra ID users</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/entra/users/search?q=</code></td><td>Search Entra users by name/email</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/entra/groups</code></td><td>List Entra groups</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/entra/groups/:id/members</code></td><td>Group membership</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/entra/users/:id/photo</code></td><td>User profile photo</td></tr>
+    </table>
+  </div>
+
+  <!-- SLA -->
+  <div class="section" id="sla">
+    <h2>SLA & Compliance</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/sla/status</code></td><td>Current SLA status across all tickets</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/sla/engine</code></td><td>Engine runtime stats</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/sla/run</code></td><td>Trigger manual SLA evaluation cycle</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/sla/config</code></td><td>Get SLA configuration</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/sla/config</code></td><td>Update SLA configuration</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/sla/calendars</code></td><td>List SLA business calendars</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/sla/calendar</code></td><td>Create/update SLA calendar</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/sla/compliance-report</code></td><td>SLA compliance report</td></tr>
+    </table>
+  </div>
+
+  <!-- Analytics -->
+  <div class="section" id="analytics">
+    <h2>Analytics & Dashboards</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/kpis</code></td><td>Key performance indicators</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/trends</code></td><td>Trend data over time</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/sla</code></td><td>SLA analytics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/agents</code></td><td>Agent performance metrics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/patterns</code></td><td>Incident pattern analytics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/executive</code></td><td>Executive dashboard data</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/channel-stats</code></td><td>Multi-channel statistics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/anomalies</code></td><td>AI-detected anomalies</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/executive-summary</code></td><td>Executive summary report</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/trend-forecast</code></td><td>AI trend forecasting</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/sla-deep-dive</code></td><td>Deep SLA analysis</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/ai-performance</code></td><td>AI performance dashboard</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/audit-trail</code></td><td>Audit trail analytics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/realtime</code></td><td>Real-time operations dashboard</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/analytics/benchmarks</code></td><td>Industry benchmarking data</td></tr>
+    </table>
+  </div>
+
+  <!-- Workflow -->
+  <div class="section" id="workflow">
+    <h2>Workflow Engine</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/workflow/stats</code></td><td>Engine runtime statistics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/workflow/log</code></td><td>Execution log history</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/workflow/run</code></td><td>Trigger manual workflow evaluation</td></tr>
+    </table>
+  </div>
+
+  <!-- Notifications -->
+  <div class="section" id="notifications">
+    <h2>Notifications</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/notifications/send</code></td><td>Send notification (email/teams/slack/in-app/webhook)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/notifications/stats</code></td><td>Delivery statistics by channel</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/notifications/history</code></td><td>Notification history</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/notifications/daily-summary</code></td><td>Trigger daily summary</td></tr>
+    </table>
+  </div>
+
+  <!-- Email -->
+  <div class="section" id="email">
+    <h2>Email</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/email/send</code></td><td>Send email via Microsoft Graph</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/email/process-inbox</code></td><td>Process inbound emails → tickets</td></tr>
+    </table>
+  </div>
+
+  <!-- Approvals -->
+  <div class="section" id="approvals">
+    <h2>Approvals</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/approvals/submit</code></td><td>Submit item for approval</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/approvals/pending</code></td><td>List pending approvals</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/approvals/:id/action</code></td><td>Approve or reject (body: <code>{action, comment}</code>)</td></tr>
+    </table>
+  </div>
+
+  <!-- CMDB -->
+  <div class="section" id="cmdb">
+    <h2>CMDB & Assets</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cmdb/relationships</code></td><td>List CI relationships</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/cmdb/relationships</code></td><td>Create CI relationship</td></tr>
+      <tr><td><span class="method delete">DELETE</span></td><td><code>/api/cmdb/relationships</code></td><td>Remove CI relationship</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cmdb/impact/:id</code></td><td>Impact analysis for a CI</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cmdb/dependency-map/:id</code></td><td>Full dependency graph</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/cmdb/impact-analysis</code></td><td>Run impact analysis</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/cmdb/discovery/ingest</code></td><td>Ingest discovery data from scanners</td></tr>
+    </table>
+  </div>
+
+  <!-- Audit -->
+  <div class="section" id="audit">
+    <h2>Audit & Compliance</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/audit/list</code></td><td>List audit log entries</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/audit/report</code></td><td>Audit report (date range)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/audit/compliance-summary</code></td><td>Compliance summary</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/audit/verify-integrity</code></td><td>Verify audit log integrity</td></tr>
+    </table>
+  </div>
+
+  <!-- Runbook -->
+  <div class="section" id="runbook">
+    <h2>Runbook Automation</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/runbook/execute</code></td><td>Execute a runbook</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/runbook/executions</code></td><td>List executions</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/runbook/list</code></td><td>List available runbooks</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/runbook/execution/:id/step/:n</code></td><td>Advance to step N</td></tr>
+    </table>
+  </div>
+
+  <!-- Reports -->
+  <div class="section" id="reports">
+    <h2>Report Builder</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/reports/schedules</code></td><td>List scheduled reports</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/reports/schedule</code></td><td>Create report schedule</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/reports/export</code></td><td>Export report (CSV/PDF)</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/reports/build</code></td><td>Build custom report</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/reports/save</code></td><td>Save report definition</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/reports/saved</code></td><td>List saved reports</td></tr>
+    </table>
+  </div>
+
+  <!-- Zendesk -->
+  <div class="section" id="zendesk">
+    <h2>Zendesk Integration (25+ endpoints)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/me</code></td><td>Current Zendesk user</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/tickets</code></td><td>List tickets</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/tickets</code></td><td>Create ticket</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/zendesk/tickets/:id</code></td><td>Update ticket</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/tickets/:id/comments</code></td><td>Ticket comments</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/groups</code></td><td>Support groups</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/users</code></td><td>Users</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/stats</code></td><td>Zendesk statistics</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/auto-triage</code></td><td>AI auto-triage Zendesk tickets</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/auto-respond</code></td><td>AI auto-respond</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/new-tickets</code></td><td>Recently created tickets</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/agents</code></td><td>Agent list</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/organizations</code></td><td>Organizations</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/sync-incident</code></td><td>Sync incident to Zendesk</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/full-import</code></td><td>Full data import</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/incremental-sync</code></td><td>Incremental sync</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/webhook</code></td><td>Incoming webhook handler</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/sync-status</code></td><td>Sync status</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/push-to-zendesk</code></td><td>Push local ticket to Zendesk</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/sync-organizations</code></td><td>Sync organizations</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/stored/tickets</code></td><td>Locally cached tickets</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/stored/users</code></td><td>Locally cached users</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/zendesk/stored/orgs</code></td><td>Locally cached orgs</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/zendesk/train-ai</code></td><td>Train AI from Zendesk data</td></tr>
+    </table>
+  </div>
+
+  <!-- AI Knowledge -->
+  <div class="section" id="ai-knowledge">
+    <h2>AI Knowledge Base</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/knowledge</code></td><td>List knowledge articles</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/knowledge</code></td><td>Create knowledge article</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/knowledge/:id/versions</code></td><td>Article version history</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/knowledge/correction</code></td><td>Submit knowledge correction</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/knowledge/learn</code></td><td>Learn from new data</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/knowledge/search</code></td><td>Semantic search</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/knowledge/upload</code></td><td>Upload knowledge document</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/knowledge/sync</code></td><td>Sync knowledge base</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/knowledge/sync-status</code></td><td>Sync status</td></tr>
+    </table>
+  </div>
+
+  <!-- AI Core -->
+  <div class="section" id="ai-core">
+    <h2>AI Core Engine (50+ endpoints)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/chat</code></td><td>AI chat (single response)</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/chat/stream</code></td><td>AI chat (streaming)</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/chat/upload</code></td><td>Chat with file upload</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/test</code></td><td>Test AI connectivity</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/auto-triage-assign</code></td><td>Auto-triage and assign ticket</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/batch-triage</code></td><td>Batch triage multiple tickets</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/detect-duplicates</code></td><td>Detect duplicate incidents</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/kb-gaps</code></td><td>Identify KB coverage gaps</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/generate-resolution-summary</code></td><td>Generate resolution summary</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/sla-predict</code></td><td>Predict SLA breach risk</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/sla-audit</code></td><td>Audit SLA compliance</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/sla-remediate</code></td><td>Auto-remediate SLA issues</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/workload-rebalance</code></td><td>Rebalance agent workloads</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/correlate-incidents</code></td><td>Correlate related incidents</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/kb-auto-generate</code></td><td>Auto-generate KB article</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/daily-briefing</code></td><td>Generate daily briefing</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/briefings</code></td><td>List briefings</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/pattern-detect</code></td><td>Detect recurring patterns</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/patterns</code></td><td>List detected patterns</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/virtual-agent</code></td><td>Start virtual agent session</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/virtual-agent/:sessionId</code></td><td>Continue virtual agent chat</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/change-risk</code></td><td>Assess change risk</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/detect-recurring</code></td><td>Detect recurring incidents</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/capacity-forecast</code></td><td>Capacity forecasting</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/search</code></td><td>Semantic search</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/thresholds</code></td><td>AI confidence thresholds</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/auto-resolve</code></td><td>Auto-resolve tickets</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/resolve-queue</code></td><td>Resolution queue</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/auto-followup</code></td><td>Auto follow-up</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/news-advisory</code></td><td>Generate news advisory</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/workflow-assist</code></td><td>AI workflow assistance</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/workflow-queue</code></td><td>Workflow review queue</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/learning/metrics</code></td><td>AI learning metrics</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/learning/trends</code></td><td>Learning trends</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/learning/feedback</code></td><td>Feedback list</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ai/learning/feedback</code></td><td>Submit feedback</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ai/learning/model-health</code></td><td>Model health status</td></tr>
+    </table>
+  </div>
+
+  <!-- CSAT -->
+  <div class="section" id="csat">
+    <h2>CSAT Surveys</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/csat/submit</code></td><td>Submit CSAT survey response</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/csat/scores</code></td><td>CSAT score aggregations</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/csat/ai-analyze</code></td><td>AI analysis of CSAT data</td></tr>
+    </table>
+  </div>
+
+  <!-- Incidents -->
+  <div class="section" id="incidents">
+    <h2>Incident Management</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/incidents/merge</code></td><td>Merge duplicate incidents</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/incidents/duplicates</code></td><td>List detected duplicates</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/incidents/dedup-scan</code></td><td>Run deduplication scan</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/incidents/:id/worklogs</code></td><td>Work logs for incident</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/incidents/:id/sla-pause</code></td><td>Pause SLA timer</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/incidents/:id/sla-resume</code></td><td>Resume SLA timer</td></tr>
+    </table>
+  </div>
+
+  <!-- Changes -->
+  <div class="section" id="changes">
+    <h2>Change Management</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/changes/calendar</code></td><td>Change calendar view</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/changes/freeze-window</code></td><td>Create freeze window</td></tr>
+      <tr><td><span class="method delete">DELETE</span></td><td><code>/api/changes/freeze-window</code></td><td>Delete freeze window</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/changes/freeze-windows</code></td><td>List freeze windows</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/changes/conflict-check</code></td><td>Check for scheduling conflicts</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/changes/collision-check</code></td><td>Check change collisions</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/changes/freeze-check</code></td><td>Check freeze window compliance</td></tr>
+    </table>
+  </div>
+
+  <!-- MIM -->
+  <div class="section" id="mim">
+    <h2>Major Incident Management</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/mim/declare</code></td><td>Declare major incident</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/mim/revoke</code></td><td>Revoke major incident</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/mim/list</code></td><td>List major incidents</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/mim/comms</code></td><td>Send MIM communications</td></tr>
+    </table>
+  </div>
+
+  <!-- Admin -->
+  <div class="section" id="admin">
+    <h2>Admin & Configuration</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/admin/custom-fields</code></td><td>List custom field definitions</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/admin/custom-fields</code></td><td>Create custom field</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/admin/field-visibility</code></td><td>Field visibility rules</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/admin/field-visibility</code></td><td>Update field visibility</td></tr>
+    </table>
+  </div>
+
+  <!-- Automation -->
+  <div class="section" id="automation">
+    <h2>Automation Rules</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/automation/rules</code></td><td>List automation rules</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/automation/rules</code></td><td>Create automation rule</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/automation/evaluate</code></td><td>Evaluate rules against ticket</td></tr>
+    </table>
+  </div>
+
+  <!-- Enterprise -->
+  <div class="section" id="enterprise">
+    <h2>Enterprise Modules (Phase 3)</h2>
+
+    <h3>Release Management</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/releases</code></td><td>List releases</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/releases</code></td><td>Create release</td></tr>
+      <tr><td><span class="method put">PUT</span></td><td><code>/api/releases/:id</code></td><td>Update release</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/releases/:id/link-change</code></td><td>Link change to release</td></tr>
+    </table>
+
+    <h3>Self-Service Portal</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/self-service/my-tickets</code></td><td>User's own tickets</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/self-service/create-ticket</code></td><td>Create ticket (end-user)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/self-service/catalog</code></td><td>Browse service catalog</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/self-service/kb-search</code></td><td>Search knowledge base</td></tr>
+    </table>
+
+    <h3>Cost Allocation</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cost/rates</code></td><td>Cost rates</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cost/summary</code></td><td>Cost summary</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cost/report</code></td><td>Cost report</td></tr>
+    </table>
+
+    <h3>Compliance & Contracts</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/compliance/export</code></td><td>Export compliance evidence</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/contracts</code></td><td>List contracts</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/contracts</code></td><td>Create contract</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/contracts/expiring</code></td><td>Expiring contracts</td></tr>
+    </table>
+
+    <h3>Service Status Page</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/status/public</code></td><td>Public status page</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/status/subscribe</code></td><td>Subscribe to status updates</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/status/subscribers</code></td><td>List subscribers</td></tr>
+    </table>
+  </div>
+
+  <!-- UX -->
+  <div class="section" id="ux">
+    <h2>UX & Production Hardening (Phase 5)</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/pwa/manifest</code></td><td>PWA manifest</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/bulk/update</code></td><td>Bulk update tickets</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/bulk/close</code></td><td>Bulk close tickets</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ticket-templates</code></td><td>Ticket templates</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/saved-filters</code></td><td>Saved filters</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/known-errors</code></td><td>Known error database</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/users/:id/notification-prefs</code></td><td>User notification preferences</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/gamification/leaderboard</code></td><td>Gamification leaderboard</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/dashboard/layout/:userId</code></td><td>Dashboard layout</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/ingest/email</code></td><td>Ingest email</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/rate-limit/status</code></td><td>Rate limit status</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/health/deep</code></td><td>Deep health check</td></tr>
+    </table>
+  </div>
+
+  <!-- Settings -->
+  <div class="section" id="settings">
+    <h2>Settings</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/settings/openai</code></td><td>OpenAI configuration</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/settings/openai</code></td><td>Update OpenAI config</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/settings/solarwinds</code></td><td>SolarWinds config</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/settings/shortcuts</code></td><td>Keyboard shortcuts</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/settings/theme</code></td><td>Theme settings</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/settings/layout</code></td><td>Layout preferences</td></tr>
+    </table>
+  </div>
+
+  <!-- System -->
+  <div class="section" id="system">
+    <h2>System & Health</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/health</code></td><td>Basic health check</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/health/deep</code></td><td>Deep health (DB, AI, integrations)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/db-stats</code></td><td>Database statistics</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/db-clean-seed</code></td><td>Clean and reseed database</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/cache/stats</code></td><td>Cache hit/miss statistics</td></tr>
+      <tr><td><span class="method post">POST</span></td><td><code>/api/cache/clear</code></td><td>Clear cache</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/ws/stats</code></td><td>WebSocket connection stats</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/i18n/languages</code></td><td>Available languages</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/i18n/pack</code></td><td>Language pack</td></tr>
+    </table>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM API Reference · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

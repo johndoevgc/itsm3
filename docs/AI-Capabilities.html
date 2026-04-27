@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM AI Capabilities</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+  ul { margin: 8px 0 8px 20px; }
+  li { margin: 4px 0; font-size: 14px; }
+  .tier { display: inline-block; padding: 4px 14px; border-radius: 14px; font-size: 12px; font-weight: 600; }
+  .t-pro { background: #f3e5f5; color: #6a1b9a; }
+  .t-mini { background: #e3f2fd; color: #0d47a1; }
+  .t-nano { background: #e8f5e9; color: #2e7d32; }
+  .stats { display: flex; gap: 20px; margin: 12px 0; }
+  .stat { background: #f8f9fe; border-radius: 6px; padding: 12px 16px; text-align: center; flex: 1; }
+  .stat .num { font-size: 22px; font-weight: 700; color: #1a237e; }
+  .stat .lbl { font-size: 11px; color: #888; text-transform: uppercase; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body data-version="2.0" data-doc="ai-capabilities">
+
+<div class="header">
+  <h1>AI Capabilities</h1>
+  <div class="subtitle">VGC-ITSM — Three-Tier Azure OpenAI Architecture</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>AI System Overview</h2>
+    <div class="stats">
+      <div class="stat"><div class="num">3</div><div class="lbl">Model Tiers</div></div>
+      <div class="stat"><div class="num">12</div><div class="lbl">AI Features</div></div>
+      <div class="stat"><div class="num">8</div><div class="lbl">Collections</div></div>
+      <div class="stat"><div class="num">15+</div><div class="lbl">AI Endpoints</div></div>
+    </div>
+    <p>All AI capabilities use Azure OpenAI Service with automatic failover across three model tiers for resilience and cost optimization.</p>
+  </div>
+
+  <div class="section">
+    <h2>Model Architecture</h2>
+    <table>
+      <tr><th>Tier</th><th>Model</th><th>Use Cases</th><th>Fallback</th></tr>
+      <tr><td><span class="tier t-pro">Primary</span></td><td><code>gpt-5.4-pro</code></td><td>Complex triage, risk analysis, KB generation, anomaly detection</td><td>→ mini</td></tr>
+      <tr><td><span class="tier t-mini">Secondary</span></td><td><code>gpt-5.4-mini</code></td><td>Standard triage, chat, summaries, semantic search</td><td>→ nano</td></tr>
+      <tr><td><span class="tier t-nano">Tertiary</span></td><td><code>gpt-5.4-nano</code></td><td>Quick classification, tagging, simple lookups</td><td>→ manual</td></tr>
+    </table>
+    <p>Failover is automatic — if primary times out or errors, the system cascades to the next tier. Uses <code>max_completion_tokens</code> parameter (not <code>max_tokens</code>).</p>
+  </div>
+
+  <div class="section">
+    <h2>AI Features</h2>
+
+    <h3>1. Intelligent Triage</h3>
+    <p>Auto-classify incoming tickets by category, priority, and assignment group. Confidence-based: auto-apply at 85%+, suggest at 70%+.</p>
+    <p><code>POST /api/ai/triage</code></p>
+
+    <h3>2. Resolution Suggestion</h3>
+    <p>Analyze ticket context and KB to suggest resolutions with confidence scoring.</p>
+    <p><code>POST /api/ai/suggest-resolution</code></p>
+
+    <h3>3. Virtual Agent (Chatbot)</h3>
+    <p>Conversational AI with session management, context memory, and escalation to human agents.</p>
+    <p><code>POST /api/ai/chat</code> — Sessions stored in <code>ai_chat_sessions</code></p>
+
+    <h3>4. KB Auto-Generation</h3>
+    <p>Generate knowledge base articles from resolved incidents. AI drafts stored for review before publishing.</p>
+    <p><code>POST /api/ai/generate-kb</code> — Drafts in <code>ai_kb_drafts</code></p>
+
+    <h3>5. Change Risk Assessment</h3>
+    <p>AI evaluates change requests and assigns risk scores based on scope, impact, and historical data.</p>
+    <p><code>POST /api/ai/risk-assessment</code></p>
+
+    <h3>6. Recurring Incident Detection</h3>
+    <p>Pattern recognition across incidents to identify recurring issues and suggest problem records.</p>
+    <p><code>GET /api/ai/recurring-patterns</code> — Patterns in <code>ai_patterns</code></p>
+
+    <h3>7. Semantic Search</h3>
+    <p>Natural language search across KB articles and tickets. Goes beyond keyword matching.</p>
+    <p><code>POST /api/ai/semantic-search</code></p>
+
+    <h3>8. Capacity Forecasting</h3>
+    <p>Predict future resource needs based on historical ticket volume, seasonal trends, and growth patterns.</p>
+    <p><code>GET /api/ai/capacity-forecast</code></p>
+
+    <h3>9. Anomaly Detection</h3>
+    <p>Detect unusual patterns in ticket volume, response times, and SLA metrics. Auto-generates alerts.</p>
+    <p><code>GET /api/ai/anomaly-detect</code></p>
+
+    <h3>10. Trend Forecasting</h3>
+    <p>Predict future SLA performance, ticket volumes, and resource utilization.</p>
+    <p><code>GET /api/ai/forecast</code></p>
+
+    <h3>11. Daily Briefing</h3>
+    <p>AI-generated daily operations summary for managers, covering open items, SLA status, and action items.</p>
+    <p><code>POST /api/ai/daily-briefing</code> — Stored in <code>ai_briefings</code></p>
+
+    <h3>12. AI Learning & Feedback</h3>
+    <p>Continuous improvement through agent feedback on AI suggestions. Tracks accuracy and adapts.</p>
+    <p><code>POST /api/ai/feedback</code> — Feedback in <code>ai_learning_feedback</code></p>
+  </div>
+
+  <div class="section">
+    <h2>AI Data Collections</h2>
+    <table>
+      <tr><th>Collection</th><th>Purpose</th></tr>
+      <tr><td><code>ai_actions</code></td><td>Log of all AI-performed actions</td></tr>
+      <tr><td><code>ai_triage_history</code></td><td>Triage decision history with confidence scores</td></tr>
+      <tr><td><code>ai_briefings</code></td><td>Generated daily briefing reports</td></tr>
+      <tr><td><code>ai_patterns</code></td><td>Detected recurring incident patterns</td></tr>
+      <tr><td><code>ai_chat_sessions</code></td><td>Virtual agent conversation state</td></tr>
+      <tr><td><code>ai_kb_drafts</code></td><td>AI-generated KB article drafts</td></tr>
+      <tr><td><code>ai_learning_feedback</code></td><td>Agent feedback on AI suggestions</td></tr>
+      <tr><td><code>zd_ai_queue</code></td><td>Zendesk AI processing queue</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>AI Performance Dashboard</h2>
+    <p>Monitor AI health via the in-app AI Performance Dashboard or API endpoints:</p>
+    <ul>
+      <li><code>GET /api/ai/performance</code> — accuracy, response times, usage by tier</li>
+      <li><code>GET /api/ai/learning/metrics</code> — learning trends, feedback analysis</li>
+      <li><code>GET /api/ai/thresholds</code> — current confidence thresholds</li>
+      <li><code>POST /api/ai/thresholds</code> — adjust thresholds</li>
+    </ul>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM AI Capabilities · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

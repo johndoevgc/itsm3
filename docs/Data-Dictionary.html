@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Data Dictionary</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .meta-bar { display: flex; gap: 40px; padding: 20px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+  .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 12px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-family: 'Cascadia Code', Consolas, monospace; }
+  .cat-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .cat-core { background: #e8eaf6; color: #1a237e; }
+  .cat-ai { background: #f3e5f5; color: #6a1b9a; }
+  .cat-int { background: #e3f2fd; color: #0d47a1; }
+  .cat-sla { background: #e8f5e9; color: #2e7d32; }
+  .cat-admin { background: #fff3e0; color: #e65100; }
+  .cat-ent { background: #fce4ec; color: #c62828; }
+  .cat-ux { background: #e0f7fa; color: #006064; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body data-version="2.0" data-doc="data-dictionary">
+
+<div class="header">
+  <h1>Data Dictionary</h1>
+  <div class="subtitle">VGC-ITSM — 67 Collections & Schema Reference</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Database</span><span class="value">Azure MySQL 8.0</span></div>
+  <div class="item"><span class="label">Collections</span><span class="value">67</span></div>
+  <div class="item"><span class="label">Pattern</span><span class="value">Document Store on SQL</span></div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>Database Schema</h2>
+    <h3>Physical Tables</h3>
+    <table>
+      <tr><th>Table</th><th>Columns</th><th>Purpose</th></tr>
+      <tr><td><code>itsm_data</code></td><td><code>id</code> (UUID PK), <code>collection</code> (VARCHAR), <code>data</code> (JSON), <code>created_at</code>, <code>updated_at</code></td><td>All domain data — 67 logical collections stored as JSON documents</td></tr>
+      <tr><td><code>audit_log</code></td><td><code>id</code> (AUTO PK), <code>action</code>, <code>collection</code>, <code>record_id</code>, <code>user</code>, <code>details</code> (JSON), <code>timestamp</code></td><td>Immutable audit trail for all mutations</td></tr>
+    </table>
+    <p>Each record in <code>itsm_data</code> is a JSON document identified by <code>collection</code> + <code>id</code>. The <code>data</code> column stores the full document as JSON.</p>
+  </div>
+
+  <div class="section">
+    <h2>All 67 Collections</h2>
+    <table>
+      <tr><th>#</th><th>Collection</th><th>Category</th><th>Description</th></tr>
+      <tr><td>1</td><td><code>incidents</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Incident tickets — unplanned service interruptions</td></tr>
+      <tr><td>2</td><td><code>problems</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Problem records — root cause investigations</td></tr>
+      <tr><td>3</td><td><code>changes</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Change requests — planned modifications</td></tr>
+      <tr><td>4</td><td><code>requests</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Service requests from users</td></tr>
+      <tr><td>5</td><td><code>assets</code></td><td><span class="cat-tag cat-core">Core</span></td><td>IT assets — hardware, software, network devices</td></tr>
+      <tr><td>6</td><td><code>kb</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Knowledge base articles</td></tr>
+      <tr><td>7</td><td><code>services</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Service catalog items</td></tr>
+      <tr><td>8</td><td><code>users</code></td><td><span class="cat-tag cat-core">Core</span></td><td>System users and profiles</td></tr>
+      <tr><td>9</td><td><code>vendors</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Vendor/supplier records</td></tr>
+      <tr><td>10</td><td><code>customers</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Customer organizations</td></tr>
+      <tr><td>11</td><td><code>workflow_rules</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Workflow automation rules</td></tr>
+      <tr><td>12</td><td><code>survey_templates</code></td><td><span class="cat-tag cat-core">Core</span></td><td>CSAT survey templates</td></tr>
+      <tr><td>13</td><td><code>smart_tasks</code></td><td><span class="cat-tag cat-core">Core</span></td><td>AI-suggested smart tasks</td></tr>
+      <tr><td>14</td><td><code>integrations</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Integration configuration records</td></tr>
+      <tr><td>15</td><td><code>escalation_log</code></td><td><span class="cat-tag cat-sla">SLA</span></td><td>Escalation event log</td></tr>
+      <tr><td>16</td><td><code>escalation_config</code></td><td><span class="cat-tag cat-sla">SLA</span></td><td>Escalation rule configuration</td></tr>
+      <tr><td>17</td><td><code>service_reports</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Generated service reports</td></tr>
+      <tr><td>18</td><td><code>zendesk_tickets</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Cached Zendesk tickets</td></tr>
+      <tr><td>19</td><td><code>zendesk_users</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Cached Zendesk users</td></tr>
+      <tr><td>20</td><td><code>zendesk_orgs</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Cached Zendesk organizations</td></tr>
+      <tr><td>21</td><td><code>zendesk_sync_state</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Zendesk sync state tracking</td></tr>
+      <tr><td>22</td><td><code>zendesk_comments</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Cached Zendesk ticket comments</td></tr>
+      <tr><td>23</td><td><code>ai_actions</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>AI-performed actions log</td></tr>
+      <tr><td>24</td><td><code>ai_triage_history</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>AI triage decision history</td></tr>
+      <tr><td>25</td><td><code>ai_briefings</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>AI-generated daily briefings</td></tr>
+      <tr><td>26</td><td><code>ai_patterns</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>Detected incident patterns</td></tr>
+      <tr><td>27</td><td><code>sla_tracking</code></td><td><span class="cat-tag cat-sla">SLA</span></td><td>SLA timer tracking per ticket</td></tr>
+      <tr><td>28</td><td><code>sla_config</code></td><td><span class="cat-tag cat-sla">SLA</span></td><td>SLA configuration and targets</td></tr>
+      <tr><td>29</td><td><code>notifications</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Notification records</td></tr>
+      <tr><td>30</td><td><code>workflow_executions</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Workflow execution history</td></tr>
+      <tr><td>31</td><td><code>saved_filters</code></td><td><span class="cat-tag cat-ux">UX</span></td><td>User-saved filter combinations</td></tr>
+      <tr><td>32</td><td><code>incident_templates</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Incident creation templates</td></tr>
+      <tr><td>33</td><td><code>approval_chains</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Approval chain definitions</td></tr>
+      <tr><td>34</td><td><code>approval_instances</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Active approval workflow instances</td></tr>
+      <tr><td>35</td><td><code>cmdb_relationships</code></td><td><span class="cat-tag cat-core">Core</span></td><td>CI-to-CI relationship mappings</td></tr>
+      <tr><td>36</td><td><code>runbook_executions</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Runbook execution records</td></tr>
+      <tr><td>37</td><td><code>report_schedules</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Scheduled report definitions</td></tr>
+      <tr><td>38</td><td><code>email_rejections</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Rejected inbound emails</td></tr>
+      <tr><td>39</td><td><code>email_templates</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Email notification templates</td></tr>
+      <tr><td>40</td><td><code>email_whitelist</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Approved email senders</td></tr>
+      <tr><td>41</td><td><code>zd_ai_queue</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>Zendesk AI processing queue</td></tr>
+      <tr><td>42</td><td><code>advisories</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Security/IT advisories</td></tr>
+      <tr><td>43</td><td><code>csat_responses</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Customer satisfaction survey responses</td></tr>
+      <tr><td>44</td><td><code>change_freeze_windows</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Change freeze period definitions</td></tr>
+      <tr><td>45</td><td><code>ai_learning_feedback</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>User feedback on AI suggestions</td></tr>
+      <tr><td>46</td><td><code>custom_fields</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Custom field definitions</td></tr>
+      <tr><td>47</td><td><code>contracts</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Vendor contracts</td></tr>
+      <tr><td>48</td><td><code>automation_rules</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Condition-action automation rules</td></tr>
+      <tr><td>49</td><td><code>sla_calendars</code></td><td><span class="cat-tag cat-sla">SLA</span></td><td>Business hour calendar definitions</td></tr>
+      <tr><td>50</td><td><code>notification_templates</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Notification message templates</td></tr>
+      <tr><td>51</td><td><code>i18n_packs</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Internationalization language packs</td></tr>
+      <tr><td>52</td><td><code>worklogs</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Work log entries (time tracking)</td></tr>
+      <tr><td>53</td><td><code>known_errors</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Known error database entries</td></tr>
+      <tr><td>54</td><td><code>field_visibility_rules</code></td><td><span class="cat-tag cat-admin">Admin</span></td><td>Field visibility rules by role/type</td></tr>
+      <tr><td>55</td><td><code>notification_preferences</code></td><td><span class="cat-tag cat-ux">UX</span></td><td>Per-user notification preferences</td></tr>
+      <tr><td>56</td><td><code>mim_records</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Major incident management records</td></tr>
+      <tr><td>57</td><td><code>ai_chat_sessions</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>AI chat session state</td></tr>
+      <tr><td>58</td><td><code>ai_kb_drafts</code></td><td><span class="cat-tag cat-ai">AI</span></td><td>AI-generated KB article drafts</td></tr>
+      <tr><td>59</td><td><code>channel_stats</code></td><td><span class="cat-tag cat-core">Core</span></td><td>Multi-channel intake statistics</td></tr>
+      <tr><td>60</td><td><code>gamification_scores</code></td><td><span class="cat-tag cat-ux">UX</span></td><td>Agent gamification points/scores</td></tr>
+      <tr><td>61</td><td><code>dashboard_layouts</code></td><td><span class="cat-tag cat-ux">UX</span></td><td>Per-user dashboard widget layouts</td></tr>
+      <tr><td>62</td><td><code>releases</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Release management records</td></tr>
+      <tr><td>63</td><td><code>cost_allocations</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Cost allocation entries</td></tr>
+      <tr><td>64</td><td><code>cost_rates</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Cost rate definitions</td></tr>
+      <tr><td>65</td><td><code>compliance_evidence</code></td><td><span class="cat-tag cat-ent">Enterprise</span></td><td>Compliance evidence artifacts</td></tr>
+      <tr><td>66</td><td><code>teams_webhooks</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>Microsoft Teams webhook configs</td></tr>
+      <tr><td>67</td><td><code>cmdb_discovery</code></td><td><span class="cat-tag cat-int">Integration</span></td><td>CMDB discovery scan results</td></tr>
+    </table>
+    <p><em>Additional runtime collections:</em> <code>status_subscribers</code>, <code>saved_reports</code>, <code>anomaly_alerts</code>, <code>benchmarks</code>, <code>ticket_templates</code></p>
+  </div>
+
+  <div class="section">
+    <h2>Collection Categories</h2>
+    <table>
+      <tr><th>Category</th><th>Count</th><th>Description</th></tr>
+      <tr><td><span class="cat-tag cat-core">Core</span></td><td>~20</td><td>ITIL core processes: incidents, problems, changes, requests, KB, assets</td></tr>
+      <tr><td><span class="cat-tag cat-ai">AI</span></td><td>~9</td><td>AI engine state: actions, triage, briefings, patterns, chat sessions, drafts</td></tr>
+      <tr><td><span class="cat-tag cat-int">Integration</span></td><td>~8</td><td>External system data: Zendesk, Teams, CMDB discovery</td></tr>
+      <tr><td><span class="cat-tag cat-sla">SLA</span></td><td>~5</td><td>SLA tracking, config, calendars, escalation</td></tr>
+      <tr><td><span class="cat-tag cat-admin">Admin</span></td><td>~13</td><td>System config: rules, templates, custom fields, schedules</td></tr>
+      <tr><td><span class="cat-tag cat-ent">Enterprise</span></td><td>~6</td><td>Enterprise modules: releases, contracts, costs, compliance</td></tr>
+      <tr><td><span class="cat-tag cat-ux">UX</span></td><td>~5</td><td>User preferences: filters, layouts, gamification, notifications</td></tr>
+    </table>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM Data Dictionary · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Release Notes</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .meta-bar { display: flex; gap: 40px; padding: 20px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 12px 0 6px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+  .phase-tag { display: inline-block; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; margin-bottom: 8px; }
+  .p1 { background: #e8eaf6; color: #1a237e; }
+  .p2 { background: #e3f2fd; color: #0d47a1; }
+  .p3 { background: #e8f5e9; color: #2e7d32; }
+  .p4 { background: #fff3e0; color: #e65100; }
+  .p5 { background: #fce4ec; color: #c62828; }
+  .step-list { margin: 0; padding: 0; list-style: none; }
+  .step-list li { padding: 8px 12px; border-left: 3px solid #e8eaf6; margin: 4px 0; font-size: 13px; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+  .stats { display: flex; gap: 24px; margin: 12px 0; }
+  .stat { background: #f8f9fe; border-radius: 6px; padding: 12px 16px; text-align: center; flex: 1; }
+  .stat .num { font-size: 24px; font-weight: 700; color: #1a237e; }
+  .stat .lbl { font-size: 11px; color: #888; text-transform: uppercase; }
+</style>
+</head>
+<body data-version="2.0" data-doc="release-notes">
+
+<div class="header">
+  <h1>Release Notes</h1>
+  <div class="subtitle">VGC-ITSM — All Phases Changelog</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Period</span><span class="value">April 2026</span></div>
+  <div class="item"><span class="label">Total Steps</span><span class="value">52</span></div>
+  <div class="item"><span class="label">E2E Tests</span><span class="value">359 Passing</span></div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>Summary</h2>
+    <div class="stats">
+      <div class="stat"><div class="num">5</div><div class="lbl">Phases</div></div>
+      <div class="stat"><div class="num">52</div><div class="lbl">Feature Steps</div></div>
+      <div class="stat"><div class="num">359</div><div class="lbl">E2E Tests</div></div>
+      <div class="stat"><div class="num">250+</div><div class="lbl">API Endpoints</div></div>
+      <div class="stat"><div class="num">67</div><div class="lbl">Collections</div></div>
+    </div>
+  </div>
+
+  <!-- Phase 1 -->
+  <div class="section">
+    <h2>Phase 1 — Core ITIL Gaps</h2>
+    <span class="phase-tag p1">177 E2E Tests</span>
+    <p>Foundation enhancements closing ITIL process gaps.</p>
+    <ul class="step-list">
+      <li><strong>Step 1:</strong> Work Logs — time tracking on incidents with duration, notes, work type</li>
+      <li><strong>Step 2:</strong> Known Errors — document known errors with workarounds, link to incidents</li>
+      <li><strong>Step 3:</strong> Custom Fields — admin-defined custom fields for any ticket type</li>
+      <li><strong>Step 4:</strong> Notification Preferences — per-user notification channel preferences</li>
+      <li><strong>Step 5:</strong> Field Visibility Rules — show/hide fields by role and ticket type</li>
+      <li><strong>Step 6:</strong> Change Collision Detection — detect overlapping changes by schedule/CI</li>
+      <li><strong>Step 7:</strong> AI Change Risk Assessment — AI evaluates change risk with scoring</li>
+      <li><strong>Step 8:</strong> AI Recurring Incident Detection — pattern recognition for recurring issues</li>
+      <li><strong>Step 9:</strong> Major Incident Management (MIM) — declare, manage, communicate major incidents</li>
+      <li><strong>Step 10:</strong> SLA Pause/Resume — pause SLA timers for customer-wait scenarios</li>
+    </ul>
+  </div>
+
+  <!-- Phase 2 -->
+  <div class="section">
+    <h2>Phase 2 — AI Enhancement & Automation</h2>
+    <span class="phase-tag p2">216 E2E Tests (cumulative)</span>
+    <p>AI capabilities expansion and workflow automation.</p>
+    <ul class="step-list">
+      <li><strong>Step 11:</strong> AI Virtual Agent — conversational chatbot with session management</li>
+      <li><strong>Step 12:</strong> AI KB Auto-Generation — generate articles from resolved incidents</li>
+      <li><strong>Step 13:</strong> Automation Rules Engine — condition-action rules for ticket automation</li>
+      <li><strong>Step 14:</strong> Email-to-Ticket — inbound email processing creates/updates tickets</li>
+      <li><strong>Step 15:</strong> Runbook Automation — define and execute multi-step runbooks</li>
+      <li><strong>Step 16:</strong> AI Capacity Forecasting — predict resource needs from trends</li>
+      <li><strong>Step 17:</strong> AI Semantic Search — natural language search across KB and tickets</li>
+      <li><strong>Step 18:</strong> Multi-Channel Statistics — analytics across email, portal, chat, phone</li>
+      <li><strong>Step 19:</strong> Gamification — points, leaderboard for agent engagement</li>
+      <li><strong>Step 20:</strong> Dashboard Layouts — customizable per-user dashboard widgets</li>
+    </ul>
+  </div>
+
+  <!-- Phase 3 -->
+  <div class="section">
+    <h2>Phase 3 — Enterprise Modules & Compliance</h2>
+    <span class="phase-tag p3">273 E2E Tests (cumulative)</span>
+    <p>Enterprise-grade modules for governance, compliance, and CMDB.</p>
+    <ul class="step-list">
+      <li><strong>Step 21:</strong> Release Management — plan, track, deploy releases with change linking</li>
+      <li><strong>Step 22:</strong> Self-Service Portal — end-user portal (tickets, catalog, KB search)</li>
+      <li><strong>Step 23:</strong> Cost Allocation — IT cost tracking by department/service</li>
+      <li><strong>Step 24:</strong> Compliance Evidence — SOC2/ISO evidence collection and export</li>
+      <li><strong>Step 25:</strong> Contract Management — vendor contracts with expiry alerts</li>
+      <li><strong>Step 26:</strong> CMDB Dependency Map — CI dependency visualization</li>
+      <li><strong>Step 27:</strong> Teams Integration — webhook notifications to Microsoft Teams</li>
+      <li><strong>Step 28:</strong> CMDB Discovery Ingestion — auto-populate CIs from scanners</li>
+      <li><strong>Step 29:</strong> Service Status Page — public-facing service health dashboard</li>
+      <li><strong>Step 30:</strong> Change Freeze Check — enforce change freeze windows</li>
+    </ul>
+  </div>
+
+  <!-- Phase 4 -->
+  <div class="section">
+    <h2>Phase 4 — Advanced Analytics & Reporting</h2>
+    <span class="phase-tag p4">319 E2E Tests (cumulative)</span>
+    <p>Comprehensive analytics, AI-powered insights, and executive reporting.</p>
+    <ul class="step-list">
+      <li><strong>Step 31:</strong> Custom Report Builder — build reports with custom filters and columns</li>
+      <li><strong>Step 32:</strong> AI Anomaly Detection — auto-detect unusual ticket volume patterns</li>
+      <li><strong>Step 33:</strong> Executive Dashboard — C-level KPI summary</li>
+      <li><strong>Step 34:</strong> Trend Forecasting — AI predicts future ticket/SLA trends</li>
+      <li><strong>Step 35:</strong> SLA Deep Dive — granular SLA analysis by team/category/severity</li>
+      <li><strong>Step 36:</strong> AI Performance Dashboard — AI accuracy, response times, usage metrics</li>
+      <li><strong>Step 37:</strong> Audit Trail Analytics — compliance-focused audit log analysis</li>
+      <li><strong>Step 38:</strong> Real-Time Ops Dashboard — live operational metrics</li>
+      <li><strong>Step 39:</strong> Benchmarking — industry standard comparisons</li>
+      <li><strong>Step 40:</strong> Scheduled Reports — auto-generate and email on schedule</li>
+    </ul>
+  </div>
+
+  <!-- Phase 5 -->
+  <div class="section">
+    <h2>Phase 5 — UX Polish & Production Hardening</h2>
+    <span class="phase-tag p5">359 E2E Tests (cumulative)</span>
+    <p>Production-ready UX, performance, and operational tooling.</p>
+    <ul class="step-list">
+      <li><strong>Step 41:</strong> PWA Support — Progressive Web App manifest and offline capability</li>
+      <li><strong>Step 42:</strong> Keyboard Shortcuts — global shortcuts and command palette</li>
+      <li><strong>Step 43:</strong> Theme Engine — customizable themes and layout preferences</li>
+      <li><strong>Step 44:</strong> Layout Preferences — per-user layout persistence</li>
+      <li><strong>Step 45:</strong> Bulk Operations — multi-select update and close</li>
+      <li><strong>Step 46:</strong> Ticket Templates — reusable ticket creation templates</li>
+      <li><strong>Step 47:</strong> Saved Filters — save and quick-apply filter combinations</li>
+      <li><strong>Step 48:</strong> CSV Export — export any report or ticket list to CSV</li>
+      <li><strong>Step 49:</strong> Rate Limiting — per-user and per-IP request throttling</li>
+      <li><strong>Step 50:</strong> Deep Health Check — comprehensive health with DB/AI/integration status</li>
+      <li><strong>Step 51:</strong> Test Runner Status — in-app E2E test status endpoint</li>
+      <li><strong>Step 52:</strong> Production Hardening — error handling, logging, graceful shutdown</li>
+    </ul>
+  </div>
+
+  <!-- Bonus phases from E2E -->
+  <div class="section">
+    <h2>Bonus — CSAT, Change Calendar, AI Learning</h2>
+    <p>Additional test suites covering specialized engines:</p>
+    <ul class="step-list">
+      <li><strong>CSAT Survey Engine:</strong> Submit surveys, validate fields, aggregate scores, AI analysis</li>
+      <li><strong>Change Calendar Engine:</strong> Calendar view, freeze window management, conflict detection</li>
+      <li><strong>AI Learning Dashboard:</strong> Learning metrics, feedback trends, model health monitoring</li>
+    </ul>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM Release Notes · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

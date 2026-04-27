@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Workflow Diagrams</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  .mermaid { margin: 16px 0; text-align: center; }
+  p { font-size: 14px; margin: 8px 0; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body data-version="2.0" data-doc="workflow-diagrams">
+
+<div class="header">
+  <h1>Workflow Diagrams</h1>
+  <div class="subtitle">VGC-ITSM — Process Flows & Architecture</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>1. Incident Lifecycle</h2>
+    <p>End-to-end flow from ticket creation through resolution and SLA tracking.</p>
+    <div class="mermaid">
+flowchart TD
+  A[New Incident] --> B{AI Triage}
+  B -->|Auto-classify| C[Priority & Category Set]
+  C --> D{SLA Timer Starts}
+  D --> E[Agent Assignment]
+  E --> F{Work In Progress}
+  F -->|Customer Wait| G[SLA Paused]
+  G --> F
+  F -->|Resolved| H[Resolution]
+  H --> I{CSAT Survey}
+  I --> J[Closed]
+  F -->|Escalated| K[Escalation Engine]
+  K --> E
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>2. Change Management</h2>
+    <p>CAB approval flow with collision detection and freeze window checks.</p>
+    <div class="mermaid">
+flowchart TD
+  A[Change Request] --> B{Freeze Window?}
+  B -->|Yes| C[Rejected - Frozen]
+  B -->|No| D{Collision Check}
+  D -->|Conflict| E[Warning - Overlap]
+  D -->|Clear| F{AI Risk Assessment}
+  F --> G[Risk Score Assigned]
+  G --> H{CAB Approval}
+  H -->|Approved| I[Scheduled]
+  H -->|Rejected| J[Rejected]
+  I --> K[Implementation]
+  K --> L{Post-Implementation Review}
+  L --> M[Closed]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>3. Problem Management</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Problem Identified] --> B[Root Cause Analysis]
+  B --> C{Known Error?}
+  C -->|Yes| D[Link to Known Error DB]
+  C -->|No| E[Investigation]
+  E --> F[Workaround Found]
+  F --> G[Known Error Created]
+  G --> H[Permanent Fix Planned]
+  H --> I[Change Request Created]
+  I --> J[Resolved]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>4. AI Triage Pipeline</h2>
+    <p>Three-tier AI processing with fallback chain.</p>
+    <div class="mermaid">
+flowchart TD
+  A[Incoming Ticket] --> B[gpt-5.4-pro]
+  B -->|Success| C[Classification + Priority]
+  B -->|Fail/Timeout| D[gpt-5.4-mini]
+  D -->|Success| C
+  D -->|Fail| E[gpt-5.4-nano]
+  E -->|Success| C
+  E -->|Fail| F[Manual Queue]
+  C --> G{Confidence > 85%?}
+  G -->|Yes| H[Auto-Apply]
+  G -->|No| I[Suggest to Agent]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>5. Email-to-Ticket</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Inbound Email] --> B{Sender Whitelisted?}
+  B -->|No| C[Rejected → email_rejections]
+  B -->|Yes| D{Existing Ticket Ref?}
+  D -->|Yes| E[Update Existing Ticket]
+  D -->|No| F[Create New Ticket]
+  F --> G[AI Triage]
+  G --> H[Agent Assignment]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>6. Approval Chain</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Request Submitted] --> B[Load Approval Chain]
+  B --> C{Level 1 Approver}
+  C -->|Approved| D{More Levels?}
+  C -->|Rejected| E[Request Rejected]
+  D -->|Yes| F{Level N Approver}
+  F -->|Approved| D
+  F -->|Rejected| E
+  D -->|No| G[Fully Approved]
+  G --> H[Auto-Provision]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>7. SLA Engine</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Ticket Created] --> B[Match SLA Config]
+  B --> C[Load Business Calendar]
+  C --> D[Start Response Timer]
+  D --> E{Response SLA Met?}
+  E -->|Breach| F[Escalation Triggered]
+  E -->|Met| G[Start Resolution Timer]
+  G --> H{Resolution SLA Met?}
+  H -->|Breach| F
+  H -->|Met| I[SLA Compliant]
+  F --> J[Notification Sent]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>8. Automation Rules Engine</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Ticket Event] --> B[Load Active Rules]
+  B --> C{Match Conditions?}
+  C -->|No| D[Skip]
+  C -->|Yes| E{Action Type}
+  E -->|Assign| F[Set Assignee]
+  E -->|Priority| G[Change Priority]
+  E -->|Notify| H[Send Notification]
+  E -->|Escalate| I[Trigger Escalation]
+  E -->|Custom| J[Execute Custom Action]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>9. Release Management</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Release Planned] --> B[Link Changes]
+  B --> C{All Changes Approved?}
+  C -->|No| D[Wait for Approvals]
+  C -->|Yes| E[Schedule Deployment]
+  E --> F[Deploy]
+  F --> G{Success?}
+  G -->|Yes| H[Release Closed]
+  G -->|No| I[Rollback]
+  I --> J[Post-Mortem]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>10. Major Incident Management</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Incident Declared Major] --> B[MIM Commander Assigned]
+  B --> C[Bridge Call Opened]
+  C --> D[Status Updates Published]
+  D --> E{Resolved?}
+  E -->|No| D
+  E -->|Yes| F[Post-Incident Review]
+  F --> G[PIR Report Generated]
+  G --> H[Linked Problems Created]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>11. Runbook Execution</h2>
+    <div class="mermaid">
+flowchart TD
+  A[Trigger Runbook] --> B[Load Steps]
+  B --> C{Step 1}
+  C -->|Success| D{More Steps?}
+  C -->|Fail| E[Execution Failed]
+  D -->|Yes| F{Step N}
+  F -->|Success| D
+  F -->|Fail| E
+  D -->|No| G[Execution Complete]
+  G --> H[Log Results]
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>12. Request Pipeline</h2>
+    <p>Server request processing with auth, rate limiting, and RBAC.</p>
+    <div class="mermaid">
+flowchart LR
+  A[HTTP Request] --> B{Rate Limit OK?}
+  B -->|No| C[429 Too Many Requests]
+  B -->|Yes| D{Auth Required?}
+  D -->|Yes| E{Token Valid?}
+  E -->|No| F[401 Unauthorized]
+  E -->|Yes| G{RBAC Check}
+  G -->|Denied| H[403 Forbidden]
+  G -->|Allowed| I[Route Handler]
+  D -->|No| I
+  I --> J[Response + Audit Log]
+    </div>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM Workflow Diagrams · Version 2.0 · April 2026</div>
+</div>
+
+<script>mermaid.initialize({ startOnLoad: true, theme: 'default' });</script>
+</body>
+</html>

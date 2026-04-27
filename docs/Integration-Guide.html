@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Integration Guide</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-family: 'Cascadia Code', Consolas, monospace; }
+  pre { background: #263238; color: #eeffff; padding: 16px; border-radius: 6px; font-size: 12px; overflow-x: auto; margin: 8px 0; font-family: 'Cascadia Code', Consolas, monospace; }
+  ul { margin: 8px 0 8px 20px; }
+  li { margin: 4px 0; font-size: 14px; }
+  .int-badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .int-live { background: #e8f5e9; color: #2e7d32; }
+  .int-ready { background: #e3f2fd; color: #0d47a1; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body data-version="2.0" data-doc="integration-guide">
+
+<div class="header">
+  <h1>Integration Guide</h1>
+  <div class="subtitle">VGC-ITSM — External Systems & APIs</div>
+  <span class="badge">Version 2.0</span>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>Integration Overview</h2>
+    <table>
+      <tr><th>System</th><th>Type</th><th>Direction</th><th>Status</th></tr>
+      <tr><td>Zendesk</td><td>Ticketing</td><td>Bi-directional sync</td><td><span class="int-badge int-live">Live</span></td></tr>
+      <tr><td>Microsoft Entra ID</td><td>Identity</td><td>SSO + user sync</td><td><span class="int-badge int-live">Live</span></td></tr>
+      <tr><td>Microsoft Graph</td><td>Directory</td><td>User/group read</td><td><span class="int-badge int-live">Live</span></td></tr>
+      <tr><td>Microsoft Teams</td><td>Notification</td><td>Outbound webhooks</td><td><span class="int-badge int-live">Live</span></td></tr>
+      <tr><td>Azure OpenAI</td><td>AI</td><td>Outbound API calls</td><td><span class="int-badge int-live">Live</span></td></tr>
+      <tr><td>SolarWinds/N-able</td><td>Monitoring</td><td>Inbound alerts</td><td><span class="int-badge int-ready">Ready</span></td></tr>
+      <tr><td>CMDB Discovery</td><td>Asset Scan</td><td>Inbound ingestion</td><td><span class="int-badge int-ready">Ready</span></td></tr>
+      <tr><td>SMTP/Email</td><td>Email</td><td>Inbound email-to-ticket</td><td><span class="int-badge int-ready">Ready</span></td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>1. Zendesk Integration</h2>
+    <h3>Setup</h3>
+    <pre>POST /api/settings
+{
+  "zendesk_subdomain": "mycompany",
+  "zendesk_email": "admin@example.com",
+  "zendesk_api_token": "your-api-token"
+}</pre>
+
+    <h3>Key Endpoints</h3>
+    <table>
+      <tr><th>Endpoint</th><th>Purpose</th></tr>
+      <tr><td><code>GET /api/zendesk/me</code></td><td>Test connection</td></tr>
+      <tr><td><code>POST /api/zendesk/full-import</code></td><td>Full initial import</td></tr>
+      <tr><td><code>POST /api/zendesk/incremental-sync</code></td><td>Delta sync since last run</td></tr>
+      <tr><td><code>POST /api/zendesk/webhook</code></td><td>Real-time webhook receiver</td></tr>
+      <tr><td><code>GET /api/zendesk/sync-status</code></td><td>Check sync state</td></tr>
+      <tr><td><code>POST /api/zendesk/push/:id</code></td><td>Push ticket to Zendesk</td></tr>
+    </table>
+    <p>Data stored in: <code>zendesk_tickets</code>, <code>zendesk_users</code>, <code>zendesk_orgs</code>, <code>zendesk_comments</code>, <code>zendesk_sync_state</code></p>
+  </div>
+
+  <div class="section">
+    <h2>2. Microsoft Entra ID & Graph</h2>
+    <h3>Authentication Flow</h3>
+    <ul>
+      <li>MSAL.js PKCE authorization code flow</li>
+      <li>Scopes: <code>User.Read</code>, <code>User.Read.All</code>, <code>Group.Read.All</code>, <code>Mail.Send</code></li>
+      <li>Token cached in browser with silent refresh</li>
+    </ul>
+    <h3>Graph API Endpoints Used</h3>
+    <table>
+      <tr><th>Endpoint</th><th>Purpose</th></tr>
+      <tr><td><code>GET /api/graph/me</code></td><td>Current user profile</td></tr>
+      <tr><td><code>GET /api/graph/users</code></td><td>All directory users</td></tr>
+      <tr><td><code>GET /api/graph/groups</code></td><td>Security groups</td></tr>
+      <tr><td><code>POST /api/graph/mail</code></td><td>Send email via Graph</td></tr>
+      <tr><td><code>GET /api/graph/photo/:id</code></td><td>User profile photos</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>3. Microsoft Teams</h2>
+    <h3>Webhook Setup</h3>
+    <pre>POST /api/db/teams_webhooks
+{
+  "data": {
+    "name": "ITSM Alerts",
+    "webhook_url": "https://outlook.office.com/webhook/...",
+    "events": ["incident_created", "sla_breach", "major_incident"],
+    "active": true
+  }
+}</pre>
+
+    <h3>Supported Events</h3>
+    <ul>
+      <li><code>incident_created</code> — new incident with P1/P2 severity</li>
+      <li><code>sla_breach</code> — SLA timer exceeded target</li>
+      <li><code>major_incident</code> — MIM declared</li>
+      <li><code>change_approved</code> — change request approved by CAB</li>
+      <li><code>escalation</code> — ticket escalated</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>4. Azure OpenAI</h2>
+    <h3>Configuration</h3>
+    <pre>POST /api/settings/openai
+{
+  "endpoint": "https://myoai.openai.azure.com",
+  "api_key": "your-key",
+  "deployment_pro": "gpt-5.4-pro",
+  "deployment_mini": "gpt-5.4-mini",
+  "deployment_nano": "gpt-5.4-nano"
+}</pre>
+
+    <h3>AI Endpoints</h3>
+    <table>
+      <tr><th>Endpoint</th><th>Purpose</th></tr>
+      <tr><td><code>POST /api/ai/triage</code></td><td>Auto-classify ticket</td></tr>
+      <tr><td><code>POST /api/ai/suggest-resolution</code></td><td>Suggest resolution</td></tr>
+      <tr><td><code>POST /api/ai/chat</code></td><td>Virtual agent chat</td></tr>
+      <tr><td><code>POST /api/ai/generate-kb</code></td><td>Generate KB article</td></tr>
+      <tr><td><code>POST /api/ai/risk-assessment</code></td><td>Change risk scoring</td></tr>
+      <tr><td><code>POST /api/ai/semantic-search</code></td><td>Natural language search</td></tr>
+      <tr><td><code>GET /api/ai/anomaly-detect</code></td><td>Anomaly detection</td></tr>
+      <tr><td><code>GET /api/ai/forecast</code></td><td>Trend forecasting</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>5. Email-to-Ticket</h2>
+    <h3>Configuration</h3>
+    <ul>
+      <li>Whitelist senders: <code>POST /api/db/email_whitelist</code></li>
+      <li>Configure templates: <code>POST /api/db/email_templates</code></li>
+      <li>Process inbound: <code>POST /api/email/inbound</code></li>
+      <li>Rejections logged to: <code>email_rejections</code> collection</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>6. CMDB Discovery</h2>
+    <h3>Ingestion API</h3>
+    <pre>POST /api/cmdb/discovery/ingest
+{
+  "source": "SolarWinds",
+  "scan_id": "SCAN-001",
+  "assets": [
+    { "hostname": "srv-web-01", "ip": "10.0.1.10", "type": "server", "os": "Ubuntu 22.04" }
+  ]
+}</pre>
+    <p>Discovered assets are matched against existing CIs and either updated or created.</p>
+  </div>
+
+  <div class="section">
+    <h2>7. WebSocket (Real-Time)</h2>
+    <p>WebSocket server on same port for real-time dashboard updates:</p>
+    <ul>
+      <li>Ticket updates pushed to connected clients</li>
+      <li>SLA breach alerts</li>
+      <li>Notification delivery</li>
+      <li>Stats: <code>GET /api/ws/stats</code></li>
+    </ul>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM Integration Guide · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

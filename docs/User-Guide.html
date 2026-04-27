@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM User Guide v2.0</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 40px 60px; }
+  .header h1 { font-size: 28px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 14px; opacity: 0.8; margin-top: 8px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 4px 16px; border-radius: 20px; font-size: 13px; margin-top: 12px; font-weight: 600; }
+  .meta-bar { display: flex; gap: 40px; padding: 20px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }
+  h3 { font-size: 15px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+  h4 { font-size: 13px; font-weight: 600; margin: 12px 0 6px; color: #555; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+  ul, ol { margin: 8px 0 8px 20px; }
+  li { margin: 4px 0; font-size: 14px; }
+  .toc { columns: 2; column-gap: 24px; margin: 12px 0; }
+  .toc a { display: block; padding: 3px 0; color: #1a237e; text-decoration: none; font-size: 13px; }
+  .toc a:hover { text-decoration: underline; }
+  .tip { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .warn { background: #fff3e0; border-left: 4px solid #ff9800; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .kbd { display: inline-block; background: #e8eaf6; border: 1px solid #c5cae9; border-radius: 3px; padding: 1px 6px; font-family: monospace; font-size: 12px; }
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body data-version="2.0" data-doc="user-guide">
+
+<div class="header">
+  <h1>User Guide</h1>
+  <div class="subtitle">VGC-ITSM — AI-Powered IT Service Management Platform</div>
+  <span class="badge">Version 2.0 — Phases 1–5</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Last Updated</span><span class="value">April 2026</span></div>
+  <div class="item"><span class="label">Covers</span><span class="value">52 Feature Steps</span></div>
+  <div class="item"><span class="label">Audience</span><span class="value">All Users</span></div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <h2>Table of Contents</h2>
+    <div class="toc">
+      <a href="#getting-started">1. Getting Started</a>
+      <a href="#dashboard">2. Dashboard</a>
+      <a href="#tickets">3. Tickets Module</a>
+      <a href="#catalog">4. Service Catalog</a>
+      <a href="#knowledge">5. Knowledge Portal</a>
+      <a href="#assets">6. Assets / CMDB</a>
+      <a href="#sla">7. SLA & Approvals</a>
+      <a href="#analytics">8. Analytics</a>
+      <a href="#customers">9. Customers</a>
+      <a href="#ai">10. AI Assist</a>
+      <a href="#admin">11. Admin Settings</a>
+      <a href="#productivity">12. Productivity</a>
+      <a href="#shortcuts">13. Keyboard Shortcuts</a>
+      <a href="#recycle">14. Recycle Bin</a>
+      <a href="#engineer-review">15. Engineer Review</a>
+      <a href="#service-status">16. Service Status</a>
+      <a href="#releases">17. Release Management</a>
+      <a href="#self-service">18. Self-Service Portal</a>
+      <a href="#cost">19. Cost Allocation</a>
+      <a href="#compliance">20. Compliance & Audit</a>
+      <a href="#contracts">21. Contract Management</a>
+      <a href="#pwa">22. PWA & Offline</a>
+      <a href="#bulk">23. Bulk Operations</a>
+      <a href="#gamification">24. Gamification</a>
+      <a href="#faq">25. FAQ</a>
+    </div>
+  </div>
+
+  <!-- 1. Getting Started -->
+  <div class="section" id="getting-started">
+    <h2>1. Getting Started</h2>
+    <h3>1.1 Accessing the Application</h3>
+    <p>Navigate to <code>https://vgc-itsm1-app.azurewebsites.net</code></p>
+    <table>
+      <tr><th>Login Method</th><th>Who</th><th>Authentication</th></tr>
+      <tr><td>VGC Admin (SSO)</td><td>Tenant Administrators</td><td>Microsoft Entra ID SSO</td></tr>
+      <tr><td>Engineer (SSO)</td><td>L1/L2 Support Engineers</td><td>Microsoft Entra ID SSO</td></tr>
+      <tr><td>Dev Admin (Local)</td><td>Developer / System Admin</td><td>Username & Password</td></tr>
+    </table>
+
+    <h3>1.2 Navigation</h3>
+    <p>The left sidebar groups modules into three sections:</p>
+    <table>
+      <tr><th>Section</th><th>Modules</th></tr>
+      <tr><td><strong>CORE</strong></td><td>Tickets, Service Catalog, Knowledge Portal, Assets / CMDB</td></tr>
+      <tr><td><strong>MONITORING</strong></td><td>Engineer Review, SLA & Approvals, Analytics, Service Status, Customers</td></tr>
+      <tr><td><strong>AI & SYSTEM</strong></td><td>AI Assist, Admin Settings, Productivity</td></tr>
+    </table>
+    <div class="tip">💡 Click the collapse arrow (◀) at the sidebar bottom for icon-only mode.</div>
+  </div>
+
+  <!-- 2. Dashboard -->
+  <div class="section" id="dashboard">
+    <h2>2. Dashboard</h2>
+    <h3>2.1 KPI Cards</h3>
+    <p>Six real-time KPI cards: Total Incidents, Open Tickets, Avg Resolution, SLA Compliance, AI Actions, Active Assets. Each shows trend indicators (▲/▼).</p>
+
+    <h3>2.2 System Health Weather</h3>
+    <table>
+      <tr><th>Icon</th><th>Meaning</th></tr>
+      <tr><td>☀️ Sunny</td><td>All systems operational, high SLA compliance</td></tr>
+      <tr><td>⛅ Cloudy</td><td>Minor issues detected</td></tr>
+      <tr><td>🌧️ Rainy</td><td>Multiple open incidents</td></tr>
+      <tr><td>⛈️ Stormy</td><td>Critical incidents or SLA breaches</td></tr>
+    </table>
+
+    <h3>2.3 Dashboard Layouts <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></h3>
+    <p>Customize your dashboard layout. Drag-and-drop widgets, save per-user preferences. Access via gear icon on Dashboard header.</p>
+  </div>
+
+  <!-- 3. Tickets -->
+  <div class="section" id="tickets">
+    <h2>3. Tickets Module</h2>
+    <h3>3.1 Ticket Types</h3>
+    <table>
+      <tr><th>Type</th><th>Collection</th><th>Use Case</th></tr>
+      <tr><td>Incident</td><td><code>incidents</code></td><td>Unplanned service interruptions</td></tr>
+      <tr><td>Problem</td><td><code>problems</code></td><td>Root cause investigation</td></tr>
+      <tr><td>Change</td><td><code>changes</code></td><td>Planned modifications</td></tr>
+      <tr><td>Request</td><td><code>requests</code></td><td>Service requests from users</td></tr>
+    </table>
+
+    <h3>3.2 Work Logs <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></h3>
+    <p>Track time spent on incidents. Add work logs with duration, notes, and work type. Available on the ticket detail panel under "Work Logs" tab.</p>
+
+    <h3>3.3 Known Errors <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></h3>
+    <p>Document known errors with workarounds. Link known errors to incidents for faster resolution. Accessible from Tickets → Known Errors sub-tab.</p>
+
+    <h3>3.4 SLA Pause/Resume <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></h3>
+    <p>Pause SLA timers when waiting for customer response. Resume when communication restarts. Available on ticket detail → SLA section.</p>
+
+    <h3>3.5 Merge Duplicates</h3>
+    <p>AI detects duplicate incidents. Review and merge from Tickets → Duplicates view. Merged tickets retain all work logs and comments.</p>
+
+    <h3>3.6 Bulk Operations <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 5</span></h3>
+    <p>Select multiple tickets → Bulk Update (change status, priority, assignee) or Bulk Close. Available from the ticket list toolbar.</p>
+
+    <h3>3.7 Ticket Templates <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 5</span></h3>
+    <p>Create reusable ticket templates for common incident types. Select template when creating new ticket to pre-fill fields.</p>
+
+    <h3>3.8 Saved Filters <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 5</span></h3>
+    <p>Save frequently used filter combinations. Quick-apply from the filter bar dropdown.</p>
+  </div>
+
+  <!-- 4. Service Catalog -->
+  <div class="section" id="catalog">
+    <h2>4. Service Catalog</h2>
+    <p>31 pre-configured service items across 8 categories:</p>
+    <table>
+      <tr><th>Category</th><th>Items</th></tr>
+      <tr><td>Access Management</td><td>SVC01, SVC09–SVC12</td></tr>
+      <tr><td>Hardware</td><td>SVC02, SVC13–SVC16</td></tr>
+      <tr><td>Software</td><td>SVC03, SVC17–SVC19</td></tr>
+      <tr><td>Network</td><td>SVC04, SVC20–SVC22</td></tr>
+      <tr><td>Email & Communication</td><td>SVC05, SVC23–SVC25</td></tr>
+      <tr><td>Cloud Services</td><td>SVC06, SVC26–SVC28</td></tr>
+      <tr><td>Security</td><td>SVC07, SVC29–SVC31</td></tr>
+      <tr><td>Database</td><td>SVC08</td></tr>
+    </table>
+    <p>Click any service to raise a request. Approval workflows trigger automatically based on cost and category.</p>
+  </div>
+
+  <!-- 5. Knowledge Portal -->
+  <div class="section" id="knowledge">
+    <h2>5. Knowledge Portal</h2>
+    <p>Browse, search, and contribute knowledge articles. AI-powered semantic search finds relevant articles even with different wording.</p>
+    <h3>Features</h3>
+    <ul>
+      <li>Full-text and semantic search</li>
+      <li>Article versioning with history</li>
+      <li>AI auto-generation from resolved incidents</li>
+      <li>KB gap analysis — identifies undocumented topics</li>
+      <li>Correction workflow for inaccurate articles</li>
+      <li>Document upload (PDF, Word, text)</li>
+    </ul>
+  </div>
+
+  <!-- 6. Assets / CMDB -->
+  <div class="section" id="assets">
+    <h2>6. Assets / CMDB</h2>
+    <h3>6.1 Asset Management</h3>
+    <p>Track hardware, software, network devices, and cloud resources through their lifecycle.</p>
+
+    <h3>6.2 CMDB Relationships <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h3>
+    <p>Define relationships between configuration items (CIs): depends-on, runs-on, connected-to. View dependency maps and impact analysis.</p>
+
+    <h3>6.3 CMDB Discovery <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h3>
+    <p>Ingest asset discovery data from network scanners (SolarWinds, Meraki). Auto-populate CI records and detect changes.</p>
+  </div>
+
+  <!-- 7. SLA & Approvals -->
+  <div class="section" id="sla">
+    <h2>7. SLA & Approvals</h2>
+    <h3>7.1 SLA Targets</h3>
+    <table>
+      <tr><th>Severity</th><th>Response</th><th>Resolution</th></tr>
+      <tr><td>Sev-A (Critical)</td><td>15 min</td><td>4 hours</td></tr>
+      <tr><td>Sev-B (High)</td><td>30 min</td><td>8 hours</td></tr>
+      <tr><td>Sev-C (Medium)</td><td>2 hours</td><td>24 hours</td></tr>
+      <tr><td>Sev-D (Low)</td><td>4 hours</td><td>72 hours</td></tr>
+    </table>
+    <p>Business hours: Mon-Fri, 09:00–18:00 SGT. 24/7 mode available. Custom calendars supported.</p>
+
+    <h3>7.2 Approval Chains</h3>
+    <p>Multi-level approval workflows for changes, high-cost requests, and KB publishing. Email notifications sent to approvers.</p>
+
+    <h3>7.3 Change Freeze Windows <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h3>
+    <p>Define periods where no changes are allowed (e.g., holiday seasons, critical business periods). Changes submitted during freeze are auto-rejected.</p>
+  </div>
+
+  <!-- 8. Analytics -->
+  <div class="section" id="analytics">
+    <h2>8. Analytics</h2>
+    <h3>8.1 Standard Analytics</h3>
+    <p>KPIs, trend charts, SLA compliance, agent performance, and incident patterns. All data cached for 5 minutes.</p>
+
+    <h3>8.2 Advanced Analytics <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 4</span></h3>
+    <ul>
+      <li><strong>Custom Report Builder</strong> — build reports with custom filters, columns, and groupings</li>
+      <li><strong>AI Anomaly Detection</strong> — automatically detect unusual patterns in ticket volumes</li>
+      <li><strong>Executive Dashboard</strong> — C-level summary with key metrics</li>
+      <li><strong>Trend Forecasting</strong> — AI predicts future ticket volumes and SLA trends</li>
+      <li><strong>SLA Deep Dive</strong> — granular SLA analysis by team, category, severity</li>
+      <li><strong>AI Performance Dashboard</strong> — track AI accuracy, response times, usage</li>
+      <li><strong>Audit Trail Analytics</strong> — compliance-focused audit analysis</li>
+      <li><strong>Real-Time Ops Dashboard</strong> — live operational metrics</li>
+      <li><strong>Benchmarking</strong> — compare against industry standards</li>
+      <li><strong>Scheduled Reports</strong> — auto-generate and email reports on schedule</li>
+    </ul>
+  </div>
+
+  <!-- 9. Customers -->
+  <div class="section" id="customers">
+    <h2>9. Customers</h2>
+    <p>Manage customer records, view ticket history per customer, track satisfaction scores. Syncs with Zendesk organizations when connected.</p>
+  </div>
+
+  <!-- 10. AI Assist -->
+  <div class="section" id="ai">
+    <h2>10. AI Assist</h2>
+    <h3>10.1 AI Chat</h3>
+    <p>Conversational AI assistant powered by GPT-5.4. Supports streaming responses, file uploads, and context-aware suggestions.</p>
+
+    <h3>10.2 Auto-Triage & Assignment</h3>
+    <p>AI analyzes incoming tickets and suggests: priority, category, assignee, and resolution. Configurable confidence thresholds determine auto-apply behavior.</p>
+
+    <h3>10.3 Virtual Agent <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></h3>
+    <p>End-user-facing chatbot that can answer questions, search KB, and create tickets. Maintains session context for multi-turn conversations.</p>
+
+    <h3>10.4 AI KB Generation <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></h3>
+    <p>Automatically generates knowledge articles from resolved incidents. Drafts go through review before publishing.</p>
+
+    <h3>10.5 Change Risk Assessment <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></h3>
+    <p>AI evaluates change requests for risk level based on impact scope, timing, and historical data.</p>
+
+    <h3>10.6 Recurring Detection <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></h3>
+    <p>Identifies recurring incident patterns and suggests problem records for root cause analysis.</p>
+
+    <h3>10.7 Capacity Forecast <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></h3>
+    <p>AI forecasts future resource needs based on ticket trends, asset utilization, and growth patterns.</p>
+
+    <h3>10.8 AI Learning Dashboard <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></h3>
+    <p>Track AI learning metrics, feedback trends, and model health. Submit corrections to improve accuracy over time.</p>
+  </div>
+
+  <!-- 11. Admin -->
+  <div class="section" id="admin">
+    <h2>11. Admin Settings</h2>
+    <ul>
+      <li><strong>OpenAI Configuration</strong> — API keys, model selection, tier thresholds</li>
+      <li><strong>SolarWinds / N-able</strong> — Connection settings for monitoring integration</li>
+      <li><strong>Zendesk</strong> — Subdomain, API token, sync settings</li>
+      <li><strong>Microsoft Graph</strong> — Entra ID app registration, certificate config</li>
+      <li><strong>Custom Fields</strong> — Define additional fields for any ticket type <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></li>
+      <li><strong>Field Visibility Rules</strong> — Show/hide fields by role or ticket type <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></li>
+      <li><strong>Notification Templates</strong> — Customize email/notification templates</li>
+      <li><strong>Automation Rules</strong> — Define condition-action rules for ticket automation <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></li>
+      <li><strong>i18n</strong> — Language packs for multi-language support</li>
+    </ul>
+  </div>
+
+  <!-- 12. Productivity -->
+  <div class="section" id="productivity">
+    <h2>12. Productivity</h2>
+    <ul>
+      <li>Smart task suggestions</li>
+      <li>Quick actions toolbar</li>
+      <li>Recently viewed items</li>
+      <li>Notification preferences per user <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 1</span></li>
+      <li>Gamification leaderboard <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></li>
+    </ul>
+  </div>
+
+  <!-- 13. Keyboard Shortcuts -->
+  <div class="section" id="shortcuts">
+    <h2>13. Keyboard Shortcuts <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 5</span></h2>
+    <table>
+      <tr><th>Shortcut</th><th>Action</th></tr>
+      <tr><td><span class="kbd">Ctrl+K</span></td><td>Open Command Palette</td></tr>
+      <tr><td><span class="kbd">Ctrl+N</span></td><td>New Ticket</td></tr>
+      <tr><td><span class="kbd">Ctrl+/</span></td><td>Global Search</td></tr>
+      <tr><td><span class="kbd">Ctrl+Shift+D</span></td><td>Go to Dashboard</td></tr>
+      <tr><td><span class="kbd">Esc</span></td><td>Close Modal / Panel</td></tr>
+    </table>
+    <p>Customize shortcuts in Admin Settings → Shortcuts.</p>
+  </div>
+
+  <!-- 14. Recycle Bin -->
+  <div class="section" id="recycle">
+    <h2>14. Recycle Bin</h2>
+    <p>Deleted items are soft-deleted and can be restored from the Recycle Bin. Available from the top-right menu. Permanently purge after review.</p>
+  </div>
+
+  <!-- 15-24: Phase 1-5 Features -->
+  <div class="section" id="engineer-review">
+    <h2>15. Engineer Review</h2>
+    <p>AI-suggested actions queue for engineers. Review triage suggestions, auto-resolve candidates, and workflow recommendations. Accept or reject with one click.</p>
+  </div>
+
+  <div class="section" id="service-status">
+    <h2>16. Service Status Page <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h2>
+    <p>Public-facing status page showing service health. Subscribers receive email notifications on status changes. Manage from Admin → Service Status.</p>
+  </div>
+
+  <div class="section" id="releases">
+    <h2>17. Release Management <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h2>
+    <p>Plan, track, and deploy releases. Link changes to releases. Track release status: Planning → Building → Testing → Deployed → Closed.</p>
+  </div>
+
+  <div class="section" id="self-service">
+    <h2>18. Self-Service Portal <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h2>
+    <p>End-user portal with limited navigation (Self-Service, Knowledge, Catalog). Users can create tickets, browse catalog, search KB, and track their tickets.</p>
+  </div>
+
+  <div class="section" id="cost">
+    <h2>19. Cost Allocation <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h2>
+    <p>Track IT service costs by department, team, or service. Define cost rates, generate cost reports, and view allocation summaries.</p>
+  </div>
+
+  <div class="section" id="compliance">
+    <h2>20. Compliance & Audit <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h2>
+    <p>Compliance evidence collection, export for SOC2/ISO audits. Full audit trail with integrity verification. See <a href="Security-Compliance.html">Security & Compliance Guide</a>.</p>
+  </div>
+
+  <div class="section" id="contracts">
+    <h2>21. Contract Management <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 3</span></h2>
+    <p>Track vendor contracts with renewal dates, costs, and SLAs. Automatic alerts for expiring contracts (30/60/90 day warnings).</p>
+  </div>
+
+  <div class="section" id="pwa">
+    <h2>22. PWA & Offline <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 5</span></h2>
+    <p>Install VGC-ITSM as a Progressive Web App for native-like experience. PWA manifest available at <code>/api/pwa/manifest</code>.</p>
+  </div>
+
+  <div class="section" id="bulk">
+    <h2>23. Bulk Operations <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 5</span></h2>
+    <p>Select multiple tickets and perform bulk update (status, priority, assignee) or bulk close. CSV export for offline analysis.</p>
+  </div>
+
+  <div class="section" id="gamification">
+    <h2>24. Gamification <span class="badge" style="font-size:10px;padding:2px 8px;">Phase 2</span></h2>
+    <p>Points awarded for resolving tickets, contributing KB articles, and meeting SLA targets. Leaderboard shows top performers. Accessible from Productivity module.</p>
+  </div>
+
+  <div class="section" id="faq">
+    <h2>25. FAQ</h2>
+    <table>
+      <tr><th>Question</th><th>Answer</th></tr>
+      <tr><td>How do I reset my password?</td><td>SSO users: contact your IT admin. Local users: ask a VGC Dev Admin to reset via Admin Settings.</td></tr>
+      <tr><td>Can I use ITSM on mobile?</td><td>Yes — the responsive UI works on tablets and phones. Install as PWA for best experience.</td></tr>
+      <tr><td>How does AI auto-triage work?</td><td>AI analyzes ticket title, description, and context. It suggests priority, category, and assignee with a confidence score. Above 85% confidence, it auto-applies.</td></tr>
+      <tr><td>What happens to deleted tickets?</td><td>They move to the Recycle Bin and can be restored. Permanent deletion requires admin action.</td></tr>
+      <tr><td>How do I connect Zendesk?</td><td>Go to Admin Settings → Integrations → Zendesk. Enter subdomain and API token. See <a href="Integration-Guide.html">Integration Guide</a>.</td></tr>
+    </table>
+  </div>
+
+  <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
+  <div class="footer">VGC-ITSM User Guide · Version 2.0 · April 2026</div>
+</div>
+</body>
+</html>

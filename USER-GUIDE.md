@@ -1,7 +1,9 @@
 # VGC-ITSM User Guide
 
 **AI-Powered IT Service Management Platform**
-*Version 1.0 · April 2026*
+*Version 2.0 · April 2026*
+
+> **Full Documentation Portal:** See [docs/index.html](docs/index.html) for the complete v2.0 documentation suite including Architecture Guide, API Reference, Data Dictionary, Workflow Diagrams, Security & Compliance, Integration Guide, and AI Capabilities.
 
 ---
 

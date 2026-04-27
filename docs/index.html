@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM Documentation Portal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #1a237e, #0d47a1); color: white; padding: 50px 60px; text-align: center; }
+  .header h1 { font-size: 32px; font-weight: 300; letter-spacing: 2px; }
+  .header .subtitle { font-size: 16px; opacity: 0.8; margin-top: 8px; }
+  .header .version { display: inline-block; background: #4caf50; color: white; padding: 4px 20px; border-radius: 20px; font-size: 14px; margin-top: 16px; font-weight: 600; }
+  .container { max-width: 1100px; margin: 40px auto; padding: 0 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+  .card { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; color: inherit; display: block; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+  .card .icon { font-size: 28px; margin-bottom: 12px; }
+  .card h3 { font-size: 16px; font-weight: 600; color: #1a237e; margin-bottom: 6px; }
+  .card p { font-size: 13px; color: #666; }
+  .card .tag { display: inline-block; background: #e8eaf6; color: #1a237e; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-top: 8px; }
+  .section-title { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 1px; margin: 30px 0 16px; }
+  .footer { text-align: center; padding: 40px; color: #999; font-size: 12px; }
+</style>
+</head>
+<body data-version="2.0" data-doc="portal-index">
+
+<div class="header">
+  <h1>VGC-ITSM Documentation</h1>
+  <div class="subtitle">Comprehensive Knowledge Portal — All Phases</div>
+  <div class="version">Version 2.0</div>
+</div>
+
+<div class="container">
+
+  <div class="section-title">Core Documentation</div>
+  <div class="grid">
+    <a href="Architecture-Guide.html" class="card">
+      <div class="icon">🏗️</div>
+      <h3>Architecture Guide</h3>
+      <p>System overview, technology stack, architecture layers, deployment topology, and request pipeline.</p>
+      <span class="tag">7 Sections</span>
+    </a>
+    <a href="API-Reference.html" class="card">
+      <div class="icon">📡</div>
+      <h3>API Reference</h3>
+      <p>Complete REST API documentation — 250+ endpoints organized by domain with method badges.</p>
+      <span class="tag">25 Endpoint Groups</span>
+    </a>
+    <a href="User-Guide.html" class="card">
+      <div class="icon">📖</div>
+      <h3>User Guide</h3>
+      <p>End-to-end user documentation covering all Phase 1–5 features with step-by-step instructions.</p>
+      <span class="tag">25 Sections</span>
+    </a>
+    <a href="Release-Notes.html" class="card">
+      <div class="icon">📋</div>
+      <h3>Release Notes</h3>
+      <p>Full changelog — 52 feature steps across 5 development phases with cumulative test counts.</p>
+      <span class="tag">52 Steps</span>
+    </a>
+    <a href="Data-Dictionary.html" class="card">
+      <div class="icon">🗄️</div>
+      <h3>Data Dictionary</h3>
+      <p>All 67 collections with categories, schema reference, and database architecture.</p>
+      <span class="tag">67 Collections</span>
+    </a>
+  </div>
+
+  <div class="section-title">Specialized Guides</div>
+  <div class="grid">
+    <a href="Admin-Guide.html" class="card">
+      <div class="icon">⚙️</div>
+      <h3>Administrator Guide</h3>
+      <p>Setup, environment configuration, deployment, integration setup, and troubleshooting.</p>
+      <span class="tag">7 Sections</span>
+    </a>
+    <a href="Workflow-Diagrams.html" class="card">
+      <div class="icon">📊</div>
+      <h3>Workflow Diagrams</h3>
+      <p>Interactive Mermaid diagrams — incident lifecycle, change management, AI triage, SLA engine.</p>
+      <span class="tag">12 Diagrams</span>
+    </a>
+    <a href="Security-Compliance.html" class="card">
+      <div class="icon">🔒</div>
+      <h3>Security & Compliance</h3>
+      <p>Authentication, RBAC (11 roles), rate limiting, audit trail, and compliance evidence.</p>
+      <span class="tag">7 Sections</span>
+    </a>
+    <a href="Integration-Guide.html" class="card">
+      <div class="icon">🔗</div>
+      <h3>Integration Guide</h3>
+      <p>Zendesk, Entra ID, Teams, Azure OpenAI, CMDB discovery, and email-to-ticket setup.</p>
+      <span class="tag">8 Integrations</span>
+    </a>
+    <a href="AI-Capabilities.html" class="card">
+      <div class="icon">🤖</div>
+      <h3>AI Capabilities</h3>
+      <p>Three-tier Azure OpenAI architecture, 12 AI features, performance monitoring.</p>
+      <span class="tag">12 AI Features</span>
+    </a>
+  </div>
+
+  <div class="section-title">Reports</div>
+  <div class="grid">
+    <a href="UAT-Test-Report.html" class="card">
+      <div class="icon">✅</div>
+      <h3>UAT Test Report</h3>
+      <p>359 end-to-end test results across all development phases.</p>
+      <span class="tag">359 Tests</span>
+    </a>
+    <a href="VGC-ITSM-Presentation.html" class="card">
+      <div class="icon">📽️</div>
+      <h3>Presentation</h3>
+      <p>Executive overview presentation of the VGC-ITSM platform.</p>
+      <span class="tag">Slides</span>
+    </a>
+  </div>
+
+</div>
+
+<div class="footer">VGC-ITSM Documentation Portal · Version 2.0 · April 2026<br>10 docs · 67 collections · 250+ endpoints · 359 E2E tests</div>
+</body>
+</html>
