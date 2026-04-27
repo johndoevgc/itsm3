@@ -1868,10 +1868,10 @@ export default function ITSMApp() {
   // ─── Load server-side collections for admin ───────────────────────────
   useEffect(() => {
     if (adminTab === "slaCalendars") {
-      fetch("/api/sla/calendars", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setSlaCalendars(d.data || [])).catch(() => {});
+      fetch("/api/sla/calendars").then(r => r.json()).then(d => setSlaCalendars(d.data || [])).catch(() => {});
     }
     if (adminTab === "notifTemplates") {
-      fetch("/api/notification-templates", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setNotifTemplates(d.data || [])).catch(() => {});
+      fetch("/api/notification-templates").then(r => r.json()).then(d => setNotifTemplates(d.data || [])).catch(() => {});
     }
   }, [adminTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -14748,12 +14748,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#9BA3BF" }}>🔍 Audit Trail Integrity</h4>
               <button onClick={async () => {
                 try {
-                  const r = await fetch("/api/audit/verify-integrity", { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+                  const r = await fetch("/api/audit/verify-integrity");
                   const d = await r.json();
                   if (r.ok) {
-                    addToast(`Audit verified: ${d.verified} entries, ${d.gapCount} gaps. Chain hash: ${d.chainHash?.substring(0, 16)}...`, d.gapCount > 0 ? "warning" : "success");
-                  } else addToast(d.error, "error");
-                } catch (e) { addToast(e.message, "error"); }
+                    showToast(`Audit verified: ${d.verified} entries, ${d.gapCount} gaps. Chain hash: ${d.chainHash?.substring(0, 16)}...`, d.gapCount > 0 ? "warning" : "success");
+                  } else showToast(d.error, "error");
+                } catch (e) { showToast(e.message, "error"); }
               }} style={{ ...btnStyle("#1E6F50"), fontSize: 11, padding: "8px 16px" }}>Verify Audit Chain Integrity</button>
             </div>
           </div>
@@ -15420,9 +15420,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 const eventType = prompt("Event type (e.g. incident_created, sla_breach, escalation, assignment):", "incident_created");
                 const subject = prompt("Subject template (use {{id}}, {{title}}, {{priority}}):", "{{id}} - {{title}}");
                 const bodyTpl = prompt("Body template:", "Ticket {{id}} ({{priority}}) has been {{eventType}}. Title: {{title}}");
-                fetch("/api/notification-template", { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                fetch("/api/notification-template", { method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ name, eventType, subject, bodyTemplate: bodyTpl, channels: ["email", "inapp"], variables: ["id", "title", "priority", "eventType", "assignee"] })
-                }).then(r => r.json()).then(d => { if (d.success) { addToast("Template created", "success"); fetch("/api/notification-templates", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setNotifTemplates(d.data || [])); } else addToast(d.error, "error"); });
+                }).then(r => r.json()).then(d => { if (d.success) { showToast("Template created", "success"); fetch("/api/notification-templates").then(r => r.json()).then(d => setNotifTemplates(d.data || [])); } else showToast(d.error, "error"); });
               }} style={{ ...btnStyle("#00E5A0"), fontSize: 11, padding: "7px 16px" }}>+ New Template</button>}
             </div>
             <div style={{ color: "#5A6178", fontSize: 11, marginBottom: 16, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033" }}>
@@ -15439,8 +15439,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                     </div>
                     {isEditAdmin && <button onClick={() => {
                       if (!confirm(`Delete template "${tpl.name}"?`)) return;
-                      fetch(`/api/notification-template/${tpl.id}`, { method: "DELETE", headers: token ? { Authorization: `Bearer ${token}` } : {} })
-                        .then(r => r.json()).then(d => { if (d.success) { addToast("Deleted", "success"); fetch("/api/notification-templates", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setNotifTemplates(d.data || [])); } });
+                      fetch(`/api/notification-template/${tpl.id}`, { method: "DELETE" })
+                        .then(r => r.json()).then(d => { if (d.success) { showToast("Deleted", "success"); fetch("/api/notification-templates").then(r => r.json()).then(d => setNotifTemplates(d.data || [])); } });
                     }} style={{ ...btnStyle("#FF4444"), fontSize: 10, padding: "4px 10px" }}>Delete</button>}
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
@@ -16337,9 +16337,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 const startH = parseInt(prompt("Business hours start (0-23):", "9"), 10);
                 const endH = parseInt(prompt("Business hours end (0-23):", "18"), 10);
                 const days = prompt("Working days (e.g. Mon-Fri):", "Mon-Fri");
-                fetch("/api/sla/calendar", { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                fetch("/api/sla/calendar", { method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ name, timezone: tz, businessHours: { start: startH, end: endH, days } })
-                }).then(r => r.json()).then(d => { if (d.success) { addToast("Calendar created", "success"); fetch("/api/sla/calendars", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setSlaCalendars(d.data || [])); } else addToast(d.error, "error"); });
+                }).then(r => r.json()).then(d => { if (d.success) { showToast("Calendar created", "success"); fetch("/api/sla/calendars").then(r => r.json()).then(d => setSlaCalendars(d.data || [])); } else showToast(d.error, "error"); });
               }} style={{ ...btnStyle("#00E5A0"), fontSize: 11, padding: "7px 16px" }}>+ New Calendar</button>}
             </div>
             <div style={{ display: "grid", gap: 12 }}>
@@ -16353,8 +16353,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                     </div>
                     {isEditAdmin && <button onClick={() => {
                       if (!confirm(`Delete calendar "${cal.name}"?`)) return;
-                      fetch(`/api/sla/calendar/${cal.id}`, { method: "DELETE", headers: token ? { Authorization: `Bearer ${token}` } : {} })
-                        .then(r => r.json()).then(d => { if (d.success) { addToast("Deleted", "success"); fetch("/api/sla/calendars", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setSlaCalendars(d.data || [])); } });
+                      fetch(`/api/sla/calendar/${cal.id}`, { method: "DELETE" })
+                        .then(r => r.json()).then(d => { if (d.success) { showToast("Deleted", "success"); fetch("/api/sla/calendars").then(r => r.json()).then(d => setSlaCalendars(d.data || [])); } });
                     }} style={{ ...btnStyle("#FF4444"), fontSize: 10, padding: "4px 10px" }}>Delete</button>}
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 12, fontSize: 12 }}>

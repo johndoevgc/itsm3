@@ -349,7 +349,7 @@ async function main() {
   assert("CSAT AI analyze returns 200", csatAi.status === 200, `Status: ${csatAi.status}`);
 
   // 43. CSAT data in generic collection API
-  const csatColl = await getJson("/api/data/csat_responses");
+  const csatColl = await getJson("/api/db/csat_responses");
   assert("CSAT collection accessible via /api/data", csatColl.status === 200, `Status: ${csatColl.status}`);
 
   // ─── Phase 8: Change Calendar Engine ──────────────────────────────
@@ -427,8 +427,8 @@ async function main() {
   assert("Freeze window no longer in list", !(freezeListAfter.json.freezeWindows?.some(fw => fw.id === freezeId) ?? false), `still present: ${freezeListAfter.json.freezeWindows?.some(fw => fw.id === freezeId) ?? 'N/A'}`);
 
   // 55. Calendar data via generic collection API
-  const fwColl = await getJson("/api/data/change_freeze_windows");
-  assert("Freeze windows collection accessible via /api/data", fwColl.status === 200, `Status: ${fwColl.status}`);
+  const fwColl = await getJson("/api/db/change_freeze_windows");
+  assert("Freeze windows collection accessible via /api/db", fwColl.status === 200, `Status: ${fwColl.status}`);
 
   // ─── Phase 9: AI Learning Dashboard ──────────────────────────────
   console.log("--- Phase 9: AI Learning Dashboard ---");
@@ -502,8 +502,8 @@ async function main() {
   assert("Model health has trend", healthRes.json.trend !== undefined, `Missing trend`);
 
   // 79. AI learning feedback collection accessible via generic API
-  const alColl = await getJson("/api/data/ai_learning_feedback");
-  assert("AI learning feedback collection accessible via /api/data", alColl.status === 200, `Status: ${alColl.status}`);
+  const alColl = await getJson("/api/db/ai_learning_feedback");
+  assert("AI learning feedback collection accessible via /api/db", alColl.status === 200, `Status: ${alColl.status}`);
 
   // 80. POST feedback with corrections
   const fbCorrRes = await postJson("/api/ai/learning/feedback", { triageId: "TEST-TRIAGE-002", verdict: "incorrect", notes: "Wrong category", correctedCategory: "Security", correctedPriority: "Sev-A" });

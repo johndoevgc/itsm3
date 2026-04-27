@@ -1586,7 +1586,7 @@ async function processInboundEmails() {
           try {
             const sentimentPrompt = `Analyze the sentiment and urgency of this IT support email. Return JSON ONLY (no markdown): { "sentiment": "positive|neutral|frustrated|angry", "urgencyScore": 0-100, "emotionalTone": "brief description", "shouldEscalate": true/false }. Only set shouldEscalate=true if sentiment is "frustrated" or "angry" AND urgencyScore >= 80.`;
             const sentPayload = {
-              model: getAIModel("nano"),
+              model: getAIModel("tertiary"),
               input: [{ role: "system", content: sentimentPrompt }, { role: "user", content: `Subject: ${subject}\n\n${description.substring(0, 1000)}` }],
               max_output_tokens: 200
             };
@@ -5187,6 +5187,9 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
   // ─── Azure OpenAI — Save Settings (runtime) ─────────────────────────
   if (pathname === "/api/settings/openai" && req.method === "POST") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required to modify OpenAI settings" });
+    }
     const body = await parseBody(req);
     const { endpoint, apiKey, model } = body || {};
     if (endpoint) AZURE_OPENAI_ENDPOINT = endpoint;
@@ -5208,6 +5211,9 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
   // ─── SolarWinds RMM — Save Settings ────────────────────────────────
   if (pathname === "/api/settings/solarwinds" && req.method === "POST") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required to modify SolarWinds settings" });
+    }
     const body = await parseBody(req);
     const { apiKey, apiHost } = body || {};
     if (!apiKey) return json(res, 400, { ok: false, detail: "API key is required" });
@@ -7792,11 +7798,12 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     // AI sentiment analysis on comment (if comment provided and AI enabled)
     if (response.comment && AZURE_OPENAI_ENDPOINT && AZURE_OPENAI_KEY) {
       try {
-        const sentimentResult = await callAzureOpenAI([
-          { role: "system", content: "Analyze the sentiment of this customer feedback comment. Return ONLY a JSON object: {\"sentiment\": \"positive\"|\"neutral\"|\"negative\", \"keywords\": [\"word1\",\"word2\"], \"summary\": \"one sentence summary\"}" },
-          { role: "user", content: response.comment },
-        ], { model: "nano", max_tokens: 150 });
-        const parsed = JSON.parse(sentimentResult.replace(/```json\n?|```/g, "").trim());
+        const sentimentResult = await callAI(
+          "Analyze the sentiment of this customer feedback comment. Return ONLY a JSON object: {\"sentiment\": \"positive\"|\"neutral\"|\"negative\", \"keywords\": [\"word1\",\"word2\"], \"summary\": \"one sentence summary\"}",
+          response.comment,
+          { tier: "tertiary", maxTokens: 150 }
+        );
+        const parsed = JSON.parse(sentimentResult.text.replace(/```json\n?|```/g, "").trim());
         response.sentiment = parsed.sentiment || null;
         response.keywords = parsed.keywords || [];
         response.aiSummary = parsed.summary || "";
@@ -7887,8 +7894,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
 
     const summary = responses.slice(-50).map(r => `${r.ticketId}: ${r.rating}/5 [${r.category}] ${r.agentName} — "${(r.comment || "no comment").substring(0, 100)}"`).join("\n");
     try {
-      const aiResult = await callAzureOpenAI([
-        { role: "system", content: `You are a customer experience analytics expert for an IT service desk (VGC Technology, Singapore). Analyze CSAT survey data and provide insights. Return ONLY a JSON object:
+      const aiResult = await callAI(`You are a customer experience analytics expert for an IT service desk (VGC Technology, Singapore). Analyze CSAT survey data and provide insights. Return ONLY a JSON object:
 {
   "overallAssessment": "brief paragraph",
   "topStrengths": ["strength1", "strength2"],
@@ -7897,10 +7903,11 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   "categoryInsights": [{"category": "name", "insight": "observation"}],
   "recommendations": [{"priority": "high|medium|low", "action": "what to do", "impact": "expected result"}],
   "riskAlerts": ["any concerning patterns"]
-}` },
-        { role: "user", content: `Analyze these ${responses.length} CSAT responses:\n${summary}` },
-      ], { model: "mini", max_tokens: 1200 });
-      const parsed = JSON.parse(aiResult.replace(/```json\n?|```/g, "").trim());
+}`,
+        `Analyze these ${responses.length} CSAT responses:\n${summary}`,
+        { tier: "secondary", maxTokens: 1200 }
+      );
+      const parsed = JSON.parse(aiResult.text.replace(/```json\n?|```/g, "").trim());
       return json(res, 200, { success: true, analysis: parsed, responseCount: responses.length });
     } catch (err) {
       console.error("[CSAT AI Analysis]", err.message);
@@ -7909,7 +7916,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   }
 
   // ── POST /api/incidents/merge — Merge duplicate incidents into a primary ──
-  if (pathname === "/api/incidents/merge" && method === "POST") {
+  if (pathname === "/api/incidents/merge" && req.method === "POST") {
     try {
       const body = await parseBody(req);
       const { primaryId, duplicateIds, mergedBy } = body;
@@ -7917,14 +7924,14 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
         return json(res, 400, { error: "primaryId and duplicateIds[] required" });
       }
       // Load primary
-      const primaryRow = await db.get("incidents", primaryId);
+      const primaryRow = await db.getOne("incidents", primaryId);
       if (!primaryRow) return json(res, 404, { error: `Primary incident ${primaryId} not found` });
       const primary = typeof primaryRow === "string" ? JSON.parse(primaryRow) : primaryRow;
 
       const mergedIds = [];
       for (const dupId of duplicateIds) {
         if (dupId === primaryId) continue;
-        const dupRow = await db.get("incidents", dupId);
+        const dupRow = await db.getOne("incidents", dupId);
         if (!dupRow) continue;
         const dup = typeof dupRow === "string" ? JSON.parse(dupRow) : dupRow;
 
@@ -7973,7 +7980,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   }
 
   // ── GET /api/incidents/duplicates — Scan for potential duplicate groups ──
-  if (pathname === "/api/incidents/duplicates" && method === "GET") {
+  if (pathname === "/api/incidents/duplicates" && req.method === "GET") {
     try {
       const allIncidents = await db.getAll("incidents");
       const openIncidents = allIncidents.filter(i => !["Closed", "Resolved"].includes(i.status));
@@ -8066,7 +8073,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   }
 
   // ── POST /api/incidents/dedup-by-zdticketid — Auto-merge zdTicketId duplicates ──
-  if (pathname === "/api/incidents/dedup-by-zdticketid" && method === "POST") {
+  if (pathname === "/api/incidents/dedup-by-zdticketid" && req.method === "POST") {
     try {
       const allIncidents = await db.getAll("incidents");
       const zdMap = new Map();
@@ -8132,7 +8139,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   }
 
   // ── Dedup scan — one-time scan to find and flag existing duplicate incidents ──
-  if (pathname === "/api/incidents/dedup-scan" && method === "POST") {
+  if (pathname === "/api/incidents/dedup-scan" && req.method === "POST") {
     try {
       const allIncidents = await db.getAll("incidents");
       const emailIncidents = allIncidents.filter(i => i.source === "email" && !["Closed", "Resolved"].includes(i.status));
@@ -8582,7 +8589,7 @@ Respond ONLY with valid JSON:
 
             // Apply resolution to incident (close it silently)
             try {
-              const incRow = await db.get("incidents", inc.id);
+              const incRow = await db.getOne("incidents", inc.id);
               if (incRow) {
                 const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
                 liveInc.status = "Closed";
@@ -8613,7 +8620,7 @@ Respond ONLY with valid JSON:
               suggestion.approvedBy = "AI Pipeline (PROD_TEST_MODE)";
               suggestion.approvedAt = new Date().toISOString();
 
-              const incRow = await db.get("incidents", inc.id);
+              const incRow = await db.getOne("incidents", inc.id);
               if (incRow) {
                 const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
                 liveInc.status = suggestion.suggestedStatus || "Resolved";
@@ -8839,7 +8846,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
 
             // Also close the incident silently
             try {
-              const incRow = await db.get("incidents", item.incidentId);
+              const incRow = await db.getOne("incidents", item.incidentId);
               if (incRow) {
                 const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
                 if (liveInc && !["Closed", "Resolved"].includes(liveInc.status)) {
@@ -9461,7 +9468,7 @@ Respond in JSON ONLY:
               wfAction.approvedAt = new Date().toISOString();
 
               // Execute action on incident
-              const incRow = await db.get("incidents", inc.id);
+              const incRow = await db.getOne("incidents", inc.id);
               if (incRow) {
                 const liveInc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
                 liveInc.activityLog = liveInc.activityLog || [];
@@ -10493,7 +10500,7 @@ async function start() {
 
     // Seed enterprise KB documentation articles if KB0010 doesn't exist
     try {
-      const kb10 = await db.get("kb", "KB0010");
+      const kb10 = await db.getOne("kb", "KB0010");
       if (!kb10) {
         const enterpriseKB = require("./kb-enterprise-articles.json");
         for (const kb of enterpriseKB) {
