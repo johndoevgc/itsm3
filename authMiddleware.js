@@ -134,6 +134,7 @@ const COLLECTION_TO_MODULE = {
   zendesk_tickets: "incidents", zendesk_users: "admin", zendesk_orgs: "customers",
   zendesk_sync_state: "admin", zendesk_comments: "incidents",
   ai_actions: "ai", ai_triage_history: "ai", ai_briefings: "ai", ai_patterns: "ai",
+  sla_calendars: "sla", notification_templates: "admin", i18n_packs: "admin",
 };
 
 // Map HTTP methods to required permission levels
@@ -186,17 +187,18 @@ const rateLimitStore = new Map(); // IP -> { count, resetAt }
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 const RATE_LIMIT_MAX = 300; // 300 requests per minute per IP
 const RATE_LIMIT_MAX_WRITE = 60; // 60 write requests per minute per IP
+const RATE_LIMIT_MAX_AI = 30; // 30 AI requests per minute per IP
 
-function checkRateLimit(ip, isWrite) {
+function checkRateLimit(ip, isWrite, isAI) {
   const now = Date.now();
-  const key = `${ip}:${isWrite ? "w" : "r"}`;
+  const key = `${ip}:${isAI ? "ai" : isWrite ? "w" : "r"}`;
   let entry = rateLimitStore.get(key);
   if (!entry || now > entry.resetAt) {
     entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
     rateLimitStore.set(key, entry);
   }
   entry.count++;
-  const limit = isWrite ? RATE_LIMIT_MAX_WRITE : RATE_LIMIT_MAX;
+  const limit = isAI ? RATE_LIMIT_MAX_AI : isWrite ? RATE_LIMIT_MAX_WRITE : RATE_LIMIT_MAX;
   return { allowed: entry.count <= limit, remaining: Math.max(0, limit - entry.count), resetAt: entry.resetAt };
 }
 
@@ -233,7 +235,8 @@ async function authMiddleware(req, res, pathname, tenantId, clientId) {
   // Rate limiting
   const clientIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
   const isWrite = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
-  const rateResult = checkRateLimit(clientIP, isWrite);
+  const isAI = pathname.startsWith("/api/ai/") || pathname.startsWith("/api/ai-");
+  const rateResult = checkRateLimit(clientIP, isWrite, isAI);
   if (!rateResult.allowed) {
     res.writeHead(429, {
       "Content-Type": "application/json",

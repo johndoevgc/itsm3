@@ -1048,6 +1048,9 @@ const VALID_COLLECTIONS = new Set([
   "custom_fields",
   "contracts",
   "automation_rules",
+  "sla_calendars",
+  "notification_templates",
+  "i18n_packs",
 ]);
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
@@ -1705,6 +1708,8 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://login.microsoftonline.com https://alcdn.msauth.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://*.azure.com https://*.cognitiveservices.azure.com; frame-src https://login.microsoftonline.com;");
 
   const urlObj = new URL(req.url, `http://localhost:${PORT}`);
@@ -2428,6 +2433,136 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // ─── SLA Business Calendar & Holiday Management ──────────────────────
+  if (pathname === "/api/sla/calendars" && req.method === "GET") {
+    try {
+      const data = dbParseAll(await db.getAll("sla_calendars"));
+      return json(res, 200, { data, count: data.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/sla/calendar" && req.method === "POST") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
+    try {
+      const body = await readBody(req);
+      if (!body.name) return json(res, 400, { error: "Calendar name required" });
+      const calId = body.id || `CAL-${Date.now().toString(36)}`;
+      const calendar = { id: calId, name: body.name, timezone: body.timezone || "Asia/Singapore", businessHours: body.businessHours || { start: 9, end: 18, days: "Mon-Fri" }, holidays: body.holidays || [], isDefault: body.isDefault || false, createdAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
+      await db.upsert("sla_calendars", calId, JSON.stringify(calendar));
+      await db.audit("sla_calendars", calId, body.id ? "update" : "create", JSON.stringify(calendar), authResult.user?.email || "system");
+      return json(res, 200, { success: true, calendar });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname.match(/^\/api\/sla\/calendar\/[^/]+$/) && req.method === "DELETE") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
+    try {
+      const calId = pathname.split("/").pop();
+      await db.deleteOne("sla_calendars", calId);
+      await db.audit("sla_calendars", calId, "delete", null, authResult.user?.email || "system");
+      return json(res, 200, { success: true });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Notification Template Management ─────────────────────────────────
+  if (pathname === "/api/notification-templates" && req.method === "GET") {
+    try {
+      const data = dbParseAll(await db.getAll("notification_templates"));
+      return json(res, 200, { data, count: data.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/notification-template" && req.method === "POST") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin", "Service Desk Lead"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
+    try {
+      const body = await readBody(req);
+      if (!body.name || !body.eventType) return json(res, 400, { error: "name and eventType required" });
+      const tplId = body.id || `TPL-${Date.now().toString(36)}`;
+      const template = { id: tplId, name: body.name, eventType: body.eventType, channels: body.channels || ["email", "inapp"], subject: body.subject || "", bodyTemplate: body.bodyTemplate || "", variables: body.variables || [], active: body.active !== false, createdAt: body.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
+      await db.upsert("notification_templates", tplId, JSON.stringify(template));
+      await db.audit("notification_templates", tplId, body.id ? "update" : "create", JSON.stringify(template), authResult.user?.email || "system");
+      return json(res, 200, { success: true, template });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname.match(/^\/api\/notification-template\/[^/]+$/) && req.method === "DELETE") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
+    try {
+      const tplId = pathname.split("/").pop();
+      await db.deleteOne("notification_templates", tplId);
+      await db.audit("notification_templates", tplId, "delete", null, authResult.user?.email || "system");
+      return json(res, 200, { success: true });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Report Export API (CSV/JSON) ─────────────────────────────────────
+  if (pathname === "/api/reports/export" && req.method === "GET") {
+    try {
+      const collection = urlObj.searchParams.get("collection");
+      const format = urlObj.searchParams.get("format") || "csv";
+      const from = urlObj.searchParams.get("from");
+      const to = urlObj.searchParams.get("to");
+      if (!collection || !VALID_COLLECTIONS.has(collection)) return json(res, 400, { error: "Invalid collection" });
+      let rows = dbParseAll(await db.getAll(collection));
+      if (from) rows = rows.filter(r => (r.createdAt || r.created_at || "") >= from);
+      if (to) rows = rows.filter(r => (r.createdAt || r.created_at || "") <= (to.length === 10 ? to + "T23:59:59Z" : to));
+      if (format === "csv") {
+        if (rows.length === 0) { res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${collection}_export.csv"` }); return res.end("No data"); }
+        const fields = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(f => typeof rows[0][f] !== "object");
+        const escCsv = (v) => { const s = String(v ?? ""); return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s; };
+        const csvLines = [fields.join(","), ...rows.map(r => fields.map(f => escCsv(r[f])).join(","))];
+        res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${collection}_export.csv"` });
+        return res.end(csvLines.join("\n"));
+      }
+      return json(res, 200, { data: rows, count: rows.length });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── Audit Trail Integrity Verification ───────────────────────────────
+  if (pathname === "/api/audit/verify-integrity" && req.method === "GET") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
+    try {
+      const rows = await db.getAllAudit(10000);
+      rows.sort((a, b) => a.id - b.id);
+      let prevHash = "GENESIS";
+      let verified = 0, gaps = [];
+      for (let i = 0; i < rows.length; i++) {
+        const entry = rows[i];
+        const content = `${entry.id}|${entry.collection}|${entry.record_id}|${entry.action}|${entry.user_name}|${entry.timestamp}`;
+        const hash = crypto.createHash("sha256").update(prevHash + "|" + content).digest("hex");
+        prevHash = hash;
+        verified++;
+        if (i > 0 && entry.id !== rows[i - 1].id + 1) gaps.push({ after: rows[i - 1].id, before: entry.id });
+      }
+      return json(res, 200, { totalEntries: rows.length, verified, gaps, gapCount: gaps.length, chainHash: prevHash, verifiedAt: new Date().toISOString() });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── i18n Language Pack API ───────────────────────────────────────────
+  if (pathname === "/api/i18n/languages" && req.method === "GET") {
+    return json(res, 200, { data: [
+      { code: "en", name: "English", isDefault: true },
+      { code: "zh", name: "中文 (Chinese)" },
+      { code: "ms", name: "Bahasa Melayu (Malay)" },
+      { code: "ja", name: "日本語 (Japanese)" },
+      { code: "th", name: "ไทย (Thai)" },
+    ]});
+  }
+  if (pathname.match(/^\/api\/i18n\/pack\/[a-z]{2}$/) && req.method === "GET") {
+    try {
+      const lang = pathname.split("/").pop();
+      const row = await db.getOne("i18n_packs", lang);
+      if (row) return json(res, 200, JSON.parse(row.data));
+      return json(res, 200, { lang, strings: {} });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/i18n/pack" && req.method === "POST") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
+    try {
+      const body = await readBody(req);
+      if (!body.lang || !body.strings) return json(res, 400, { error: "lang and strings required" });
+      await db.upsert("i18n_packs", body.lang, JSON.stringify(body));
+      await db.audit("i18n_packs", body.lang, "update", JSON.stringify({ lang: body.lang, keyCount: Object.keys(body.strings).length }), authResult.user?.email || "system");
+      return json(res, 200, { success: true });
+    } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
   // ─── DB Stats ─────────────────────────────────────────────────────────

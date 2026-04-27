@@ -1865,6 +1865,16 @@ export default function ITSMApp() {
   useEffect(() => { _save("vgc_sla_policy", slaPolicy); }, [slaPolicy]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_notif_channels", notifChannels); }, [notifChannels]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ─── Load server-side collections for admin ───────────────────────────
+  useEffect(() => {
+    if (adminTab === "slaCalendars") {
+      fetch("/api/sla/calendars", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setSlaCalendars(d.data || [])).catch(() => {});
+    }
+    if (adminTab === "notifTemplates") {
+      fetch("/api/notification-templates", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setNotifTemplates(d.data || [])).catch(() => {});
+    }
+  }, [adminTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Global Keyboard Shortcuts ──────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -2131,6 +2141,10 @@ export default function ITSMApp() {
   const [contracts, setContracts] = useState(() => _ls("vgc_contracts", []));
   // ─── Automation Rules State ──────────────────────────────────────────
   const [automationRules, setAutomationRules] = useState(() => _ls("vgc_automation_rules", []));
+  // ─── SLA Calendars State ──────────────────────────────────────────────
+  const [slaCalendars, setSlaCalendars] = useState([]);
+  // ─── Notification Templates State ─────────────────────────────────────
+  const [notifTemplates, setNotifTemplates] = useState([]);
   // ─── AI Customer Survey State ───────────────────────────────────────────
   const [surveyDraft, setSurveyDraft] = useState(null); // { incidentId, subject, body, recipient, status: "draft"|"sent" }
   const [surveyDrafts, setSurveyDrafts] = useState([]);
@@ -12080,6 +12094,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       { id: "audit", label: "Audit Log", icon: "📜" },
       { section: "POLICIES" },
       { id: "slaPolicy", label: "SLA Policy", icon: "⏱️" },
+      { id: "slaCalendars", label: "SLA Calendars", icon: "📅" },
       { id: "businessImpact", label: "Impact", icon: "💰" },
       { id: "escalation", label: "Escalation", icon: "📞", devOnly: true },
       { id: "customFields", label: "Custom Fields", icon: "🏷️" },
@@ -12087,12 +12102,14 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       { id: "automationRules", label: "Automation Rules", icon: "⚡" },
       { section: "COMMUNICATIONS" },
       { id: "notifications", label: "Notifications", icon: "🔔" },
+      { id: "notifTemplates", label: "Templates", icon: "📋" },
       { id: "smtp", label: "Email / SMTP", icon: "📧", devOnly: true },
       { id: "emailWhitelist", label: "Whitelist", icon: "📨", devOnly: true },
       { section: "DATA & OPS" },
       { id: "migration", label: "Import", icon: "📦", devOnly: true },
       { id: "dataMaintenance", label: "Maintenance", icon: "🧹", devOnly: true },
       { id: "reportSchedules", label: "Reports", icon: "📅" },
+      { id: "reportExport", label: "Export", icon: "📤" },
       { section: "SYSTEM" },
       { id: "infrastructure", label: "Infrastructure & Cloud", icon: "☁️", devOnly: true },
       { id: "vendors", label: "Vendors", icon: "📇" },
@@ -14702,6 +14719,46 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           );
         })()}
 
+        {/* Report Export */}
+        {activeTab === "reportExport" && (
+          <div>
+            <h3 style={{ margin: "0 0 20px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📤 Data Export</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+              {["incidents", "problems", "changes", "requests", "assets", "kb", "customers", "contracts", "services"].map(col => (
+                <div key={col} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 8, textTransform: "capitalize" }}>{col}</div>
+                  <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 12 }}>Export all records</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => {
+                      window.open(`/api/reports/export?collection=${col}&format=csv`, "_blank");
+                    }} style={{ ...btnStyle("#1E6F50"), fontSize: 10, padding: "5px 12px", flex: 1 }}>CSV</button>
+                    <button onClick={() => {
+                      fetch(`/api/reports/export?collection=${col}&format=json`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                        .then(r => r.json()).then(d => {
+                          const blob = new Blob([JSON.stringify(d.data, null, 2)], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a"); a.href = url; a.download = `${col}_export.json`; a.click(); URL.revokeObjectURL(url);
+                        });
+                    }} style={{ ...btnStyle("#1E3A6F"), fontSize: 10, padding: "5px 12px", flex: 1 }}>JSON</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 24, padding: 16, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213033" }}>
+              <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#9BA3BF" }}>🔍 Audit Trail Integrity</h4>
+              <button onClick={async () => {
+                try {
+                  const r = await fetch("/api/audit/verify-integrity", { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+                  const d = await r.json();
+                  if (r.ok) {
+                    addToast(`Audit verified: ${d.verified} entries, ${d.gapCount} gaps. Chain hash: ${d.chainHash?.substring(0, 16)}...`, d.gapCount > 0 ? "warning" : "success");
+                  } else addToast(d.error, "error");
+                } catch (e) { addToast(e.message, "error"); }
+              }} style={{ ...btnStyle("#1E6F50"), fontSize: 11, padding: "8px 16px" }}>Verify Audit Chain Integrity</button>
+            </div>
+          </div>
+        )}
+
         {/* Infrastructure & Cloud — Merged Azure Topology, Cost & Operations */}
         {activeTab === "infrastructure" && (
           <div>
@@ -15345,6 +15402,52 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                       <span key={j} style={{ padding: "1px 5px", borderRadius: 3, background: ch === "Teams" ? "#6366F118" : "#1E2130", color: ch === "Teams" ? "#6366F1" : "#A0AEC0", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>{ch}</span>
                     ))}
                     <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: 4 }}>{r.delay}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Notification Templates */}
+        {activeTab === "notifTemplates" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📋 Notification Templates</h3>
+              {isEditAdmin && <button onClick={() => {
+                const name = prompt("Template name:");
+                if (!name) return;
+                const eventType = prompt("Event type (e.g. incident_created, sla_breach, escalation, assignment):", "incident_created");
+                const subject = prompt("Subject template (use {{id}}, {{title}}, {{priority}}):", "{{id}} - {{title}}");
+                const bodyTpl = prompt("Body template:", "Ticket {{id}} ({{priority}}) has been {{eventType}}. Title: {{title}}");
+                fetch("/api/notification-template", { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                  body: JSON.stringify({ name, eventType, subject, bodyTemplate: bodyTpl, channels: ["email", "inapp"], variables: ["id", "title", "priority", "eventType", "assignee"] })
+                }).then(r => r.json()).then(d => { if (d.success) { addToast("Template created", "success"); fetch("/api/notification-templates", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setNotifTemplates(d.data || [])); } else addToast(d.error, "error"); });
+              }} style={{ ...btnStyle("#00E5A0"), fontSize: 11, padding: "7px 16px" }}>+ New Template</button>}
+            </div>
+            <div style={{ color: "#5A6178", fontSize: 11, marginBottom: 16, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033" }}>
+              Use template variables: <code style={{ color: "#00E5A0" }}>{"{{id}}, {{title}}, {{priority}}, {{assignee}}, {{status}}, {{eventType}}"}</code>
+            </div>
+            <div style={{ display: "grid", gap: 12 }}>
+              {notifTemplates.length === 0 && <div style={{ color: "#5A6178", textAlign: "center", padding: 40 }}>No templates configured. Default system templates will be used.</div>}
+              {notifTemplates.map(tpl => (
+                <div key={tpl.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4" }}>{tpl.name}</span>
+                      <span style={{ fontSize: 10, color: tpl.active ? "#00E5A0" : "#FF6B6B", background: tpl.active ? "#0D2D1A" : "#2D0D0D", padding: "2px 8px", borderRadius: 4 }}>{tpl.active ? "Active" : "Inactive"}</span>
+                    </div>
+                    {isEditAdmin && <button onClick={() => {
+                      if (!confirm(`Delete template "${tpl.name}"?`)) return;
+                      fetch(`/api/notification-template/${tpl.id}`, { method: "DELETE", headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                        .then(r => r.json()).then(d => { if (d.success) { addToast("Deleted", "success"); fetch("/api/notification-templates", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setNotifTemplates(d.data || [])); } });
+                    }} style={{ ...btnStyle("#FF4444"), fontSize: 10, padding: "4px 10px" }}>Delete</button>}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+                    <div><span style={{ color: "#5A6178" }}>Event:</span> <span style={{ color: "#FF9800" }}>{tpl.eventType}</span></div>
+                    <div><span style={{ color: "#5A6178" }}>Channels:</span> <span style={{ color: "#9BA3BF" }}>{(tpl.channels || []).join(", ")}</span></div>
+                    <div style={{ gridColumn: "1/-1" }}><span style={{ color: "#5A6178" }}>Subject:</span> <span style={{ color: "#9BA3BF" }}>{tpl.subject}</span></div>
+                    <div style={{ gridColumn: "1/-1" }}><span style={{ color: "#5A6178" }}>Body:</span> <span style={{ color: "#9BA3BF", fontSize: 11 }}>{(tpl.bodyTemplate || "").substring(0, 200)}{(tpl.bodyTemplate || "").length > 200 ? "..." : ""}</span></div>
                   </div>
                 </div>
               ))}
@@ -16219,6 +16322,58 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* SLA Business Calendars */}
+        {activeTab === "slaCalendars" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📅 SLA Business Calendars</h3>
+              {isEditAdmin && <button onClick={() => {
+                const name = prompt("Calendar name:");
+                if (!name) return;
+                const tz = prompt("Timezone (e.g. Asia/Singapore):", "Asia/Singapore");
+                const startH = parseInt(prompt("Business hours start (0-23):", "9"), 10);
+                const endH = parseInt(prompt("Business hours end (0-23):", "18"), 10);
+                const days = prompt("Working days (e.g. Mon-Fri):", "Mon-Fri");
+                fetch("/api/sla/calendar", { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                  body: JSON.stringify({ name, timezone: tz, businessHours: { start: startH, end: endH, days } })
+                }).then(r => r.json()).then(d => { if (d.success) { addToast("Calendar created", "success"); fetch("/api/sla/calendars", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setSlaCalendars(d.data || [])); } else addToast(d.error, "error"); });
+              }} style={{ ...btnStyle("#00E5A0"), fontSize: 11, padding: "7px 16px" }}>+ New Calendar</button>}
+            </div>
+            <div style={{ display: "grid", gap: 12 }}>
+              {slaCalendars.length === 0 && <div style={{ color: "#5A6178", textAlign: "center", padding: 40 }}>No calendars configured. Using default (Mon-Fri 9:00-18:00 SGT).</div>}
+              {slaCalendars.map(cal => (
+                <div key={cal.id} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4" }}>{cal.name}</span>
+                      {cal.isDefault && <span style={{ marginLeft: 8, fontSize: 10, color: "#00E5A0", background: "#0D2D1A", padding: "2px 8px", borderRadius: 4 }}>DEFAULT</span>}
+                    </div>
+                    {isEditAdmin && <button onClick={() => {
+                      if (!confirm(`Delete calendar "${cal.name}"?`)) return;
+                      fetch(`/api/sla/calendar/${cal.id}`, { method: "DELETE", headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                        .then(r => r.json()).then(d => { if (d.success) { addToast("Deleted", "success"); fetch("/api/sla/calendars", { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.json()).then(d => setSlaCalendars(d.data || [])); } });
+                    }} style={{ ...btnStyle("#FF4444"), fontSize: 10, padding: "4px 10px" }}>Delete</button>}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 12, fontSize: 12 }}>
+                    <div><span style={{ color: "#5A6178" }}>Timezone:</span> <span style={{ color: "#9BA3BF" }}>{cal.timezone}</span></div>
+                    <div><span style={{ color: "#5A6178" }}>Hours:</span> <span style={{ color: "#9BA3BF" }}>{cal.businessHours?.start || 9}:00 - {cal.businessHours?.end || 18}:00</span></div>
+                    <div><span style={{ color: "#5A6178" }}>Days:</span> <span style={{ color: "#9BA3BF" }}>{cal.businessHours?.days || "Mon-Fri"}</span></div>
+                  </div>
+                  {cal.holidays && cal.holidays.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <span style={{ fontSize: 11, color: "#5A6178" }}>Holidays ({cal.holidays.length}):</span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {cal.holidays.slice(0, 10).map((h, i) => <span key={i} style={{ fontSize: 10, color: "#FF9800", background: "#1A1200", padding: "2px 8px", borderRadius: 4 }}>{typeof h === "string" ? h : h.date} {h.name ? `- ${h.name}` : ""}</span>)}
+                        {cal.holidays.length > 10 && <span style={{ fontSize: 10, color: "#5A6178" }}>+{cal.holidays.length - 10} more</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
