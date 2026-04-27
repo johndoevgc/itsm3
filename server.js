@@ -7561,9 +7561,108 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
           });
         }
       }
+
+      // ── Second pass: zdTicketId-based duplicate detection (definite duplicates) ──
+      const zdMap = new Map(); // zdTicketId → [incidents]
+      for (const inc of allIncidents) {
+        if (inc.zdTicketId) {
+          const key = String(inc.zdTicketId);
+          if (!zdMap.has(key)) zdMap.set(key, []);
+          zdMap.get(key).push(inc);
+        }
+      }
+      const visitedZdGroups = new Set();
+      for (const [zdId, zdIncs] of zdMap) {
+        if (zdIncs.length < 2) continue;
+        // Skip if all incidents in this group are already in a subject-similarity group
+        const allAlreadyGrouped = zdIncs.every(i => visited.has(i.id));
+        if (allAlreadyGrouped) continue;
+        // Sort: oldest first as primary
+        zdIncs.sort((a, b) => new Date(a.createdAt || a.created || 0) - new Date(b.createdAt || b.created || 0));
+        groups.push({
+          suggestedPrimary: zdIncs[0].id,
+          type: "zdTicketId_match",
+          zdTicketId: zdId,
+          incidents: zdIncs.map(inc => ({
+            id: inc.id, title: inc.title, status: inc.status, priority: inc.priority,
+            reporter: inc.reporterName || inc.reporterEmail || inc.reporter, reporterEmail: inc.reporterEmail,
+            createdAt: inc.createdAt, source: inc.source, category: inc.category,
+            activityCount: Array.isArray(inc.activityLog) ? inc.activityLog.length : 0,
+          })),
+          similarity: 100,
+          reporter: zdIncs[0].reporterEmail || zdIncs[0].reporter,
+        });
+      }
+
       return json(res, 200, { scanned: openIncidents.length, groupsFound: groups.length, groups });
     } catch (err) {
       return json(res, 500, { error: "Duplicate scan failed", details: err.message });
+    }
+  }
+
+  // ── POST /api/incidents/dedup-by-zdticketid — Auto-merge zdTicketId duplicates ──
+  if (pathname === "/api/incidents/dedup-by-zdticketid" && method === "POST") {
+    try {
+      const allIncidents = await db.getAll("incidents");
+      const zdMap = new Map();
+      for (const inc of allIncidents) {
+        if (inc.zdTicketId) {
+          const key = String(inc.zdTicketId);
+          if (!zdMap.has(key)) zdMap.set(key, []);
+          zdMap.get(key).push(inc);
+        }
+      }
+      let totalMerged = 0;
+      const mergedGroups = [];
+      for (const [zdId, zdIncs] of zdMap) {
+        if (zdIncs.length < 2) continue;
+        // Keep oldest as primary
+        zdIncs.sort((a, b) => new Date(a.createdAt || a.created || 0) - new Date(b.createdAt || b.created || 0));
+        const primary = zdIncs[0];
+        const duplicateIds = zdIncs.slice(1).map(i => i.id);
+
+        // Merge activity logs from duplicates into primary
+        if (!Array.isArray(primary.activityLog)) primary.activityLog = [];
+        for (const dup of zdIncs.slice(1)) {
+          const dupLogs = Array.isArray(dup.activityLog) ? dup.activityLog : [];
+          for (const log of dupLogs) {
+            primary.activityLog.push({ ...log, detail: `[Merged from ${dup.id}] ${log.detail || ""}` });
+          }
+          // Close the duplicate
+          dup.status = "Closed";
+          dup.duplicateOf = primary.id;
+          dup.updatedAt = new Date().toISOString();
+          if (!Array.isArray(dup.activityLog)) dup.activityLog = [];
+          dup.activityLog.push({
+            id: `AL-ZDDEDUP-${Date.now()}-${dup.id}`,
+            type: "merged",
+            user: "ZD Dedup Engine",
+            time: new Date().toISOString(),
+            detail: `Closed as duplicate — merged into ${primary.id} (same Zendesk ticket #${zdId})`,
+          });
+          await db.upsert("incidents", dup.id, JSON.stringify(dup));
+          await db.audit("incidents", dup.id, "zd_dedup_close", JSON.stringify({ primaryId: primary.id, zdTicketId: zdId }), "ZD Dedup Engine");
+        }
+        // Update primary with merge summary
+        primary.activityLog.push({
+          id: `AL-ZDDEDUP-P-${Date.now()}-${primary.id}`,
+          type: "merge_primary",
+          user: "ZD Dedup Engine",
+          time: new Date().toISOString(),
+          detail: `Auto-merged ${duplicateIds.length} duplicate(s) for ZD#${zdId}: ${duplicateIds.join(", ")}`,
+        });
+        primary.updatedAt = new Date().toISOString();
+        await db.upsert("incidents", primary.id, JSON.stringify(primary));
+        await db.audit("incidents", primary.id, "zd_dedup_primary", JSON.stringify({ mergedIds: duplicateIds, zdTicketId: zdId }), "ZD Dedup Engine");
+
+        totalMerged += duplicateIds.length;
+        mergedGroups.push({ zdTicketId: zdId, primaryId: primary.id, mergedIds: duplicateIds });
+      }
+      if (wsServer) wsServer.broadcast("incidents", { action: "zd_dedup", totalMerged, mergedGroups });
+      return json(res, 200, { success: true, groupsFound: mergedGroups.length, totalMerged, mergedGroups });
+    } catch (err) {
+      console.error("[ZD Dedup]", err.message);
+      return json(res, 500, { error: "ZD dedup failed", details: err.message });
     }
   }
 
