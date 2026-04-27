@@ -1536,8 +1536,11 @@ export default function ITSMApp() {
   const [aiTrainingTab, setAiTrainingTab] = useState("documents");
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
-  const DATA_VERSION = "v2.6";
+  const DATA_VERSION = "v2.8";
   const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers"];
+  // Universal filter: remove any E2E/test/seed records by ID pattern
+  const _isTestRecord = (id) => /^(INC-D|INC-[A-Z]{4,}|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)/.test(id);
+  const _cleanTestRecords = (arr) => Array.isArray(arr) ? arr.filter(r => !_isTestRecord(r.id)) : arr;
   const _ls = (key, fallback) => {
     try {
       // Entra users: start empty, hydrate from DB
@@ -1549,11 +1552,11 @@ export default function ITSMApp() {
             const s = localStorage.getItem(key);
             if (s) {
               const parsed = JSON.parse(s);
-              if (Array.isArray(parsed) && parsed.length > 0 && !parsed.some(r => /^(INC-D|INC-[A-Z]|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)/.test(r.id))) return parsed;
+              return _cleanTestRecords(parsed);
             }
             return [];
           }
-        } catch {}
+        } catch (e) {}
       }
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
@@ -1562,6 +1565,10 @@ export default function ITSMApp() {
         return fallback;
       }
       const s = localStorage.getItem(key);
+      if (s && PRODUCTION_COLLECTIONS.includes(key)) {
+        const parsed = JSON.parse(s);
+        return _cleanTestRecords(parsed);
+      }
       return s ? JSON.parse(s) : fallback;
     } catch { return fallback; }
   };
@@ -1574,31 +1581,22 @@ export default function ITSMApp() {
   const [graphEmails, setGraphEmails] = useState(null); // Outlook inbox
   const [graphCalendar, setGraphCalendar] = useState(null); // Today's events
   const [graphChats, setGraphChats] = useState(null); // Teams chats
-  const [graphTeams, setGraphTeams] = useState(null); // Joined teams
-  const [graphPresence, setGraphPresence] = useState(null); // Presence status
-  const [graphUnread, setGraphUnread] = useState(0); // Unread email count
-  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphTeams, setGraphTeams] = useState(null); // Teams list
   const [graphError, setGraphError] = useState(null);
   const graphFetchedRef = useRef(false);
 
   const [incidents, setIncidents] = useState(() => {
-    const stored = _ls("vgc_incidents", INITIAL_INCIDENTS);
-    // Clean up seed/E2E test records
-    return stored.filter(i => i.id !== "INC0001" && !/^INC-[A-Z]{6,}/.test(i.id));
+    const stored = _cleanTestRecords(_ls("vgc_incidents", INITIAL_INCIDENTS));
+    return stored;
   });
   const [problems, setProblems] = useState(() => {
-    const stored = _ls("vgc_problems", INITIAL_PROBLEMS);
-    // Clean up seed PRB0001 and any auto-generated problems from seed incidents
-    return stored.filter(p => p.id !== "PRB0001" && !p.title?.includes("Problem from INC000") && !p.linkedIncidents?.some(id => /^INC000\d$/.test(id)));
+    const stored = _cleanTestRecords(_ls("vgc_problems", INITIAL_PROBLEMS));
+    return stored.filter(p => !p.title?.includes?.("[E2E"));
   });
-  const [changes, setChanges] = useState(() => {
-    const stored = _ls("vgc_changes", INITIAL_CHANGES);
-    // Clean up CHG0002 (linked to INC0001/PRB0001 seed data)
-    return stored.filter(c => c.id !== "CHG0002");
-  });
-  const [requests, setRequests] = useState(() => _ls("vgc_requests", INITIAL_REQUESTS));
+  const [changes, setChanges] = useState(() => _cleanTestRecords(_ls("vgc_changes", INITIAL_CHANGES)));
   const [assets, setAssets] = useState(() => _ls("vgc_assets", ASSETS));
   const [kbArticles, setKbArticles] = useState(() => _ls("vgc_kb", KB_ARTICLES));
+  const [requests, setRequests] = useState(() => _cleanTestRecords(_ls("vgc_requests", INITIAL_REQUESTS)));
   const [serviceCatalog, setServiceCatalog] = useState(() => _ls("vgc_services", SERVICES));
   const [search, setSearch] = useState("");
 
@@ -1613,7 +1611,7 @@ export default function ITSMApp() {
           const data = await r.json();
           if (data.prodTestMode) setProdTestMode(true);
         }
-      } catch {}
+      } catch (e) {}
     };
     checkProdMode();
     const iv = setInterval(checkProdMode, 5 * 60 * 1000);
@@ -1905,7 +1903,7 @@ export default function ITSMApp() {
   const [showCardSettings, setShowCardSettings] = useState(false);
   const [dashboardEditMode, setDashboardEditMode] = useState(false);
   const [cardLayout, setCardLayout] = useState(() => {
-    try { const s = localStorage.getItem("vgc_card_layout"); if (s) return JSON.parse(s); } catch {}
+    try { const s = localStorage.getItem("vgc_card_layout"); if (s) return JSON.parse(s); } catch (e) {}
     return {};
   });
   const [dragState, setDragState] = useState(null);
@@ -2169,10 +2167,10 @@ export default function ITSMApp() {
     }
   }, [azureOpenAI]);
   useEffect(() => {
-    try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch {}
+    try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch (e) {}
   }, [dismissedProactiveAlerts]);
   useEffect(() => {
-    try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch {}
+    try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch (e) {}
   }, [cardLayout]);
 
   // ─── GLOBAL AI ERROR INTERCEPTOR (Hard Rule: AI must solve every error) ──
@@ -2371,7 +2369,7 @@ export default function ITSMApp() {
       try {
         const stored = sessionStorage.getItem("itsm_sso_fallback");
         if (stored) { fallbackUser = JSON.parse(stored); sessionStorage.removeItem("itsm_sso_fallback"); }
-      } catch {}
+      } catch (e) {}
 
       // Enrich with live Entra ID data, load DB-stored role, then set user
       (async () => {
@@ -2382,7 +2380,7 @@ export default function ITSMApp() {
             const syncData = await sync.json();
             entraProfile = syncData.users?.find(u => u.email === email);
           }
-        } catch {}
+        } catch (e) {}
 
         // Load DB-stored role (persisted from GUI edits)
         let dbStoredRole = null;
@@ -2399,7 +2397,7 @@ export default function ITSMApp() {
               dbStoredRole = d.rbacRole || null;
             }
           }
-        } catch {}
+        } catch (e) {}
 
         // Determine role: DB-stored > DEV_ADMIN check > ADMIN check > default L1 Support
         const determineRole = (baseRole) => {
@@ -2516,7 +2514,7 @@ export default function ITSMApp() {
     const timer = setTimeout(() => {
       setDisasterAlert(scenario);
       // Auto-dismiss after 10 seconds and permanently mark as shown
-      autoDismissTimer = setTimeout(() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch {} }, 10000);
+      autoDismissTimer = setTimeout(() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch (e) {} }, 10000);
     }, 4000);
     return () => { clearTimeout(timer); clearTimeout(autoDismissTimer); };
   }, [isLoggedIn]);
@@ -3040,7 +3038,7 @@ export default function ITSMApp() {
     try {
       const res = await fetch("/api/ai/briefings");
       if (res.ok) { const data = await res.json(); setAiBriefings(data.briefings || []); }
-    } catch {}
+    } catch (e) {}
   }, []);
 
   // ─── Phase 5: AI Pattern Detection ────────────────────────────────
@@ -3112,7 +3110,7 @@ export default function ITSMApp() {
     try {
       const res = await fetch("/api/ai/patterns");
       if (res.ok) { const data = await res.json(); setAiPatterns(data.patterns || []); }
-    } catch {}
+    } catch (e) {}
   }, []);
 
   const createProblemFromPattern = useCallback(async (patternId) => {
@@ -3153,7 +3151,7 @@ export default function ITSMApp() {
             const seedPattern = /^(INC000)\d$/;
             setIncidents(items.filter(i => !seedPattern.test(i.id)));
           }
-        } catch {}
+        } catch (e) {}
       } else if (dryRun) {
         showToast(`🔍 Found ${data.eligibleCount} incidents eligible for closure`, "info");
       }
@@ -3168,9 +3166,10 @@ export default function ITSMApp() {
       const res = await fetch("/api/ai/resolve-queue");
       if (res.ok) {
         const data = await res.json();
-        setAiResolveQueue(data.items || []);
+        const items = (data.items || []).filter(i => !_isTestRecord(i.incidentId));
+        setAiResolveQueue(items);
       }
-    } catch {}
+    } catch (e) {}
   }, []);
 
   const runAiAutoResolve = useCallback(async () => {
@@ -3226,7 +3225,7 @@ export default function ITSMApp() {
             const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
             setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
           }
-        } catch {}
+        } catch (e) {}
       } else {
         showToast(`❌ AI suggestion rejected`, "info");
       }
@@ -3249,7 +3248,7 @@ export default function ITSMApp() {
         const data = await res.json();
         setAiWorkflowQueue((data.items || []).filter(i => i.status === "pending"));
       }
-    } catch {}
+    } catch (e) {}
   }, []);
 
   const runAiWorkflowAssist = useCallback(async () => {
@@ -3286,7 +3285,7 @@ export default function ITSMApp() {
             const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
             setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
           }
-        } catch {}
+        } catch (e) {}
       } else {
         showToast(`❌ Workflow suggestion rejected`, "info");
       }
@@ -3352,7 +3351,7 @@ export default function ITSMApp() {
             const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
             setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
           }
-        } catch {}
+        } catch (e) {}
       }
     } catch (err) { showToast("Bulk close failed: " + err.message, "error"); }
     setHistoricalCloseRunning(false);
@@ -4098,7 +4097,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
 
   // ─── Persist to localStorage + SQLite Database ─────────────────────────
   const DB_API = "/api/db";
-  const _save = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+  const _save = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} };
 
   // ─── Recycle Bin helpers ───────────────────────────────────────────────
   const RECYCLE_LABELS = { customers: "Customer", vendors: "Vendor", workflow_rules: "Workflow Rule", service_reports: "Service Report", service_catalog: "Catalog Item", managed_users: "User", kb_articles: "KB Article", survey_templates: "Survey Template", ai_actions: "AI Action" };
@@ -4184,16 +4183,15 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
                 const items = data.map(d => typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d));
                 // For Entra users: filter out any seed data that leaked into DB
                 if (isEntraProductionUser) {
-                  const seedPattern = /^(INC-D\d|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d*$/;
-                  const isSeedLinked = (item) => item.title?.includes("Problem from INC000") || item.linkedIncidents?.some(id => /^(INC000\d|INC-D\d)$/.test(id));
-                  const filtered = items.filter(item => !seedPattern.test(item.id) && !isSeedLinked(item));
+                  const filtered = _cleanTestRecords(items).filter(item => !item.title?.includes("Problem from INC000") && !item.linkedIncidents?.some(id => /^(INC000\d|INC-D\d)$/.test(id)));
                   if (filtered.length > 0) setter(filtered);
                 } else {
-                  setter(items);
+                  const filtered = _cleanTestRecords(items).filter(item => !item.title?.includes("Problem from INC000") && !item.linkedIncidents?.some(id => /^(INC000\d|INC-D\d)$/.test(id)));
+                  if (filtered.length > 0) setter(filtered);
                 }
               }
             }
-          } catch {}
+          } catch (e) {}
         }
       }
       // Seed DB from state if DB is empty — ONLY for demo/local users
@@ -4209,7 +4207,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             setSlaPolicy(prev => ({ ...prev, ...saved, severities: { ...prev.severities, ...saved.severities }, supportHours: { ...prev.supportHours, ...(saved.supportHours || {}) } }));
           }
         }
-      } catch {}
+      } catch (e) {}
 
       // ─── Load Tenant Settings from server (persists across deploys) ─────
       try {
@@ -4221,7 +4219,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             _save("vgc_general_settings", ts);
           }
         }
-      } catch {}
+      } catch (e) {}
 
       // ─── Load Incident Templates from server ─────
       try {
@@ -4230,7 +4228,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           const tplData = await tplr.json();
           if (tplData.data && tplData.data.length > 0) setIncidentTemplates(tplData.data);
         }
-      } catch {}
+      } catch (e) {}
 
       // ─── Load Approval Chains + Instances ─────
       try {
@@ -4238,19 +4236,19 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
         if (acr.ok) { const d = await acr.json(); if (d.data) setApprovalChains(d.data); }
         const air = await fetch(`${DB_API}/approval_instances`);
         if (air.ok) { const d = await air.json(); if (d.data) setApprovalInstances(d.data); }
-      } catch {}
+      } catch (e) {}
 
       // ─── Load Report Schedules ─────
       try {
         const rsr = await fetch("/api/reports/schedules");
         if (rsr.ok) { const d = await rsr.json(); if (d.data) setReportSchedules(d.data); }
-      } catch {}
+      } catch (e) {}
 
       // ─── Load Email Whitelist ─────
       try {
         const ewlr = await fetch(`${DB_API}/email_whitelist`);
         if (ewlr.ok) { const d = await ewlr.json(); if (d.data && d.data.length > 0) setEmailWhitelist(d.data); }
-      } catch {}
+      } catch (e) {}
 
       if (!isEntraProductionUser) {
         const syncMap = [
@@ -4331,7 +4329,7 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
             try {
               const incR = await fetch("/api/db/incidents");
               if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
-            } catch {}
+            } catch (e) {}
           }
         }
         // 4) Auto-sync Zendesk organizations → ITSM customers
@@ -4339,9 +4337,9 @@ Generated by VGC-ITSM AI Knowledge Portal v${APP_VERSION.version} — ${APP_VERS
           await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
           const custR = await fetch("/api/db/customers");
           if (custR.ok) { const custData = await custR.json(); if (Array.isArray(custData.data) && custData.data.length > 0) setCustomers(custData.data); }
-        } catch {}
+        } catch (e) {}
         setGlobalLastSync(new Date());
-      } catch {} finally { setGlobalSyncActive(false); }
+      } catch (e) {} finally { setGlobalSyncActive(false); }
     };
     doSync(); // immediate on mount
     globalSyncRef.current = setInterval(doSync, 60000); // every 60s
@@ -14296,7 +14294,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             ...versionHistory.map(v => ({ ...v, source: "local" })),
             ...auditLogs.map(a => {
               let parsed = {};
-              try { parsed = JSON.parse(a.data || "{}"); } catch {}
+              try { parsed = JSON.parse(a.data || "{}"); } catch (e) {}
               return {
                 id: `DB_${a.id || a.record_id}`,
                 timestamp: a.timestamp || a.created_at,
@@ -19958,7 +19956,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       try {
         const ar = await fetch("/api/zendesk/agents");
         if (ar.ok) { const ad = await ar.json(); setZdAgents(ad.agents || []); setZdGroups(ad.groups || []); }
-      } catch {}
+      } catch (e) {}
     } catch (e) { setZdError(e.message); setZdConnected(false); }
     finally { setZdLoading(false); }
   };
@@ -19982,14 +19980,14 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     try {
       const r = await fetch("/api/zendesk/stats");
       if (r.ok) { const data = await r.json(); setZdStats(data); }
-    } catch {}
+    } catch (e) {}
   };
 
   const zdFetchComments = async (ticketId) => {
     try {
       const r = await fetch(`/api/zendesk/tickets/${ticketId}/comments`);
       if (r.ok) { const data = await r.json(); setZdComments(data.comments || []); }
-    } catch {}
+    } catch (e) {}
   };
 
   const zdSelectTicket = async (ticket) => {
@@ -20177,18 +20175,18 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(fixed));
           setZdAiQueue(fixed);
         }
-      } catch {}
+      } catch (e) {}
     }
     localStorage.setItem("vgc_zd_queue_v2", "1");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Persist AI queue, triaged IDs, stats, and logs to localStorage ──
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch {} }, [zdAiQueue]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch {} }, [zdTriagedIds]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(zdAutoStats)); } catch {} }, [zdAutoStats]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch {} }, [zdAutoLog]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch {} }, [zdStats]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch {} }, [zdTickets]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch (e) {} }, [zdAiQueue]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch (e) {} }, [zdTriagedIds]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(zdAutoStats)); } catch (e) {} }, [zdAutoStats]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch (e) {} }, [zdAutoLog]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch (e) {} }, [zdStats]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch (e) {} }, [zdTickets]);
 
   // Auto-polling for new tickets (every 120s when automation is on)
   React.useEffect(() => {
@@ -20225,7 +20223,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   const incData = await incR.json();
                   if (incData.data) setIncidents(incData.data);
                 }
-              } catch {}
+              } catch (e) {}
               // Auto-triage newly discovered tickets (90% AI rule)
               if (data.stats.ticketsCreated > 0 && zdAutoMode && azureOpenAI.enabled) {
                 addAutoLog({ type: "info", message: `${data.stats.ticketsCreated} new ticket(s) found — triggering AI auto-triage...` });
@@ -20236,7 +20234,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           // Always refresh sync status & incidents
           const statusR = await fetch("/api/zendesk/sync-status");
           if (statusR.ok) setZdSyncStatus(await statusR.json());
-        } catch {}
+        } catch (e) {}
       }, 90000);
       return () => clearInterval(zdRealTimePollRef.current);
     }
@@ -20853,7 +20851,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                         addAutoLog({ type: "info", message: `Batch approving ${highConf.length} high-confidence items...` });
                         let sent = 0;
                         for (const q of highConf) {
-                          try { await zdApproveAndSend(q); sent++; } catch {}
+                          try { await zdApproveAndSend(q); sent++; } catch (e) {}
                         }
                         addAutoLog({ type: "human_approved", message: `Batch approved: ${sent}/${highConf.length} responses sent successfully` });
                       }} disabled={zdLoading}
@@ -24596,7 +24594,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
                     <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{kbEntries.length} entries</span>
                     <button onClick={async () => {
-                      try { const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const d = await r.json(); fetchKbEntries(); trackAction("AI Training", "Knowledge Sync", `${d.syncedThisRun || 0} new entries synced. Total: ${d.totalEntries}`, "AI"); setAiMessages(prev => [...prev, { role: "ai", text: `🔄 Synced! ${d.syncedThisRun || 0} new entries. Total: ${d.totalEntries}`, source: "azure" }]); } catch {}
+                      try { const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const d = await r.json(); fetchKbEntries(); trackAction("AI Training", "Knowledge Sync", `${d.syncedThisRun || 0} new entries synced. Total: ${d.totalEntries}`, "AI"); setAiMessages(prev => [...prev, { role: "ai", text: `🔄 Synced! ${d.syncedThisRun || 0} new entries. Total: ${d.totalEntries}`, source: "azure" }]); } catch (e) {}
                     }} style={{ background: "none", border: "1px solid #06B6D433", borderRadius: 3, padding: "1px 5px", fontSize: 8, color: "#06B6D4", cursor: "pointer" }} title="Sync all knowledge system-wide">🔄</button>
                   </span>
                 </div>
@@ -25017,7 +25015,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 🚨 {disasterAlert.type} Warning — {disasterAlert.region}
               </div>
             </div>
-            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch {} }} style={{
+            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch (e) {} }} style={{
               background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
               cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: 14, flexShrink: 0,
@@ -25054,7 +25052,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             <span style={{ fontSize: 8, color: "rgba(255,255,255,0.2)", fontFamily: "'JetBrains Mono', monospace" }}>
               Auto-dismiss in 10s · One-time alert
             </span>
-            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch {} }} style={{
+            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch (e) {} }} style={{
               background: `${disasterAlert.color}22`, border: `1px solid ${disasterAlert.color}44`,
               borderRadius: 8, padding: "5px 14px", fontSize: 10, fontWeight: 600,
               color: disasterAlert.color, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif",
