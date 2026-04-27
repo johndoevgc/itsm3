@@ -9004,6 +9004,28 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     });
   }
 
+  // ─── Phase 5: Compliance Report (uptime, data residency, SLA) ────────
+  if (pathname === "/api/compliance/report" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const resolved = incidents.filter(i => ["Resolved", "Closed"].includes(i.status));
+      const slaMet = resolved.filter(i => i.slaStatus === "met" || i.slaStatus === "within").length;
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now - 30 * 86400000);
+      const recentIncidents = incidents.filter(i => new Date(i.createdAt || 0) >= thirtyDaysAgo);
+      const criticalCount = recentIncidents.filter(i => i.priority === "P1" || i.priority === "Critical").length;
+      return json(res, 200, {
+        generatedAt: now.toISOString(),
+        dataResidency: { region: process.env.AZURE_REGION || "Southeast Asia", provider: "Microsoft Azure", dbHost: process.env.MYSQL_HOST || "local" },
+        slaCompliance: { totalResolved: resolved.length, slaMet, slaBreached: resolved.length - slaMet, complianceRate: resolved.length > 0 ? Math.round((slaMet / resolved.length) * 100) : 100 },
+        last30Days: { totalIncidents: recentIncidents.length, criticalIncidents: criticalCount, openIncidents: incidents.filter(i => !["Resolved", "Closed"].includes(i.status)).length },
+        securityHeaders: { hsts: true, csp: true, xFrameOptions: true, xContentTypeOptions: true },
+        encryption: { inTransit: "TLS 1.2+", atRest: "Azure MySQL encryption" }
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // ─── GET /api/purge-status — Scheduled purge/cleanup status for Admin UI ───
   if (pathname === "/api/purge-status" && req.method === "GET") {
     try {

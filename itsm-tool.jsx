@@ -2061,6 +2061,8 @@ export default function ITSMApp() {
   const [aiRuleSuggestions, setAiRuleSuggestions] = useState([]);
   // ─── Product Vendors Contact State ──────────────────────────────────────
   const [generalSettings, setGeneralSettings] = useState(() => _ls("vgc_general_settings", { orgName: "VGC Technology Pte Ltd", timezone: "Asia/Singapore", dateFormat: "DD-MM-YYYY", language: "en" }));
+  const [aiGovData, setAiGovData] = useState(null);
+  const [brandingSettings, setBrandingSettings] = useState(() => _ls("vgc_branding", { productName: "", logoUrl: "", primaryColor: "#6366F1", accentColor: "#4CAF50", supportEmail: "", footerText: "" }));
   const [vendors, setVendors] = useState(() => {
     const saved = _ls("vgc_vendors", null);
     return saved || [
@@ -12089,6 +12091,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       { id: "vendors", label: "Vendors", icon: "📇" },
       { id: "surveys", label: "Surveys", icon: "📊" },
       { id: "billing", label: "Billing", icon: "💳", devOnly: true },
+      { id: "aiGovernance", label: "AI Governance", icon: "🧠" },
+      { id: "branding", label: "Branding", icon: "🎨" },
       { id: "general", label: "General", icon: "⚙️" },
       { id: "uat", label: "UAT", icon: "🧪" },
     ];
@@ -15952,6 +15956,138 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   display: "flex", alignItems: "center", gap: 6
                 }}>🔄 Restart Tour</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* AI Governance Dashboard */}
+        {activeTab === "aiGovernance" && (
+          <div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🧠 AI Governance Dashboard</h3>
+                <button style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600 }} onClick={async () => {
+                  try {
+                    const [usageRes, auditRes, govRes] = await Promise.all([
+                      fetch("/api/ai/usage").then(r => r.json()),
+                      fetch("/api/ai/audit?limit=50").then(r => r.json()),
+                      fetch("/api/ai/governance").then(r => r.json())
+                    ]);
+                    setAiGovData({ usage: usageRes, audit: auditRes.entries || auditRes, governance: govRes, loaded: true });
+                  } catch (e) { console.error("AI gov fetch failed:", e); }
+                }}>🔄 Refresh</button>
+              </div>
+
+              {!aiGovData?.loaded ? (
+                <div style={{ textAlign: "center", padding: 40 }}>
+                  <button style={{ padding: "10px 24px", borderRadius: 8, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 13, fontWeight: 600 }} onClick={async () => {
+                    try {
+                      const [usageRes, auditRes, govRes] = await Promise.all([
+                        fetch("/api/ai/usage").then(r => r.json()),
+                        fetch("/api/ai/audit?limit=50").then(r => r.json()),
+                        fetch("/api/ai/governance").then(r => r.json())
+                      ]);
+                      setAiGovData({ usage: usageRes, audit: auditRes.entries || auditRes, governance: govRes, loaded: true });
+                    } catch (e) { console.error("AI gov fetch failed:", e); }
+                  }}>Load AI Governance Data</button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+                    {[
+                      { label: "Monthly Budget", value: `$${aiGovData.governance?.monthlyBudgetUSD || 10}`, color: "#6366F1" },
+                      { label: "Spent", value: `$${(aiGovData.usage?.estimatedCostUSD || 0).toFixed(4)}`, color: (aiGovData.usage?.budgetPercentage || 0) > 80 ? "#EF4444" : "#4CAF50" },
+                      { label: "Budget Used", value: `${(aiGovData.usage?.budgetPercentage || 0).toFixed(1)}%`, color: (aiGovData.usage?.budgetPercentage || 0) > 80 ? "#EF4444" : "#F59E0B" },
+                      { label: "Total Calls", value: aiGovData.usage?.totalCalls || 0, color: "#06B6D4" }
+                    ].map((s, i) => (
+                      <div key={i} style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #1E2130", textAlign: "center" }}>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "'JetBrains Mono', monospace" }}>{s.value}</div>
+                        <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4 }}>{s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #1E2130", marginBottom: 20 }}>
+                    <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 8 }}>Settings</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                      <div><span style={{ fontSize: 10, color: "#5A6178" }}>Autonomy Level</span><div style={{ fontSize: 13, color: "#C4CAD6", textTransform: "capitalize" }}>{aiGovData.governance?.autonomyLevel || "suggest"}</div></div>
+                      <div><span style={{ fontSize: 10, color: "#5A6178" }}>Primary Model</span><div style={{ fontSize: 13, color: "#C4CAD6" }}>{aiGovData.governance?.models?.primary || "N/A"}</div></div>
+                      <div><span style={{ fontSize: 10, color: "#5A6178" }}>Fallback Model</span><div style={{ fontSize: 13, color: "#C4CAD6" }}>{aiGovData.governance?.models?.secondary || "N/A"}</div></div>
+                    </div>
+                  </div>
+
+                  <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #1E2130" }}>
+                    <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 8 }}>Recent AI Audit Log</div>
+                    <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                      {(Array.isArray(aiGovData.audit) ? aiGovData.audit : []).slice(0, 20).map((entry, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", borderBottom: "1px solid #1E213044", fontSize: 11 }}>
+                          <span style={{ color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 140 }}>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "—"}</span>
+                          <span style={{ color: "#C4CAD6", flex: 1, marginLeft: 8 }}>{entry.action || entry.type || "—"}</span>
+                          <span style={{ color: entry.status === "overridden" ? "#F59E0B" : "#4CAF50", minWidth: 80, textAlign: "right" }}>{entry.status || "logged"}</span>
+                        </div>
+                      ))}
+                      {(!Array.isArray(aiGovData.audit) || aiGovData.audit.length === 0) && (
+                        <div style={{ color: "#5A6178", fontSize: 11, padding: 12, textAlign: "center" }}>No audit entries yet</div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Branding Editor */}
+        {activeTab === "branding" && (
+          <div>
+            <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🎨 Branding & White-Label</h3>
+              <p style={{ fontSize: 11, color: "#5A6178", marginBottom: 20 }}>Customize the look and feel for your organization.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <FormField label="Product Name">
+                  <input style={inputStyle} value={brandingSettings.productName || ""} placeholder="e.g. Acme ITSM" onChange={e => setBrandingSettings(p => ({ ...p, productName: e.target.value }))} />
+                </FormField>
+                <FormField label="Logo URL">
+                  <input style={inputStyle} value={brandingSettings.logoUrl || ""} placeholder="https://example.com/logo.png" onChange={e => setBrandingSettings(p => ({ ...p, logoUrl: e.target.value }))} />
+                </FormField>
+                <FormField label="Primary Color">
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input type="color" value={brandingSettings.primaryColor || "#6366F1"} onChange={e => setBrandingSettings(p => ({ ...p, primaryColor: e.target.value }))} style={{ width: 40, height: 32, border: "none", cursor: "pointer" }} />
+                    <input style={inputStyle} value={brandingSettings.primaryColor || "#6366F1"} onChange={e => setBrandingSettings(p => ({ ...p, primaryColor: e.target.value }))} />
+                  </div>
+                </FormField>
+                <FormField label="Accent Color">
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input type="color" value={brandingSettings.accentColor || "#4CAF50"} onChange={e => setBrandingSettings(p => ({ ...p, accentColor: e.target.value }))} style={{ width: 40, height: 32, border: "none", cursor: "pointer" }} />
+                    <input style={inputStyle} value={brandingSettings.accentColor || "#4CAF50"} onChange={e => setBrandingSettings(p => ({ ...p, accentColor: e.target.value }))} />
+                  </div>
+                </FormField>
+                <FormField label="Support Email">
+                  <input style={inputStyle} value={brandingSettings.supportEmail || ""} placeholder="support@yourcompany.com" onChange={e => setBrandingSettings(p => ({ ...p, supportEmail: e.target.value }))} />
+                </FormField>
+                <FormField label="Footer Text">
+                  <input style={inputStyle} value={brandingSettings.footerText || ""} placeholder="© 2026 Your Company" onChange={e => setBrandingSettings(p => ({ ...p, footerText: e.target.value }))} />
+                </FormField>
+              </div>
+              <div style={{ marginTop: 20, display: "flex", gap: 12 }}>
+                <button style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#6366F1", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }} onClick={async () => {
+                  try {
+                    _save("vgc_branding", brandingSettings);
+                    await fetch("/api/settings/tenant", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...generalSettings, branding: brandingSettings }) });
+                    setToast({ type: "success", message: "Branding saved" });
+                  } catch { setToast({ type: "error", message: "Failed to save branding" }); }
+                }}>💾 Save Branding</button>
+                <button style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid #EF444433", background: "#EF444418", color: "#EF4444", cursor: "pointer", fontSize: 12, fontWeight: 600 }} onClick={() => {
+                  setBrandingSettings({ productName: "", logoUrl: "", primaryColor: "#6366F1", accentColor: "#4CAF50", supportEmail: "", footerText: "" });
+                  setToast({ type: "info", message: "Branding reset to defaults" });
+                }}>Reset to Defaults</button>
+              </div>
+              {brandingSettings.logoUrl && (
+                <div style={{ marginTop: 20, background: "#0A0C14", borderRadius: 6, padding: 16, border: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 8 }}>Preview</div>
+                  <img src={brandingSettings.logoUrl} alt="Logo preview" style={{ maxHeight: 48, maxWidth: 200 }} onError={e => { e.target.style.display = "none"; }} />
+                </div>
+              )}
             </div>
           </div>
         )}
