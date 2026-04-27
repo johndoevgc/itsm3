@@ -144,6 +144,13 @@ const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
 // ─── Production Mode ────────────────────────────────────────────────────
 // PROD_TEST_MODE=false: AI thresholds at production levels, Zendesk bidirectional sync enabled
 const PROD_TEST_MODE = process.env.PROD_TEST_MODE === "true";
+
+// ─── Feature Flags ──────────────────────────────────────────────────────
+const FEATURE_PDPA = process.env.FEATURE_PDPA === "true";
+const FEATURE_PORTAL = process.env.FEATURE_PORTAL === "true";
+const FEATURE_BILLING = process.env.FEATURE_BILLING === "true";
+const FEATURE_SETUP_WIZARD = process.env.FEATURE_SETUP_WIZARD !== "false"; // default ON
+
 // ─── Email Redirect (safety net) ────────────────────────────────────────
 // When true, ALL outbound emails are redirected to EMAIL_REDIRECT_TARGET
 // Flip to false when ready to send to real customers
@@ -1079,6 +1086,11 @@ const VALID_COLLECTIONS = new Set([
   "teams_webhooks",
   "cmdb_discovery",
   "status_subscribers",
+  "pdpa_config",
+  "dsar_requests",
+  "billing_entries",
+  "sg_holidays",
+  "portal_sessions",
   "releases",
   "cost_allocations",
   "cost_rates",
@@ -8405,7 +8417,290 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       portalUrl: PORTAL_URL,
       version: APP_VERSION.version,
       build: APP_VERSION.build,
+      features: {
+        pdpa: FEATURE_PDPA,
+        portal: FEATURE_PORTAL,
+        billing: FEATURE_BILLING,
+        setupWizard: FEATURE_SETUP_WIZARD,
+      },
     });
+  }
+
+  // ─── Setup Wizard ─────────────────────────────────────────────────────
+  if (pathname === "/api/setup/status" && req.method === "GET") {
+    if (!FEATURE_SETUP_WIZARD) return json(res, 200, { completed: true });
+    try {
+      const cfg = await db.getOne("tenant_settings", "setup_completed");
+      return json(res, 200, { completed: !!cfg });
+    } catch { return json(res, 200, { completed: false }); }
+  }
+
+  if (pathname === "/api/setup/complete" && req.method === "POST") {
+    if (!FEATURE_SETUP_WIZARD) return json(res, 400, { error: "Setup wizard disabled" });
+    const body = await parseBody(req);
+    if (!body.companyName) return json(res, 400, { error: "companyName is required" });
+    const setupData = {
+      companyName: String(body.companyName).slice(0, 200),
+      companyShortName: String(body.companyShortName || body.companyName).slice(0, 50),
+      adminEmail: String(body.adminEmail || "").slice(0, 200),
+      timezone: String(body.timezone || "Asia/Singapore").slice(0, 50),
+      businessHoursStart: parseInt(body.businessHoursStart) || 9,
+      businessHoursEnd: parseInt(body.businessHoursEnd) || 18,
+      businessDays: String(body.businessDays || "Mon-Fri").slice(0, 20),
+      logoUrl: String(body.logoUrl || "").slice(0, 500),
+      completedAt: new Date().toISOString(),
+      completedBy: req.userEmail || "system",
+    };
+    await db.upsert("tenant_settings", "setup_config", JSON.stringify(setupData));
+    await db.upsert("tenant_settings", "setup_completed", JSON.stringify({ completed: true, at: setupData.completedAt }));
+    // Update SLA policy with business hours
+    try {
+      const existingPolicy = await db.getOne("sla_config", "active_policy");
+      const policy = existingPolicy ? JSON.parse(existingPolicy.data) : {};
+      policy.supportHours = { start: setupData.businessHoursStart, end: setupData.businessHoursEnd, days: setupData.businessDays, tz: setupData.timezone };
+      await db.upsert("sla_config", "active_policy", JSON.stringify(policy));
+    } catch (e) { console.warn("[Setup] Could not update SLA policy:", e.message); }
+    await auditLog("setup_wizard_completed", req, { companyName: setupData.companyName });
+    return json(res, 200, { ok: true, message: "Setup completed" });
+  }
+
+  // ─── SG Public Holidays ──────────────────────────────────────────────
+  if (pathname === "/api/sg-holidays" && req.method === "GET") {
+    try {
+      const row = await db.getOne("sg_holidays", "holidays_2026");
+      if (row) return json(res, 200, JSON.parse(row.data));
+      // Seed default SG 2026 holidays (MOM gazetted)
+      const holidays2026 = {
+        year: 2026,
+        holidays: [
+          { date: "2026-01-01", name: "New Year's Day" },
+          { date: "2026-01-29", name: "Chinese New Year" },
+          { date: "2026-01-30", name: "Chinese New Year (Day 2)" },
+          { date: "2026-03-31", name: "Hari Raya Puasa" },
+          { date: "2026-04-03", name: "Good Friday" },
+          { date: "2026-05-01", name: "Labour Day" },
+          { date: "2026-05-12", name: "Vesak Day" },
+          { date: "2026-06-07", name: "Hari Raya Haji" },
+          { date: "2026-08-09", name: "National Day" },
+          { date: "2026-10-20", name: "Deepavali" },
+          { date: "2026-12-25", name: "Christmas Day" },
+        ],
+      };
+      await db.upsert("sg_holidays", "holidays_2026", JSON.stringify(holidays2026));
+      return json(res, 200, holidays2026);
+    } catch (e) { return json(res, 500, { error: e.message }); }
+  }
+
+  if (pathname === "/api/sg-holidays" && req.method === "PUT") {
+    const body = await parseBody(req);
+    if (!body.year || !Array.isArray(body.holidays)) return json(res, 400, { error: "year and holidays[] required" });
+    const key = `holidays_${body.year}`;
+    await db.upsert("sg_holidays", key, JSON.stringify(body));
+    // Also update active SLA policy with holidays
+    try {
+      const existingPolicy = await db.getOne("sla_config", "active_policy");
+      const policy = existingPolicy ? JSON.parse(existingPolicy.data) : {};
+      policy.holidays = body.holidays.map(h => h.date);
+      await db.upsert("sla_config", "active_policy", JSON.stringify(policy));
+    } catch (e) { console.warn("[Holidays] Could not update SLA policy:", e.message); }
+    await auditLog("sg_holidays_updated", req, { year: body.year, count: body.holidays.length });
+    return json(res, 200, { ok: true });
+  }
+
+  // ─── PDPA Compliance Module ───────────────────────────────────────────
+  if (pathname.startsWith("/api/pdpa") && !FEATURE_PDPA) {
+    return json(res, 404, { error: "PDPA module not enabled" });
+  }
+
+  if (pathname === "/api/pdpa/config" && req.method === "GET") {
+    try {
+      const row = await db.getOne("pdpa_config", "active");
+      return json(res, 200, row ? JSON.parse(row.data) : { retentionDays: 365, consentRequired: true, autoDelete: false });
+    } catch (e) { return json(res, 500, { error: e.message }); }
+  }
+
+  if (pathname === "/api/pdpa/config" && req.method === "PUT") {
+    const body = await parseBody(req);
+    const config = {
+      retentionDays: Math.max(30, Math.min(3650, parseInt(body.retentionDays) || 365)),
+      consentRequired: !!body.consentRequired,
+      autoDelete: !!body.autoDelete,
+      dataCategories: Array.isArray(body.dataCategories) ? body.dataCategories.slice(0, 50) : ["personal", "contact", "ticket"],
+      updatedAt: new Date().toISOString(),
+      updatedBy: req.userEmail || "system",
+    };
+    await db.upsert("pdpa_config", "active", JSON.stringify(config));
+    await auditLog("pdpa_config_updated", req, config);
+    return json(res, 200, { ok: true, config });
+  }
+
+  if (pathname === "/api/pdpa/dsar" && req.method === "GET") {
+    const all = await db.getAll("dsar_requests");
+    const requests = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+    return json(res, 200, requests);
+  }
+
+  if (pathname === "/api/pdpa/dsar" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.type || !body.subjectEmail) return json(res, 400, { error: "type and subjectEmail required" });
+    const dsarId = `DSAR-${Date.now().toString(36).toUpperCase()}`;
+    const dsar = {
+      id: dsarId,
+      type: ["access", "erasure", "portability", "correction"].includes(body.type) ? body.type : "access",
+      subjectEmail: String(body.subjectEmail).slice(0, 200),
+      subjectName: String(body.subjectName || "").slice(0, 200),
+      reason: String(body.reason || "").slice(0, 1000),
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      createdBy: req.userEmail || "system",
+    };
+    await db.upsert("dsar_requests", dsarId, JSON.stringify(dsar));
+    await auditLog("dsar_created", req, { dsarId, type: dsar.type, subjectEmail: dsar.subjectEmail });
+    return json(res, 201, dsar);
+  }
+
+  if (pathname.startsWith("/api/pdpa/dsar/") && req.method === "PUT") {
+    const dsarId = pathname.split("/").pop();
+    const existing = await db.getOne("dsar_requests", dsarId);
+    if (!existing) return json(res, 404, { error: "DSAR not found" });
+    const dsar = JSON.parse(existing.data);
+    const body = await parseBody(req);
+    if (body.status && ["pending", "in_progress", "completed", "rejected"].includes(body.status)) dsar.status = body.status;
+    if (body.notes) dsar.notes = String(body.notes).slice(0, 2000);
+    dsar.updatedAt = new Date().toISOString();
+    dsar.updatedBy = req.userEmail || "system";
+    await db.upsert("dsar_requests", dsarId, JSON.stringify(dsar));
+    await auditLog("dsar_updated", req, { dsarId, status: dsar.status });
+    return json(res, 200, dsar);
+  }
+
+  if (pathname === "/api/pdpa/purge-preview" && req.method === "GET") {
+    try {
+      const cfgRow = await db.getOne("pdpa_config", "active");
+      const cfg = cfgRow ? JSON.parse(cfgRow.data) : { retentionDays: 365 };
+      const cutoff = new Date(Date.now() - cfg.retentionDays * 86400000).toISOString();
+      const incidents = await db.getAll("incidents");
+      const eligible = incidents.filter(r => {
+        try { const d = JSON.parse(r.data); return d.status === "Closed" && d.resolvedDate && d.resolvedDate < cutoff; } catch { return false; }
+      });
+      return json(res, 200, { retentionDays: cfg.retentionDays, cutoffDate: cutoff, eligibleCount: eligible.length });
+    } catch (e) { return json(res, 500, { error: e.message }); }
+  }
+
+  // ─── Billing / Time Tracking ──────────────────────────────────────────
+  if (pathname.startsWith("/api/billing") && !FEATURE_BILLING) {
+    return json(res, 404, { error: "Billing module not enabled" });
+  }
+
+  if (pathname === "/api/billing/entries" && req.method === "GET") {
+    const all = await db.getAll("billing_entries");
+    const entries = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+    const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+    const month = qs.get("month"); // YYYY-MM format
+    const filtered = month ? entries.filter(e => e.date && e.date.startsWith(month)) : entries;
+    return json(res, 200, filtered);
+  }
+
+  if (pathname === "/api/billing/entries" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.ticketId || !body.hours) return json(res, 400, { error: "ticketId and hours required" });
+    const entryId = `BIL-${Date.now().toString(36).toUpperCase()}`;
+    const entry = {
+      id: entryId,
+      ticketId: String(body.ticketId).slice(0, 50),
+      ticketTitle: String(body.ticketTitle || "").slice(0, 300),
+      hours: Math.max(0, Math.min(24, parseFloat(body.hours) || 0)),
+      rate: parseFloat(body.rate) || 0,
+      description: String(body.description || "").slice(0, 500),
+      date: String(body.date || new Date().toISOString().slice(0, 10)),
+      technician: req.userEmail || String(body.technician || "").slice(0, 200),
+      category: String(body.category || "support").slice(0, 50),
+      billable: body.billable !== false,
+      createdAt: new Date().toISOString(),
+    };
+    await db.upsert("billing_entries", entryId, JSON.stringify(entry));
+    await auditLog("billing_entry_created", req, { entryId, ticketId: entry.ticketId, hours: entry.hours });
+    return json(res, 201, entry);
+  }
+
+  if (pathname === "/api/billing/summary" && req.method === "GET") {
+    const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+    const month = qs.get("month") || new Date().toISOString().slice(0, 7);
+    const all = await db.getAll("billing_entries");
+    const entries = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+    const monthEntries = entries.filter(e => e.date && e.date.startsWith(month));
+    const totalHours = monthEntries.reduce((s, e) => s + (e.hours || 0), 0);
+    const billableHours = monthEntries.filter(e => e.billable).reduce((s, e) => s + (e.hours || 0), 0);
+    const totalAmount = monthEntries.filter(e => e.billable).reduce((s, e) => s + ((e.hours || 0) * (e.rate || 0)), 0);
+    const byTechnician = {};
+    monthEntries.forEach(e => {
+      const t = e.technician || "unknown";
+      if (!byTechnician[t]) byTechnician[t] = { hours: 0, billable: 0, amount: 0 };
+      byTechnician[t].hours += e.hours || 0;
+      if (e.billable) { byTechnician[t].billable += e.hours || 0; byTechnician[t].amount += (e.hours || 0) * (e.rate || 0); }
+    });
+    return json(res, 200, { month, totalEntries: monthEntries.length, totalHours, billableHours, totalAmount: Math.round(totalAmount * 100) / 100, currency: "SGD", byTechnician });
+  }
+
+  if (pathname === "/api/billing/export" && req.method === "GET") {
+    const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+    const month = qs.get("month") || new Date().toISOString().slice(0, 7);
+    const all = await db.getAll("billing_entries");
+    const entries = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+    const monthEntries = entries.filter(e => e.date && e.date.startsWith(month));
+    const header = "Date,Ticket ID,Ticket Title,Technician,Hours,Rate (SGD),Amount (SGD),Billable,Category,Description\n";
+    const rows = monthEntries.map(e => {
+      const amt = (e.billable ? (e.hours || 0) * (e.rate || 0) : 0).toFixed(2);
+      return [e.date, e.ticketId, `"${(e.ticketTitle || "").replace(/"/g, '""')}"`, e.technician, e.hours, e.rate || 0, amt, e.billable ? "Yes" : "No", e.category, `"${(e.description || "").replace(/"/g, '""')}"`].join(",");
+    }).join("\n");
+    res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="billing-${month}.csv"` });
+    return res.end(header + rows);
+  }
+
+  // ─── Self-Service Portal ──────────────────────────────────────────────
+  if (pathname.startsWith("/api/portal") && !FEATURE_PORTAL) {
+    return json(res, 404, { error: "Self-service portal not enabled" });
+  }
+
+  if (pathname === "/api/portal/submit" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.email || !body.subject) return json(res, 400, { error: "email and subject required" });
+    const incId = `INC-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+    const incident = {
+      id: incId,
+      title: String(body.subject).slice(0, 300),
+      description: String(body.description || "").slice(0, 5000),
+      category: String(body.category || "General").slice(0, 100),
+      priority: "Medium",
+      status: "Open",
+      reportedBy: String(body.email).slice(0, 200),
+      reportedByName: String(body.name || "").slice(0, 200),
+      channel: "self-service",
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+    };
+    await db.upsert("incidents", incId, JSON.stringify(incident));
+    await auditLog("portal_ticket_created", req, { incidentId: incId, email: body.email });
+    return json(res, 201, { id: incId, message: "Ticket submitted successfully" });
+  }
+
+  if (pathname === "/api/portal/tickets" && req.method === "GET") {
+    const qs = new URL(req.url, `http://${req.headers.host}`).searchParams;
+    const email = qs.get("email");
+    if (!email) return json(res, 400, { error: "email parameter required" });
+    const all = await db.getAll("incidents");
+    const tickets = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+      .filter(t => t && t.reportedBy === email)
+      .map(t => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, category: t.category, created: t.created, updated: t.updated }));
+    return json(res, 200, tickets);
+  }
+
+  if (pathname === "/api/portal/kb" && req.method === "GET") {
+    const all = await db.getAll("kb");
+    const articles = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+      .filter(a => a && a.status === "Published")
+      .map(a => ({ id: a.id, title: a.title, category: a.category, content: a.content }));
+    return json(res, 200, articles);
   }
 
   // Health check
@@ -12745,6 +13040,47 @@ async function start() {
         else console.log(`[Seed] Created 2 internal email whitelist entries`);
       } catch (e) { console.warn("[Seed] Email whitelist seed failed:", e.message); }
     }
+
+    // ─── Seed SG 2026 Public Holidays ───────────────────────────────
+    try {
+      const hRow = await db.getOne("sg_holidays", "holidays_2026");
+      if (!hRow) {
+        const holidays2026 = { year: 2026, holidays: [
+          { date: "2026-01-01", name: "New Year's Day" },
+          { date: "2026-01-29", name: "Chinese New Year" },
+          { date: "2026-01-30", name: "Chinese New Year (Day 2)" },
+          { date: "2026-03-31", name: "Hari Raya Puasa" },
+          { date: "2026-04-03", name: "Good Friday" },
+          { date: "2026-05-01", name: "Labour Day" },
+          { date: "2026-05-12", name: "Vesak Day" },
+          { date: "2026-06-07", name: "Hari Raya Haji" },
+          { date: "2026-08-09", name: "National Day" },
+          { date: "2026-10-20", name: "Deepavali" },
+          { date: "2026-12-25", name: "Christmas Day" },
+        ]};
+        await db.upsert("sg_holidays", "holidays_2026", JSON.stringify(holidays2026));
+        // Also set holidays in SLA policy
+        const existingPolicy = await db.getOne("sla_config", "active_policy");
+        const policy = existingPolicy ? JSON.parse(existingPolicy.data) : {};
+        if (!policy.holidays || policy.holidays.length === 0) {
+          policy.holidays = holidays2026.holidays.map(h => h.date);
+          await db.upsert("sla_config", "active_policy", JSON.stringify(policy));
+        }
+        console.log(`[Seed] Created SG 2026 public holidays (${holidays2026.holidays.length} holidays)`);
+      }
+    } catch (e) { console.warn("[Seed] SG holidays seed failed:", e.message); }
+
+    // ─── Auto-create setup_completed for existing deployments ───────
+    try {
+      const setupRow = await db.getOne("tenant_settings", "setup_completed");
+      if (!setupRow) {
+        const incCount = await db.count("incidents");
+        if (incCount > 0) {
+          await db.upsert("tenant_settings", "setup_completed", JSON.stringify({ completed: true, at: new Date().toISOString(), auto: true }));
+          console.log("[Setup] Existing deployment detected — marked setup as completed");
+        }
+      }
+    } catch (e) { console.warn("[Setup] Auto-complete check failed:", e.message); }
 
     // ─── SLA Data Migration: Backfill Missing Fields ────────────────
     try {

@@ -1531,11 +1531,20 @@ export default function ITSMApp() {
 
   // ─── Runtime Config (fetched from server /api/config) ──────────────
   const [runtimeConfig, setRuntimeConfig] = useState(null);
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [setupStep, setSetupStep] = useState(0);
+  const [setupData, setSetupData] = useState({ companyName: "", companyShortName: "", adminEmail: "", timezone: "Asia/Singapore", businessHoursStart: 9, businessHoursEnd: 18, businessDays: "Mon-Fri", logoUrl: "" });
   useEffect(() => {
     fetch("/api/config").then(r => r.json()).then(cfg => {
       setRuntimeConfig(cfg);
       if (cfg.appName) APP_VERSION.name = cfg.appName;
       if (cfg.aiEngineName) APP_VERSION.engine = cfg.aiEngineName + " (Multi-Model: Pro/Mini/Nano)";
+      // Check setup wizard status
+      if (cfg.features?.setupWizard) {
+        fetch("/api/setup/status").then(r => r.json()).then(s => {
+          if (!s.completed) setShowSetupWizard(true);
+        }).catch(() => {});
+      }
     }).catch(() => {});
   }, []);
 
@@ -22928,6 +22937,96 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           <div style={{ fontSize: 9, color: "#5A617855", marginTop: 4 }}>
             Build {APP_VERSION.build} • {APP_VERSION.platform} • Powered by Azure AI & Microsoft Entra ID
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Setup Wizard Modal ─────────────────────────────────────────────
+  if (showSetupWizard) {
+    const wizardSteps = ["Welcome", "Company Info", "Business Hours", "Complete"];
+    const submitSetup = async () => {
+      try {
+        const r = await fetch("/api/setup/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(setupData) });
+        if (r.ok) { setShowSetupWizard(false); window.location.reload(); }
+      } catch (e) { console.error("Setup error:", e); }
+    };
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#09090B", color: "#FAFAFA", fontFamily: "'DM Sans', sans-serif" }}>
+        <div style={{ background: "#111318", borderRadius: 16, padding: 40, maxWidth: 520, width: "100%", border: "1px solid #1E2030" }}>
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🚀</div>
+            <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>ITSM Setup Wizard</h1>
+            <p style={{ color: "#71717A", fontSize: 13, marginTop: 6 }}>Step {setupStep + 1} of {wizardSteps.length}: {wizardSteps[setupStep]}</p>
+            <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 12 }}>
+              {wizardSteps.map((_, i) => <div key={i} style={{ width: 40, height: 4, borderRadius: 2, background: i <= setupStep ? "#6366F1" : "#27272A" }} />)}
+            </div>
+          </div>
+          {setupStep === 0 && <div style={{ textAlign: "center" }}>
+            <p style={{ color: "#A1A1AA", fontSize: 14, lineHeight: 1.6 }}>Welcome! Let's set up your ITSM environment.<br/>This will configure your organization details, business hours, and SLA policies.</p>
+            <button onClick={() => setSetupStep(1)} style={{ marginTop: 20, padding: "10px 32px", background: "#6366F1", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Get Started</button>
+          </div>}
+          {setupStep === 1 && <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <label style={{ fontSize: 13, color: "#A1A1AA" }}>Company Name *
+              <input value={setupData.companyName} onChange={e => setSetupData(p => ({ ...p, companyName: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </label>
+            <label style={{ fontSize: 13, color: "#A1A1AA" }}>Short Name
+              <input value={setupData.companyShortName} onChange={e => setSetupData(p => ({ ...p, companyShortName: e.target.value }))} placeholder="e.g. ACME" style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </label>
+            <label style={{ fontSize: 13, color: "#A1A1AA" }}>Admin Email
+              <input value={setupData.adminEmail} onChange={e => setSetupData(p => ({ ...p, adminEmail: e.target.value }))} type="email" style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </label>
+            <label style={{ fontSize: 13, color: "#A1A1AA" }}>Logo URL (optional)
+              <input value={setupData.logoUrl} onChange={e => setSetupData(p => ({ ...p, logoUrl: e.target.value }))} placeholder="https://..." style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </label>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={() => setSetupStep(0)} style={{ flex: 1, padding: "10px", background: "#27272A", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, cursor: "pointer" }}>Back</button>
+              <button onClick={() => setSetupStep(2)} disabled={!setupData.companyName} style={{ flex: 1, padding: "10px", background: setupData.companyName ? "#6366F1" : "#3F3F46", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Next</button>
+            </div>
+          </div>}
+          {setupStep === 2 && <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <label style={{ fontSize: 13, color: "#A1A1AA" }}>Timezone
+              <select value={setupData.timezone} onChange={e => setSetupData(p => ({ ...p, timezone: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14 }}>
+                <option value="Asia/Singapore">Asia/Singapore (SGT, UTC+8)</option>
+                <option value="Asia/Kuala_Lumpur">Asia/Kuala_Lumpur (MYT, UTC+8)</option>
+                <option value="Asia/Hong_Kong">Asia/Hong_Kong (HKT, UTC+8)</option>
+                <option value="Asia/Jakarta">Asia/Jakarta (WIB, UTC+7)</option>
+                <option value="Asia/Tokyo">Asia/Tokyo (JST, UTC+9)</option>
+                <option value="Australia/Sydney">Australia/Sydney (AEST, UTC+10/11)</option>
+              </select>
+            </label>
+            <div style={{ display: "flex", gap: 12 }}>
+              <label style={{ flex: 1, fontSize: 13, color: "#A1A1AA" }}>Start Hour
+                <input type="number" min={0} max={23} value={setupData.businessHoursStart} onChange={e => setSetupData(p => ({ ...p, businessHoursStart: parseInt(e.target.value) || 9 }))} style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+              </label>
+              <label style={{ flex: 1, fontSize: 13, color: "#A1A1AA" }}>End Hour
+                <input type="number" min={0} max={23} value={setupData.businessHoursEnd} onChange={e => setSetupData(p => ({ ...p, businessHoursEnd: parseInt(e.target.value) || 18 }))} style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+              </label>
+            </div>
+            <label style={{ fontSize: 13, color: "#A1A1AA" }}>Business Days
+              <select value={setupData.businessDays} onChange={e => setSetupData(p => ({ ...p, businessDays: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 12px", background: "#1A1D27", border: "1px solid #27272A", borderRadius: 6, color: "#fff", fontSize: 14 }}>
+                <option value="Mon-Fri">Monday – Friday</option>
+                <option value="Mon-Sat">Monday – Saturday</option>
+                <option value="24/7">24/7</option>
+              </select>
+            </label>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={() => setSetupStep(1)} style={{ flex: 1, padding: "10px", background: "#27272A", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, cursor: "pointer" }}>Back</button>
+              <button onClick={() => setSetupStep(3)} style={{ flex: 1, padding: "10px", background: "#6366F1", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Next</button>
+            </div>
+          </div>}
+          {setupStep === 3 && <div style={{ textAlign: "center" }}>
+            <div style={{ background: "#1A1D27", borderRadius: 8, padding: 16, marginBottom: 16, textAlign: "left", fontSize: 13 }}>
+              <div style={{ color: "#A1A1AA" }}>Company: <span style={{ color: "#fff" }}>{setupData.companyName}</span></div>
+              <div style={{ color: "#A1A1AA", marginTop: 4 }}>Admin: <span style={{ color: "#fff" }}>{setupData.adminEmail || "—"}</span></div>
+              <div style={{ color: "#A1A1AA", marginTop: 4 }}>Hours: <span style={{ color: "#fff" }}>{setupData.businessHoursStart}:00 – {setupData.businessHoursEnd}:00 ({setupData.businessDays})</span></div>
+              <div style={{ color: "#A1A1AA", marginTop: 4 }}>Timezone: <span style={{ color: "#fff" }}>{setupData.timezone}</span></div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setSetupStep(2)} style={{ flex: 1, padding: "10px", background: "#27272A", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, cursor: "pointer" }}>Back</button>
+              <button onClick={submitSetup} style={{ flex: 1, padding: "10px", background: "#22C55E", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Complete Setup</button>
+            </div>
+          </div>}
         </div>
       </div>
     );
