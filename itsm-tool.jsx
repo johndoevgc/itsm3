@@ -6,8 +6,8 @@ import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEven
 
 // ─── App Version ─────────────────────────────────────────────────────────
 const APP_VERSION = {
-  version: "4.3.0",
-  build: "phase9-ai-learning",
+  version: "3.0",
+  build: "phase10-productization",
   date: "2026-04-27",
   channel: "Production",
   name: "ITSM",
@@ -1601,6 +1601,7 @@ export default function ITSMApp() {
   const [graphCalendar, setGraphCalendar] = useState(null); // Today's events
   const [graphChats, setGraphChats] = useState(null); // Teams chats
   const [graphTeams, setGraphTeams] = useState(null); // Teams list
+  const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState(null);
   const graphFetchedRef = useRef(false);
 
