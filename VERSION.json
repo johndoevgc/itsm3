@@ -1,11 +1,11 @@
 {
-  "version": "2.1",
+  "version": "3.0",
   "build": "2026-04-27",
-  "phases": 5,
+  "phases": 10,
   "steps": 52,
   "e2eTests": 359,
-  "collections": 68,
-  "endpoints": "250+",
+  "collections": 74,
+  "endpoints": "300+",
   "docs": [
     "Architecture-Guide.html",
     "API-Reference.html",
