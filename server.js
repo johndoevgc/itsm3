@@ -1078,13 +1078,34 @@ const VALID_COLLECTIONS = new Set([
   "benchmarks",
   "ticket_templates",
   "saved_filters",
+  "tenant_settings",
 ]);
+
+// ─── Version Info ─────────────────────────────────────────────────────
+let APP_VERSION = { version: "unknown", build: "unknown" };
+try { APP_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, "VERSION.json"), "utf8")); } catch {}
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
 let zdSyncInProgress = false;
 let zdLastSyncTime = null;
 let zdSyncStats = { tickets: 0, users: 0, orgs: 0, comments: 0, errors: 0 };
 let zdAutoSyncInterval = null;
+
+// ─── Dynamic Org Name (cached, refreshed every 5 min) ────────────────
+let _cachedOrgName = "VGC Technology Pte Ltd";
+let _orgNameCacheTs = 0;
+async function getOrgName() {
+  if (Date.now() - _orgNameCacheTs < 300000) return _cachedOrgName;
+  try {
+    const row = await db.getOne("tenant_settings", "tenant_config");
+    if (row) {
+      const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      if (d.orgName) _cachedOrgName = d.orgName;
+    }
+  } catch {}
+  _orgNameCacheTs = Date.now();
+  return _cachedOrgName;
+}
 
 // Get access token via Managed Identity (no secrets needed on Azure App Service)
 function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
@@ -5213,6 +5234,30 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     }
   }
 
+  // ─── Tenant Settings — Persist org info, timezone, etc to DB ────────
+  if (pathname === "/api/settings/tenant" && req.method === "GET") {
+    try {
+      const row = await db.getOne("tenant_settings", "tenant_config");
+      if (row) {
+        const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+        return json(res, 200, data);
+      }
+      return json(res, 200, { orgName: "VGC Technology Pte Ltd", timezone: "Asia/Singapore", dateFormat: "DD-MM-YYYY", language: "en" });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  if (pathname === "/api/settings/tenant" && req.method === "PUT") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    try {
+      const body = await parseBody(req);
+      const { orgName, timezone, dateFormat, language } = body || {};
+      const settings = { id: "tenant_config", orgName: orgName || "VGC Technology Pte Ltd", timezone: timezone || "Asia/Singapore", dateFormat: dateFormat || "DD-MM-YYYY", language: language || "en", updatedAt: new Date().toISOString() };
+      await db.upsert("tenant_settings", "tenant_config", JSON.stringify(settings));
+      return json(res, 200, { ok: true, ...settings });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // ─── Azure OpenAI — Save Settings (runtime) ─────────────────────────
   if (pathname === "/api/settings/openai" && req.method === "POST") {
     if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
@@ -5223,8 +5268,10 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     if (endpoint) AZURE_OPENAI_ENDPOINT = endpoint;
     if (apiKey) AZURE_OPENAI_KEY = apiKey;
     if (model) AZURE_OPENAI_MODEL = model;
-    console.log(`[OPENAI] Settings updated. Model=${AZURE_OPENAI_MODEL}, Endpoint=${AZURE_OPENAI_ENDPOINT.substring(0, 60)}...`);
-    return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, models: AI_MODELS, message: "Azure OpenAI settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
+    // Persist to DB so settings survive restart
+    try { await db.upsert("tenant_settings", "openai_config", JSON.stringify({ id: "openai_config", endpoint: AZURE_OPENAI_ENDPOINT, apiKey: AZURE_OPENAI_KEY, model: AZURE_OPENAI_MODEL, updatedAt: new Date().toISOString() })); } catch {}
+    console.log(`[OPENAI] Settings updated & persisted. Model=${AZURE_OPENAI_MODEL}, Endpoint=${AZURE_OPENAI_ENDPOINT.substring(0, 60)}...`);
+    return json(res, 200, { ok: true, model: AZURE_OPENAI_MODEL, models: AI_MODELS, message: "Azure OpenAI settings updated and persisted to database." });
   }
 
   // ─── Azure OpenAI — Get Current Config: GET /api/settings/openai ────
@@ -5248,8 +5295,10 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     SOLARWINDS_API_KEY = apiKey;
     SOLARWINDS_API_HOST = (apiHost || "wwwasia.system-monitor.com").replace(/^(https?:\/\/)/, "").replace(/\/+$/, "");
     if (global._solarwindsCache) global._solarwindsCache = { data: null, ts: 0 };
-    console.log(`[SOLARWINDS] API settings updated. Host=${SOLARWINDS_API_HOST}`);
-    return json(res, 200, { ok: true, message: "SolarWinds RMM settings updated. Changes are active until next app restart. Update Azure App Settings for persistence." });
+    // Persist to DB
+    try { await db.upsert("tenant_settings", "solarwinds_config", JSON.stringify({ id: "solarwinds_config", apiKey: SOLARWINDS_API_KEY, apiHost: SOLARWINDS_API_HOST, updatedAt: new Date().toISOString() })); } catch {}
+    console.log(`[SOLARWINDS] API settings updated & persisted. Host=${SOLARWINDS_API_HOST}`);
+    return json(res, 200, { ok: true, message: "SolarWinds RMM settings updated and persisted to database." });
   }
 
   // ─── SolarWinds RMM / N-able API Proxy ──────────────────────────────
@@ -6835,9 +6884,25 @@ Return JSON ONLY (no markdown): {
 
       const activitySummary = (ticket.activityLog || []).map(a => `[${a.time}] ${a.user}: ${a.detail}`).join("\n");
 
-      const systemPrompt = `You are VGC Technology's knowledge management AI. Generate a professional KB article from a resolved ITSM incident. The article should help future engineers resolve similar issues quickly. Existing KB titles for deduplication: [${kbTitles.substring(0, 1000)}]. If this resolution is too similar to an existing article, set isDuplicate=true. Return JSON ONLY: { "title": "clear article title", "category": "matching incident category", "content": "full structured article with Problem, Cause, Solution, Prevention sections", "tags": ["tag1","tag2"], "whenToUse": "one-line description of when to use this article", "bestFor": "role or scenario", "confidence": 0-100, "isDuplicate": false, "duplicateOf": "existing title if duplicate" }`;
+      const orgName = await getOrgName();
+      const systemPrompt = `You are ${orgName}'s knowledge management AI. Generate a professional, enterprise-grade KB article from a resolved ITSM incident. The article must help engineers resolve similar issues quickly and independently.
 
-      const userPrompt = `Resolved Incident:\nID: ${ticket.id}\nTitle: ${ticket.title}\nCategory: ${ticket.category || "General"}\nPriority: ${ticket.priority}\nDescription: ${(ticket.description || "").substring(0, 500)}\nResolution/Workaround: ${(ticket.workaround || ticket.resolution || "").substring(0, 500)}\n\nActivity Log:\n${activitySummary.substring(0, 2000)}\n\nGenerate a KB article from this resolution.`;
+Structure requirements:
+- **Problem Statement**: Clear description of the issue and symptoms
+- **Root Cause**: Technical root cause analysis  
+- **Solution Steps**: Numbered, actionable resolution steps (copy-paste commands where applicable)
+- **Prevention**: How to prevent recurrence
+- **When To Use**: One-line description of when this article applies
+- **Best For**: Target audience (e.g., "L1 Service Desk", "Network Engineers")
+- **Quick Fix**: 1-2 sentence emergency workaround if applicable
+- **Related Services**: Affected services/systems
+- **Estimated Resolution Time**: Typical time to resolve
+
+Existing KB titles for deduplication: [${kbTitles.substring(0, 1500)}]. If this resolution is too similar to an existing article, set isDuplicate=true.
+
+Return JSON ONLY: { "title": "clear article title", "category": "matching incident category", "content": "full structured article with above sections", "tags": ["tag1","tag2"], "whenToUse": "one-line", "bestFor": "role or scenario", "quickFix": "emergency workaround or empty string", "relatedServices": ["svc1"], "estimatedResolutionTime": "Xh Ym", "confidence": 0-100, "isDuplicate": false, "duplicateOf": "existing title if duplicate" }`;
+
+      const userPrompt = `Resolved Incident:\nID: ${ticket.id}\nTitle: ${ticket.title}\nCategory: ${ticket.category || "General"}\nPriority: ${ticket.priority}\nDescription: ${(ticket.description || "").substring(0, 800)}\nResolution/Workaround: ${(ticket.workaround || ticket.resolution || "").substring(0, 800)}\n\nActivity Log:\n${activitySummary.substring(0, 3000)}\n\nGenerate a comprehensive KB article from this resolution.`;
 
       const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
       const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
@@ -6883,6 +6948,9 @@ Return JSON ONLY (no markdown): {
           tags: kbDraft.tags || [],
           whenToUse: kbDraft.whenToUse || "",
           bestFor: kbDraft.bestFor || "",
+          quickFix: kbDraft.quickFix || "",
+          relatedServices: kbDraft.relatedServices || [],
+          estimatedResolutionTime: kbDraft.estimatedResolutionTime || "",
           sourceTicketId: ticket.id,
         },
         confidence: kbDraft.confidence || 75,
@@ -6950,6 +7018,113 @@ Return JSON ONLY (no markdown): {
       return json(res, 200, { success: true, kbId, article: kbArticle });
     } catch (err) {
       console.error("[AI KB Approve]", err.message);
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/ai/kb-batch-generate — batch-generate KB from all recent resolved incidents
+  if (pathname === "/api/ai/kb-batch-generate" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+      return json(res, 503, { error: "Azure OpenAI not configured" });
+    }
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    try {
+      const body = await parseBody(req, 50000);
+      const { requestedBy, sinceDays = 7, maxArticles = 10 } = body || {};
+      if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+
+      // Get resolved incidents from the last N days
+      const cutoff = new Date(Date.now() - sinceDays * 86400000).toISOString();
+      const allInc = await db.getAll("incidents");
+      const resolved = allInc.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+        .filter(t => t && (t.status === "Resolved" || t.status === "Closed") && (t.workaround || t.resolution) && (t.resolvedAt || t.updatedAt || t.created) >= cutoff);
+
+      // Get existing KB + existing drafts to skip
+      const existingKB = await db.getAll("kb");
+      const kbTitles = existingKB.map(k => { try { const d = JSON.parse(k.data); return d.title || ""; } catch { return ""; } }).filter(Boolean);
+      const existingDrafts = await db.getAll("ai_actions");
+      const draftSourceIds = new Set(existingDrafts.map(d => { try { const a = JSON.parse(d.data); return a.type === "kb_draft" ? a.incidentId : null; } catch { return null; } }).filter(Boolean));
+
+      // Filter out incidents that already have KB drafts
+      const candidates = resolved.filter(t => !draftSourceIds.has(t.id)).slice(0, maxArticles);
+
+      if (candidates.length === 0) {
+        return json(res, 200, { success: true, generated: 0, message: "No new resolved incidents need KB articles" });
+      }
+
+      // Get AI learning feedback to improve generation
+      let feedbackContext = "";
+      try {
+        const fbRows = await db.getAll("ai_learning_feedback");
+        const recentFb = fbRows.slice(-20).map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(f => f && f.type === "kb_quality");
+        if (recentFb.length > 0) {
+          feedbackContext = `\n\nRecent engineer feedback on KB quality:\n${recentFb.map(f => `- ${f.rating}: "${f.comment}"`).join("\n")}`;
+        }
+      } catch {}
+
+      const orgName = await getOrgName();
+      const results = [];
+
+      for (const ticket of candidates) {
+        try {
+          const activitySummary = (ticket.activityLog || []).map(a => `[${a.time}] ${a.user}: ${a.detail}`).join("\n");
+
+          const systemPrompt = `You are ${orgName}'s knowledge management AI. Generate a professional, enterprise-grade KB article from a resolved ITSM incident.${feedbackContext}
+
+Structure: Problem Statement, Root Cause, Solution Steps (numbered), Prevention, When To Use, Best For, Quick Fix. Existing KB: [${kbTitles.join(", ").substring(0, 1500)}]. Set isDuplicate=true if too similar.
+
+Return JSON ONLY: { "title": "string", "category": "string", "content": "full article", "tags": ["tag1"], "whenToUse": "string", "bestFor": "string", "quickFix": "string", "confidence": 0-100, "isDuplicate": false, "duplicateOf": "" }`;
+
+          const userPrompt = `Incident ${ticket.id}: ${ticket.title}\nCategory: ${ticket.category || "General"}\nPriority: ${ticket.priority}\nDescription: ${(ticket.description || "").substring(0, 600)}\nResolution: ${(ticket.workaround || ticket.resolution || "").substring(0, 600)}\nActivity:\n${activitySummary.substring(0, 1500)}`;
+
+          const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
+          const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+          const aiResult = await new Promise((resolve, reject) => {
+            const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY } }, (aiRes) => {
+              let data = ""; aiRes.on("data", c => data += c);
+              aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}`)); });
+            });
+            aiReq.on("error", reject);
+            aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+            aiReq.write(JSON.stringify(payload));
+            aiReq.end();
+          });
+
+          const text = extractAIText(aiResult);
+          const kbDraft = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+
+          if (kbDraft.isDuplicate) {
+            results.push({ ticketId: ticket.id, status: "skipped_duplicate", duplicateOf: kbDraft.duplicateOf });
+            continue;
+          }
+
+          const draftId = `KBD-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+          const now = new Date().toISOString();
+          const actionRecord = {
+            id: draftId, type: "kb_draft", severity: "low",
+            title: `KB Draft: ${kbDraft.title}`,
+            description: `Auto-generated from resolved ticket ${ticket.id} (batch)`,
+            incidentId: ticket.id,
+            suggestedAction: `Publish KB article: "${kbDraft.title}"`,
+            kbDraft: { title: kbDraft.title, category: kbDraft.category || ticket.category || "General", content: kbDraft.content, tags: kbDraft.tags || [], whenToUse: kbDraft.whenToUse || "", bestFor: kbDraft.bestFor || "", quickFix: kbDraft.quickFix || "", sourceTicketId: ticket.id },
+            confidence: kbDraft.confidence || 75,
+            autoExecutable: false, status: "pending_approval",
+            createdAt: now, createdBy: "AI KB Batch Engine", requestedBy,
+          };
+          await db.upsert("ai_actions", draftId, JSON.stringify(actionRecord));
+          kbTitles.push(kbDraft.title); // prevent dups within same batch
+          results.push({ ticketId: ticket.id, draftId, title: kbDraft.title, confidence: kbDraft.confidence || 75, status: "draft_created" });
+        } catch (err) {
+          results.push({ ticketId: ticket.id, status: "error", error: err.message });
+        }
+      }
+
+      console.log(`[AI KB Batch] Generated ${results.filter(r => r.status === "draft_created").length} drafts from ${candidates.length} candidates`);
+      return json(res, 200, { success: true, generated: results.filter(r => r.status === "draft_created").length, skipped: results.filter(r => r.status === "skipped_duplicate").length, errors: results.filter(r => r.status === "error").length, results });
+    } catch (err) {
+      console.error("[AI KB Batch]", err.message);
       return json(res, 500, { error: err.message });
     }
   }
@@ -8201,6 +8376,8 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     try { dbOk = await db.ping(); } catch {}
     return json(res, 200, {
       status: "ok",
+      version: APP_VERSION.version,
+      build: APP_VERSION.build,
       database: dbOk ? "connected" : "error",
       dbType: db.type,
       dbLabel: db.label,
@@ -12416,9 +12593,28 @@ async function start() {
   server.listen(PORT, async () => {
     const stats = {};
     for (const c of VALID_COLLECTIONS) stats[c] = await db.count(c);
-    console.log(`VGC-ITSM serving on port ${PORT}`);
+    console.log(`VGC-ITSM v${APP_VERSION.version} (build ${APP_VERSION.build}) serving on port ${PORT}`);
     console.log(`Database: ${db.label}`);
     console.log(`Collections:`, stats);
+
+    // Restore persisted settings from DB (OpenAI, SolarWinds)
+    try {
+      const oaiRow = await db.getOne("tenant_settings", "openai_config");
+      if (oaiRow) {
+        const cfg = typeof oaiRow.data === "string" ? JSON.parse(oaiRow.data) : oaiRow.data;
+        if (cfg.endpoint && !process.env.AZURE_OPENAI_ENDPOINT) AZURE_OPENAI_ENDPOINT = cfg.endpoint;
+        if (cfg.apiKey && !process.env.AZURE_OPENAI_KEY) AZURE_OPENAI_KEY = cfg.apiKey;
+        if (cfg.model && !process.env.AZURE_OPENAI_MODEL) AZURE_OPENAI_MODEL = cfg.model;
+        console.log(`[Settings] Restored OpenAI config from DB. Model=${AZURE_OPENAI_MODEL}`);
+      }
+      const swRow = await db.getOne("tenant_settings", "solarwinds_config");
+      if (swRow) {
+        const cfg = typeof swRow.data === "string" ? JSON.parse(swRow.data) : swRow.data;
+        if (cfg.apiKey && !process.env.SOLARWINDS_API_KEY) SOLARWINDS_API_KEY = cfg.apiKey;
+        if (cfg.apiHost && !process.env.SOLARWINDS_API_HOST) SOLARWINDS_API_HOST = cfg.apiHost;
+        console.log(`[Settings] Restored SolarWinds config from DB. Host=${SOLARWINDS_API_HOST}`);
+      }
+    } catch (e) { console.log("[Settings] Could not restore persisted settings:", e.message); }
 
     // Seed default KB articles if none exist
     if (stats.kb === 0) {

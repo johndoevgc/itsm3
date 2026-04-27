@@ -1,10 +1,10 @@
 {
-  "version": "2.0",
-  "build": "2026-04-12",
+  "version": "2.1",
+  "build": "2026-04-27",
   "phases": 5,
   "steps": 52,
   "e2eTests": 359,
-  "collections": 67,
+  "collections": 68,
   "endpoints": "250+",
   "docs": [
     "Architecture-Guide.html",
