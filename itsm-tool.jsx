@@ -1601,6 +1601,8 @@ export default function ITSMApp() {
   const [graphCalendar, setGraphCalendar] = useState(null); // Today's events
   const [graphChats, setGraphChats] = useState(null); // Teams chats
   const [graphTeams, setGraphTeams] = useState(null); // Teams list
+  const [graphUnread, setGraphUnread] = useState(0); // Unread email count
+  const [graphPresence, setGraphPresence] = useState(null); // User presence
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState(null);
   const graphFetchedRef = useRef(false);
