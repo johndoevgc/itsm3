@@ -19570,7 +19570,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", borderRadius: 10, padding: 4 }}>
           {[
             { id: "automation", label: "🤖 Automation", count: null },
-            { id: "queue", label: "� Engineer Review", count: pendingQueue.length },
+            { id: "queue", label: "📝 AI Draft Queue", count: pendingQueue.length },
             { id: "tickets", label: "📋 All Tickets", count: zdStats.open + zdStats.pending },
             { id: "analytics", label: "📊 Analytics", count: null },
             { id: "sync", label: "🔄 Sync & Migration", count: zdSyncStatus?.counts?.zdTickets || null },
