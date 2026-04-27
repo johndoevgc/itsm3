@@ -1153,6 +1153,9 @@ let zdSyncInProgress = false;
 let zdLastSyncTime = null;
 let zdSyncStats = { tickets: 0, users: 0, orgs: 0, comments: 0, errors: 0 };
 let zdAutoSyncInterval = null;
+// Shutdown handle registries — push any setInterval/setTimeout that needs cleanup on SIGTERM/SIGINT
+const _shutdownIntervals = [];
+const _shutdownTimeouts = [];
 
 // ─── Dynamic Org Name (cached, refreshed every 5 min) ────────────────
 let _cachedOrgName = ORG_NAME;
@@ -2714,11 +2717,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Graph API proxy: /api/graph?endpoint=/users
+  // Graph API proxy: /api/graph?endpoint=/users (allowlisted endpoints only)
   if (pathname.startsWith("/api/graph")) {
     const endpoint = urlObj.searchParams.get("endpoint");
     if (!endpoint || !endpoint.startsWith("/")) {
       return json(res, 400, { error: "Missing or invalid endpoint parameter" });
+    }
+    const GRAPH_ALLOWED_PREFIXES = ["/me", "/users", "/groups", "/teams", "/communications", "/reports"];
+    const epLower = endpoint.toLowerCase();
+    if (!GRAPH_ALLOWED_PREFIXES.some(p => epLower === p || epLower.startsWith(p + "/") || epLower.startsWith(p + "?"))) {
+      return json(res, 403, { error: "Graph endpoint not allowed" });
     }
     try {
       const data = await graphAppCall(endpoint);
@@ -8966,6 +8974,35 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
+  // ─── POST /api/purge-test-data — Remove E2E/test records from all collections ───
+  if (pathname === "/api/purge-test-data" && req.method === "POST") {
+    try {
+      const TEST_PATTERNS = [/^INC-E2E-/i, /^INC-MOH/i, /^INC-D\d$/i, /^INC000\d$/i, /^PRB000\d$/i, /^CHG000\d$/i, /^REQ000\d$/i, /^AST000\d$/i];
+      const TEST_STRINGS = ["E2E Agent", "user@test.com", "e2e-test", "test-automation", "E2E Test"];
+      const COLLECTIONS_TO_SCAN = ["incidents", "problems", "changes", "requests", "assets", "customers", "kb", "users", "audit_log", "worklogs", "automation_rules", "sla_breaches", "notifications", "releases", "known_errors"];
+      const results = {};
+      let totalPurged = 0;
+      for (const coll of COLLECTIONS_TO_SCAN) {
+        try {
+          const rows = await db.getAll(coll);
+          let deleted = 0;
+          for (const row of rows) {
+            const item = typeof row.data === "string" ? JSON.parse(row.data) : (row.data || row);
+            const id = item.id || row.id || "";
+            const str = JSON.stringify(item);
+            const isTest = TEST_PATTERNS.some(p => p.test(id)) || TEST_STRINGS.some(s => str.includes(s));
+            if (isTest) {
+              try { await db.delete(coll, row.id || id); deleted++; } catch {}
+            }
+          }
+          if (deleted > 0) { results[coll] = deleted; totalPurged += deleted; }
+        } catch {}
+      }
+      await db.audit("system", "purge-test-data", "purge", JSON.stringify({ totalPurged, collections: results }), auth.name || "System");
+      return json(res, 200, { ok: true, totalPurged, collections: results, timestamp: new Date().toISOString() });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // Health check
   if (pathname === "/api/health") {
     let dbOk = false;
@@ -11598,63 +11635,6 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
-  // ─── Step 13: Automation Rules Execution Engine ───────────────────────
-  // POST /api/automation/evaluate — evaluate all rules against a ticket event
-  if (pathname === "/api/automation/evaluate" && req.method === "POST") {
-    const body = await parseBody(req);
-    if (!body.incidentId || !body.event) return json(res, 400, { error: "incidentId and event required" });
-    try {
-      const incRow = await db.getOne("incidents", body.incidentId);
-      if (!incRow) return json(res, 404, { error: "Incident not found" });
-      const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
-      const ruleRows = await db.getAll("automation_rules");
-      const rules = ruleRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).filter(r => r.enabled !== false && r.trigger === body.event);
-      const results = [];
-      for (const rule of rules) {
-        let conditionsMet = true;
-        for (const cond of (rule.conditions || [])) {
-          const fieldVal = inc[cond.field];
-          if (cond.operator === "equals" && fieldVal !== cond.value) conditionsMet = false;
-          if (cond.operator === "contains" && !(fieldVal || "").toString().toLowerCase().includes((cond.value || "").toLowerCase())) conditionsMet = false;
-          if (cond.operator === "not_equals" && fieldVal === cond.value) conditionsMet = false;
-          if (cond.operator === "in" && !(cond.value || []).includes(fieldVal)) conditionsMet = false;
-        }
-        if (!conditionsMet) continue;
-        const actionsApplied = [];
-        for (const action of (rule.actions || [])) {
-          if (action.type === "set_field") { inc[action.field] = action.value; actionsApplied.push(`Set ${action.field}=${action.value}`); }
-          if (action.type === "assign") { inc.assignee = action.value; actionsApplied.push(`Assigned to ${action.value}`); }
-          if (action.type === "set_priority") { inc.priority = action.value; actionsApplied.push(`Priority → ${action.value}`); }
-          if (action.type === "add_tag") { inc.tags = [...(inc.tags || []), action.value]; actionsApplied.push(`Tag added: ${action.value}`); }
-          if (action.type === "escalate") { inc.escalated = true; inc.escalationLevel = (inc.escalationLevel || 0) + 1; actionsApplied.push("Escalated"); }
-          if (action.type === "notify") { actionsApplied.push(`Notify: ${action.value}`); }
-        }
-        if (actionsApplied.length > 0) {
-          await db.upsert("incidents", body.incidentId, inc);
-          results.push({ ruleId: rule.id, ruleName: rule.name, actions: actionsApplied });
-        }
-      }
-      return json(res, 200, { incidentId: body.incidentId, event: body.event, rulesEvaluated: rules.length, rulesTriggered: results.length, results });
-    } catch (err) { return json(res, 500, { error: err.message }); }
-  }
-  // GET /api/automation/rules — list all automation rules
-  if (pathname === "/api/automation/rules" && req.method === "GET") {
-    try {
-      const rows = await db.getAll("automation_rules");
-      return json(res, 200, rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data));
-    } catch (err) { return json(res, 500, { error: err.message }); }
-  }
-  // POST /api/automation/rules — create automation rule
-  if (pathname === "/api/automation/rules" && req.method === "POST") {
-    const body = await parseBody(req);
-    if (!body.name || !body.trigger) return json(res, 400, { error: "name and trigger required" });
-    const id = `AR-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const rule = { id, name: body.name, description: body.description || "", trigger: body.trigger, conditions: body.conditions || [], actions: body.actions || [], enabled: body.enabled !== false, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
-    await db.upsert("automation_rules", id, rule);
-    await db.audit("automation_rules", id, "create", `Automation rule: ${rule.name}`, auth.name || "System");
-    return json(res, 201, rule);
-  }
-
   // ─── Step 14: Email-to-Ticket Ingest ──────────────────────────────────
   // POST /api/ingest/email — parse inbound email and create ticket
   if (pathname === "/api/ingest/email" && req.method === "POST") {
@@ -13076,10 +13056,10 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
   const distDir = path.join(__dirname, "dist");
   const hasDistDir = fs.existsSync(distDir);
   const serveRoot = hasDistDir ? distDir : __dirname;
-  let filePath = path.join(serveRoot, pathname === "/" ? "index.html" : pathname);
+  let filePath = path.resolve(serveRoot, (pathname === "/" ? "index.html" : pathname).replace(/^[\/]+/, ""));
   const ext = path.extname(filePath).toLowerCase();
   // Security: prevent directory traversal
-  if (!filePath.startsWith(serveRoot)) {
+  if (!path.normalize(filePath).startsWith(path.normalize(serveRoot))) {
     res.writeHead(403);
     return res.end("Forbidden");
   }
@@ -13496,10 +13476,12 @@ async function start() {
       }
     };
     // Run initial scan after 2 min delay, then every 15 min
-    setTimeout(() => {
+    const slaGuardianStartTimer = setTimeout(() => {
       runSlaGuardian();
-      setInterval(runSlaGuardian, SLA_GUARDIAN_INTERVAL);
+      const slaGuardianInterval = setInterval(runSlaGuardian, SLA_GUARDIAN_INTERVAL);
+      _shutdownIntervals.push(slaGuardianInterval);
     }, 2 * 60 * 1000);
+    _shutdownTimeouts.push(slaGuardianStartTimer);
     console.log("[SLA Guardian] Proactive SLA prediction scheduled every 15 minutes");
 
     // ─── Scheduled Zendesk Incremental Sync (every 5 min) ───────────
@@ -13583,6 +13565,7 @@ async function start() {
       }
     };
     const queueCleanupInterval = setInterval(runQueueCleanup, CLEANUP_INTERVAL);
+    _shutdownIntervals.push(queueCleanupInterval);
 
     // ─── Scheduled Log Purge (every 6 hours, after queue cleanup) ───
     const LOG_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
@@ -13634,6 +13617,7 @@ async function start() {
       }
     };
     const logPurgeInterval = setInterval(runLogPurge, LOG_PURGE_INTERVAL);
+    _shutdownIntervals.push(logPurgeInterval);
 
     // ─── Scheduled Terminal-Status AI Actions Purge (every 6 hours) ──
     // Deletes auto_applied, auto_approved, approved, executed, rejected records older than 7 days
@@ -13701,6 +13685,7 @@ async function start() {
       }
     };
     const terminalPurgeInterval = setInterval(runTerminalPurge, TERMINAL_PURGE_INTERVAL);
+    _shutdownIntervals.push(terminalPurgeInterval);
 
     // ─── Scheduled Audit Log Purge (every 6 hours, keep 30 days) ────
     const AUDIT_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
@@ -13740,6 +13725,7 @@ async function start() {
       }
     };
     const auditPurgeInterval = setInterval(runAuditPurge, AUDIT_PURGE_INTERVAL);
+    _shutdownIntervals.push(auditPurgeInterval);
 
     // Run once on startup with staggered delays
     setTimeout(() => {
@@ -13772,5 +13758,16 @@ async function start() {
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });
 
 // Graceful shutdown
-process.on("SIGINT", () => { if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval); if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
-process.on("SIGTERM", () => { if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval); if (workflowEngine) workflowEngine.stop(); if (cacheLayer) cacheLayer.stop(); if (wsServer) wsServer.stop(); if (slaEngine) slaEngine.stop(); db.close(); process.exit(0); });
+const _gracefulShutdown = () => {
+  try { _shutdownIntervals.forEach(h => { try { clearInterval(h); } catch {} }); } catch {}
+  try { _shutdownTimeouts.forEach(h => { try { clearTimeout(h); } catch {} }); } catch {}
+  if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval);
+  if (workflowEngine) workflowEngine.stop();
+  if (cacheLayer) cacheLayer.stop();
+  if (wsServer) wsServer.stop();
+  if (slaEngine) slaEngine.stop();
+  db.close();
+  process.exit(0);
+};
+process.on("SIGINT", _gracefulShutdown);
+process.on("SIGTERM", _gracefulShutdown);
