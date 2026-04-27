@@ -681,6 +681,120 @@ async function main() {
   assert("Dashboard layout PUT returns 200", dlPut.status === 200, `Status: ${dlPut.status}`);
   assert("Dashboard layout saved widgets", dlPut.json.widgets.length === 2, `Got: ${dlPut.json.widgets.length}`);
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Phase 3: Enterprise Modules & Compliance Tests
+  // ═══════════════════════════════════════════════════════════════════════
+
+  console.log("\n--- Phase 3: Release Management ---");
+  const relCreate = await postJson("/api/releases", { name: "Release 2026-Q2", type: "Major", description: "Q2 feature release", scheduledStart: "2026-06-01", scheduledEnd: "2026-06-15" });
+  assert("Release create returns 201", relCreate.status === 201, `Status: ${relCreate.status}`);
+  assert("Release has id", !!relCreate.json.id, `Got: ${relCreate.json.id}`);
+  assert("Release status is Plan", relCreate.json.status === "Plan", `Got: ${relCreate.json.status}`);
+  const relList = await getJson("/api/releases");
+  assert("Release list returns 200", relList.status === 200, `Status: ${relList.status}`);
+  assert("Release list is array", Array.isArray(relList.json), `Got: ${typeof relList.json}`);
+  if (relCreate.json.id) {
+    const relGet = await getJson(`/api/releases/${relCreate.json.id}`);
+    assert("Release GET returns 200", relGet.status === 200, `Status: ${relGet.status}`);
+    const relUpd = await putJson(`/api/releases/${relCreate.json.id}`, { status: "Build" });
+    assert("Release update returns 200", relUpd.status === 200, `Status: ${relUpd.status}`);
+    assert("Release status updated to Build", relUpd.json.status === "Build", `Got: ${relUpd.json.status}`);
+    const relLink = await postJson(`/api/releases/${relCreate.json.id}/link-change`, { changeId: "CHG-E2E-001" });
+    assert("Release link-change returns 200", relLink.status === 200, `Status: ${relLink.status}`);
+    assert("Release linkedChanges includes CHG", relLink.json.linkedChanges.includes("CHG-E2E-001"), `Got: ${JSON.stringify(relLink.json.linkedChanges)}`);
+  }
+
+  console.log("--- Phase 3: Self-Service Portal ---");
+  const ssCreate = await postJson("/api/self-service/create-ticket", { title: "My laptop is slow", requesterEmail: "enduser@test.com", category: "Hardware" });
+  assert("Self-service create returns 201", ssCreate.status === 201, `Status: ${ssCreate.status}`);
+  assert("Self-service has ticketId", !!ssCreate.json.ticketId, `Got: ${ssCreate.json.ticketId}`);
+  const ssTickets = await getJson("/api/self-service/my-tickets?email=enduser@test.com");
+  assert("Self-service my-tickets returns 200", ssTickets.status === 200, `Status: ${ssTickets.status}`);
+  assert("Self-service tickets found", ssTickets.json.total > 0, `Total: ${ssTickets.json.total}`);
+  const ssCatalog = await getJson("/api/self-service/catalog");
+  assert("Self-service catalog returns 200", ssCatalog.status === 200, `Status: ${ssCatalog.status}`);
+  const ssKb = await getJson("/api/self-service/kb-search?q=test");
+  assert("Self-service KB search returns 200", ssKb.status === 200, `Status: ${ssKb.status}`);
+  assert("KB search has results array", Array.isArray(ssKb.json.results), `Got: ${typeof ssKb.json.results}`);
+
+  console.log("--- Phase 3: Cost Allocation ---");
+  const costRate = await postJson("/api/cost/rates", { team: "E2E-Team", hourlyRate: 75, currency: "USD" });
+  assert("Cost rate POST returns 200", costRate.status === 200, `Status: ${costRate.status}`);
+  const costRates = await getJson("/api/cost/rates");
+  assert("Cost rates GET returns 200", costRates.status === 200, `Status: ${costRates.status}`);
+  assert("Cost rates is array", Array.isArray(costRates.json), `Got: ${typeof costRates.json}`);
+  const costSummary = await getJson("/api/cost/summary");
+  assert("Cost summary returns 200", costSummary.status === 200, `Status: ${costSummary.status}`);
+  assert("Cost summary has departments", Array.isArray(costSummary.json.departments), `Got: ${typeof costSummary.json.departments}`);
+  const costReport = await getJson("/api/cost/report");
+  assert("Cost report returns 200", costReport.status === 200, `Status: ${costReport.status}`);
+  assert("Cost report has items", Array.isArray(costReport.json.items), `Got: ${typeof costReport.json.items}`);
+
+  console.log("--- Phase 3: Compliance Evidence ---");
+  const compExport = await postJson("/api/compliance/export", { type: "soc2", startDate: "2026-01-01", endDate: "2026-12-31" });
+  assert("Compliance export returns 200", compExport.status === 200, `Status: ${compExport.status}`);
+  assert("Compliance has framework", compExport.json.framework === "soc2", `Got: ${compExport.json.framework}`);
+  assert("Compliance has summary", typeof compExport.json.summary === "object", `Got: ${typeof compExport.json.summary}`);
+  assert("Compliance has auditLog", Array.isArray(compExport.json.auditLog), `Got: ${typeof compExport.json.auditLog}`);
+
+  console.log("--- Phase 3: Contract Management ---");
+  const ctrCreate = await postJson("/api/contracts", { name: "E2E Support Contract", vendor: "Acme Corp", type: "Service", value: 50000, startDate: "2026-01-01", endDate: "2026-08-01" });
+  assert("Contract create returns 201", ctrCreate.status === 201, `Status: ${ctrCreate.status}`);
+  assert("Contract has id", !!ctrCreate.json.id, `Got: ${ctrCreate.json.id}`);
+  const ctrList = await getJson("/api/contracts");
+  assert("Contract list returns 200", ctrList.status === 200, `Status: ${ctrList.status}`);
+  if (ctrCreate.json.id) {
+    const ctrUpd = await putJson(`/api/contracts/${ctrCreate.json.id}`, { status: "Under Review" });
+    assert("Contract update returns 200", ctrUpd.status === 200, `Status: ${ctrUpd.status}`);
+  }
+  const ctrExpiring = await getJson("/api/contracts/expiring?days=365");
+  assert("Contracts expiring returns 200", ctrExpiring.status === 200, `Status: ${ctrExpiring.status}`);
+  assert("Contracts expiring has array", Array.isArray(ctrExpiring.json.expiring), `Got: ${typeof ctrExpiring.json.expiring}`);
+
+  console.log("--- Phase 3: CMDB Dependency Map ---");
+  const depMap = await getJson("/api/cmdb/dependency-map/AST-001");
+  assert("Dependency map returns 200", depMap.status === 200, `Status: ${depMap.status}`);
+  assert("Dependency map has rootAssetId", depMap.json.rootAssetId === "AST-001", `Got: ${depMap.json.rootAssetId}`);
+  assert("Dependency map has dependencies", Array.isArray(depMap.json.dependencies), `Got: ${typeof depMap.json.dependencies}`);
+  const impactAnalysis = await postJson("/api/cmdb/impact-analysis", { assetId: "AST-001" });
+  assert("Impact analysis returns 200", impactAnalysis.status === 200, `Status: ${impactAnalysis.status}`);
+  assert("Impact analysis has assetId", impactAnalysis.json.assetId === "AST-001", `Got: ${impactAnalysis.json.assetId}`);
+  assert("Impact has impactedAssets", Array.isArray(impactAnalysis.json.impactedAssets), `Got: ${typeof impactAnalysis.json.impactedAssets}`);
+
+  console.log("--- Phase 3: Teams Integration ---");
+  const twCreate = await postJson("/api/integrations/teams/webhook", { channelName: "E2E-Channel", webhookUrl: "https://example.com/teams-webhook" });
+  assert("Teams webhook create returns 201", twCreate.status === 201, `Status: ${twCreate.status}`);
+  assert("Teams webhook has id", !!twCreate.json.id, `Got: ${twCreate.json.id}`);
+  const twList = await getJson("/api/integrations/teams/webhooks");
+  assert("Teams webhooks list returns 200", twList.status === 200, `Status: ${twList.status}`);
+  const twNotify = await postJson("/api/integrations/teams/notify", { webhookId: twCreate.json.id, title: "E2E Test", message: "Test notification", priority: "P2" });
+  assert("Teams notify returns 200", twNotify.status === 200, `Status: ${twNotify.status}`);
+  assert("Teams notify sent flag", twNotify.json.sent === true, `Got: ${twNotify.json.sent}`);
+
+  console.log("--- Phase 3: CMDB Discovery Ingest ---");
+  const discovery = await postJson("/api/cmdb/discovery/ingest", { source: "e2e-test", assets: [{ hostname: "srv-e2e-001", type: "Server", os: "Ubuntu 22.04", ipAddress: "10.0.0.100", manufacturer: "Dell" }, { hostname: "srv-e2e-002", type: "Server", os: "Windows Server 2022", ipAddress: "10.0.0.101" }] });
+  assert("Discovery ingest returns 200", discovery.status === 200, `Status: ${discovery.status}`);
+  assert("Discovery has added count", typeof discovery.json.added === "number", `Got: ${discovery.json.added}`);
+  assert("Discovery source correct", discovery.json.source === "e2e-test", `Got: ${discovery.json.source}`);
+
+  console.log("--- Phase 3: Service Status Public Page ---");
+  const statusPublic = await getJson("/api/status/public");
+  assert("Status public returns 200", statusPublic.status === 200, `Status: ${statusPublic.status}`);
+  assert("Status public has services", Array.isArray(statusPublic.json.services), `Got: ${typeof statusPublic.json.services}`);
+  assert("Status public has overallStatus", typeof statusPublic.json.overallStatus === "string", `Got: ${typeof statusPublic.json.overallStatus}`);
+  const statusSub = await postJson("/api/status/subscribe", { email: "e2e@test.com" });
+  assert("Status subscribe returns 201", statusSub.status === 201, `Status: ${statusSub.status}`);
+  assert("Status subscribe confirmed", statusSub.json.subscribed === true, `Got: ${statusSub.json.subscribed}`);
+  const statusSubs = await getJson("/api/status/subscribers");
+  assert("Status subscribers returns 200", statusSubs.status === 200, `Status: ${statusSubs.status}`);
+
+  console.log("--- Phase 3: Change Freeze Check ---");
+  const freezeCheck = await getJson("/api/changes/freeze-check?date=2026-12-25");
+  assert("Freeze check returns 200", freezeCheck.status === 200, `Status: ${freezeCheck.status}`);
+  assert("Freeze check has frozen field", typeof freezeCheck.json.frozen === "boolean", `Got: ${typeof freezeCheck.json.frozen}`);
+  const freezeCheckSafe = await getJson("/api/changes/freeze-check?date=2026-03-15");
+  assert("Freeze check safe date returns 200", freezeCheckSafe.status === 200, `Status: ${freezeCheckSafe.status}`);
+
   // Results
   console.log(`\n====== RESULTS ======`);
   tests.forEach(t => console.log(t));
