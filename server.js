@@ -1489,6 +1489,7 @@ const VALID_COLLECTIONS = new Set([
   "email_preferences",
   "email_confirm_log",
   "workflow_rules_v2",
+  "compliance_evidence",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -12140,7 +12141,154 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
-  // ─── Step 4: Known Error Database (KEDB) ──────────────────────────────
+  // POST /api/shadow/promote — Phase I2: record a promote/reject decision for a
+  // shadow flag. AUDIT-ONLY: does NOT auto-flip the live flag. Operator runs the
+  // recommended featureFlags POST manually from the Feature Flags admin tab so
+  // the change is intentional and traceable.
+  if (pathname === "/api/shadow/promote" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { flag, decision, approvedBy, notes } = body || {};
+      if (!flag) return json(res, 400, { error: "flag required" });
+      if (!["promote", "reject"].includes(decision)) return json(res, 400, { error: "decision must be promote|reject" });
+      if (!approvedBy) return json(res, 403, { error: "approvedBy required" });
+      const at = new Date().toISOString();
+      const id = `decision_${flag}_${Date.now()}`;
+      await db.upsert("shadow_diffs", id, JSON.stringify({
+        flag, kind: "decision", decision, approvedBy, notes: notes || "", at,
+      }));
+      try { await db.audit("shadow_diffs", flag, "promotion_decision", JSON.stringify({ decision, approvedBy, notes }), approvedBy); } catch {}
+      // Map shadow flag -> recommended live flag flip
+      const liveFlag = flag.replace(/_v2$/, "");
+      const recommendation = decision === "promote"
+        ? `POST /api/feature-flags { name: "${liveFlag}", enabled: true, scope: "all" }`
+        : `Disable shadow flag: POST /api/feature-flags { name: "${flag}", enabled: false }`;
+      return json(res, 200, { ok: true, id, recommendation });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // POST /api/ai/outbox/:id/{approve|reject|reschedule} — Phase I3: cooling-off
+  // queue actions. Uses Phase A safety pattern: approvedBy required.
+  // approve  -> sendAfter = now (drainer picks it up within 60s)
+  // reject   -> status = "rejected"
+  // reschedule -> body { delayMinutes } pushes sendAfter forward
+  {
+    const m = pathname.match(/^\/api\/ai\/outbox\/([^/]+)\/(approve|reject|reschedule)$/);
+    if (m && req.method === "POST") {
+      try {
+        const id = m[1]; const action = m[2];
+        const body = await parseBody(req);
+        const approvedBy = body && body.approvedBy;
+        if (!approvedBy) return json(res, 403, { error: "approvedBy required" });
+        const row = await db.getOne("ai_email_outbox", id);
+        if (!row) return json(res, 404, { error: "outbox entry not found" });
+        const rec = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+        if (rec.status !== "queued") return json(res, 409, { error: `entry is ${rec.status}, only queued can be actioned` });
+        const at = new Date().toISOString();
+        if (action === "approve") {
+          rec.sendAfter = at; // drainer will pick up next cycle
+          rec.approvedBy = approvedBy;
+          rec.approvedAt = at;
+        } else if (action === "reject") {
+          rec.status = "rejected";
+          rec.rejectedBy = approvedBy;
+          rec.rejectedAt = at;
+          rec.rejectReason = (body && body.reason) || "no reason provided";
+        } else if (action === "reschedule") {
+          const delay = Math.max(1, Math.min(parseInt(body && body.delayMinutes) || 30, 1440));
+          rec.sendAfter = new Date(Date.now() + delay * 60_000).toISOString();
+          rec.rescheduledBy = approvedBy;
+          rec.rescheduledAt = at;
+        }
+        await db.upsert("ai_email_outbox", id, JSON.stringify(rec));
+        try { await db.audit("ai_email_outbox", id, `cooling_off_${action}`, JSON.stringify({ approvedBy, delayMinutes: body && body.delayMinutes }), approvedBy); } catch {}
+        return json(res, 200, { ok: true, id, action, status: rec.status, sendAfter: rec.sendAfter });
+      } catch (err) { return json(res, 500, { error: err.message }); }
+    }
+  }
+
+  // GET /api/ai/outbox?status=queued — Phase I1: list cooling-off queue entries
+  if (pathname === "/api/ai/outbox" && req.method === "GET") {
+    try {
+      const status = urlObj.searchParams.get("status");
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "100", 10), 500);
+      const rows = await db.getAll("ai_email_outbox");
+      const items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const filtered = status ? items.filter(i => i.status === status) : items;
+      filtered.sort((a, b) => String(b.queuedAt || "").localeCompare(String(a.queuedAt || "")));
+      const counts = items.reduce((acc, i) => { acc[i.status || "unknown"] = (acc[i.status || "unknown"] || 0) + 1; return acc; }, {});
+      return json(res, 200, { total: filtered.length, counts, items: filtered.slice(0, limit) });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // GET /api/compliance/evidence?from=&to=&limit= — Phase J: list evidence rows
+  if (pathname === "/api/compliance/evidence" && req.method === "GET") {
+    try {
+      const from = urlObj.searchParams.get("from");
+      const to = urlObj.searchParams.get("to");
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "365", 10), 1000);
+      const rows = await db.getAll("compliance_evidence");
+      let items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      if (from) items = items.filter(i => (i.date || "") >= from);
+      if (to) items = items.filter(i => (i.date || "") <= to);
+      items.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+      return json(res, 200, { total: items.length, items: items.slice(0, limit) });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // POST /api/compliance/snapshot-now — admin trigger for an evidence snapshot
+  if (pathname === "/api/compliance/snapshot-now" && req.method === "POST") {
+    if (!authResult || !["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const dayKey = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" })).toISOString().slice(0, 10);
+      // Force re-capture by removing existing
+      try { await db.upsert("compliance_evidence", `evidence_${dayKey}`, JSON.stringify({ _superseded: true })); } catch {}
+      if (workflowEngine && typeof workflowEngine._captureComplianceEvidence === "function") {
+        await workflowEngine._captureComplianceEvidence(dayKey);
+        const row = await db.getOne("compliance_evidence", `evidence_${dayKey}`);
+        return json(res, 200, { ok: true, dayKey, evidence: row && (typeof row.data === "string" ? JSON.parse(row.data) : row.data) });
+      }
+      return json(res, 503, { error: "Workflow engine not available" });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // GET /api/compliance/export?from=&to=&format=json|csv|html — Phase J2
+  if (pathname === "/api/compliance/export" && req.method === "GET") {
+    try {
+      const from = urlObj.searchParams.get("from") || "";
+      const to = urlObj.searchParams.get("to") || "";
+      const format = (urlObj.searchParams.get("format") || "json").toLowerCase();
+      const rows = await db.getAll("compliance_evidence");
+      let items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(i => i && i.date);
+      if (from) items = items.filter(i => i.date >= from);
+      if (to) items = items.filter(i => i.date <= to);
+      items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+      const fname = `vgc-itsm-compliance_${from || "all"}_to_${to || "now"}`;
+      if (format === "csv") {
+        const cols = ["date", "slaAttainmentPct", "mttrHours", "csatAvg30d", "incidentsCreated", "incidentsResolved", "totalChanges", "changeFreezeViolations", "signedBy", "capturedAt"];
+        const esc = (v) => v == null ? "" : `"${String(v).replace(/"/g, '""')}"`;
+        const head = cols.join(",");
+        const body = items.map(i => cols.map(c => {
+          if (c === "date" || c === "signedBy" || c === "capturedAt") return esc(i[c]);
+          return esc((i.metrics || {})[c]);
+        }).join(",")).join("\n");
+        res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${fname}.csv"` });
+        return res.end(head + "\n" + body + "\n");
+      }
+      if (format === "html") {
+        const rowsHtml = items.map(i => `<tr><td>${i.date}</td><td>${(i.metrics||{}).slaAttainmentPct ?? "-"}%</td><td>${(i.metrics||{}).mttrHours ?? "-"}h</td><td>${(i.metrics||{}).csatAvg30d ?? "-"}</td><td>${(i.metrics||{}).incidentsCreated ?? 0}</td><td>${(i.metrics||{}).incidentsResolved ?? 0}</td><td>${(i.metrics||{}).totalChanges ?? 0}</td><td>${(i.metrics||{}).changeFreezeViolations ?? 0}</td><td>${i.signedBy || "-"}</td></tr>`).join("");
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>VGC ITSM Compliance Evidence Pack</title><style>body{font-family:Arial,sans-serif;max-width:1000px;margin:24px auto;padding:24px;color:#222}h1{color:#1a1a2e;border-bottom:3px solid #6366F1;padding-bottom:8px}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #ddd}th{background:#f8f9fa;font-size:11px;text-transform:uppercase;color:#666;letter-spacing:0.5px}tr:nth-child(even){background:#fafafa}.meta{color:#666;font-size:12px;margin:8px 0 24px}</style></head><body><h1>VGC ITSM — Compliance Evidence Pack</h1><div class="meta">Period: <b>${from || "earliest"}</b> → <b>${to || "today"}</b> · Generated: <b>${new Date().toISOString()}</b> · ITIL 4 / ISO 20000 aligned · ${items.length} day(s)</div><table><thead><tr><th>Date</th><th>SLA</th><th>MTTR</th><th>CSAT</th><th>Created</th><th>Resolved</th><th>Changes</th><th>Freeze viol.</th><th>Signed by</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="9" style="text-align:center;color:#999;padding:32px">No evidence records in range. Trigger a snapshot first.</td></tr>'}</tbody></table><p style="color:#888;font-size:11px;margin-top:32px">This document was generated automatically by VGC ITSM and reflects metrics captured at 00:05 SGT each day. Hash-chained audit trail available via /api/audit/verify-integrity.</p></body></html>`;
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": `attachment; filename="${fname}.html"` });
+        return res.end(html);
+      }
+      // default: json
+      return json(res, 200, { from, to, count: items.length, items });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // POST /api/kb/:id/known-error — flag a KB article as a Known Error
   if (/^\/api\/kb\/([^/]+)\/known-error$/.test(pathname) && req.method === "POST") {
     const kbId = pathname.split("/")[3];

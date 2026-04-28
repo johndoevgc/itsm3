@@ -96,6 +96,19 @@ class WorkflowEngine {
         this._log("error", "DAILY_SUMMARY", `Schedule check failed: ${dsErr.message}`);
       }
 
+      // ─── Phase J1 — Daily compliance evidence snapshot (00:05 SGT) ───
+      try {
+        const nowSGT = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" }));
+        const hour = nowSGT.getHours();
+        const todayKey = nowSGT.toISOString().slice(0, 10);
+        if (hour >= 0 && (!this.lastEvidenceDay || this.lastEvidenceDay !== todayKey)) {
+          await this._captureComplianceEvidence(todayKey);
+          this.lastEvidenceDay = todayKey;
+        }
+      } catch (evErr) {
+        this._log("error", "COMPLIANCE_EVIDENCE", `Snapshot failed: ${evErr.message}`);
+      }
+
       // ─── Email-to-Ticket: poll inbound emails ────────────────────────
       if (this._processInboundEmails) {
         try {
@@ -501,6 +514,83 @@ class WorkflowEngine {
 
   getLog(limit = 50) {
     return this.executionLog.slice(-limit);
+  }
+
+  // ─── Phase J1 — Daily compliance evidence snapshot ────────────────────
+  // Captures key ITSM/ISO 20000 metrics into compliance_evidence collection.
+  // Idempotent per day via id = "evidence_<YYYY-MM-DD>".
+  async _captureComplianceEvidence(dayKey) {
+    try {
+      const id = `evidence_${dayKey}`;
+      const existing = await this.db.getOne("compliance_evidence", id);
+      if (existing) return; // already captured today
+      const incRows = await this.db.getAll("incidents");
+      const allInc = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(i => i && !i._deleted);
+      const dayStart = new Date(`${dayKey}T00:00:00+08:00`).getTime();
+      const dayEnd = dayStart + 86400000;
+      const closedToday = allInc.filter(i => i.resolvedAt && new Date(i.resolvedAt).getTime() >= dayStart && new Date(i.resolvedAt).getTime() < dayEnd);
+      const createdToday = allInc.filter(i => i.createdAt && new Date(i.createdAt).getTime() >= dayStart && new Date(i.createdAt).getTime() < dayEnd);
+
+      // SLA attainment from sla_tracking
+      let slaAttainment = null, mttrHours = null;
+      try {
+        const slaRows = await this.db.getAll("sla_tracking");
+        const slaItems = slaRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+        const total = slaItems.length;
+        if (total > 0) {
+          const attained = slaItems.filter(s => !s.breached).length;
+          slaAttainment = Math.round((attained / total) * 1000) / 10;
+        }
+      } catch {}
+      if (closedToday.length > 0) {
+        const total = closedToday.reduce((sum, i) => {
+          const t = new Date(i.resolvedAt).getTime() - new Date(i.createdAt || i.resolvedAt).getTime();
+          return sum + Math.max(0, t);
+        }, 0);
+        mttrHours = Math.round((total / closedToday.length) / 3600000 * 10) / 10;
+      }
+
+      // CSAT
+      let csatAvg = null;
+      try {
+        const csatRows = await this.db.getAll("csat_responses");
+        const csatItems = csatRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+        const recent = csatItems.filter(c => c.respondedAt && new Date(c.respondedAt).getTime() >= dayStart - 30 * 86400000);
+        if (recent.length > 0) {
+          const sum = recent.reduce((s, c) => s + (Number(c.rating) || 0), 0);
+          csatAvg = Math.round((sum / recent.length) * 10) / 10;
+        }
+      } catch {}
+
+      // Change freeze violations + total changes
+      let totalChanges = 0, freezeViolations = 0;
+      try {
+        const chRows = await this.db.getAll("changes");
+        const chItems = chRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(c => c && !c._deleted);
+        totalChanges = chItems.length;
+        freezeViolations = chItems.filter(c => c.freezeViolation === true).length;
+      } catch {}
+
+      const evidence = {
+        id, date: dayKey, capturedAt: new Date().toISOString(),
+        metrics: {
+          slaAttainmentPct: slaAttainment,
+          mttrHours,
+          csatAvg30d: csatAvg,
+          incidentsCreated: createdToday.length,
+          incidentsResolved: closedToday.length,
+          totalIncidents: allInc.length,
+          totalChanges,
+          changeFreezeViolations: freezeViolations,
+        },
+        signedBy: "system",
+      };
+      await this.db.upsert("compliance_evidence", id, JSON.stringify(evidence));
+      try { await this.db.audit("compliance_evidence", id, "snapshot", JSON.stringify(evidence.metrics), "system"); } catch {}
+      this._log("action", "COMPLIANCE_EVIDENCE", `Captured ${id}: SLA ${slaAttainment}%, MTTR ${mttrHours}h, CSAT ${csatAvg}`);
+    } catch (err) {
+      this._log("error", "COMPLIANCE_EVIDENCE", `Capture failed: ${err.message}`);
+    }
   }
 
   // ─── Daily Summary Email ──────────────────────────────────────────────
