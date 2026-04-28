@@ -4275,6 +4275,151 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       }
 
       // ═══════════════════════════════════════════════════════════════
+      // RECONCILE OPEN INCIDENTS WITH ZENDESK (Silent backfill)
+      // POST /api/zendesk/reconcile-open
+      // For every open ITSM incident with a zdTicketId, fetch the current
+      // Zendesk status and silently close any that are solved/closed in ZD.
+      // Sev-A is never auto-closed (surfaced as requiresManualReview).
+      // No emails, no notifications — only WS broadcasts for UI refresh.
+      // Body: { dryRun?: bool, requestedBy?: string }
+      // ═══════════════════════════════════════════════════════════════
+      if (pathname === "/api/zendesk/reconcile-open" && req.method === "POST") {
+        try {
+          const body = await parseBody(req, 5000).catch(() => ({}));
+          const dryRun = body.dryRun === true;
+          const requestedBy = body.requestedBy || authResult?.user?.email || "admin";
+
+          // 1. Load all open incidents WITH a Zendesk link
+          const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold", "Reopened"]);
+          const allRows = await db.getAll("incidents");
+          const openLinked = [];
+          for (const r of allRows) {
+            try {
+              const inc = JSON.parse(r.data);
+              if (openStatuses.has((inc.status || "").trim()) && inc.zdTicketId) openLinked.push(inc);
+            } catch {}
+          }
+
+          // 2. Batch-fetch current ZD status (chunks of 100 via show_many)
+          const zdMap = {}; // ticketId -> { status, updated_at, exists }
+          const ids = [...new Set(openLinked.map(i => String(i.zdTicketId)))];
+          const missingIds = new Set(ids);
+          for (let i = 0; i < ids.length; i += 100) {
+            const batch = ids.slice(i, i + 100);
+            try {
+              const resp = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}`);
+              for (const t of (resp.tickets || [])) {
+                zdMap[String(t.id)] = { status: (t.status || "").toLowerCase(), updated_at: t.updated_at, exists: true };
+                missingIds.delete(String(t.id));
+              }
+            } catch (e) { console.warn(`[ZD Reconcile] Batch ${i} fetch failed: ${e.message}`); }
+          }
+          // Tickets not returned by show_many = deleted in Zendesk
+          for (const mid of missingIds) zdMap[mid] = { exists: false };
+
+          // 3. Determine actions per incident
+          const closedZdStatuses = new Set(["solved", "closed"]);
+          const toClose = [];           // will be silently closed
+          const requiresManualReview = []; // Sev-A — surface for human review
+          const stillOpen = [];          // ZD also still open
+          const deletedInZd = [];        // ZD ticket gone
+          for (const inc of openLinked) {
+            const zd = zdMap[String(inc.zdTicketId)];
+            if (!zd) continue;
+            if (!zd.exists) {
+              if (isHighSeverity(inc.priority)) requiresManualReview.push({ id: inc.id, zdTicketId: inc.zdTicketId, reason: "ZD ticket deleted (high severity)" });
+              else deletedInZd.push(inc);
+              continue;
+            }
+            if (closedZdStatuses.has(zd.status)) {
+              if (isHighSeverity(inc.priority)) {
+                requiresManualReview.push({ id: inc.id, zdTicketId: inc.zdTicketId, zdStatus: zd.status, reason: "high severity — manual review required" });
+              } else {
+                toClose.push({ inc, zdStatus: zd.status, zdUpdatedAt: zd.updated_at });
+              }
+            } else {
+              stillOpen.push({ id: inc.id, zdTicketId: inc.zdTicketId, zdStatus: zd.status });
+            }
+          }
+
+          if (dryRun) {
+            return json(res, 200, {
+              dryRun: true,
+              scanned: openLinked.length,
+              wouldClose: toClose.length,
+              wouldMarkDeleted: deletedInZd.length,
+              requiresManualReview: requiresManualReview.length,
+              stillOpen: stillOpen.length,
+              sample: toClose.slice(0, 20).map(x => ({ id: x.inc.id, title: x.inc.title, priority: x.inc.priority, status: x.inc.status, zdTicketId: x.inc.zdTicketId, zdStatus: x.zdStatus })),
+              manualReview: requiresManualReview.slice(0, 10),
+              deleted: deletedInZd.slice(0, 10).map(i => ({ id: i.id, title: i.title, zdTicketId: i.zdTicketId })),
+            });
+          }
+
+          // 4. Apply silent closures (no email, no notification)
+          const nowISO = new Date().toISOString();
+          let closedCount = 0;
+          let deletedCount = 0;
+          for (const { inc, zdStatus, zdUpdatedAt } of toClose) {
+            const closedTs = zdUpdatedAt || nowISO;
+            inc.status = "Closed";
+            inc.resolvedAt = inc.resolvedAt || closedTs;
+            inc.closedAt = closedTs;
+            inc.closedBy = "ZD Reconciliation";
+            inc.closureReason = `Zendesk reconciliation — already ${zdStatus} in Zendesk #${inc.zdTicketId}`;
+            inc.resolution = inc.resolution || `Reconciled with Zendesk #${inc.zdTicketId} (${zdStatus}). No customer-facing action required.`;
+            inc.historicalClose = true;
+            inc.suppressNotification = true;
+            inc.zdLastSync = nowISO;
+            inc.updatedAt = nowISO;
+            inc.activityLog = inc.activityLog || [];
+            inc.activityLog.push({ id: `AL-RECON-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,5)}`, type: "status", user: "ZD Reconciliation", time: nowISO, detail: `Silent close — Zendesk #${inc.zdTicketId} is ${zdStatus} (no notifications sent)` });
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            await db.audit("incidents", inc.id, "zd_reconcile_close", JSON.stringify({ zdTicketId: inc.zdTicketId, zdStatus, requestedBy }), requestedBy);
+            // WS broadcast for silent UI refresh — never on notifications channel
+            if (wsServer) wsServer.broadcast("incidents", { action: "update", collection: "incidents", id: inc.id, silent: true });
+            closedCount++;
+          }
+          for (const inc of deletedInZd) {
+            inc.status = "Closed";
+            inc.resolvedAt = inc.resolvedAt || nowISO;
+            inc.closedAt = nowISO;
+            inc.closedBy = "ZD Reconciliation";
+            inc.closureReason = "Zendesk ticket no longer exists";
+            inc.resolution = inc.resolution || "Linked Zendesk ticket no longer exists. Closed during reconciliation.";
+            inc.historicalClose = true;
+            inc.suppressNotification = true;
+            inc.zdLastSync = nowISO;
+            inc.updatedAt = nowISO;
+            inc.activityLog = inc.activityLog || [];
+            inc.activityLog.push({ id: `AL-RECON-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,5)}`, type: "status", user: "ZD Reconciliation", time: nowISO, detail: `Silent close — Zendesk #${inc.zdTicketId} no longer exists` });
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            await db.audit("incidents", inc.id, "zd_reconcile_delete", JSON.stringify({ zdTicketId: inc.zdTicketId, requestedBy }), requestedBy);
+            if (wsServer) wsServer.broadcast("incidents", { action: "update", collection: "incidents", id: inc.id, silent: true });
+            deletedCount++;
+          }
+
+          if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+          console.log(`[ZD Reconcile] Closed ${closedCount} silent, ${deletedCount} ZD-deleted, ${requiresManualReview.length} flagged for review (by ${requestedBy})`);
+
+          return json(res, 200, {
+            success: true,
+            scanned: openLinked.length,
+            closed: closedCount,
+            markedDeleted: deletedCount,
+            requiresManualReview: requiresManualReview.length,
+            stillOpen: stillOpen.length,
+            requestedBy,
+            timestamp: nowISO,
+            manualReview: requiresManualReview.slice(0, 50),
+          });
+        } catch (err) {
+          console.error("[ZD Reconcile]", err.message);
+          return json(res, 500, { error: err.message });
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════════
       // WEBHOOK — Receive real-time Zendesk webhook events
       // ═══════════════════════════════════════════════════════════════
       if (pathname === "/api/zendesk/webhook" && req.method === "POST") {
@@ -9780,11 +9925,16 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
     try {
       const body = await parseBody(req, 10000);
-      const { cutoffDate, requestedBy, dryRun, limit } = body;
+      const { cutoffDate, requestedBy, dryRun, limit, requireNoZdLink, noActivitySinceDays } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
 
       const cutoff = new Date(cutoffDate || "2026-04-01T00:00:00Z");
       if (isNaN(cutoff.getTime())) return json(res, 400, { error: "Invalid cutoffDate" });
+
+      // noActivitySinceDays — eligible only if last activity older than N days
+      const inactivityCutoff = (noActivitySinceDays && noActivitySinceDays > 0)
+        ? new Date(Date.now() - noActivitySinceDays * 86400000)
+        : null;
 
       const allRows = await db.getAll("incidents");
       const allIncidents = allRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
@@ -9793,6 +9943,17 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       const closableStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold", "Reopened"]);
       const eligible = allIncidents.filter(inc => {
         if (!closableStatuses.has(inc.status)) return false;
+        // Phase 6.1 — never auto-close high-severity in historical mode
+        if (isHighSeverity(inc.priority)) return false;
+        // Phase 6.2 — optionally require no Zendesk link
+        if (requireNoZdLink === true && inc.zdTicketId) return false;
+        // Phase 6.3 — optionally require no recent activity
+        if (inactivityCutoff) {
+          const lastAct = (inc.activityLog && inc.activityLog.length > 0)
+            ? new Date(inc.activityLog[inc.activityLog.length - 1].time || 0)
+            : new Date(inc.updatedAt || inc.createdAt || 0);
+          if (!isNaN(lastAct.getTime()) && lastAct > inactivityCutoff) return false;
+        }
         const createdStr = inc.createdAt || inc.created || inc.openedDate;
         if (createdStr === undefined || createdStr === null || createdStr === "") {
           return true; // No date = treat as old / eligible
