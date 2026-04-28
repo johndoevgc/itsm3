@@ -2626,7 +2626,7 @@ export default function ITSMApp() {
       type: "EMAIL_FALLBACK",
       incidentId: incident.id,
       incidentTitle: incident.title,
-      to: "help@vgctechnology.com, devadmin@vgctechnology.com",
+      to: "devadmin@vgctechnology.com",
       subject: `🚨 AUTO-ESCALATION: ${incident.priority} — ${incident.id} — ${incident.title}`,
       status: "queued",
       correlationId,
@@ -2911,7 +2911,7 @@ export default function ITSMApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actionId,
-          approverEmails: [currentUser.email, "help@vgctechnology.com"],
+          approverEmails: [currentUser.email].filter(Boolean),
           appUrl: window.location.origin
         })
       });
