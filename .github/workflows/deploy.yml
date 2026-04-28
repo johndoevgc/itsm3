@@ -33,6 +33,20 @@ jobs:
       - run: npm ci --production=false
       - name: Syntax check server
         run: node -c server.js
+      - name: Lint
+        run: npx eslint . --max-warnings 600
+      - name: Unit tests
+        run: npm test
+      - name: Stamp build metadata
+        run: |
+          node -e "
+            const fs = require('fs');
+            const v = JSON.parse(fs.readFileSync('VERSION.json','utf8'));
+            v.gitSha = '${{ github.sha }}'.slice(0,8);
+            v.buildDate = new Date().toISOString().slice(0,10);
+            v.buildNumber = '${{ github.run_number }}';
+            fs.writeFileSync('VERSION.json', JSON.stringify(v, null, 2) + '\n');
+          "
       - name: Build frontend
         if: ${{ github.event.inputs.skip_build != 'true' }}
         run: npx vite build
@@ -40,11 +54,73 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: dist/
+          path: |
+            dist/
+            VERSION.json
           retention-days: 7
 
-  deploy:
+  deploy-staging:
     needs: validate
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Deploy to staging slot
+        env:
+          DEPLOY_CREDS: ${{ secrets.KUDU_CREDENTIALS }}
+          APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
+        run: |
+          CRED=$(echo -n "$DEPLOY_CREDS" | base64)
+          SLOT_SCM="https://${APP_NAME}-staging.scm.azurewebsites.net"
+          
+          # Upload server.js to staging
+          curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/server.js" \
+            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
+            --data-binary @server.js
+          
+          # Upload VERSION.json
+          curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/VERSION.json" \
+            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
+            --data-binary @dist/VERSION.json
+
+          # Upload index.html
+          curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/index.html" \
+            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
+            --data-binary @dist/index.html
+
+          # Upload JS assets
+          for f in dist/assets/*.js; do
+            fname=$(basename "$f")
+            curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/assets/${fname}" \
+              -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
+              --data-binary @"$f"
+          done
+          echo "Staging deployment complete"
+
+      - name: Smoke test staging
+        env:
+          APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
+        run: |
+          STAGING_URL="https://${APP_NAME}-staging.azurewebsites.net"
+          sleep 10
+          for i in 1 2 3; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${STAGING_URL}/api/health")
+            if [ "$STATUS" = "200" ]; then
+              echo "Staging health check passed"
+              exit 0
+            fi
+            echo "Staging attempt $i: HTTP $STATUS, retrying..."
+            sleep 5
+          done
+          echo "Staging health check failed"
+          exit 1
+
+  deploy:
+    needs: deploy-staging
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -82,6 +158,12 @@ jobs:
             -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
             --data-binary @server.js
           echo "Uploaded server.js"
+          
+          # Upload VERSION.json
+          curl -s -X PUT "${SCM}/api/vfs/site/wwwroot/VERSION.json" \
+            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
+            --data-binary @dist/VERSION.json
+          echo "Uploaded VERSION.json"
           
           # Upload index.html
           curl -s -X PUT "${SCM}/api/vfs/site/wwwroot/index.html" \
