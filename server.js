@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware");
 const { SlaEngine, computeSlaStatus } = require("./slaEngine");
 const { WebSocketServer } = require("./wsServer");
@@ -14031,10 +14032,43 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       });
       return;
     }
-    res.writeHead(200, {
+    const baseHeaders = {
       "Content-Type": MIME[ext] || "application/octet-stream",
       "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=31536000",
-    });
+    };
+    // Phase T1 — gzip/brotli compression for text assets. Node's http server
+    // does not negotiate this automatically. Saves ~78% on the 1.5 MB JS bundle.
+    const COMPRESSIBLE = new Set([".js", ".css", ".html", ".json", ".svg", ".map"]);
+    const accept = (req.headers["accept-encoding"] || "").toLowerCase();
+    if (COMPRESSIBLE.has(ext) && data.length > 1024) {
+      // In-memory cache to avoid recompressing on every request.
+      const cacheKey = filePath + ":" + (accept.includes("br") ? "br" : "gz");
+      if (!global.__staticCompressionCache) global.__staticCompressionCache = new Map();
+      const cache = global.__staticCompressionCache;
+      let entry = cache.get(cacheKey);
+      try {
+        if (!entry) {
+          if (accept.includes("br")) {
+            entry = { encoding: "br", buf: zlib.brotliCompressSync(data, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }) };
+          } else if (accept.includes("gzip")) {
+            entry = { encoding: "gzip", buf: zlib.gzipSync(data, { level: 6 }) };
+          }
+          if (entry) {
+            // Bound cache to ~30 entries to avoid memory creep on dev hot reload.
+            if (cache.size > 30) cache.clear();
+            cache.set(cacheKey, entry);
+          }
+        }
+      } catch (zErr) {
+        // Fall through to uncompressed on any compression error
+        entry = null;
+      }
+      if (entry) {
+        res.writeHead(200, { ...baseHeaders, "Content-Encoding": entry.encoding, "Vary": "Accept-Encoding" });
+        return res.end(entry.buf);
+      }
+    }
+    res.writeHead(200, baseHeaders);
     res.end(data);
   });
 });
