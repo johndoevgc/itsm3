@@ -32,6 +32,11 @@ const DEFAULTS = {
                          payload: { sevA: -1, sevB: 10, sevC: 5, sevD: 2 } },
   // PII redaction before OpenAI prompts. Default ON.
   pii_redact:          { enabled: true,  scope: "all" },
+
+  // Phase C — continual improvement
+  // CSAT survey loop on AI-resolved incidents. Default OFF (staging first).
+  // payload.delayHours = hours after resolution to send the survey.
+  csat_ai_loop:        { enabled: false, scope: "staging", payload: { delayHours: 24 } },
 };
 
 let _db = null;

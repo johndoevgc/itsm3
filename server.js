@@ -396,6 +396,83 @@ function redactForAI(prompt) {
   return { prompt: redacted, map };
 }
 
+// ─── Phase C helpers: data residency, CSAT loop, RACI, MIM review ────────
+const AZURE_REGION = process.env.AZURE_REGION || process.env.WEBSITE_REGION_NAME || "southeastasia";
+
+// C3 — log every AI call with region + timestamp (PDPA / ISO 27018 evidence trail).
+// Stores the prompt HASH only (sha256, first 16 chars) to avoid retaining raw PII.
+async function logAICall({ purpose, model, incidentId, promptText, redactionCount, tokensIn, tokensOut, status, errorMessage }) {
+  if (!db) return;
+  try {
+    const crypto = require("crypto");
+    const promptHash = promptText
+      ? crypto.createHash("sha256").update(String(promptText)).digest("hex").substring(0, 16)
+      : null;
+    const id = `AICALL-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    await db.upsert("ai_audit_log", id, JSON.stringify({
+      id,
+      type: "ai_call",
+      purpose: purpose || "unknown",
+      model: model || null,
+      incidentId: incidentId || null,
+      region: AZURE_REGION,
+      promptHash,
+      redactionCount: redactionCount || 0,
+      tokensIn: tokensIn || null,
+      tokensOut: tokensOut || null,
+      status: status || "ok",
+      errorMessage: errorMessage || null,
+      timestamp: new Date().toISOString(),
+    }));
+  } catch (e) {
+    console.warn("[AI Call Log] failed:", e.message);
+  }
+}
+
+// C1 — CSAT survey scheduled at +N hours after AI resolution.
+// Uses ai_email_outbox so it benefits from the same drainer + cooling-off cancel UX.
+async function scheduleCsatSurvey(incident, resolvedBy) {
+  if (!db) return null;
+  if (!featureFlags.isEnabled("csat_ai_loop")) return null;
+  const recipient = safeRecipient(incident);
+  if (!recipient) return null;
+  const hours = (featureFlags.payload("csat_ai_loop") && featureFlags.payload("csat_ai_loop").delayHours) || 24;
+  const sendAfter = new Date(Date.now() + hours * 3600_000).toISOString();
+  const id = `CSAT-${incident.id}-${Date.now()}`;
+  const surveyUrl = `${process.env.PORTAL_URL || "https://vgc-itsm1-app.azurewebsites.net"}/portal/csat?incident=${encodeURIComponent(incident.id)}&token=${id}`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:600px;">
+    <div style="background:linear-gradient(135deg,#1E3A5F,#3B82F6);padding:20px 24px;border-radius:8px 8px 0 0;">
+      <h2 style="margin:0;color:#fff;font-size:18px;">How did we do?</h2>
+    </div>
+    <div style="background:#f8f9fa;padding:20px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+      <p style="color:#333;">Hi ${(incident.reporterName || "there").replace(/</g, "&lt;")},</p>
+      <p style="color:#333;">Your incident <strong>${String(incident.id).replace(/</g, "&lt;")}</strong> was resolved by ${(resolvedBy || "VGC IT Support").replace(/</g, "&lt;")}.
+      Please take 30 seconds to rate your experience.</p>
+      <p style="text-align:center;margin:24px 0;">
+        ${[1,2,3,4,5].map(n => `<a href="${surveyUrl}&score=${n}" style="display:inline-block;padding:10px 14px;margin:0 4px;background:#3B82F6;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">${n} ⭐</a>`).join("")}
+      </p>
+      <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+    </div>
+  </div>`;
+  const rec = {
+    id, incidentId: incident.id, severity: incident.priority || "Sev-C",
+    source: "csat_ai_loop",
+    opts: {
+      to: [recipient],
+      subject: `[VGC ITSM] How did we do? — Incident ${incident.id}`,
+      body: html,
+      isCustomerEmail: true,
+      from: senderFor("noreply"),
+    },
+    status: "queued",
+    queuedAt: new Date().toISOString(),
+    sendAfter,
+  };
+  await db.upsert("ai_email_outbox", id, JSON.stringify(rec));
+  console.log(`[CSAT Schedule] ${id} scheduled for ${incident.id} (sendAfter=${sendAfter})`);
+  return id;
+}
+
 // ─── Scheduled Purge Status Tracker ─────────────────────────────────────
 const purgeStatus = {
   queueCleanup: { lastRun: null, lastResult: null, nextRun: null, totalDismissed: 0, runCount: 0 },
@@ -9009,6 +9086,43 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       return json(res, 200, logs);
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
+  // GET /api/ai/quality-metrics — Phase C1: rolling 30-day AI quality stats
+  if (pathname === "/api/ai/quality-metrics" && req.method === "GET") {
+    try {
+      const days = parseInt(urlObj.searchParams.get("days") || "30");
+      const since = Date.now() - days * 86400_000;
+      const [csatRows, queueRows] = await Promise.all([
+        db.getAll("csat_responses"),
+        db.getAll("ai_resolve_queue"),
+      ]);
+      const csat = csatRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean)
+        .filter(c => c && c.submittedAt && new Date(c.submittedAt).getTime() >= since);
+      const queue = queueRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean)
+        .filter(s => s && (s.approvedAt || s.rejectedAt || s.dismissedAt) && new Date(s.approvedAt || s.rejectedAt || s.dismissedAt).getTime() >= since);
+      const ai = csat.filter(c => c.aiResolved === true);
+      const human = csat.filter(c => c.aiResolved !== true);
+      const avg = arr => arr.length ? arr.reduce((s, c) => s + (Number(c.score) || 0), 0) / arr.length : null;
+      const approved = queue.filter(s => s.status === "approved").length;
+      const rejected = queue.filter(s => s.status === "rejected").length;
+      const dismissed = queue.filter(s => s.status === "auto_dismissed").length;
+      const total = approved + rejected + dismissed;
+      return json(res, 200, {
+        windowDays: days,
+        csat: {
+          aiResolvedCount: ai.length,
+          humanResolvedCount: human.length,
+          aiAvg: avg(ai),
+          humanAvg: avg(human),
+        },
+        queue: {
+          approved, rejected, dismissed, total,
+          approvalRate: total ? approved / total : null,
+          rejectRate: total ? rejected / total : null,
+        },
+        region: AZURE_REGION,
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
   // POST /api/ai/audit/:id/override — admin overrides AI decision
   if (/^\/api\/ai\/audit\/([^/]+)\/override$/.test(pathname) && req.method === "POST") {
     const auditId = pathname.split("/")[4];
@@ -9795,11 +9909,21 @@ Respond ONLY with valid JSON:
       if (!suggestionId || !action) return json(res, 400, { error: "suggestionId and action required" });
       if (action === "approve" && !approvedBy) return json(res, 403, { error: "Human approval required — approvedBy is mandatory" });
 
+      // Phase C2 — RACI consultedBy required for Sev-B and above on approve
+      const consultedBy = Array.isArray(body.consultedBy) ? body.consultedBy.filter(Boolean) : [];
+      const informedBy = Array.isArray(body.informedBy) ? body.informedBy.filter(Boolean) : [];
+
       const row = await db.getOne("ai_resolve_queue", suggestionId);
       if (!row) return json(res, 404, { error: "Suggestion not found" });
       const suggestion = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
 
       if (action === "approve") {
+        // Sev-B and above must have at least one non-AI consultedBy entry
+        const sev = String(suggestion.priority || "").toLowerCase().replace(/[\s_-]/g, "");
+        const isSevBPlus = sev === "seva" || sev === "sevb" || sev === "p1" || sev === "p2" || sev === "critical" || sev === "high";
+        if (isSevBPlus && consultedBy.length === 0) {
+          return json(res, 400, { error: "RACI: at least one consultedBy required for Sev-B and above" });
+        }
         // Update the incident status (DO NOT sync to Zendesk — one-way pull only)
         const incRow = await db.getOne("incidents", suggestion.incidentId);
         if (incRow) {
@@ -9813,10 +9937,17 @@ Respond ONLY with valid JSON:
           inc.aiResolved = true;
           inc.skipZendeskSync = true; // Flag: do NOT push to Zendesk
           await db.upsert("incidents", inc.id, inc);
+          // Phase C1 — schedule CSAT survey for AI-resolved incidents
+          scheduleCsatSurvey(inc, `AI (approved by ${approvedBy})`).catch(e => console.warn("[CSAT Schedule]", e.message));
         }
         suggestion.status = "approved";
         suggestion.approvedBy = approvedBy;
         suggestion.approvedAt = new Date().toISOString();
+        // Phase C2 — RACI fields
+        suggestion.accountableBy = approvedBy;
+        suggestion.consultedBy = consultedBy;
+        suggestion.informedBy = informedBy;
+        suggestion.racLockedAt = new Date().toISOString();
         if (editedResolution) suggestion.resolution = editedResolution;
       } else if (action === "reject") {
         suggestion.status = "rejected";
@@ -10144,6 +10275,17 @@ Respond in JSON ONLY:
           });
 
           const aiText = extractAIText(aiResult);
+          // Phase C3 — log AI call (region tag, prompt hash, redaction count) for PDPA evidence
+          logAICall({
+            purpose: "ai_auto_followup",
+            model: payload.model,
+            incidentId: inc.id,
+            promptText: aiPrompt,
+            redactionCount: Object.keys((_redacted && _redacted.map) || {}).length,
+            tokensIn: aiResult?.usage?.input_tokens || aiResult?.usage?.prompt_tokens,
+            tokensOut: aiResult?.usage?.output_tokens || aiResult?.usage?.completion_tokens,
+            status: "ok",
+          }).catch(() => {});
           let aiResponse;
           try {
             aiResponse = JSON.parse(aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
@@ -11569,6 +11711,34 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       await db.audit("incidents", body.incidentId, "mim_declare", "Major Incident declared", auth.name || "System");
       if (wsServer) wsServer.broadcast("mim", { action: "declared", incidentId: body.incidentId, mimId: mimRecord.id });
       return json(res, 201, { success: true, mim: mimRecord });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/mim/review — Phase C5: MIM marks a Sev-A record as reviewed,
+  // unblocking AI auto-resolve gating logic (still requires human approve on the queue).
+  if (pathname === "/api/mim/review" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.mimId && !body.incidentId) return json(res, 400, { error: "mimId or incidentId required" });
+    try {
+      let mimRow = body.mimId ? await db.getOne("mim_records", body.mimId) : null;
+      if (!mimRow && body.incidentId) {
+        const all = await db.getAll("mim_records");
+        for (const r of all) {
+          try {
+            const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (m && m.incidentId === body.incidentId && m.status === "active") { mimRow = r; break; }
+          } catch {}
+        }
+      }
+      if (!mimRow) return json(res, 404, { error: "MIM record not found" });
+      const mim = typeof mimRow.data === "string" ? JSON.parse(mimRow.data) : mimRow.data;
+      mim.mimReviewed = true;
+      mim.mimReviewedBy = (auth && auth.name) || body.reviewedBy || "Unknown";
+      mim.mimReviewedAt = new Date().toISOString();
+      mim.mimNotes = body.notes || mim.mimNotes || "";
+      await db.upsert("mim_records", mim.id, mim);
+      try { await db.audit("mim_records", mim.id, "mim_review", JSON.stringify({ reviewedBy: mim.mimReviewedBy }), mim.mimReviewedBy); } catch {}
+      if (wsServer) wsServer.broadcast("mim", { action: "reviewed", incidentId: mim.incidentId, mimId: mim.id });
+      return json(res, 200, { success: true, mim });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
   // POST /api/mim/revoke
