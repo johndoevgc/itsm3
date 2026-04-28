@@ -1523,6 +1523,259 @@ const SearchBar = ({ value, onChange, placeholder }) => (
   </div>
 );
 
+// ─── Phase H1 — Email & Sync Audit Tab ──────────────────────────────────
+const EmailAuditTab = () => {
+  const [tab, setTab] = useState("suppressions");
+  const [prefs, setPrefs] = useState([]);
+  const [throttle, setThrottle] = useState([]);
+  const [zdAudit, setZdAudit] = useState({ items: [], todayCount: 0, total: 0 });
+  const [loading, setLoading] = useState(false);
+  const [seedDryRun, setSeedDryRun] = useState(null);
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const [p, c, z] = await Promise.all([
+        fetch("/api/email-preferences").then(r => r.json()),
+        fetch("/api/email-confirm-log?limit=100").then(r => r.json()),
+        fetch("/api/audit/zd-suppressions?limit=100").then(r => r.json()),
+      ]);
+      setPrefs(p.preferences || []);
+      setThrottle(c.items || []);
+      setZdAudit({ items: z.items || [], todayCount: z.todayCount || 0, total: z.total || 0 });
+    } catch (e) { console.warn("[EmailAudit] reload failed", e); }
+    setLoading(false);
+  };
+  useEffect(() => { reload(); }, []);
+
+  const togglePref = async (email, currentlyOptedOut) => {
+    const url = currentlyOptedOut ? "/api/email-preferences/subscribe" : "/api/email-preferences/unsubscribe";
+    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+    reload();
+  };
+
+  const runBulkSeed = async (dryRun) => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/email-preferences/bulk-seed", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun, source: "bulk_seed_phase_h_ui" }),
+      });
+      const d = await r.json();
+      if (dryRun) setSeedDryRun(d); else { setSeedDryRun(null); reload(); alert(`Seeded ${d.inserted} (skipped ${d.skipped})`); }
+    } catch (e) { alert("Bulk seed failed: " + e.message); }
+    setLoading(false);
+  };
+
+  const tabBtn = (id, label, count) => (
+    <button onClick={() => setTab(id)} style={{
+      padding: "8px 14px", borderRadius: 6, border: "none", cursor: "pointer",
+      background: tab === id ? "#1E2130" : "transparent",
+      color: tab === id ? "#E8ECF4" : "#5A6178",
+      fontSize: 12, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif",
+    }}>{label}{count != null && <span style={{ marginLeft: 6, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace" }}>{count}</span>}</button>
+  );
+
+  const cellStyle = { padding: "8px 12px", borderBottom: "1px solid #1E213044", color: "#C4CAD6", fontSize: 12 };
+  const thStyle = { ...cellStyle, color: "#5A6178", textTransform: "uppercase", fontSize: 10, letterSpacing: 0.8, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 };
+
+  return (
+    <div>
+      <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🔇 Email & Sync Audit</h3>
+          <div style={{ display: "flex", gap: 8 }}>
+            {zdAudit.todayCount > 0 && (
+              <span style={{ padding: "4px 10px", background: "#22C55E22", color: "#22C55E", borderRadius: 6, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
+                {zdAudit.todayCount} ZD comments suppressed today
+              </span>
+            )}
+            <button onClick={reload} disabled={loading} style={{ ...btnStyle("#6366F1"), padding: "6px 14px", fontSize: 11 }}>{loading ? "⏳" : "🔄 Refresh"}</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", padding: 4, borderRadius: 6 }}>
+          {tabBtn("suppressions", "Suppressions", prefs.length)}
+          {tabBtn("throttle", "Throttle Log", throttle.length)}
+          {tabBtn("zdAudit", "ZD Push Audit", zdAudit.total)}
+        </div>
+
+        {tab === "suppressions" && (
+          <div>
+            <div style={{ marginBottom: 12, padding: 12, background: "#0A0C14", borderRadius: 6, border: "1px dashed #1E2130", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ color: "#C4CAD6", fontSize: 12 }}>Bulk pre-seed unsubscribe for internal users (vgctechnology.com, vgcsg.com):</span>
+              <button onClick={() => runBulkSeed(true)} disabled={loading} style={{ ...btnStyle("#FFB347"), padding: "6px 12px", fontSize: 11 }}>Dry Run</button>
+              {seedDryRun && (
+                <>
+                  <span style={{ color: "#FFB347", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
+                    eligible: {seedDryRun.eligible} (existing skipped: {seedDryRun.skipped})
+                  </span>
+                  <button onClick={() => runBulkSeed(false)} disabled={loading} style={{ ...btnStyle("#EC4899"), padding: "6px 12px", fontSize: 11 }}>Confirm Seed</button>
+                </>
+              )}
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Space Grotesk', sans-serif" }}>
+              <thead><tr><th style={thStyle}>Email</th><th style={thStyle}>Status</th><th style={thStyle}>Source</th><th style={thStyle}>Updated</th><th style={thStyle}>Action</th></tr></thead>
+              <tbody>
+                {prefs.length === 0 && <tr><td style={cellStyle} colSpan={5}>No preferences recorded.</td></tr>}
+                {prefs.map(p => (
+                  <tr key={p.id || p.email}>
+                    <td style={cellStyle}>{p.email}</td>
+                    <td style={cellStyle}>{p.autoConfirm ? <span style={{ color: "#22C55E" }}>● Subscribed</span> : <span style={{ color: "#EF4444" }}>● Opted-out</span>}</td>
+                    <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{p.source || "-"}</code></td>
+                    <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{p.updatedAt ? p.updatedAt.slice(0, 19).replace("T", " ") : "-"}</code></td>
+                    <td style={cellStyle}>
+                      <button onClick={() => togglePref(p.email, !p.autoConfirm)} style={{ ...btnStyle(p.autoConfirm ? "#EF4444" : "#22C55E"), padding: "4px 10px", fontSize: 10 }}>
+                        {p.autoConfirm ? "Unsubscribe" : "Re-subscribe"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === "throttle" && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Space Grotesk', sans-serif" }}>
+            <thead><tr><th style={thStyle}>Email</th><th style={thStyle}>Incident</th><th style={thStyle}>Source</th><th style={thStyle}>Sent</th><th style={thStyle}>Window</th></tr></thead>
+            <tbody>
+              {throttle.length === 0 && <tr><td style={cellStyle} colSpan={5}>No confirmation emails logged yet.</td></tr>}
+              {throttle.map((t, i) => {
+                const ageH = t.sentAt ? (Date.now() - new Date(t.sentAt).getTime()) / 3600000 : null;
+                const within24 = ageH != null && ageH < 24;
+                return (
+                  <tr key={i}>
+                    <td style={cellStyle}>{t.email || "-"}</td>
+                    <td style={cellStyle}><code style={{ color: "#818CF8", fontSize: 11 }}>{t.incidentId || "-"}</code></td>
+                    <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{t.source || "-"}</code></td>
+                    <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{t.sentAt ? t.sentAt.slice(0, 19).replace("T", " ") : "-"}</code></td>
+                    <td style={cellStyle}>{within24 ? <span style={{ color: "#FFB347" }}>● Throttled (&lt;24h)</span> : <span style={{ color: "#5A6178" }}>○ Open</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        {tab === "zdAudit" && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Space Grotesk', sans-serif" }}>
+            <thead><tr><th style={thStyle}>When</th><th style={thStyle}>Ticket</th><th style={thStyle}>Reason</th><th style={thStyle}>Detail</th></tr></thead>
+            <tbody>
+              {zdAudit.items.length === 0 && <tr><td style={cellStyle} colSpan={4}>No ZD push suppressions yet.</td></tr>}
+              {zdAudit.items.map((r, i) => {
+                let parsed = {}; try { parsed = typeof r.data === "string" ? JSON.parse(r.data) : (r.data || {}); } catch {}
+                return (
+                  <tr key={i}>
+                    <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{r.timestamp ? String(r.timestamp).slice(0, 19).replace("T", " ") : "-"}</code></td>
+                    <td style={cellStyle}><code style={{ color: "#818CF8", fontSize: 11 }}>#{r.record_id || "-"}</code></td>
+                    <td style={cellStyle}>{r.action === "push_suppressed_flag" ? <span style={{ color: "#EF4444" }}>flag off</span> : <span style={{ color: "#FFB347" }}>dedup 60s</span>}</td>
+                    <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{parsed.action || "-"} {parsed.status ? `→ ${parsed.status}` : ""}</code></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Phase H2 — Feature Flags Tab ──────────────────────────────────────
+const FeatureFlagsTab = () => {
+  const [flags, setFlags] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [editPayload, setEditPayload] = useState({}); // name -> JSON string
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/feature-flags").then(r => r.json());
+      setFlags(r.flags || []);
+    } catch (e) { console.warn("[FeatureFlags] reload failed", e); }
+    setLoading(false);
+  };
+  useEffect(() => { reload(); }, []);
+
+  const update = async (name, patch) => {
+    const r = await fetch("/api/feature-flags", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, ...patch }),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); alert(`Update failed: ${d.error || r.statusText}`); return; }
+    reload();
+  };
+  const savePayload = (name) => {
+    const txt = editPayload[name];
+    if (!txt) return;
+    try {
+      const obj = JSON.parse(txt);
+      update(name, { payload: obj });
+      setEditPayload(p => { const n = { ...p }; delete n[name]; return n; });
+    } catch (e) { alert("Invalid JSON: " + e.message); }
+  };
+
+  const cellStyle = { padding: "10px 12px", borderBottom: "1px solid #1E213044", color: "#C4CAD6", fontSize: 12, verticalAlign: "top" };
+
+  return (
+    <div>
+      <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🚩 Feature Flags</h3>
+            <p style={{ margin: "4px 0 0", color: "#5A6178", fontSize: 11 }}>Toggle live system behavior. Every change is audited (who/when/before/after).</p>
+          </div>
+          <button onClick={reload} disabled={loading} style={{ ...btnStyle("#6366F1"), padding: "6px 14px", fontSize: 11 }}>{loading ? "⏳" : "🔄 Refresh"}</button>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Space Grotesk', sans-serif" }}>
+          <thead>
+            <tr style={{ background: "#0A0C14" }}>
+              <th style={{ ...cellStyle, fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "'JetBrains Mono', monospace" }}>Flag</th>
+              <th style={{ ...cellStyle, fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "'JetBrains Mono', monospace" }}>Enabled</th>
+              <th style={{ ...cellStyle, fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "'JetBrains Mono', monospace" }}>Scope</th>
+              <th style={{ ...cellStyle, fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.8, fontFamily: "'JetBrains Mono', monospace" }}>Payload</th>
+            </tr>
+          </thead>
+          <tbody>
+            {flags.map(f => (
+              <tr key={f.name}>
+                <td style={cellStyle}>
+                  <code style={{ color: "#818CF8", fontSize: 12, fontWeight: 600 }}>{f.name}</code>
+                </td>
+                <td style={cellStyle}>
+                  <div onClick={() => update(f.name, { enabled: !f.enabled })}
+                    style={{ width: 44, height: 24, borderRadius: 12, cursor: "pointer", background: f.enabled ? "#22C55E" : "#1E2130", padding: 2, transition: "background 0.2s" }}>
+                    <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", transform: f.enabled ? "translateX(20px)" : "translateX(0)", transition: "transform 0.2s" }} />
+                  </div>
+                </td>
+                <td style={cellStyle}>
+                  <select value={f.scope || "all"} onChange={e => update(f.name, { scope: e.target.value })} style={{ ...inputStyle, padding: "5px 8px", fontSize: 11, width: "auto" }}>
+                    <option value="all">all</option><option value="prod">prod</option><option value="staging">staging</option>
+                  </select>
+                </td>
+                <td style={cellStyle}>
+                  {f.payload != null ? (
+                    <div>
+                      <textarea
+                        value={editPayload[f.name] != null ? editPayload[f.name] : JSON.stringify(f.payload, null, 2)}
+                        onChange={e => setEditPayload(p => ({ ...p, [f.name]: e.target.value }))}
+                        style={{ ...inputStyle, fontSize: 11, fontFamily: "'JetBrains Mono', monospace", minHeight: 60, width: 280 }} />
+                      {editPayload[f.name] != null && (
+                        <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
+                          <button onClick={() => savePayload(f.name)} style={{ ...btnStyle("#22C55E"), padding: "4px 10px", fontSize: 10 }}>Save</button>
+                          <button onClick={() => setEditPayload(p => { const n = { ...p }; delete n[f.name]; return n; })} style={{ ...btnStyle("#5A6178"), padding: "4px 10px", fontSize: 10 }}>Cancel</button>
+                        </div>
+                      )}
+                    </div>
+                  ) : <span style={{ color: "#5A6178", fontSize: 11 }}>—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 // ─── Main App ────────────────────────────────────────────────────────────
 export default function ITSMApp() {
   // Demo mode removed — production only
@@ -12113,6 +12366,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       { id: "surveys", label: "Surveys", icon: "📊" },
       { id: "billing", label: "Billing", icon: "💳", devOnly: true },
       { id: "aiGovernance", label: "AI Governance", icon: "🧠" },
+      { id: "emailAudit", label: "Email & Sync Audit", icon: "🔇" },
+      { id: "featureFlags", label: "Feature Flags", icon: "🚩" },
       { id: "branding", label: "Branding", icon: "🎨" },
       { id: "general", label: "General", icon: "⚙️" },
       { id: "uat", label: "UAT", icon: "🧪" },
@@ -15980,6 +16235,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             </div>
           </div>
         )}
+
+        {/* Phase H1 — Email & Sync Audit */}
+        {activeTab === "emailAudit" && <EmailAuditTab />}
+
+        {/* Phase H2 — Feature Flags */}
+        {activeTab === "featureFlags" && <FeatureFlagsTab />}
 
         {/* AI Governance Dashboard */}
         {activeTab === "aiGovernance" && (

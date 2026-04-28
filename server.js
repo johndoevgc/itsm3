@@ -1488,6 +1488,7 @@ const VALID_COLLECTIONS = new Set([
   "ai_email_outbox",
   "email_preferences",
   "email_confirm_log",
+  "workflow_rules_v2",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -11996,6 +11997,96 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       const rows = await db.getAll("email_preferences");
       const prefs = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
       return json(res, 200, { total: prefs.length, preferences: prefs });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // GET /api/email-confirm-log?limit=100 — Phase H1: throttle log viewer
+  if (pathname === "/api/email-confirm-log" && req.method === "GET") {
+    try {
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "100", 10), 1000);
+      const rows = await db.getAll("email_confirm_log");
+      const items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      items.sort((a, b) => String(b.sentAt || "").localeCompare(String(a.sentAt || "")));
+      return json(res, 200, { total: items.length, items: items.slice(0, limit) });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // GET /api/audit/zd-suppressions?limit=100 — Phase H1: ZD push audit aggregator
+  if (pathname === "/api/audit/zd-suppressions" && req.method === "GET") {
+    try {
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "100", 10), 1000);
+      const rows = await db.getAudit("zendesk_sync", limit);
+      const filtered = rows.filter(r => r.action === "push_suppressed_flag" || r.action === "push_suppressed_dedup");
+      // Today count for badge
+      const today = new Date().toISOString().slice(0, 10);
+      const todayCount = filtered.filter(r => String(r.timestamp || "").startsWith(today)).length;
+      return json(res, 200, { total: filtered.length, todayCount, items: filtered });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // POST /api/email-preferences/bulk-seed — Phase H3: pre-seed unsubscribe for
+  // internal users so noise stops immediately for everyone, then they re-subscribe
+  // on demand. Never overwrites explicit existing entries.
+  // Body: { domains?: string[], dryRun?: boolean, source?: string }
+  if (pathname === "/api/email-preferences/bulk-seed" && req.method === "POST") {
+    if (!authResult || !authResult.role || !["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const body = await parseBody(req);
+      const domains = (Array.isArray(body && body.domains) && body.domains.length
+        ? body.domains
+        : INTERNAL_DOMAINS).map(d => String(d).toLowerCase().trim()).filter(Boolean);
+      const dryRun = body && body.dryRun === true;
+      const source = (body && body.source) || "bulk_seed_phase_h";
+      const seededAt = new Date().toISOString();
+
+      // Existing prefs — never overwrite
+      const existingRows = await db.getAll("email_preferences");
+      const existing = new Set(existingRows.map(r => String(r.id || "").toLowerCase()).filter(Boolean));
+
+      // Collect candidate emails from users + customers
+      const candidates = new Map(); // email -> source-collection
+      for (const coll of ["users", "customers"]) {
+        try {
+          const rows = await db.getAll(coll);
+          for (const r of rows) {
+            try {
+              const rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+              const email = String((rec && rec.email) || "").toLowerCase().trim();
+              if (!email || !email.includes("@")) continue;
+              const domain = email.split("@")[1];
+              if (!domains.includes(domain)) continue;
+              if (!candidates.has(email)) candidates.set(email, coll);
+            } catch {}
+          }
+        } catch {}
+      }
+
+      const eligible = candidates.size;
+      let inserted = 0;
+      const skipped = [];
+      if (!dryRun) {
+        for (const [email, srcColl] of candidates) {
+          if (existing.has(email)) { skipped.push(email); continue; }
+          try {
+            await db.upsert("email_preferences", email, JSON.stringify({
+              id: email, email, autoConfirm: false, updatedAt: seededAt,
+              source, sourceCollection: srcColl, seededAt,
+            }));
+            inserted++;
+          } catch { /* best-effort */ }
+        }
+        try {
+          await db.audit("email_preferences", "bulk_seed", "bulk_seed", JSON.stringify({
+            domains, eligible, inserted, skippedCount: skipped.length, source,
+          }), (authResult.user && authResult.user.email) || "admin");
+        } catch {}
+      }
+      return json(res, 200, {
+        dryRun, domains, scanned: eligible, eligible, inserted,
+        skipped: skipped.length, skippedSample: skipped.slice(0, 10),
+      });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 

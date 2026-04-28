@@ -74,6 +74,13 @@ class WorkflowEngine {
         }
       }
 
+      // ─── Phase H4 — Shadow workflow harness (diff-only) ─────────────
+      try {
+        const _shadowWf = require("./shadowWorkflow");
+        const _ff = require("./featureFlags");
+        await _shadowWf.runShadow({ db: this.db, featureFlags: _ff, incidents: this._cycleIncidents });
+      } catch { /* shadow is non-fatal */ }
+
       // ─── AI Auto-Resolve for idle incidents (Production Pipeline) ─────
       await this._triggerAutoResolveForIdle();
 
