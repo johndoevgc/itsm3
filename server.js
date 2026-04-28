@@ -1923,6 +1923,22 @@ async function processInboundEmails() {
           continue;
         }
 
+        // ── Gate 1.5: Zendesk system / external ticket-system echo emails ──
+        // Subjects like "[Request received] Ticket ID: #8371 - ..." or "#8368 - ..."
+        // are confirmation/notification emails from Zendesk or other ITSM systems
+        // that we've forwarded into. They should be ingested into the existing
+        // ZD-linked incident (handled by reconcile), not create a new orphan.
+        const _zdEcho = /\[request received\]|\[ticket #\d+|^#\d{3,}\s*[-–]/i.test(subject)
+          || fromAddr.endsWith("@zendesk.com")
+          || fromAddr.includes("@support.")
+          || /support\+id\d+@/.test(fromAddr);
+        if (_zdEcho) {
+          await _markEmailRead(token, sender, msg.id);
+          await _logRejection(fromAddr, subject, "zendesk-system-echo");
+          console.log(`[Email-to-Ticket] Skipped zendesk-system-echo: ${fromAddr} "${subject.substring(0, 60)}"`);
+          continue;
+        }
+
         // ── Gate 2: Skip newsletters, marketing, bulk mail, news digests ──
         const noisePatterns = ["newsletter", "marketing", "promo", "digest", "updates@", "info@", "notification@", "campaign", "unsubscribe", "daily briefing", "weekly briefing", "threat brief", "cyber brief", "news alert", "security alert roundup", "threat roundup", "daily recap", "weekly recap", "news round"];
         const isNoise = noisePatterns.some(p => fromAddr.includes(p) || subject.toLowerCase().includes(p));
