@@ -10,6 +10,8 @@ const { NotificationEngine } = require("./notificationEngine");
 const { WorkflowEngine } = require("./workflowEngine");
 const { AnalyticsEngine } = require("./analyticsEngine");
 const { CacheLayer } = require("./cacheLayer");
+const featureFlags = require("./featureFlags");
+const shadowMode = require("./shadowMode");
 
 const PORT = process.env.PORT || 8080;
 const AZURE_SUBSCRIPTION_ID = process.env.AZURE_SUBSCRIPTION_ID || "";
@@ -1142,6 +1144,8 @@ const VALID_COLLECTIONS = new Set([
   "ticket_templates",
   "saved_filters",
   "tenant_settings",
+  "feature_flags",
+  "shadow_diffs",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -9016,6 +9020,24 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
+  // ─── Feature Flags admin ──────────────────────────────────────────────
+  if (pathname === "/api/feature-flags" && req.method === "GET") {
+    return json(res, 200, { flags: featureFlags.list(), shadowStats: shadowMode.getStats() });
+  }
+  if (pathname === "/api/feature-flags" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      if (!body?.name) return json(res, 400, { error: "name required" });
+      const rec = await featureFlags.set(body.name, {
+        enabled: body.enabled,
+        scope:   body.scope,
+        payload: body.payload,
+      });
+      try { await db.audit("feature_flags", body.name, "set", JSON.stringify(rec), req.user?.email || "system"); } catch {}
+      return json(res, 200, { ok: true, flag: rec });
+    } catch (e) { return json(res, 500, { error: e.message }); }
+  }
+
   // Health check
   if (pathname === "/api/health") {
     let dbOk = false;
@@ -13167,6 +13189,13 @@ Assignee: ${incident.assignee || "N/A"}`;
 }
 async function start() {
   await initDatabase();
+
+  // Initialize feature flags (DB-backed, hot-reload every 30s)
+  try {
+    await featureFlags.init(db, { reloadSec: 30 });
+    console.log(`[FeatureFlags] Loaded ${featureFlags.list().length} flag(s)`);
+  } catch (e) { console.warn("[FeatureFlags] init failed:", e.message); }
+
   // Start SLA Engine (after DB is initialized)
   // Initialize WebSocket server
   wsServer = new WebSocketServer();

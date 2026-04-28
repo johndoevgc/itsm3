@@ -131,7 +131,8 @@ Invoke-WebRequest -Method PUT -Uri "$vfsBase/server.js" -Headers $h -InFile "ser
 # Upload supporting backend modules (only if changed locally — push always for safety)
 $backendFiles = @(
   "workflowEngine.js","slaEngine.js","notificationEngine.js","analyticsEngine.js",
-  "authMiddleware.js","cacheLayer.js","graphService.js","wsServer.js","msalConfig.js"
+  "authMiddleware.js","cacheLayer.js","graphService.js","wsServer.js","msalConfig.js",
+  "featureFlags.js","shadowMode.js"
 ) | Where-Object { Test-Path $_ }
 foreach ($bf in $backendFiles) {
   Info "Uploading $bf"

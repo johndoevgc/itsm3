@@ -37,11 +37,49 @@ param(
     [string]$SqlServerName = "sql-vgc-itsm-$Environment",
 
     [Parameter(Mandatory = $false)]
-    [string]$SqlDbName = "sqldb-vgc-itsm-$Environment"
+    [string]$SqlDbName = "sqldb-vgc-itsm-$Environment",
+
+    # ─── Routine code-update flow (slot-aware, safe-by-default) ─────────
+    # Use:  .\deploy.ps1 -Update            # build + push to staging slot
+    #       .\deploy.ps1 -Update -Swap      # also swap staging -> prod
+    #       .\deploy.ps1 -Update -Swap -Rollback  # revert last swap
+    [Parameter(Mandatory = $false)]
+    [switch]$Update,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Swap,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Rollback
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+# ─── Routine update path (delegates to slot-aware deploy) ──────────────
+if ($Update -or $Swap -or $Rollback) {
+    $slotScript = Join-Path $PSScriptRoot "scripts/deploy-slot.ps1"
+    if (-not (Test-Path $slotScript)) {
+        Write-Host "  ✘ scripts/deploy-slot.ps1 not found" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "`n▸ Routine update via staging slot (safe-by-default)" -ForegroundColor Cyan
+    if ($Swap -and -not $Update) {
+        # Swap-only (already deployed to staging earlier)
+        & $slotScript -Swap:$true -Rollback:$Rollback
+    } else {
+        # Build + push to staging, then optionally swap
+        & $slotScript -Slot staging
+        if ($LASTEXITCODE -ne 0) { Write-Host "  ✘ Staging deploy failed" -ForegroundColor Red; exit 1 }
+        if ($Swap) {
+            & $slotScript -Swap:$true -Rollback:$Rollback
+        } else {
+            Write-Host "`nStaging URL: https://vgc-itsm1-app-staging.azurewebsites.net" -ForegroundColor Yellow
+            Write-Host "When ready to promote: .\deploy.ps1 -Swap" -ForegroundColor Yellow
+        }
+    }
+    exit $LASTEXITCODE
+}
 
 # ─── Helpers ────────────────────────────────────────────────────────────
 function Write-Step { param([string]$Message) Write-Host "`n▸ $Message" -ForegroundColor Cyan }

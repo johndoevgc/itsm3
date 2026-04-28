@@ -2,6 +2,11 @@
 // Computes SLA compliance, tracks breaches, and auto-escalates.
 // Runs as a periodic timer on the server.
 
+// Optional integrations (loaded lazily — slaEngine is also imported by tests)
+let _featureFlags = null, _shadow = null;
+try { _featureFlags = require("./featureFlags"); } catch {}
+try { _shadow = require("./shadowMode"); } catch {}
+
 // ─── Default SLA Policy (matches client-side DEFAULT_SLA_POLICY) ────────
 const DEFAULT_SLA_POLICY = {
   supportHours: { start: 9, end: 18, days: "Mon-Fri", tz: "Asia/Singapore" },
@@ -237,7 +242,29 @@ class SlaEngine {
       const slaUpdates = []; // batch SLA tracking upserts
 
       for (const inc of openIncidents) {
-        const sla = computeSlaStatus(inc, this.policy);
+        // Phase 2 shadow mode: when `shadow_sla_v2` flag is on, run a
+        // candidate computeSlaStatus_v2 alongside and log diffs. The
+        // control implementation's value is always what we use.
+        const shadowOn = _featureFlags && _shadow && _featureFlags.isEnabled("shadow_sla_v2");
+        let sla;
+        if (shadowOn) {
+          sla = await _shadow.run({
+            name:      "shadow_sla_v2",
+            enabled:   true,
+            control:   () => computeSlaStatus(inc, this.policy),
+            candidate: () => computeSlaStatus(inc, this.policy), // replace with v2 impl when ready
+            keys:      ["status", "breached", "hoursElapsed", "firstResponseTarget", "worstResponseTarget"],
+            onDiff:    async (d) => {
+              try {
+                await this.db.upsert("shadow_diffs", `sla_${inc.id}_${Date.now()}`, JSON.stringify({
+                  flag: "shadow_sla_v2", incidentId: inc.id, ...d, at: new Date().toISOString(),
+                }));
+              } catch { /* non-fatal */ }
+            },
+          });
+        } else {
+          sla = computeSlaStatus(inc, this.policy);
+        }
 
         // Collect SLA tracking update (batch later)
         slaUpdates.push({ id: inc.id, data: {
