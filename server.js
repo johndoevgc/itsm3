@@ -12,6 +12,7 @@ const { AnalyticsEngine } = require("./analyticsEngine");
 const { CacheLayer } = require("./cacheLayer");
 const featureFlags = require("./featureFlags");
 const shadowMode = require("./shadowMode");
+const piiRedact = require("./piiRedact");
 
 const PORT = process.env.PORT || 8080;
 const AZURE_SUBSCRIPTION_ID = process.env.AZURE_SUBSCRIPTION_ID || "";
@@ -176,6 +177,19 @@ const SOPHOS_CLIENT_SECRET = process.env.SOPHOS_CLIENT_SECRET || "";
 
 // M365 Mail sending via Managed Identity
 const MAIL_FROM = process.env.MAIL_FROM || "itsupport@vgctechnology.com";
+// Phase B5 — channel-specific senders (default to MAIL_FROM for backward compat).
+// Use senderFor(channel) where channel ∈ {"alerts","support","noreply"}.
+const MAIL_FROM_ALERTS  = process.env.MAIL_FROM_ALERTS  || MAIL_FROM;
+const MAIL_FROM_SUPPORT = process.env.MAIL_FROM_SUPPORT || MAIL_FROM;
+const MAIL_FROM_NOREPLY = process.env.MAIL_FROM_NOREPLY || MAIL_FROM;
+function senderFor(channel) {
+  switch ((channel || "").toLowerCase()) {
+    case "alerts":  return MAIL_FROM_ALERTS;
+    case "support": return MAIL_FROM_SUPPORT;
+    case "noreply": return MAIL_FROM_NOREPLY;
+    default:        return MAIL_FROM;
+  }
+}
 
 // ─── Production Mode ────────────────────────────────────────────────────
 // PROD_TEST_MODE=false: AI thresholds at production levels, Zendesk bidirectional sync enabled
@@ -277,6 +291,109 @@ function safeRecipient(record) {
     }
   }
   return null;
+}
+
+// ─── Phase B helpers: feature-gated customer email + cooling-off queue ───
+function _severityKey(priority) {
+  if (!priority) return "sevC";
+  const p = String(priority).toLowerCase().replace(/[\s_-]/g, "");
+  if (p === "seva" || p === "sev1" || p === "p1" || p === "critical") return "sevA";
+  if (p === "sevb" || p === "sev2" || p === "p2" || p === "high") return "sevB";
+  if (p === "sevd" || p === "sev4" || p === "p4" || p === "low") return "sevD";
+  return "sevC";
+}
+// Decides whether to send a customer email immediately, queue it for cooling-off,
+// or skip it entirely based on feature flags. `meta` MUST include {incidentId, severity, source}.
+// Returns: { action: "sent"|"queued"|"skipped", reason }
+async function queueOrSendCustomerEmail(opts, meta) {
+  const incidentId = (meta && meta.incidentId) || "unknown";
+  const severity = (meta && meta.severity) || "Sev-C";
+  const source = (meta && meta.source) || "system";
+
+  // Phase B1 — auto_customer_email gate
+  if (!featureFlags.isEnabled("auto_customer_email")) {
+    try { await db.audit("incidents", incidentId, "email_skipped_flag_off", JSON.stringify({ source, severity, flag: "auto_customer_email" }), source); } catch {}
+    console.log(`[CustomerEmail] auto_customer_email=off → skipped for ${incidentId} (${source})`);
+    return { action: "skipped", reason: "auto_customer_email flag off" };
+  }
+
+  // Phase B3 — cooling-off queue
+  const cool = featureFlags.isEnabled("ai_cooling_off");
+  if (cool) {
+    const payload = featureFlags.payload("ai_cooling_off") || { sevA: -1, sevB: 10, sevC: 5, sevD: 2 };
+    const key = _severityKey(severity);
+    const minutes = typeof payload[key] === "number" ? payload[key] : 5;
+    if (minutes < 0) {
+      try { await db.audit("incidents", incidentId, "email_blocked_severity", JSON.stringify({ source, severity, key }), source); } catch {}
+      console.warn(`[CustomerEmail] BLOCKED for ${incidentId} (${severity}) — cooling-off policy disallows`);
+      return { action: "skipped", reason: `cooling-off blocks ${severity}` };
+    }
+    if (minutes > 0) {
+      const sendAfter = new Date(Date.now() + minutes * 60_000).toISOString();
+      const id = `OBX-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const rec = {
+        id, incidentId, severity, source,
+        opts, // { to, subject, body, isCustomerEmail, from }
+        status: "queued",
+        queuedAt: new Date().toISOString(),
+        sendAfter,
+      };
+      try {
+        await db.upsert("ai_email_outbox", id, JSON.stringify(rec));
+        console.log(`[CustomerEmail] Queued ${id} for ${incidentId} (${severity}, +${minutes}m)`);
+        return { action: "queued", reason: `cooling-off ${minutes}m` };
+      } catch (qErr) {
+        console.warn(`[CustomerEmail] Queue failed for ${incidentId}, sending immediately:`, qErr.message);
+        // fall through to immediate send
+      }
+    }
+  }
+
+  // Immediate send
+  await graphSendMail(opts);
+  return { action: "sent", reason: "immediate" };
+}
+
+// Outbox drainer (runs every 60s). Sends queued customer emails whose sendAfter <= now.
+async function _drainCustomerEmailOutbox() {
+  if (!db) return;
+  try {
+    const rows = await db.getAll("ai_email_outbox");
+    const now = Date.now();
+    let sent = 0, failed = 0;
+    for (const r of rows) {
+      let rec; try { rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { continue; }
+      if (!rec || rec.status !== "queued") continue;
+      if (!rec.sendAfter || new Date(rec.sendAfter).getTime() > now) continue;
+      try {
+        await graphSendMail(rec.opts);
+        rec.status = "sent";
+        rec.sentAt = new Date().toISOString();
+        await db.upsert("ai_email_outbox", rec.id, JSON.stringify(rec));
+        sent++;
+      } catch (sendErr) {
+        rec.status = "failed";
+        rec.failedAt = new Date().toISOString();
+        rec.errorMessage = sendErr.message;
+        try { await db.upsert("ai_email_outbox", rec.id, JSON.stringify(rec)); } catch {}
+        failed++;
+      }
+    }
+    if (sent || failed) console.log(`[Outbox Drain] sent=${sent} failed=${failed}`);
+  } catch (err) {
+    console.warn("[Outbox Drain] error:", err.message);
+  }
+}
+
+// PII redaction wrapper for AI prompts. Returns { prompt, map } so callers can
+// reverse-map AI output for the FINAL outbound email (never log raw values).
+function redactForAI(prompt) {
+  if (!featureFlags.isEnabled("pii_redact")) return { prompt, map: {} };
+  const { redacted, map } = piiRedact.redact(prompt);
+  if (Object.keys(map).length > 0) {
+    console.log("[PII Redact]", JSON.stringify(piiRedact.summary(map)));
+  }
+  return { prompt: redacted, map };
 }
 
 // ─── Scheduled Purge Status Tracker ─────────────────────────────────────
@@ -1166,6 +1283,7 @@ const VALID_COLLECTIONS = new Set([
   "tenant_settings",
   "feature_flags",
   "shadow_diffs",
+  "ai_email_outbox",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -2083,10 +2201,11 @@ const server = http.createServer(async (req, res) => {
               console.warn(`[Incident Create] No valid recipient for ${id} — skipping confirmation email`);
               try { await db.audit("incidents", id, "email_skipped_no_recipient", JSON.stringify({ stage: "create" }), "system"); } catch {}
             } else {
-            graphSendMail({
+            queueOrSendCustomerEmail({
               to: [_newIncTo],
               subject: `[VGC ITSM] Incident ${id} created — ${(body.title || "").substring(0, 80)}`,
               isCustomerEmail: true,
+              from: senderFor("support"),
               body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
                 <div style="background:linear-gradient(135deg,#3B82F6,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
                   <h2 style="margin:0;color:#fff;font-size:18px;">📋 New Incident Created</h2>
@@ -2104,7 +2223,8 @@ const server = http.createServer(async (req, res) => {
                   <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
                 </div>
               </div>`,
-            }).catch(e => console.warn("[Incident Create] Confirmation email failed:", e.message));
+            }, { incidentId: id, severity: body.priority || "Sev-C", source: "incident_create" })
+              .catch(e => console.warn("[Incident Create] Confirmation email failed:", e.message));
             }
           }
 
@@ -2256,10 +2376,11 @@ const server = http.createServer(async (req, res) => {
             console.warn(`[Incident Resolve] No valid recipient for ${recordId} — skipping ${body.status} email`);
             try { await db.audit("incidents", recordId, "email_skipped_no_recipient", JSON.stringify({ stage: "resolve", status: body.status }), "system"); } catch {}
           } else {
-          graphSendMail({
+          queueOrSendCustomerEmail({
             to: [_resTo],
             subject: `[VGC ITSM] Incident ${recordId} — ${body.status}`,
             isCustomerEmail: true,
+            from: senderFor("support"),
             body: buildEmailTemplate({
               type: body.status === "Resolved" ? "incident_resolved" : "incident_closed",
               incidentId: recordId,
@@ -2271,7 +2392,8 @@ const server = http.createServer(async (req, res) => {
                 { label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" },
               ],
             }),
-          }).catch(e => console.warn("[Incident Resolve] Customer email failed:", e.message));
+          }, { incidentId: recordId, severity: body.priority || "Sev-C", source: "incident_resolve" })
+            .catch(e => console.warn("[Incident Resolve] Customer email failed:", e.message));
           }
         }
 
@@ -9715,10 +9837,11 @@ Respond ONLY with valid JSON:
           console.warn(`[AI Resolve Approve] No valid recipient for ${suggestion.incidentId} — skipping customer email`);
           try { await db.audit("ai_resolve_queue", suggestionId, "email_skipped_no_recipient", JSON.stringify({ stage: "approve" }), approvedBy || "system"); } catch {}
         } else {
-        graphSendMail({
+        queueOrSendCustomerEmail({
           to: [_aiResTo],
           subject: `[VGC ITSM] Your incident ${suggestion.incidentId} has been resolved`,
           isCustomerEmail: true,
+          from: senderFor("support"),
           body: buildEmailTemplate({
             type: "ai_approved_customer",
             incidentId: suggestion.incidentId || "",
@@ -9731,7 +9854,8 @@ Respond ONLY with valid JSON:
               { label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" },
             ],
           }),
-        }).catch(e => console.warn("[AI Resolve Approve] Customer email failed:", e.message));
+        }, { incidentId: suggestion.incidentId, severity: suggestion.priority || "Sev-C", source: "ai_resolve_approve" })
+          .catch(e => console.warn("[AI Resolve Approve] Customer email failed:", e.message));
         }
 
         // 2. Approver confirmation → internal email (Enterprise template)
@@ -9990,11 +10114,13 @@ Respond in JSON ONLY:
   "confidence": 0-100
 }`;
 
+          // Phase B4 — redact PII from prompt before sending to OpenAI
+          const _redacted = redactForAI(aiPrompt);
           const payload = {
             model: getAIModel("primary"),
             input: [
               { role: "system", content: "You are a senior IT support engineer at VGC Technology Pte Ltd. Generate professional customer email responses with relevant official vendor documentation links. Respond ONLY in valid JSON." },
-              { role: "user", content: aiPrompt },
+              { role: "user", content: _redacted.prompt },
             ],
             max_output_tokens: 1200,
           };
@@ -10025,6 +10151,12 @@ Respond in JSON ONLY:
             results.errors.push({ id: inc.id, error: "AI returned invalid JSON" });
             continue;
           }
+          // Phase B4 — restore redacted PII tokens in any user-visible fields
+          if (_redacted && _redacted.map && Object.keys(_redacted.map).length > 0) {
+            for (const k of ["subject", "greeting", "body", "resolution"]) {
+              if (typeof aiResponse[k] === "string") aiResponse[k] = piiRedact.restore(aiResponse[k], _redacted.map);
+            }
+          }
 
           // ── 4. Build HTML email from AI response using enterprise template ──
           const emailType = aiResponse.closingAction === "resolve" ? "ai_followup_resolved" : "ai_followup";
@@ -10052,12 +10184,14 @@ Respond in JSON ONLY:
               console.warn(`[AI Follow-Up] No valid recipient for ${inc.id} — skipping email`);
               try { await db.audit("incidents", inc.id, "email_skipped_no_recipient", JSON.stringify({ stage: "ai_followup" }), requestedBy || "system"); } catch {}
             } else {
-              graphSendMail({
+              queueOrSendCustomerEmail({
                 to: [_fuTo],
                 subject: emailSubject,
                 isCustomerEmail: true,
+                from: senderFor("support"),
                 body: emailHtml,
-              }).catch(e => console.warn(`[AI Follow-Up] Email failed for ${inc.id}:`, e.message));
+              }, { incidentId: inc.id, severity: inc.priority || "Sev-C", source: "ai_auto_followup" })
+                .catch(e => console.warn(`[AI Follow-Up] Email failed for ${inc.id}:`, e.message));
             }
           }
 
@@ -10363,6 +10497,7 @@ Respond in JSON ONLY:
         subject: emailSubject,
         body: advisoryHtml,
         isCustomerEmail: false, // internal email
+        from: senderFor("noreply"),
       });
 
       // Store advisory in DB for audit trail
@@ -13301,6 +13436,10 @@ async function start() {
     await featureFlags.init(db, { reloadSec: 30 });
     console.log(`[FeatureFlags] Loaded ${featureFlags.list().length} flag(s)`);
   } catch (e) { console.warn("[FeatureFlags] init failed:", e.message); }
+
+  // Phase B3 — start customer-email outbox drainer (60s interval)
+  setInterval(_drainCustomerEmailOutbox, 60_000).unref?.();
+  console.log("[Outbox Drain] Started (interval=60s)");
 
   // Start SLA Engine (after DB is initialized)
   // Initialize WebSocket server

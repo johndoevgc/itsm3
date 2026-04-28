@@ -566,6 +566,7 @@ class WorkflowEngine {
         subject: `[VGC ITSM] Daily Summary — ${todayStr} | ${open.length} open, ${resolvedToday.length} resolved`,
         body: html,
         isCustomerEmail: false,
+        from: process.env.MAIL_FROM_ALERTS || process.env.MAIL_FROM || "itsupport@vgctechnology.com",
       });
 
       this.lastDailySummary = now.toISOString();

@@ -21,6 +21,17 @@ const DEFAULTS = {
   // Phase 2 shadow-mode flags — default OFF in prod, can be enabled per slot
   shadow_sla_v2:       { enabled: false, scope: "staging" },
   shadow_workflow_v2:  { enabled: false, scope: "staging" },
+
+  // Phase B — operational maturity gates
+  // Auto customer email on incident CRUD: OFF in prod by default (safer).
+  // Engineers can flip to true once cooling-off + redaction are validated.
+  auto_customer_email: { enabled: false, scope: "prod" },
+  // Cooling-off queue: hold AI customer emails for N minutes by severity.
+  // Default ON — payload defines per-severity delay (minutes).
+  ai_cooling_off:      { enabled: true,  scope: "all",
+                         payload: { sevA: -1, sevB: 10, sevC: 5, sevD: 2 } },
+  // PII redaction before OpenAI prompts. Default ON.
+  pii_redact:          { enabled: true,  scope: "all" },
 };
 
 let _db = null;
