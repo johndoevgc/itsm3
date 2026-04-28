@@ -251,13 +251,33 @@ const AI_THRESHOLDS = {
   autoApply: parseInt(process.env.AI_AUTO_APPLY_THRESHOLD || (PROD_TEST_MODE ? "70" : "85"), 10),
   slaRisk: parseInt(process.env.AI_SLA_RISK_THRESHOLD || "70", 10),
   patternConfidence: parseInt(process.env.AI_PATTERN_CONFIDENCE_THRESHOLD || "70", 10),
-  autoResolveConfidence: parseInt(process.env.AI_AUTO_RESOLVE_THRESHOLD || "60", 10),
+  autoResolveConfidence: parseInt(process.env.AI_AUTO_RESOLVE_THRESHOLD || "85", 10),
   maxPendingPerIncident: parseInt(process.env.AI_MAX_PENDING_PER_INCIDENT || "3", 10),
   maxPendingTotal: parseInt(process.env.AI_MAX_PENDING_TOTAL || "200", 10),
   staleDays: parseInt(process.env.AI_STALE_DAYS || "1", 10),
   monitorIntervalMin: parseInt(process.env.AI_MONITOR_INTERVAL_MIN || "15", 10),
 };
 console.log("[AI Thresholds]", JSON.stringify(AI_THRESHOLDS));
+
+// ─── Phase A safety helpers (Major Incident Process + recipient hygiene) ─
+// Returns true for Sev-A, P1, Critical (any case/dash). Used to block AI auto-resolve.
+function isHighSeverity(priority) {
+  if (!priority) return false;
+  const p = String(priority).toLowerCase().replace(/[\s_-]/g, "");
+  return p === "seva" || p === "sev1" || p === "p1" || p === "critical" || p === "sevcritical";
+}
+// Returns a real recipient or null. Never returns the "customer@example.com" placeholder.
+// Callers MUST handle null by skipping the send and logging to audit_log.
+function safeRecipient(record) {
+  if (!record || typeof record !== "object") return null;
+  const candidates = [record.reporterEmail, record.requesterEmail, record.contactEmail, record.email];
+  for (const c of candidates) {
+    if (typeof c === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c) && !/example\.com$/i.test(c)) {
+      return c;
+    }
+  }
+  return null;
+}
 
 // ─── Scheduled Purge Status Tracker ─────────────────────────────────────
 const purgeStatus = {
@@ -2058,8 +2078,13 @@ const server = http.createServer(async (req, res) => {
 
           // ─── Email: New Incident Created ──────────────────────────────
           if (collection === "incidents" && body.title) {
+            const _newIncTo = safeRecipient(body);
+            if (!_newIncTo) {
+              console.warn(`[Incident Create] No valid recipient for ${id} — skipping confirmation email`);
+              try { await db.audit("incidents", id, "email_skipped_no_recipient", JSON.stringify({ stage: "create" }), "system"); } catch {}
+            } else {
             graphSendMail({
-              to: [body.reporterEmail || body.requesterEmail || "customer@example.com"],
+              to: [_newIncTo],
               subject: `[VGC ITSM] Incident ${id} created — ${(body.title || "").substring(0, 80)}`,
               isCustomerEmail: true,
               body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
@@ -2080,6 +2105,45 @@ const server = http.createServer(async (req, res) => {
                 </div>
               </div>`,
             }).catch(e => console.warn("[Incident Create] Confirmation email failed:", e.message));
+            }
+          }
+
+          // ─── Phase A5: Auto-create MIM record for Sev-A / P1 / Critical ──
+          if (collection === "incidents" && isHighSeverity(body.priority)) {
+            try {
+              const existing = await db.getAll("mim_records");
+              const already = existing.some(r => {
+                try { const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return m.incidentId === id && m.status === "active"; } catch { return false; }
+              });
+              if (!already) {
+                const nowIso = new Date().toISOString();
+                const mimRecord = {
+                  id: `MIM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                  incidentId: id,
+                  declaredAt: nowIso,
+                  declaredBy: "System (auto, severity-triggered)",
+                  status: "active",
+                  severity: body.priority,
+                  mimReviewed: false,
+                  affectedServices: body.affectedServices || [],
+                  source: "auto_severity_trigger",
+                };
+                await db.upsert("mim_records", mimRecord.id, mimRecord);
+                try {
+                  const liveRow = await db.getOne("incidents", id);
+                  if (liveRow) {
+                    const liveInc = typeof liveRow.data === "string" ? JSON.parse(liveRow.data) : liveRow.data;
+                    liveInc.isMajorIncident = true;
+                    liveInc.majorDeclaredAt = nowIso;
+                    liveInc.mimRecordId = mimRecord.id;
+                    await db.upsert("incidents", id, JSON.stringify(liveInc));
+                  }
+                } catch {}
+                await db.audit("mim_records", mimRecord.id, "auto_declared", JSON.stringify({ incidentId: id, priority: body.priority }), "system");
+                if (wsServer) wsServer.broadcast("mim", { action: "auto_declared", incidentId: id, mimId: mimRecord.id });
+                console.log(`[MIM Auto] Declared ${mimRecord.id} for ${id} (${body.priority})`);
+              }
+            } catch (mimErr) { console.warn("[MIM Auto] Failed:", mimErr.message); }
           }
 
           // ─── Auto-add customer domain to email whitelist ──────────────
@@ -2187,8 +2251,13 @@ const server = http.createServer(async (req, res) => {
           })();
 
           // ─── Email: Customer resolution notice ──────────────────────
+          const _resTo = safeRecipient(body);
+          if (!_resTo) {
+            console.warn(`[Incident Resolve] No valid recipient for ${recordId} — skipping ${body.status} email`);
+            try { await db.audit("incidents", recordId, "email_skipped_no_recipient", JSON.stringify({ stage: "resolve", status: body.status }), "system"); } catch {}
+          } else {
           graphSendMail({
-            to: [body.reporterEmail || body.requesterEmail || "customer@example.com"],
+            to: [_resTo],
             subject: `[VGC ITSM] Incident ${recordId} — ${body.status}`,
             isCustomerEmail: true,
             body: buildEmailTemplate({
@@ -2203,6 +2272,7 @@ const server = http.createServer(async (req, res) => {
               ],
             }),
           }).catch(e => console.warn("[Incident Resolve] Customer email failed:", e.message));
+          }
         }
 
         // ─── Email: Assignment change notification ────────────────────
@@ -9475,7 +9545,20 @@ Respond ONLY with valid JSON:
           // ─── Smart Routing: auto-dismiss noise/routine, queue important for engineers ───
           const isNoise = relevance === "noise_informational";
           const isRoutineHighConf = relevance === "internal_routine" && suggestion.confidence >= 80 && autoResolvable;
-          const shouldAutoDismiss = isNoise || isRoutineHighConf;
+          const sevABlocked = isHighSeverity(inc.priority);
+          const shouldAutoDismiss = !sevABlocked && (isNoise || isRoutineHighConf);
+
+          if (sevABlocked) {
+            // Sev-A / P1 / Critical — record for engineer review only, never auto-apply
+            suggestion.status = "pending_approval";
+            suggestion.sevABlocked = true;
+            suggestion.classificationReasoning = `[BLOCKED FROM AUTO-RESOLVE: ${inc.priority}] ` + classificationReasoning;
+            await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+            try { await db.audit("ai_resolve_queue", suggestion.id, "sev_a_auto_resolve_blocked", JSON.stringify({ incidentId: inc.id, priority: inc.priority, confidence: suggestion.confidence }), "system"); } catch {}
+            suggestions.push(suggestion);
+            console.warn(`[AI Auto-Resolve] BLOCKED auto-resolve for ${inc.id} (${inc.priority}) — Major Incident Process requires human approval`);
+            continue;
+          }
 
           if (shouldAutoDismiss && suggestion.confidence >= AI_THRESHOLDS.autoResolveConfidence) {
             // ── Auto-dismiss: resolve silently, NO email, NO engineer review ──
@@ -9627,8 +9710,13 @@ Respond ONLY with valid JSON:
         const incTitle = suggestion.incidentTitle || suggestion.incidentId || suggestionId;
 
         // 1. Customer resolution notice — Enterprise template
+        const _aiResTo = safeRecipient(suggestion);
+        if (!_aiResTo) {
+          console.warn(`[AI Resolve Approve] No valid recipient for ${suggestion.incidentId} — skipping customer email`);
+          try { await db.audit("ai_resolve_queue", suggestionId, "email_skipped_no_recipient", JSON.stringify({ stage: "approve" }), approvedBy || "system"); } catch {}
+        } else {
         graphSendMail({
-          to: [suggestion.reporterEmail || "customer@example.com"],
+          to: [_aiResTo],
           subject: `[VGC ITSM] Your incident ${suggestion.incidentId} has been resolved`,
           isCustomerEmail: true,
           body: buildEmailTemplate({
@@ -9644,6 +9732,7 @@ Respond ONLY with valid JSON:
             ],
           }),
         }).catch(e => console.warn("[AI Resolve Approve] Customer email failed:", e.message));
+        }
 
         // 2. Approver confirmation → internal email (Enterprise template)
         graphSendMail({
@@ -9787,8 +9876,13 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
     if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
     try {
       const body = await parseBody(req);
-      const requestedBy = body.requestedBy || "AI Auto Follow-Up";
-      const dryRun = body.dryRun === true; // preview without sending emails or updating DB
+      // ─── Phase A gate: approvedBy required for any non-dryRun customer-facing send ───
+      const approvedBy = body.approvedBy || (authResult && authResult.user && authResult.user.email) || null;
+      const dryRun = body.dryRun === true || !approvedBy; // fail-safe: missing approver → dry run
+      if (!approvedBy && body.dryRun !== true) {
+        console.warn("[AI Auto Follow-Up] approvedBy missing — forcing dryRun:true");
+      }
+      const requestedBy = body.requestedBy || approvedBy || "AI Auto Follow-Up";
       const maxItems = Math.min(body.maxItems || 5, 20); // limit to prevent Azure proxy timeout (230s)
 
       // ── 1. Load all incidents and Zendesk tickets ──
@@ -9812,6 +9906,12 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
       for (const inc of allIncidents) {
         try {
           const incStatus = (inc.status || "").trim();
+
+          // ─── Phase A: never AI-auto-followup Sev-A / P1 / Critical (Major Incident Process) ───
+          if (isHighSeverity(inc.priority)) {
+            results.skipped.push({ id: inc.id, reason: `high-severity (${inc.priority}) requires Major Incident Manager` });
+            continue;
+          }
 
           // ── 2a. Sync ITSM status with Zendesk (if linked) ──
           if (inc.zdTicketId && zdTickets[inc.zdTicketId]) {
@@ -9947,12 +10047,18 @@ Respond in JSON ONLY:
           // ── 5. Send email to customer ──
           const emailSubject = aiResponse.subject || `[VGC ITSM] Re: ${(inc.title || "Your request").substring(0, 60)} — ${aiResponse.closingAction === "resolve" ? "Resolved" : "Update"}`;
           if (!dryRun) {
-            graphSendMail({
-              to: [inc.reporterEmail || "customer@example.com"],
-              subject: emailSubject,
-              isCustomerEmail: true,
-              body: emailHtml,
-            }).catch(e => console.warn(`[AI Follow-Up] Email failed for ${inc.id}:`, e.message));
+            const _fuTo = safeRecipient(inc);
+            if (!_fuTo) {
+              console.warn(`[AI Follow-Up] No valid recipient for ${inc.id} — skipping email`);
+              try { await db.audit("incidents", inc.id, "email_skipped_no_recipient", JSON.stringify({ stage: "ai_followup" }), requestedBy || "system"); } catch {}
+            } else {
+              graphSendMail({
+                to: [_fuTo],
+                subject: emailSubject,
+                isCustomerEmail: true,
+                body: emailHtml,
+              }).catch(e => console.warn(`[AI Follow-Up] Email failed for ${inc.id}:`, e.message));
+            }
           }
 
           // ── 6. Update incident status + activity log ──

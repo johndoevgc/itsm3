@@ -562,10 +562,10 @@ class WorkflowEngine {
       </div>`;
 
       await this.graphSendMail({
-        to: ["management@vgctechnology.com"],
+        to: ["hlaing@vgctechnology.com"],
         subject: `[VGC ITSM] Daily Summary — ${todayStr} | ${open.length} open, ${resolvedToday.length} resolved`,
         body: html,
-        isCustomerEmail: true,
+        isCustomerEmail: false,
       });
 
       this.lastDailySummary = now.toISOString();
