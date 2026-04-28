@@ -4275,6 +4275,93 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       }
 
       // ═══════════════════════════════════════════════════════════════
+      // CLEANUP EMAIL-INGESTED ORPHAN NOISE (Silent bulk-close)
+      // POST /api/zendesk/cleanup-email-orphans
+      // Closes INC-EMAIL-* incidents in open status with NO zdTicketId.
+      // These are typically Zendesk auto-reply emails, [Request received]
+      // confirmations, RE:/FW: noise that got parsed as new incidents.
+      // Sev-A / P1 / Critical are never auto-closed.
+      // Body: { dryRun?: bool, requestedBy?: string, idPrefix?: string }
+      // ═══════════════════════════════════════════════════════════════
+      if (pathname === "/api/zendesk/cleanup-email-orphans" && req.method === "POST") {
+        try {
+          const body = await parseBody(req, 50000).catch(() => ({}));
+          const dryRun = body.dryRun === true;
+          const requestedBy = body.requestedBy || authResult?.user?.email || "admin";
+          const idPrefix = body.idPrefix || "INC-EMAIL-";
+          const explicitIds = Array.isArray(body.ids) ? new Set(body.ids) : null;
+          const reasonOverride = typeof body.reason === "string" ? body.reason : null;
+
+          const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold", "Reopened"]);
+          const allRows = await db.getAll("incidents");
+          const candidates = [];
+          const skippedHighSev = [];
+          for (const r of allRows) {
+            try {
+              const inc = JSON.parse(r.data);
+              if (!openStatuses.has((inc.status || "").trim())) continue;
+              if (inc.zdTicketId) continue;
+              if (explicitIds) {
+                if (!explicitIds.has(inc.id)) continue;
+              } else {
+                if (!inc.id || !inc.id.startsWith(idPrefix)) continue;
+              }
+              if (isHighSeverity(inc.priority)) { skippedHighSev.push({ id: inc.id, title: inc.title, priority: inc.priority }); continue; }
+              candidates.push(inc);
+            } catch {}
+          }
+
+          if (dryRun) {
+            return json(res, 200, {
+              dryRun: true,
+              eligibleCount: candidates.length,
+              skippedHighSev: skippedHighSev.length,
+              skippedHighSevSample: skippedHighSev.slice(0, 10),
+              sample: candidates.slice(0, 20).map(i => ({ id: i.id, title: (i.title || "").slice(0, 80), priority: i.priority, status: i.status, createdAt: i.createdAt }))
+            });
+          }
+
+          const now = new Date().toISOString();
+          let closed = 0;
+          for (const inc of candidates) {
+            inc.status = "Closed";
+            inc.resolvedAt = inc.resolvedAt || now;
+            inc.closedAt = now;
+            inc.updatedAt = now;
+            inc.historicalClose = true;
+            inc.suppressNotification = true;
+            inc.closureReason = reasonOverride || "Email-ingested orphan (no Zendesk link, auto-noise)";
+            inc.resolution = inc.resolution || (reasonOverride ? `Bulk-closed: ${reasonOverride}` : "Bulk-closed: email-ingested orphan with no Zendesk linkage. Likely Zendesk auto-reply, system notification, or unparsable email.");
+            inc.activityLog = [...(inc.activityLog || []), {
+              id: `AL-CLEANUP-${Date.now()}-${closed}`,
+              type: "close",
+              user: "Email Orphan Cleanup",
+              time: now,
+              detail: `Silently closed by cleanup operation (requested by ${requestedBy}). No customer notification sent.`
+            }];
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            try { await db.audit("incidents", inc.id, "silent-close-email-orphan", JSON.stringify({ reason: inc.closureReason, requestedBy }), requestedBy); } catch {}
+            try { wsServer && wsServer.broadcast && wsServer.broadcast("incidents/update", { id: inc.id, status: "Closed", silent: true }); } catch {}
+            closed++;
+          }
+          try { cacheLayer && cacheLayer.invalidatePrefix && cacheLayer.invalidatePrefix("incidents"); } catch {}
+
+          return json(res, 200, {
+            success: true,
+            scanned: candidates.length + skippedHighSev.length,
+            closed,
+            skippedHighSev: skippedHighSev.length,
+            requestedBy,
+            timestamp: now,
+            notificationsSent: 0
+          });
+        } catch (err) {
+          console.error("[Email Orphan Cleanup]", err);
+          return json(res, 500, { error: err.message });
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════════
       // RECONCILE OPEN INCIDENTS WITH ZENDESK (Silent backfill)
       // POST /api/zendesk/reconcile-open
       // For every open ITSM incident with a zdTicketId, fetch the current
