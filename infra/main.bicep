@@ -55,6 +55,12 @@ param portalUrl string = ''
 @description('Use shared MySQL server instead of creating a new one.')
 param useSharedMysql bool = false
 
+@description('Provision a staging deployment slot (requires Standard or higher SKU).')
+param enableStagingSlot bool = true
+
+@description('Email redirect target for non-prod (staging slot will redirect all outbound mail here).')
+param stagingEmailRedirectTarget string = 'hlaing@vgctechnology.com'
+
 @description('Shared MySQL server name (required if useSharedMysql=true).')
 param sharedMysqlServer string = ''
 
@@ -169,6 +175,9 @@ var computedPortalUrl = empty(portalUrl) ? 'https://${appName}.azurewebsites.net
 resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   name: appName
   location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly: true
@@ -197,23 +206,130 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         // ─── MySQL ───
         { name: 'MYSQL_HOST', value: mysqlHost }
         { name: 'MYSQL_USER', value: useSharedMysql ? '${customerName}_admin' : mysqlAdminLogin }
-        { name: 'MYSQL_PASSWORD', value: mysqlAdminPassword }
+        { name: 'MYSQL_PASSWORD', value: '@Microsoft.KeyVault(SecretUri=${secretMysqlPassword.properties.secretUri})' }
         { name: 'MYSQL_DATABASE', value: dbName }
         { name: 'MYSQL_SSL', value: 'true' }
         // ─── AI (optional) ───
         { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAiEndpoint }
-        { name: 'AZURE_OPENAI_API_KEY', value: azureOpenAiKey }
-        // ─── Safety defaults ───
+        { name: 'AZURE_OPENAI_API_KEY', value: empty(azureOpenAiKey) ? '' : '@Microsoft.KeyVault(SecretUri=${secretOpenAiKey!.properties.secretUri})' }
+        // ─── Safety defaults (PRODUCTION slot) ───
+        { name: 'NODE_ENV', value: 'production' }
+        { name: 'APP_DISPLAY_NAME', value: '${orgShortName} ITSM' }
         { name: 'PROD_TEST_MODE', value: 'false' }
-        { name: 'EMAIL_REDIRECT_MODE', value: 'true' }
+        { name: 'EMAIL_REDIRECT_MODE', value: 'false' }
+        { name: 'NOTIFICATIONS_MODE', value: 'live' }
+        { name: 'AI_AUTONOMY_LEVEL', value: 'suggest' }
+        // ─── Slot warmup (used when swapping) ───
+        { name: 'WEBSITE_SWAP_WARMUP_PING_PATH', value: '/api/health' }
+        { name: 'WEBSITE_SWAP_WARMUP_PING_STATUSES', value: '200' }
       ]
     }
+  }
+}
+
+// ─── Slot-sticky settings on PROD (so a swap does NOT carry these over) ──
+resource webAppSlotConfig 'Microsoft.Web/sites/config@2023-12-01' = {
+  parent: webApp
+  name: 'slotConfigNames'
+  properties: {
+    appSettingNames: [
+      'NODE_ENV'
+      'APP_DISPLAY_NAME'
+      'MYSQL_HOST'
+      'MYSQL_USER'
+      'MYSQL_PASSWORD'
+      'MYSQL_DATABASE'
+      'EMAIL_REDIRECT_MODE'
+      'EMAIL_REDIRECT_TARGET'
+      'NOTIFICATIONS_MODE'
+      'PROD_TEST_MODE'
+      'AI_AUTONOMY_LEVEL'
+      'AZURE_OPENAI_API_KEY'
+      'AZURE_OPENAI_ENDPOINT'
+      'ENTRA_CLIENT_ID'
+      'ENTRA_CLIENT_SECRET'
+    ]
+  }
+}
+
+// ─── Grant prod web app identity Key Vault Secrets User role ─────────────
+var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+resource webAppKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: keyVault
+  name: guid(keyVault.id, webApp.id, kvSecretsUserRoleId)
+  properties: {
+    principalId: webApp.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
+  }
+}
+
+// ─── Staging Slot ───────────────────────────────────────────────────────
+resource stagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = if (enableStagingSlot) {
+  parent: webApp
+  name: 'staging'
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: appServicePlan.id
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'NODE|22-lts'
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
+      alwaysOn: appServiceSku != 'B1'
+      healthCheckPath: '/api/health'
+      appSettings: [
+        { name: 'NODE_ENV', value: 'staging' }
+        { name: 'PORT', value: '8080' }
+        { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '0' }
+        { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'false' }
+        { name: 'APP_DISPLAY_NAME', value: '${orgShortName} ITSM (STAGING)' }
+        { name: 'PORTAL_URL', value: 'https://${appName}-staging.azurewebsites.net' }
+        { name: 'HELPDESK_MAILBOX', value: helpdeskMailbox }
+        { name: 'MAIL_FROM', value: mailFrom }
+        // ─── Entra (same app reg by default; swap in a separate one if desired) ───
+        { name: 'ENTRA_CLIENT_ID', value: entraClientId }
+        { name: 'ENTRA_TENANT_ID', value: entraTenantId }
+        { name: 'ALLOWED_TENANT_IDS', value: entraTenantId }
+        // ─── MySQL — points at STAGING DB; user must update host/password ───
+        // Set MYSQL_HOST / MYSQL_USER / MYSQL_PASSWORD via az CLI after deploy,
+        // or pass them in via additional secret references.
+        { name: 'MYSQL_HOST', value: 'CHANGE_ME_STAGING_HOST' }
+        { name: 'MYSQL_USER', value: 'CHANGE_ME' }
+        { name: 'MYSQL_PASSWORD', value: 'CHANGE_ME' }
+        { name: 'MYSQL_DATABASE', value: dbName }
+        { name: 'MYSQL_SSL', value: 'true' }
+        // ─── Safety: staging MUST NOT email customers or take live AI actions ───
+        { name: 'PROD_TEST_MODE', value: 'true' }
+        { name: 'EMAIL_REDIRECT_MODE', value: 'true' }
+        { name: 'EMAIL_REDIRECT_TARGET', value: stagingEmailRedirectTarget }
+        { name: 'NOTIFICATIONS_MODE', value: 'sandbox' }
+        { name: 'AI_AUTONOMY_LEVEL', value: 'suggest' }
+        { name: 'WEBSITE_SWAP_WARMUP_PING_PATH', value: '/api/health' }
+        { name: 'WEBSITE_SWAP_WARMUP_PING_STATUSES', value: '200' }
+      ]
+    }
+  }
+}
+
+// ─── Grant staging slot identity Key Vault Secrets User role ─────────────
+resource stagingSlotKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableStagingSlot) {
+  scope: keyVault
+  name: guid(keyVault.id, '${webApp.id}/slots/staging', kvSecretsUserRoleId)
+  properties: {
+    principalId: stagingSlot!.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
   }
 }
 
 // ─── Outputs ───
 output appUrl string = 'https://${webApp.properties.defaultHostName}'
 output appName string = webApp.name
+output stagingUrl string = enableStagingSlot ? 'https://${stagingSlot!.properties.defaultHostName}' : ''
 output mysqlHost string = mysqlHost
 output keyVaultName string = keyVault.name
 output keyVaultUri string = keyVault.properties.vaultUri

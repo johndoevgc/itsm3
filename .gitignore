@@ -32,3 +32,5 @@ profiles.json
 sw_clients.xml
 body_role.json
 deploy/
+
+scripts/.staging-settings.json
