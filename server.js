@@ -1107,21 +1107,65 @@ function json(res, status, data) {
   // that can return multi-MB payloads.
   const req = res.req;
   const accept = (req && req.headers && req.headers["accept-encoding"] || "").toLowerCase();
+
+  // Phase T3 — ETag / 304 Not Modified. For idempotent GET responses we hash
+  // the body and compare to If-None-Match. Polling clients (every 30-60 s)
+  // get a 0-byte 304 instead of redownloading the entire payload when the
+  // data hasn't changed. Combined with brotli, an unchanged poll costs
+  // ~150 bytes total.
+  let etag = null;
+  if (status === 200 && req && req.method === "GET" && body.length > 256) {
+    const hash = crypto.createHash("sha1").update(body).digest("base64").replace(/=+$/, "");
+    etag = `W/"${hash}"`;
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      res.writeHead(304, { "ETag": etag, "Cache-Control": "private, must-revalidate" });
+      return res.end();
+    }
+  }
+
   if (body.length > 1024 && accept) {
     try {
+      const headers = { "Content-Type": "application/json", "Vary": "Accept-Encoding" };
+      if (etag) { headers["ETag"] = etag; headers["Cache-Control"] = "private, must-revalidate"; }
       if (accept.includes("br")) {
         const buf = zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } });
-        res.writeHead(status, { "Content-Type": "application/json", "Content-Encoding": "br", "Vary": "Accept-Encoding" });
+        res.writeHead(status, { ...headers, "Content-Encoding": "br" });
         return res.end(buf);
       }
       if (accept.includes("gzip")) {
         const buf = zlib.gzipSync(body, { level: 6 });
-        res.writeHead(status, { "Content-Type": "application/json", "Content-Encoding": "gzip", "Vary": "Accept-Encoding" });
+        res.writeHead(status, { ...headers, "Content-Encoding": "gzip" });
         return res.end(buf);
       }
     } catch { /* fall through to uncompressed */ }
   }
-  res.writeHead(status, { "Content-Type": "application/json" });
+  const finalHeaders = { "Content-Type": "application/json" };
+  if (etag) { finalHeaders["ETag"] = etag; finalHeaders["Cache-Control"] = "private, must-revalidate"; }
+  res.writeHead(status, finalHeaders);
+  res.end(body);
+}
+
+// Phase T5 — compressed text response helper. Used by CSV/HTML/text exports.
+function sendText(res, status, contentType, body, extraHeaders) {
+  const req = res.req;
+  const accept = (req && req.headers && req.headers["accept-encoding"] || "").toLowerCase();
+  const baseHeaders = { "Content-Type": contentType, ...(extraHeaders || {}) };
+  if (typeof body === "string" && body.length > 1024 && accept) {
+    try {
+      if (accept.includes("br")) {
+        const buf = zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } });
+        res.writeHead(status, { ...baseHeaders, "Content-Encoding": "br", "Vary": "Accept-Encoding" });
+        return res.end(buf);
+      }
+      if (accept.includes("gzip")) {
+        const buf = zlib.gzipSync(body, { level: 6 });
+        res.writeHead(status, { ...baseHeaders, "Content-Encoding": "gzip", "Vary": "Accept-Encoding" });
+        return res.end(buf);
+      }
+    } catch { /* fall through */ }
+  }
+  res.writeHead(status, baseHeaders);
   res.end(body);
 }
 
@@ -2395,12 +2439,23 @@ const server = http.createServer(async (req, res) => {
         const limit = parseInt(qs.get("limit") || "0") || 0;
         const offset = parseInt(qs.get("offset") || "0") || 0;
         const search = qs.get("search") || "";
+        // Phase T4 — thin-row projection. ?fields=id,title,status returns only
+        // those keys per item, drastically shrinking list payloads. Heavy
+        // blobs like description, resolutionNotes, attachments stay on disk
+        // until the user opens the detail view.
+        const fieldsParam = qs.get("fields") || "";
+        const fields = fieldsParam ? fieldsParam.split(",").map(s => s.trim()).filter(Boolean) : null;
+        const project = fields ? (item) => {
+          const out = {};
+          for (const f of fields) if (f in item) out[f] = item[f];
+          return out;
+        } : (item) => item;
 
         // Use SQL-level pagination when no search filter and db.getPage is available
         if (limit > 0 && !search && db.getPage) {
           const totalCount = await db.count(collection);
           const pageRows = await db.getPage(collection, { limit, offset });
-          const items = pageRows.map(r => JSON.parse(r.data));
+          const items = pageRows.map(r => project(JSON.parse(r.data)));
           return json(res, 200, { collection, count: items.length, total: totalCount, data: items });
         }
 
@@ -2413,6 +2468,7 @@ const server = http.createServer(async (req, res) => {
         }
         const total = items.length;
         if (limit > 0) items = items.slice(offset, offset + limit);
+        if (fields) items = items.map(project);
         return json(res, 200, { collection, count: items.length, total, data: items });
       }
 
@@ -2698,8 +2754,7 @@ const server = http.createServer(async (req, res) => {
       const rows = await db.getAll(exportCol);
       const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
       if (items.length === 0) {
-        res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${exportCol}_export.csv"` });
-        return res.end("No data");
+        return sendText(res, 200, "text/csv", "No data", { "Content-Disposition": `attachment; filename="${exportCol}_export.csv"` });
       }
       // Collect all unique keys across all items
       const keySet = new Set();
@@ -2716,12 +2771,9 @@ const server = http.createServer(async (req, res) => {
       const csvLines = [headers.map(escapeCsv).join(",")];
       items.forEach(item => csvLines.push(headers.map(h => escapeCsv(item[h])).join(",")));
       const csv = csvLines.join("\r\n");
-      res.writeHead(200, {
-        "Content-Type": "text/csv; charset=utf-8",
+      return sendText(res, 200, "text/csv; charset=utf-8", csv, {
         "Content-Disposition": `attachment; filename="${exportCol}_${new Date().toISOString().slice(0,10)}.csv"`,
-        "Content-Length": Buffer.byteLength(csv, "utf-8"),
       });
-      return res.end(csv);
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
@@ -3075,12 +3127,11 @@ const server = http.createServer(async (req, res) => {
       if (from) rows = rows.filter(r => (r.createdAt || r.created_at || "") >= from);
       if (to) rows = rows.filter(r => (r.createdAt || r.created_at || "") <= (to.length === 10 ? to + "T23:59:59Z" : to));
       if (format === "csv") {
-        if (rows.length === 0) { res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${collection}_export.csv"` }); return res.end("No data"); }
+        if (rows.length === 0) { return sendText(res, 200, "text/csv", "No data", { "Content-Disposition": `attachment; filename="${collection}_export.csv"` }); }
         const fields = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(f => typeof rows[0][f] !== "object");
         const escCsv = (v) => { const s = String(v ?? ""); return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s; };
         const csvLines = [fields.join(","), ...rows.map(r => fields.map(f => escCsv(r[f])).join(","))];
-        res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${collection}_export.csv"` });
-        return res.end(csvLines.join("\n"));
+        return sendText(res, 200, "text/csv", csvLines.join("\n"), { "Content-Disposition": `attachment; filename="${collection}_export.csv"` });
       }
       return json(res, 200, { data: rows, count: rows.length });
     } catch (err) { return json(res, 500, { error: err.message }); }
