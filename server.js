@@ -314,6 +314,20 @@ async function queueOrSendCustomerEmail(opts, meta) {
   const severity = (meta && meta.severity) || "Sev-C";
   const source = (meta && meta.source) || "system";
 
+  // Phase F — apply the same recipient-noise gate as Phase E (internal-domain
+  // skip, per-email opt-out, 24h throttle). Treat array `to` by checking first.
+  try {
+    const firstTo = Array.isArray(opts && opts.to) ? opts.to[0] : (opts && opts.to);
+    const _gate = await shouldSendCustomerConfirmation(firstTo);
+    if (!_gate.send) {
+      try { await db.audit("incidents", incidentId, "email_skipped_recipient_gate", JSON.stringify({ source, severity, to: firstTo, reason: _gate.reason }), source); } catch {}
+      console.log(`[CustomerEmail] Recipient-gate skip for ${incidentId} → ${firstTo} (${_gate.reason})`);
+      return { action: "skipped", reason: _gate.reason };
+    }
+    // log only when we DO send so throttle window starts
+    if (firstTo) await _logConfirmation(firstTo, incidentId);
+  } catch { /* gate is advisory; never block on its errors */ }
+
   // Phase B1 — auto_customer_email gate
   if (!featureFlags.isEnabled("auto_customer_email")) {
     try { await db.audit("incidents", incidentId, "email_skipped_flag_off", JSON.stringify({ source, severity, flag: "auto_customer_email" }), source); } catch {}
