@@ -1529,29 +1529,104 @@ const btnStyle = (accent = "#818CF8") => ({
   boxShadow: `0 2px 8px ${accent}33`,
 });
 
-// Phase S1c+S1d — Debounced SearchBar. Module-level + React.memo so identity is
-// stable across parent renders. Keeps an internal `local` value driving the input
-// at 60 fps, then commits to the parent ~180 ms after typing stops. This prevents
-// the per-keystroke parent re-render that was causing the search box to feel
-// frozen / drop characters when the parent recreates inline child components.
-const SearchBar = React.memo(function SearchBar({ value, onChange, placeholder, debounceMs = 180 }) {
-  const [local, setLocal] = React.useState(value || "");
+// Phase S1e — Remount-safe SearchBar.
+// Root cause of "cannot type": IncidentsModule / CatalogModule / KnowledgeModule
+// etc. are inline-defined inside ITSMApp, so every parent re-render (polling
+// timers fire every 30-60s, websocket events, AI scans, …) creates a NEW
+// component reference. React's diff treats `type !== prevType` and **unmounts**
+// the entire subtree — SearchBar included — wiping local state and DOM focus
+// mid-keystroke. React.memo doesn't help because the parent component's
+// identity itself changes.
+//
+// Fix: persist the input value + caret + focus in a module-scoped cache keyed
+// by placeholder (each SearchBar instance has a unique placeholder string). A
+// freshly-mounted SearchBar reads its prior value from the cache and restores
+// focus/selection so the user's typing experience is uninterrupted.
+//
+// Commit to parent on every keystroke wrapped in React.startTransition so the
+// parent re-render is low-priority and never blocks the input's paint.
+const __searchBarCache = new Map(); // key -> { value, focused, selStart, selEnd }
+const SearchBar = React.memo(function SearchBar({ value, onChange, placeholder }) {
+  const cacheKey = placeholder || "__default__";
+  const inputRef = React.useRef(null);
   const onChangeRef = React.useRef(onChange);
   React.useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
-  // Keep local in sync if the parent value changes externally (clear, route change, etc.)
-  React.useEffect(() => { setLocal(prev => (prev === (value || "") ? prev : (value || ""))); }, [value]);
-  // Commit local → parent after the user stops typing
+
+  // Read cached value (survives remount), but parent's controlled `value` wins
+  // when it differs from the cache (e.g. route change clears search).
+  const [local, setLocal] = React.useState(() => {
+    const cached = __searchBarCache.get(cacheKey);
+    if (cached && cached.value === (value || "")) return cached.value;
+    if (cached && cached.value && (value || "") === "") return cached.value;
+    return value || "";
+  });
+
+  // External clear / programmatic change → sync down.
   React.useEffect(() => {
-    if (local === (value || "")) return;
-    const t = setTimeout(() => { try { onChangeRef.current && onChangeRef.current(local); } catch {} }, debounceMs);
-    return () => clearTimeout(t);
-  }, [local, value, debounceMs]);
+    const cached = __searchBarCache.get(cacheKey);
+    const cachedVal = cached?.value;
+    if ((value || "") !== local && (value || "") !== cachedVal) {
+      setLocal(value || "");
+    }
+  }, [value, cacheKey, local]);
+
+  // After mount, restore focus + caret if this input was focused before unmount.
+  React.useEffect(() => {
+    const cached = __searchBarCache.get(cacheKey);
+    if (cached?.focused && inputRef.current) {
+      inputRef.current.focus();
+      try {
+        const pos = cached.selStart ?? cached.value.length;
+        inputRef.current.setSelectionRange(pos, cached.selEnd ?? pos);
+      } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleChange = (e) => {
+    const next = e.target.value;
+    setLocal(next);
+    __searchBarCache.set(cacheKey, {
+      value: next,
+      focused: true,
+      selStart: e.target.selectionStart,
+      selEnd: e.target.selectionEnd,
+    });
+    // Commit parent in a transition so polling-driven parent re-renders never
+    // race the user's keystroke commit. Falls back to direct call if the API
+    // is unavailable.
+    const fn = onChangeRef.current;
+    if (!fn) return;
+    if (React.startTransition) {
+      React.startTransition(() => { try { fn(next); } catch {} });
+    } else {
+      try { fn(next); } catch {}
+    }
+  };
+
+  const handleFocus = () => {
+    const cached = __searchBarCache.get(cacheKey) || { value: local };
+    __searchBarCache.set(cacheKey, { ...cached, focused: true });
+  };
+  const handleBlur = (e) => {
+    const cached = __searchBarCache.get(cacheKey) || { value: local };
+    __searchBarCache.set(cacheKey, {
+      ...cached,
+      focused: false,
+      selStart: e.target.selectionStart,
+      selEnd: e.target.selectionEnd,
+    });
+  };
+
   return (
     <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
       <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#5A6178", fontSize: 14 }}>⌕</span>
       <input
+        ref={inputRef}
         value={local}
-        onChange={e => setLocal(e.target.value)}
+        onChange={handleChange}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
         placeholder={placeholder || "Search..."}
         style={{ ...inputStyle, paddingLeft: 32 }}
       />
