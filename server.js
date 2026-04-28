@@ -1100,8 +1100,29 @@ function readBody(req) {
 }
 
 function json(res, status, data) {
+  const body = JSON.stringify(data);
+  // Phase T2 — compress JSON responses > 1 KB. The caller doesn't have to
+  // change anything; we read Accept-Encoding from req which is stashed on
+  // res by the request handler. Massive savings on /api/db/* endpoints
+  // that can return multi-MB payloads.
+  const req = res.req;
+  const accept = (req && req.headers && req.headers["accept-encoding"] || "").toLowerCase();
+  if (body.length > 1024 && accept) {
+    try {
+      if (accept.includes("br")) {
+        const buf = zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } });
+        res.writeHead(status, { "Content-Type": "application/json", "Content-Encoding": "br", "Vary": "Accept-Encoding" });
+        return res.end(buf);
+      }
+      if (accept.includes("gzip")) {
+        const buf = zlib.gzipSync(body, { level: 6 });
+        res.writeHead(status, { "Content-Type": "application/json", "Content-Encoding": "gzip", "Vary": "Accept-Encoding" });
+        return res.end(buf);
+      }
+    } catch { /* fall through to uncompressed */ }
+  }
   res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(data));
+  res.end(body);
 }
 
 function parseBody(req, maxSize = 50000) {
@@ -2174,6 +2195,8 @@ async function _markEmailRead(token, sender, messageId) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Phase T2 — stash req on res so helpers (json, etc.) can negotiate compression.
+  res.req = req;
   // CORS headers for API routes
   if (req.url.startsWith("/api/")) {
     const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:4173,http://localhost:5173").split(",").map(s => s.trim());
