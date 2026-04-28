@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
 import { allLoginScopes, graphScopes } from "./msalConfig.js";
@@ -1303,12 +1304,94 @@ const StatCard = ({ label, value, trend, icon, accent, onClick }) => (
   </div>
 );
 
-const DataTable = React.memo(function DataTable({ columns, data, onRowClick, initialLimit = 200 }) {
-  // Phase S3c — soft row cap to keep DOM size bounded. Big lists get a "Show more"
-  // button. Real virtualisation comes in Phase T.
+const DataTable = React.memo(function DataTable({ columns, data, onRowClick, initialLimit = 200, virtualizeThreshold = 300, rowHeight = 40, viewportHeight = 600 }) {
+  // Phase T (Phase 9) — true windowing for large lists.
+  // Behaviour:
+  //   data.length ≤ virtualizeThreshold  → original table layout (zero risk)
+  //   data.length >  virtualizeThreshold → CSS-grid + react-virtual (renders ~20-30 rows max)
+  const total = (data || []).length;
+  const useVirtual = total > virtualizeThreshold;
+
+  // ─── Virtualized renderer (large lists) ────────────────────────────
+  const parentRef = React.useRef(null);
+  const rowVirtualizer = useVirtualizer({
+    count: useVirtual ? total : 0,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 8,
+  });
+
+  if (useVirtual) {
+    const gridTemplate = columns.map(c => c.width || c.minWidth || "minmax(120px, 1fr)").join(" ");
+    const virtualItems = rowVirtualizer.getVirtualItems();
+    const cellBaseStyle = {
+      padding: "10px 14px", color: "#D4D4D8",
+      borderBottom: "1px solid #27272A22",
+      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      display: "flex", alignItems: "center",
+    };
+    return (
+      <div style={{ borderRadius: "10px", border: "1px solid #27272A", overflow: "hidden" }}>
+        {/* Header row (sticky) */}
+        <div style={{
+          display: "grid", gridTemplateColumns: gridTemplate,
+          background: "#09090B", borderBottom: "1px solid #27272A",
+        }}>
+          {columns.map((col, i) => (
+            <div key={i} style={{
+              padding: "10px 14px", color: "#A1A1AA",
+              fontWeight: 500, fontSize: "10px", textTransform: "uppercase",
+              letterSpacing: "1px", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap",
+              overflow: "hidden", textOverflow: "ellipsis",
+            }}>{col.label}</div>
+          ))}
+        </div>
+        {/* Scrollable virtualized body */}
+        <div ref={parentRef} style={{ maxHeight: viewportHeight, overflow: "auto", contain: "strict" }}>
+          <div style={{ height: rowVirtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+            {virtualItems.map(vi => {
+              const row = data[vi.index];
+              if (!row) return null;
+              const i = vi.index;
+              return (
+                <div key={row.id || row.Id || i}
+                  onClick={() => onRowClick?.(row)}
+                  style={{
+                    position: "absolute", top: 0, left: 0, width: "100%",
+                    transform: `translateY(${vi.start}px)`,
+                    height: rowHeight,
+                    display: "grid", gridTemplateColumns: gridTemplate,
+                    background: i % 2 === 0 ? "#0C0D12" : "#09090B",
+                    cursor: onRowClick ? "pointer" : "default",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={e => { if (onRowClick) e.currentTarget.style.background = "#1C1C22"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = i % 2 === 0 ? "#0C0D12" : "#09090B"; }}
+                >
+                  {columns.map((col, j) => (
+                    <div key={j} style={{
+                      ...cellBaseStyle,
+                      fontFamily: col.mono ? "'JetBrains Mono', monospace" : "inherit",
+                      fontSize: col.mono ? "12px" : "13px",
+                    }} title={!col.render ? String(row[col.key] ?? "") : undefined}>
+                      {col.render ? col.render(row) : row[col.key]}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ padding: "6px 12px", background: "#09090B", borderTop: "1px solid #27272A", fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textAlign: "right" }}>
+          {total.toLocaleString()} rows · virtualized
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Original table renderer (small lists, unchanged behaviour) ────
   const [limit, setLimit] = React.useState(initialLimit);
   React.useEffect(() => { setLimit(initialLimit); }, [data, initialLimit]);
-  const total = (data || []).length;
   const rows = total > limit ? data.slice(0, limit) : data;
   return (
   <div style={{ overflowX: "auto", borderRadius: "10px", border: "1px solid #27272A" }}>

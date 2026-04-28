@@ -11,6 +11,7 @@ const { NotificationEngine } = require("./notificationEngine");
 const { WorkflowEngine } = require("./workflowEngine");
 const { AnalyticsEngine } = require("./analyticsEngine");
 const { CacheLayer } = require("./cacheLayer");
+const incidentIndexFactory = require("./incidentIndex");
 const featureFlags = require("./featureFlags");
 const shadowMode = require("./shadowMode");
 const piiRedact = require("./piiRedact");
@@ -266,6 +267,10 @@ let notifyEngine = null;
 let workflowEngine = null;
 let analyticsEngine = null;
 let cacheLayer = null;
+
+// Phase 9 — incident in-memory index. Created here so it can be referenced
+// by request handlers; warmed + db-wrapped after db is ready (server.listen).
+let incidentIndex = null;
 
 // ─── Configurable AI Thresholds ─────────────────────────────────────────
 const AI_THRESHOLDS = {
@@ -4308,23 +4313,23 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           const explicitIds = Array.isArray(body.ids) ? new Set(body.ids) : null;
           const reasonOverride = typeof body.reason === "string" ? body.reason : null;
 
+          // Phase 9 — use incident index instead of full table scan + parse.
+          // Falls back to db.getAll if the index is unavailable for any reason.
           const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold", "Reopened"]);
-          const allRows = await db.getAll("incidents");
+          const sourceList = (incidentIndex && incidentIndex.size() > 0)
+            ? incidentIndex.openWithoutZdLink()
+            : (await db.getAll("incidents")).map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(i => i && openStatuses.has((i.status || "").trim()) && !i.zdTicketId);
+
           const candidates = [];
           const skippedHighSev = [];
-          for (const r of allRows) {
-            try {
-              const inc = JSON.parse(r.data);
-              if (!openStatuses.has((inc.status || "").trim())) continue;
-              if (inc.zdTicketId) continue;
-              if (explicitIds) {
-                if (!explicitIds.has(inc.id)) continue;
-              } else {
-                if (!inc.id || !inc.id.startsWith(idPrefix)) continue;
-              }
-              if (isHighSeverity(inc.priority)) { skippedHighSev.push({ id: inc.id, title: inc.title, priority: inc.priority }); continue; }
-              candidates.push(inc);
-            } catch {}
+          for (const inc of sourceList) {
+            if (explicitIds) {
+              if (!explicitIds.has(inc.id)) continue;
+            } else {
+              if (!inc.id || !inc.id.startsWith(idPrefix)) continue;
+            }
+            if (isHighSeverity(inc.priority)) { skippedHighSev.push({ id: inc.id, title: inc.title, priority: inc.priority }); continue; }
+            candidates.push(inc);
           }
 
           if (dryRun) {
@@ -4393,14 +4398,20 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           const requestedBy = body.requestedBy || authResult?.user?.email || "admin";
 
           // 1. Load all open incidents WITH a Zendesk link
+          // Phase 9 — index-backed (instant) with full-scan fallback.
           const openStatuses = new Set(["New", "Open", "In Progress", "Pending", "On Hold", "Reopened"]);
-          const allRows = await db.getAll("incidents");
-          const openLinked = [];
-          for (const r of allRows) {
-            try {
-              const inc = JSON.parse(r.data);
-              if (openStatuses.has((inc.status || "").trim()) && inc.zdTicketId) openLinked.push(inc);
-            } catch {}
+          let openLinked;
+          if (incidentIndex && incidentIndex.size() > 0) {
+            openLinked = incidentIndex.openWithZdLink();
+          } else {
+            const allRows = await db.getAll("incidents");
+            openLinked = [];
+            for (const r of allRows) {
+              try {
+                const inc = JSON.parse(r.data);
+                if (openStatuses.has((inc.status || "").trim()) && inc.zdTicketId) openLinked.push(inc);
+              } catch {}
+            }
           }
 
           // 2. Batch-fetch current ZD status (chunks of 100 via show_many)
@@ -14344,6 +14355,11 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     return json(res, 200, { e2eTests: "available", runner: "e2e-azure-test.cjs", endpoint: "/api/health", phase: 5, totalEndpoints: "250+", lastDeployed: new Date().toISOString() });
   }
 
+  // Phase 9 — incident index observability
+  if (pathname === "/api/admin/index-stats" && req.method === "GET") {
+    return json(res, 200, incidentIndex ? incidentIndex.stats() : { error: "incidentIndex not initialized" });
+  }
+
   // ─── Static File Serving ──────────────────────────────────────────────
   const distDir = path.join(__dirname, "dist");
   const hasDistDir = fs.existsSync(distDir);
@@ -14501,6 +14517,9 @@ async function start() {
   // Initialize Cache Layer
   cacheLayer = new CacheLayer({ maxSize: 1000, defaultTTL: 5 * 60 * 1000 });
 
+  // Phase 9 — Incident in-memory index (warmed inside server.listen below)
+  incidentIndex = incidentIndexFactory.create({ db });
+
   // Initialize Analytics Engine (15 min scan — non-critical)
   analyticsEngine = new AnalyticsEngine(db, { cacheTTL: 15 * 60 * 1000 });
 
@@ -14532,6 +14551,13 @@ async function start() {
     console.log(`${APP_DISPLAY_NAME} v${APP_VERSION.version} (build ${APP_VERSION.build}) serving on port ${PORT}`);
     console.log(`Database: ${db.label}`);
     console.log(`Collections:`, stats);
+
+    // Phase 9 — incident in-memory index. Wrap db FIRST so any subsequent
+    // upsert (seeders, settings restore, etc.) goes through the index.
+    try {
+      incidentIndex.wrapDb();
+      await incidentIndex.warm();
+    } catch (e) { console.warn("[IncidentIndex] init failed:", e.message); }
 
     // Restore persisted settings from DB (OpenAI, SolarWinds)
     try {
