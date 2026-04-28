@@ -37,6 +37,10 @@ const DEFAULTS = {
   // CSAT survey loop on AI-resolved incidents. Default OFF (staging first).
   // payload.delayHours = hours after resolution to send the survey.
   csat_ai_loop:        { enabled: false, scope: "staging", payload: { delayHours: 24 } },
+
+  // Phase D5 — Sev-A MIM Teams webhook fan-out (off by default; enable per-slot
+  // once webhook URLs are populated in `teams_webhooks` collection).
+  mim_teams_webhook:   { enabled: false, scope: "staging" },
 };
 
 let _db = null;

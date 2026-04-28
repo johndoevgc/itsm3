@@ -473,6 +473,47 @@ async function scheduleCsatSurvey(incident, resolvedBy) {
   return id;
 }
 
+// ─── Phase D4: fire Teams webhook for Sev-A MIM declarations ────────────
+// Reads `teams_webhooks` collection; fires fire-and-forget POST to webhooks
+// where (channel === "major-incidents") OR (active === true && no channel filter).
+// Gated by feature flag `mim_teams_webhook` so initial rollout is opt-in.
+async function notifyTeamsMajorIncident(mimRecord, incident) {
+  try {
+    if (!featureFlags || !featureFlags.isEnabled("mim_teams_webhook")) return;
+    const rows = await db.getAll("teams_webhooks");
+    const hooks = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+    const targets = hooks.filter(h => h && h.url && h.active !== false && (!h.channel || h.channel === "major-incidents" || h.channel === "mim"));
+    if (targets.length === 0) return;
+    const card = {
+      "@type": "MessageCard", "@context": "https://schema.org/extensions",
+      themeColor: "C8102E", summary: `Major Incident Declared: ${incident.id}`,
+      title: `🚨 Sev-A Major Incident — ${incident.id}`,
+      sections: [{
+        activityTitle: incident.title || incident.summary || "(no title)",
+        activitySubtitle: `Priority ${incident.priority} • Declared ${mimRecord.declaredAt}`,
+        facts: [
+          { name: "Incident", value: incident.id },
+          { name: "Severity", value: incident.priority },
+          { name: "Affected", value: (mimRecord.affectedServices || []).join(", ") || "TBD" },
+          { name: "MIM Record", value: mimRecord.id },
+          { name: "Region", value: AZURE_REGION },
+        ],
+      }],
+    };
+    const payload = JSON.stringify(card);
+    for (const h of targets) {
+      try {
+        const u = new URL(h.url);
+        const opts = { hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } };
+        const r = https.request(opts, (resp) => { resp.on("data", () => {}); resp.on("end", () => {}); });
+        r.on("error", e => console.warn(`[Teams MIM] webhook ${h.id || h.url} failed:`, e.message));
+        r.write(payload); r.end();
+      } catch (e) { console.warn("[Teams MIM] bad webhook:", e.message); }
+    }
+    console.log(`[Teams MIM] dispatched to ${targets.length} webhook(s) for ${incident.id}`);
+  } catch (e) { console.warn("[Teams MIM] notify failed:", e.message); }
+}
+
 // ─── Scheduled Purge Status Tracker ─────────────────────────────────────
 const purgeStatus = {
   queueCleanup: { lastRun: null, lastResult: null, nextRun: null, totalDismissed: 0, runCount: 0 },
@@ -2338,6 +2379,7 @@ const server = http.createServer(async (req, res) => {
                 } catch {}
                 await db.audit("mim_records", mimRecord.id, "auto_declared", JSON.stringify({ incidentId: id, priority: body.priority }), "system");
                 if (wsServer) wsServer.broadcast("mim", { action: "auto_declared", incidentId: id, mimId: mimRecord.id });
+                notifyTeamsMajorIncident(mimRecord, { ...body, id }).catch(() => {});
                 console.log(`[MIM Auto] Declared ${mimRecord.id} for ${id} (${body.priority})`);
               }
             } catch (mimErr) { console.warn("[MIM Auto] Failed:", mimErr.message); }
@@ -11710,6 +11752,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       await db.upsert("mim_records", mimRecord.id, mimRecord);
       await db.audit("incidents", body.incidentId, "mim_declare", "Major Incident declared", auth.name || "System");
       if (wsServer) wsServer.broadcast("mim", { action: "declared", incidentId: body.incidentId, mimId: mimRecord.id });
+      notifyTeamsMajorIncident(mimRecord, inc).catch(() => {});
       return json(res, 201, { success: true, mim: mimRecord });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
@@ -11778,6 +11821,56 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: `Comms sent: ${comm.type}`, user: auth.name || "System" }];
       await db.upsert("incidents", body.incidentId, inc);
       return json(res, 201, { success: true, communication: comm });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // POST /api/mim/post-mortem — Phase D3: attach post-mortem URL/notes to MIM record
+  if (pathname === "/api/mim/post-mortem" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.mimId && !body.incidentId) return json(res, 400, { error: "mimId or incidentId required" });
+    if (!body.url && !body.notes) return json(res, 400, { error: "url or notes required" });
+    try {
+      let mimRow = body.mimId ? await db.getOne("mim_records", body.mimId) : null;
+      if (!mimRow && body.incidentId) {
+        const all = await db.getAll("mim_records");
+        for (const r of all) {
+          try {
+            const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (m && m.incidentId === body.incidentId) { mimRow = r; break; }
+          } catch {}
+        }
+      }
+      if (!mimRow) return json(res, 404, { error: "MIM record not found" });
+      const mim = typeof mimRow.data === "string" ? JSON.parse(mimRow.data) : mimRow.data;
+      mim.postMortemUrl = body.url || mim.postMortemUrl || null;
+      mim.postMortemNotes = body.notes || mim.postMortemNotes || "";
+      mim.postMortemBy = (auth && auth.name) || body.author || "Unknown";
+      mim.postMortemAt = new Date().toISOString();
+      if (body.close) { mim.status = "closed"; mim.closedAt = mim.postMortemAt; }
+      await db.upsert("mim_records", mim.id, mim);
+      try { await db.audit("mim_records", mim.id, "post_mortem", JSON.stringify({ url: mim.postMortemUrl, by: mim.postMortemBy }), mim.postMortemBy); } catch {}
+      if (wsServer) wsServer.broadcast("mim", { action: "post_mortem", incidentId: mim.incidentId, mimId: mim.id });
+      return json(res, 200, { success: true, mim });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // GET /api/shadow/diffs?flag=&limit= — Phase D2: read shadow_diffs collection
+  if (pathname === "/api/shadow/diffs" && req.method === "GET") {
+    try {
+      const flagFilter = urlObj.searchParams.get("flag");
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "100"), 500);
+      const rows = await db.getAll("shadow_diffs");
+      const diffs = rows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(Boolean);
+      const filtered = flagFilter ? diffs.filter(d => d.flag === flagFilter) : diffs;
+      filtered.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+      const flagStats = {};
+      for (const d of filtered) {
+        const f = d.flag || "unknown";
+        flagStats[f] = (flagStats[f] || 0) + 1;
+      }
+      return json(res, 200, { total: filtered.length, flagStats, diffs: filtered.slice(0, limit) });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 

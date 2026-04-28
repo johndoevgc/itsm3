@@ -148,6 +148,27 @@ function computeSlaStatus(incident, policy) {
   };
 }
 
+// ─── Phase D1: Candidate v2 — status driven by WORST of response/resolution ──
+// v1 only watches resolutionPct; v2 also escalates when firstResponsePct breaches
+// before responder acknowledges. If incident has firstAckAt set, firstResponsePct
+// is excluded (already met). Output shape matches v1 for clean diffing.
+function computeSlaStatus_v2(incident, policy) {
+  const base = computeSlaStatus(incident, policy);
+  const acked = !!(incident.firstAckAt || incident.firstResponseAt || incident.acknowledgedAt);
+  const worstPct = acked ? base.resolutionPct : Math.max(base.resolutionPct, base.firstResponsePct);
+  let status = "on_track";
+  if (worstPct >= 100) status = "breached";
+  else if (worstPct >= 90) status = "critical";
+  else if (worstPct >= 80) status = "at_risk";
+  return {
+    ...base,
+    status,
+    breached: worstPct >= 100,
+    worstPct: Math.round(worstPct * 10) / 10,
+    ackConsidered: !acked,
+  };
+}
+
 // ─── SLA Engine Class ───────────────────────────────────────────────────
 class SlaEngine {
   constructor(db, options = {}) {
@@ -252,7 +273,7 @@ class SlaEngine {
             name:      "shadow_sla_v2",
             enabled:   true,
             control:   () => computeSlaStatus(inc, this.policy),
-            candidate: () => computeSlaStatus(inc, this.policy), // replace with v2 impl when ready
+            candidate: () => computeSlaStatus_v2(inc, this.policy),
             keys:      ["status", "breached", "hoursElapsed", "firstResponseTarget", "worstResponseTarget"],
             onDiff:    async (d) => {
               try {
@@ -343,4 +364,4 @@ class SlaEngine {
   }
 }
 
-module.exports = { SlaEngine, computeSlaStatus, getBusinessHoursElapsed, DEFAULT_SLA_POLICY };
+module.exports = { SlaEngine, computeSlaStatus, computeSlaStatus_v2, getBusinessHoursElapsed, DEFAULT_SLA_POLICY };
