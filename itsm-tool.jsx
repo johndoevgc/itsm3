@@ -1582,8 +1582,13 @@ const SearchBar = React.memo(function SearchBar({ value, onChange, placeholder }
   });
 
   // External clear / programmatic change → sync down.
+  // CRITICAL: never override local state while the user is actively typing
+  // (focused). Parent commits run in React.startTransition and may briefly
+  // lag the local value — without this guard the user's keystrokes get
+  // wiped out by the stale parent value, making the input feel unresponsive.
   React.useEffect(() => {
     const cached = __searchBarCache.get(cacheKey);
+    if (cached?.focused) return;
     const cachedVal = cached?.value;
     if ((value || "") !== local && (value || "") !== cachedVal) {
       setLocal(value || "");
