@@ -23,7 +23,8 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
       {
         locationName: location
         failoverPriority: 0
-        isZoneRedundant: true // Zone-redundant as required
+        // SRE: Zone redundancy not supported with Serverless capability
+        isZoneRedundant: false
       }
     ]
     backupPolicy: {

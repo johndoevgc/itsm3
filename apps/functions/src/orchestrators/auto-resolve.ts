@@ -144,16 +144,33 @@ async function executeAction(
 /**
  * Generates a cryptographically random temporary password.
  * Meets M365 password complexity: 14 chars, upper+lower+digit+special.
+ * SECURITY: Uses crypto.getRandomValues() — not Math.random().
  */
 function generateTemporaryPassword(): string {
-  const chars = 'abcdefghjkmnpqrstuvwxyz';
+  const lower = 'abcdefghjkmnpqrstuvwxyz';
   const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const digits = '23456789';
   const special = '!@#$%^&*';
+  const all = lower + upper + digits + special;
 
-  const rand = (set: string) => set[Math.floor(Math.random() * set.length)];
+  const rand = (set: string): string => {
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    return set[arr[0]! % set.length]!;
+  };
 
-  const base = Array.from({ length: 8 }, () => rand(chars)).join('');
-  // Ensure complexity requirements are met
-  return `${rand(upper)}${rand(upper)}${base}${rand(digits)}${rand(digits)}${rand(special)}`;
+  // Guarantee at least one of each required character class
+  const required = [rand(upper), rand(upper), rand(digits), rand(digits), rand(special)];
+  const rest = Array.from({ length: 9 }, () => rand(all));
+
+  // Shuffle the combined array cryptographically
+  const combined = [...required, ...rest];
+  for (let i = combined.length - 1; i > 0; i--) {
+    const jArr = new Uint32Array(1);
+    crypto.getRandomValues(jArr);
+    const j = jArr[0]! % (i + 1);
+    [combined[i], combined[j]] = [combined[j]!, combined[i]!];
+  }
+
+  return combined.join('');
 }

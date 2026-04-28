@@ -1,6 +1,5 @@
-import OpenAI from 'openai';
-import { AzureKeyCredential } from '@azure/core-auth';
-import { DefaultAzureCredential } from '@azure/identity';
+import { AzureOpenAI } from 'openai';
+import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import { env } from './env.js';
 import { SYSTEM_PROMPT_V1, OPENAI_FUNCTIONS, AutoResolveActionSchema } from '@itsm3/ai-prompts';
 import { redactPii } from '@itsm3/graph-client';
@@ -8,21 +7,21 @@ import type { AutoResolveAction } from '@itsm3/ai-prompts';
 
 /**
  * Azure OpenAI client factory.
- * SECURITY: Uses Managed Identity token (DefaultAzureCredential).
+ * SECURITY: Uses Managed Identity token via DefaultAzureCredential — no API keys.
+ * Uses AzureOpenAI class from the openai SDK for proper Azure AD token auth.
  * SRE: Feature-flag gated — if OpenAI unavailable, falls back to ticket creation only.
  * PDPA: Input is redacted before sending to OpenAI.
  */
-export function createOpenAIClient(): OpenAI {
-  // Use Azure AD token auth (no API keys)
-  return new OpenAI({
-    baseURL: `${env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${env.AZURE_OPENAI_DEPLOYMENT}`,
-    apiKey: 'placeholder', // Not used — overridden by getToken
-    defaultHeaders: {
-      'api-version': env.AZURE_OPENAI_API_VERSION,
-    },
-    defaultQuery: {
-      'api-version': env.AZURE_OPENAI_API_VERSION,
-    },
+export function createOpenAIClient(): AzureOpenAI {
+  const credential = new DefaultAzureCredential();
+  // Azure OpenAI scope for token acquisition
+  const scope = 'https://cognitiveservices.azure.com/.default';
+  const azureADTokenProvider = getBearerTokenProvider(credential, scope);
+
+  return new AzureOpenAI({
+    endpoint: env.AZURE_OPENAI_ENDPOINT,
+    apiVersion: env.AZURE_OPENAI_API_VERSION,
+    azureADTokenProvider,
   });
 }
 
@@ -41,14 +40,14 @@ export interface TriageResult {
  * SRE: Throws TriageError with retryable=false on model refusal.
  */
 export async function triageMessage(
-  client: OpenAI,
+  client: AzureOpenAI,
   userMessage: string,
   context: { tenantId: string; userUpn: string },
 ): Promise<TriageResult> {
   // PDPA: Strip PII before sending to OpenAI
   const safeMessage = redactPii(userMessage);
 
-  let response: OpenAI.Chat.ChatCompletion;
+  let response: Awaited<ReturnType<AzureOpenAI['chat']['completions']['create']>>;
   try {
     response = await client.chat.completions.create({
       model: env.AZURE_OPENAI_DEPLOYMENT,

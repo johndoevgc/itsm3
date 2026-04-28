@@ -140,6 +140,7 @@ module apiApp './app/api.bicep' = {
     resourceToken: resourceToken
     containerAppsEnvironmentId: containerAppsEnv.outputs.containerAppsEnvironmentId
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
+    cosmosAccountName: cosmos.outputs.cosmosAccountName
     openAiEndpoint: openai.outputs.openAiEndpoint
     keyVaultUri: keyVault.outputs.keyVaultUri
     appConfigEndpoint: appConfig.outputs.appConfigEndpoint

@@ -74,9 +74,12 @@ async function waitForCallAnswer(
   timeoutSeconds: number,
   logger: { info: Function; warn: Function },
 ): Promise<boolean> {
-  // In production: poll ACS call state events via webhook (ACS_CALLBACK_URL)
-  // For now: simulate with timeout
+  // NOTE: Full implementation requires ACS webhook events (CallConnected/CallDisconnected).
+  // The ACS_CALLBACK_URL must handle POST events from ACS Call Automation.
+  // Until webhook integration is complete, this conservatively returns false (no-answer)
+  // so SMS fallback is always triggered — fail-safe for P1 SLA compliance.
+  // TODO: Implement ACS event grid / webhook handler for production.
   await new Promise((resolve) => setTimeout(resolve, Math.min(timeoutSeconds * 1000, 25_000)));
-  logger.warn('Call answer detection not fully implemented — assuming no answer for safety');
+  logger.warn('ACS call answer webhook not implemented — triggering SMS fallback (safe default)');
   return false;
 }

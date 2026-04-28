@@ -105,6 +105,25 @@ jobs:
       - name: Auto-rollback on failure
         if: failure()
         run: |
-          echo "Deploying previous revision..."
-          azd deploy --environment production --no-prompt --revision previous || true
-          echo "Rollback completed"
+          echo "Deployment health check failed — activating previous Container App revision..."
+          # List and activate the most recent stable revision for each service
+          for svc in api web functions; do
+            APP_NAME=$(az containerapp list \
+              --resource-group "rg-itsm3-production-*" \
+              --query "[?contains(name,'ca-${svc}')].name | [0]" \
+              --output tsv 2>/dev/null || true)
+            if [ -n "$APP_NAME" ]; then
+              PREV_REVISION=$(az containerapp revision list \
+                --name "$APP_NAME" \
+                --resource-group "rg-itsm3-production-*" \
+                --query "sort_by([?properties.active==\`false\`],&properties.createdTime)[-1].name" \
+                --output tsv 2>/dev/null || true)
+              if [ -n "$PREV_REVISION" ]; then
+                az containerapp revision activate \
+                  --revision "$PREV_REVISION" \
+                  --resource-group "rg-itsm3-production-*" || true
+                echo "Rollback: activated $PREV_REVISION for $APP_NAME"
+              fi
+            fi
+          done
+          echo "Rollback attempt completed"

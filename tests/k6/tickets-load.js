@@ -43,7 +43,7 @@ export default function () {
     'status is 201': (r) => r.status === 201,
     'has ticket id': (r) => {
       try {
-        return JSON.parse(r.body as string).id !== undefined;
+        return JSON.parse(r.body).id !== undefined;
       } catch {
         return false;
       }

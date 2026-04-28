@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { getCosmosClient, DATABASE_ID, CONTAINERS } from '../../lib/cosmos.js';
 
 /**
@@ -84,7 +85,7 @@ export const gdprRoutes: FastifyPluginAsync = async (fastify) => {
         .database(DATABASE_ID)
         .container(CONTAINERS.AUDIT_LOG)
         .items.create({
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           tenantId,
           type: 'DSR_DELETE',
           subjectUpn: '[HASHED]', // PDPA: don't log UPN in audit log either

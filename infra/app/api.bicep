@@ -8,6 +8,7 @@ param location string
 param resourceToken string
 param containerAppsEnvironmentId string
 param cosmosEndpoint string
+param cosmosAccountName string
 param openAiEndpoint string
 param keyVaultUri string
 param appConfigEndpoint string
@@ -104,14 +105,20 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
-// Grant UAMI roles
-// Cosmos DB Built-in Data Contributor
-resource cosmosRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(uami.id, 'cosmos-contributor')
+// Grant UAMI Cosmos DB Built-in Data Contributor via Cosmos RBAC
+// Uses Cosmos DB's own RBAC (sqlRoleAssignments), not Azure RBAC
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' existing = {
+  name: cosmosAccountName
+}
+
+resource cosmosRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
+  name: guid(uami.id, cosmosAccountName, 'cosmos-data-contributor')
+  parent: cosmosAccount
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '00000000-0000-0000-0000-000000000002') // Cosmos DB Built-in Data Contributor
+    // 00000000-0000-0000-0000-000000000002 = Cosmos DB Built-in Data Contributor
+    roleDefinitionId: '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
     principalId: uami.properties.principalId
-    principalType: 'ServicePrincipal'
+    scope: cosmosAccount.id
   }
 }
 

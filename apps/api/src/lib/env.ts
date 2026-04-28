@@ -25,12 +25,13 @@ const EnvSchema = z.object({
   WHATSAPP_VERIFY_TOKEN: z.string().min(1, 'azd env set WHATSAPP_VERIFY_TOKEN required'),
   WHATSAPP_TOKEN: z.string().min(1, 'azd env set WHATSAPP_TOKEN required'),
 
-  // Helpdesk phone (E.164 format)
-  // SECURITY: Never hardcode this. Always from env.
+  // Helpdesk phone (E.164 format) — optional; P1 escalation disabled if not set
+  // To enable: azd env set HELP_DESK_PHONE=+6569781299
+  // SECURITY: Never hardcode this value. Always read from environment.
   HELP_DESK_PHONE: z
     .string()
-    .regex(/^\+[1-9]\d{1,14}$/, 'HELP_DESK_PHONE must be E.164 format')
-    .describe('azd env set HELP_DESK_PHONE=+6569781299'),
+    .regex(/^\+[1-9]\d{1,14}$/, 'HELP_DESK_PHONE must be E.164 format (e.g. +6569781299)')
+    .optional(),
 
   // App Config
   APP_CONFIG_ENDPOINT: z.string().url().optional(),
