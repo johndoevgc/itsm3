@@ -216,6 +216,10 @@ const CUSTOMER_REDIRECT_TARGET = process.env.CUSTOMER_REDIRECT_TARGET || "johndo
 const PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
 const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
+// Phase E1: internal Entra/customer domains — ticket is created but NO confirmation
+// email is sent back (they can see it on the dashboard). Override with env var.
+const INTERNAL_DOMAINS = (process.env.INTERNAL_DOMAINS || "vgctechnology.com,vgcsg.com")
+  .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 
 // ─── Local Auth: Dev Admin ──────────────────────────────────────────────
 // Password is stored as SHA-256 hash (never plain text)
@@ -512,6 +516,70 @@ async function notifyTeamsMajorIncident(mimRecord, incident) {
     }
     console.log(`[Teams MIM] dispatched to ${targets.length} webhook(s) for ${incident.id}`);
   } catch (e) { console.warn("[Teams MIM] notify failed:", e.message); }
+}
+
+// ─── Phase E: Email-noise controls ──────────────────────────────────────
+// E4: per-recipient opt-out cache (refreshed on lookup; misses are not cached).
+async function isEmailUnsubscribed(email) {
+  if (!email) return false;
+  try {
+    const row = await db.getOne("email_preferences", String(email).toLowerCase());
+    if (!row) return false;
+    const pref = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    return pref && pref.autoConfirm === false;
+  } catch { return false; }
+}
+
+// E5: per-sender 24h throttle for confirmation emails.
+// Returns true if a confirmation has already been logged for `email` within the
+// configured window (default 24h via `internal_quiet_hours.windowHours`).
+async function _wasRecentlyConfirmed(email) {
+  if (!email) return false;
+  try {
+    const flag = featureFlags.payload("internal_quiet_hours") || {};
+    const windowH = Number(flag.windowHours) > 0 ? Number(flag.windowHours) : 24;
+    const cutoff = Date.now() - windowH * 3600_000;
+    const id = `EC-${String(email).toLowerCase()}`;
+    const row = await db.getOne("email_confirm_log", id);
+    if (!row) return false;
+    const rec = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    return rec && rec.lastSentAt && new Date(rec.lastSentAt).getTime() > cutoff;
+  } catch { return false; }
+}
+async function _logConfirmation(email, incidentId) {
+  if (!email) return;
+  try {
+    const id = `EC-${String(email).toLowerCase()}`;
+    await db.upsert("email_confirm_log", id, JSON.stringify({
+      id, email: String(email).toLowerCase(), lastSentAt: new Date().toISOString(),
+      lastIncidentId: incidentId || null,
+    }));
+  } catch {}
+}
+
+// E1+E4+E5 unified gate: returns { send: boolean, reason?: string }.
+// Caller skips graphSendMail when send=false and audits the reason.
+// NOT tied to `auto_customer_email` so external (paying) customers always receive
+// confirmations; only internal/opted-out/throttled recipients are suppressed.
+async function shouldSendCustomerConfirmation(email, opts = {}) {
+  const e = (email || "").toLowerCase();
+  if (!e) return { send: false, reason: "no_recipient" };
+  // E1: internal users get the dashboard, not an email
+  const dom = e.split("@")[1] || "";
+  if (!opts.allowInternal && INTERNAL_DOMAINS.includes(dom)) {
+    return { send: false, reason: "internal_domain" };
+  }
+  // E4: per-recipient opt-out
+  if (await isEmailUnsubscribed(e)) {
+    return { send: false, reason: "unsubscribed" };
+  }
+  // E5: 24h throttle when flag enabled
+  if (featureFlags && featureFlags.isEnabled("internal_quiet_hours")) {
+    if (await _wasRecentlyConfirmed(e)) {
+      return { send: false, reason: "throttled_24h" };
+    }
+  }
+  return { send: true };
 }
 
 // ─── Scheduled Purge Status Tracker ─────────────────────────────────────
@@ -1402,6 +1470,8 @@ const VALID_COLLECTIONS = new Set([
   "feature_flags",
   "shadow_diffs",
   "ai_email_outbox",
+  "email_preferences",
+  "email_confirm_log",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -1758,13 +1828,14 @@ async function processInboundEmails() {
         const fromAddr = (msg.from?.emailAddress?.address || "").toLowerCase();
         const subject = msg.subject || "(No Subject)";
 
-        // ── Gate 1: Skip auto-generated, no-reply, and ITSM notification emails ──
-        if (fromAddr.includes("noreply") || fromAddr.includes("no-reply") || fromAddr.includes("mailer-daemon") ||
-            subject.startsWith("[VGC ITSM]") || subject.startsWith("[TEST →") ||
-            subject.startsWith("[VGC Technology Pte Ltd]")) {
+        // ── Gate 1: Skip auto-generated, no-reply, and ITSM notification emails (Phase E2 hardened) ──
+        // Catch Re:/Fwd: of our own confirmations (e.g. "Re: [VGC ITSM] Incident...") which previously
+        // slipped past startsWith() and round-tripped into new tickets.
+        const _selfLoop = /\[vgc itsm\]|\[vgc technology pte ltd\]|\[test →/i.test(subject);
+        if (fromAddr.includes("noreply") || fromAddr.includes("no-reply") || fromAddr.includes("mailer-daemon") || _selfLoop) {
           await _markEmailRead(token, sender, msg.id);
-          await _logRejection(fromAddr, subject, "auto-generated");
-          console.log(`[Email-to-Ticket] Skipped auto-generated: ${fromAddr}`);
+          await _logRejection(fromAddr, subject, _selfLoop ? "self-loop" : "auto-generated");
+          console.log(`[Email-to-Ticket] Skipped ${_selfLoop ? "self-loop" : "auto-generated"}: ${fromAddr}`);
           continue;
         }
 
@@ -1820,6 +1891,12 @@ async function processInboundEmails() {
           await _markEmailRead(token, sender, msg.id);
           console.log(`[Email-to-Ticket] Skipped duplicate RFC Message-ID: ${rfcMessageId}`);
           continue;
+        }
+
+        // Phase E2: In-Reply-To matches an existing incident's RFC Message-ID → reply
+        if (inReplyTo && _emailRfcMsgIdSet.has(inReplyTo)) {
+          const parentInc = _emailParsedIncidents.find(i => i.rfcMessageId === inReplyTo);
+          if (parentInc) { await _appendAsReply(parentInc, msg, fromAddr, subject, "in-reply-to-match"); continue; }
         }
 
         // ── Gate 5.7: ConversationId dedup — Graph API groups thread messages ──
@@ -1931,11 +2008,19 @@ async function processInboundEmails() {
         // Mark email as read
         await _markEmailRead(token, sender, msg.id);
 
-        // Send confirmation to customer
-        graphSendMail({
+        // Phase E1+E3+E4+E5: send confirmation only when gate allows
+        const _gate = await shouldSendCustomerConfirmation(fromAddr);
+        if (!_gate.send) {
+          try { await db.audit("incidents", incId, "email_confirm_skipped", JSON.stringify({ to: fromAddr, reason: _gate.reason }), "email-pipeline"); } catch {}
+          console.log(`[Email-to-Ticket] Confirmation suppressed for ${incId} → ${fromAddr} (${_gate.reason})`);
+        } else {
+          await _logConfirmation(fromAddr, incId);
+          // Send confirmation to customer
+          graphSendMail({
           to: [fromAddr],
           subject: `[VGC ITSM] Incident ${incId} created — ${subject.substring(0, 60)}`,
           isCustomerEmail: true,
+          from: senderFor("support"),
           body: `<div style="font-family:Arial,sans-serif;max-width:600px;">
             <div style="background:linear-gradient(135deg,#3B82F6,#06B6D4);padding:16px 20px;border-radius:8px 8px 0 0;">
               <h2 style="margin:0;color:#fff;font-size:18px;">📧 Incident Created from Your Email</h2>
@@ -1950,10 +2035,13 @@ async function processInboundEmails() {
               </table>
               <p style="color:#666;font-size:13px;margin-top:16px;">Our team will review your request and respond as soon as possible.</p>
               <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
-              <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management</p>
+              <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management<br/>
+                <a href="https://vgc-itsm1-app.azurewebsites.net/api/email-preferences/unsubscribe?email=${encodeURIComponent(fromAddr)}" style="color:#9ca3af;font-size:10px;">Unsubscribe from auto-confirmations</a>
+              </p>
             </div>
           </div>`,
-        }).catch(e => console.warn(`[Email-to-Ticket] Confirmation email failed for ${incId}:`, e.message));
+          }).catch(e => console.warn(`[Email-to-Ticket] Confirmation email failed for ${incId}:`, e.message));
+        }
 
         // ─── AI Sentiment Analysis on inbound email (fire-and-forget) ───
         if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
@@ -11821,6 +11909,52 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: `Comms sent: ${comm.type}`, user: auth.name || "System" }];
       await db.upsert("incidents", body.incidentId, inc);
       return json(res, 201, { success: true, communication: comm });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // GET /api/email-preferences/unsubscribe?email=... — Phase E4: one-click opt-out
+  // Also accepts POST {email} for programmatic unsubscribe.
+  if (pathname === "/api/email-preferences/unsubscribe" && (req.method === "GET" || req.method === "POST")) {
+    let email = urlObj.searchParams.get("email");
+    if (!email && req.method === "POST") {
+      const body = await parseBody(req);
+      email = body && body.email;
+    }
+    if (!email) return json(res, 400, { error: "email required" });
+    email = String(email).toLowerCase();
+    try {
+      const id = email;
+      await db.upsert("email_preferences", id, JSON.stringify({
+        id, email, autoConfirm: false, updatedAt: new Date().toISOString(), source: "unsubscribe_link",
+      }));
+      try { await db.audit("email_preferences", id, "unsubscribe", JSON.stringify({ email }), email); } catch {}
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(`<!doctype html><html><body style="font-family:Arial,sans-serif;max-width:560px;margin:64px auto;padding:24px;color:#333;"><h2>You're unsubscribed</h2><p><b>${email}</b> will no longer receive automatic confirmation emails from VGC ITSM. Tickets you raise are still tracked and visible in the dashboard.</p><p style="color:#888;font-size:12px;">To re-enable, POST to <code>/api/email-preferences/subscribe</code>.</p></body></html>`);
+      }
+      return json(res, 200, { success: true, email });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // POST /api/email-preferences/subscribe { email } — re-enable confirmations
+  if (pathname === "/api/email-preferences/subscribe" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.email) return json(res, 400, { error: "email required" });
+    const email = String(body.email).toLowerCase();
+    try {
+      const id = email;
+      await db.upsert("email_preferences", id, JSON.stringify({
+        id, email, autoConfirm: true, updatedAt: new Date().toISOString(), source: "resubscribe",
+      }));
+      try { await db.audit("email_preferences", id, "subscribe", JSON.stringify({ email }), email); } catch {}
+      return json(res, 200, { success: true, email });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+  // GET /api/email-preferences — list opt-out records (admin)
+  if (pathname === "/api/email-preferences" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("email_preferences");
+      const prefs = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { total: prefs.length, preferences: prefs });
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 

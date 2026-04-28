@@ -41,6 +41,10 @@ const DEFAULTS = {
   // Phase D5 — Sev-A MIM Teams webhook fan-out (off by default; enable per-slot
   // once webhook URLs are populated in `teams_webhooks` collection).
   mim_teams_webhook:   { enabled: false, scope: "staging" },
+
+  // Phase E5 — per-sender 24h throttle on auto-confirmation emails.
+  // payload.windowHours = throttle window (default 24).
+  internal_quiet_hours:{ enabled: true, scope: "all", payload: { windowHours: 24 } },
 };
 
 let _db = null;
