@@ -1,0 +1,79 @@
+/**
+ * Global CSS with Tailwind and WCAG 2.2 AA compliant oklch color tokens.
+ * 8px grid, Inter font, 12px radius, subtle shadows.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* oklch color tokens — light theme */
+    --background: oklch(0.99 0 0);
+    --foreground: oklch(0.15 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.15 0 0);
+    --primary: oklch(0.55 0.18 250);
+    --primary-foreground: oklch(0.99 0 0);
+    --secondary: oklch(0.96 0.01 250);
+    --secondary-foreground: oklch(0.25 0 0);
+    --muted: oklch(0.96 0.01 250);
+    --muted-foreground: oklch(0.55 0 0);
+    --accent: oklch(0.96 0.01 250);
+    --accent-foreground: oklch(0.25 0 0);
+    --destructive: oklch(0.55 0.22 25);
+    --destructive-foreground: oklch(0.99 0 0);
+    --border: oklch(0.92 0.01 250);
+    --input: oklch(0.92 0.01 250);
+    --ring: oklch(0.55 0.18 250);
+    --radius: 0.75rem; /* 12px */
+
+    /* P1 alert color */
+    --p1-pulse: oklch(0.55 0.22 25);
+  }
+
+  .dark {
+    --background: oklch(0.1 0 0);
+    --foreground: oklch(0.95 0 0);
+    --card: oklch(0.15 0 0);
+    --card-foreground: oklch(0.95 0 0);
+    --primary: oklch(0.65 0.18 250);
+    --primary-foreground: oklch(0.1 0 0);
+    --secondary: oklch(0.2 0.01 250);
+    --secondary-foreground: oklch(0.95 0 0);
+    --muted: oklch(0.2 0.01 250);
+    --muted-foreground: oklch(0.6 0 0);
+    --accent: oklch(0.2 0.01 250);
+    --accent-foreground: oklch(0.95 0 0);
+    --destructive: oklch(0.65 0.22 25);
+    --destructive-foreground: oklch(0.1 0 0);
+    --border: oklch(0.25 0.01 250);
+    --input: oklch(0.25 0.01 250);
+    --ring: oklch(0.65 0.18 250);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* P1 pulse animation — reduced motion respects prefers-reduced-motion */
+@keyframes p1-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.p1-pulse {
+  animation: p1-pulse 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p1-pulse {
+    animation: none;
+  }
+}

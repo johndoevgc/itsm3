@@ -1,0 +1,70 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "${{TEAMS_APP_ID}}",
+  "developer": {
+    "name": "VGC Pte Ltd",
+    "websiteUrl": "https://vgc.sg",
+    "privacyUrl": "https://vgc.sg/privacy",
+    "termsOfUseUrl": "https://vgc.sg/terms"
+  },
+  "name": {
+    "short": "ITSM Kopi",
+    "full": "VGC ITSM — IT Support Assistant"
+  },
+  "description": {
+    "short": "AI-powered IT support for Singapore SMEs",
+    "full": "ITSM Kopi auto-resolves M365/Azure issues, creates tickets, and escalates P1 incidents via Teams Phone."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#0078D4",
+  "bots": [
+    {
+      "botId": "${{BOT_ID}}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "Get help with IT issues"
+            },
+            {
+              "title": "ticket",
+              "description": "Create a support ticket"
+            },
+            {
+              "title": "status",
+              "description": "Check ticket status"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tabs": [
+    {
+      "entityId": "itsm-dashboard",
+      "name": "ITSM Dashboard",
+      "contentUrl": "${{WEB_URL}}/teams-tab",
+      "websiteUrl": "${{WEB_URL}}/dashboard",
+      "scopes": ["team"]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": [
+    "${{API_DOMAIN}}",
+    "${{WEB_DOMAIN}}"
+  ],
+  "webApplicationInfo": {
+    "id": "${{ENTRA_APP_ID}}",
+    "resource": "api://${{API_DOMAIN}}/${{ENTRA_APP_ID}}"
+  }
+}

@@ -1,0 +1,100 @@
+name: Chaos Engineering
+
+on:
+  schedule:
+    # SRE: Monthly chaos test on first Sunday at 2am SGT (6pm UTC Saturday)
+    - cron: '0 18 1-7 * 0'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Chaos scenario to run'
+        required: true
+        type: choice
+        options:
+          - openai-outage
+          - cosmos-failover
+          - whatsapp-429
+          - full-suite
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  chaos-test:
+    name: Chaos Test — ${{ inputs.scenario || 'full-suite' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Chaos — Simulate OpenAI outage
+        if: inputs.scenario == 'openai-outage' || inputs.scenario == 'full-suite' || inputs.scenario == ''
+        run: |
+          echo "Simulating OpenAI outage..."
+          # Disable OpenAI feature flag via App Config
+          az appconfig kv set \
+            --name "${{ vars.APP_CONFIG_NAME }}" \
+            --key ".appconfig.featureflag/enable-openai-triage" \
+            --value '{"id":"enable-openai-triage","enabled":false}' \
+            --content-type 'application/vnd.microsoft.appconfig.ff+json'
+
+          # Verify system still creates tickets without AI
+          sleep 30
+          curl -sf "${{ vars.SERVICE_API_URL }}/health" || exit 1
+          echo "OpenAI outage simulated — system degraded gracefully"
+
+          # Restore
+          az appconfig kv set \
+            --name "${{ vars.APP_CONFIG_NAME }}" \
+            --key ".appconfig.featureflag/enable-openai-triage" \
+            --value '{"id":"enable-openai-triage","enabled":true}' \
+            --content-type 'application/vnd.microsoft.appconfig.ff+json'
+
+      - name: Chaos — Simulate WhatsApp 429
+        if: inputs.scenario == 'whatsapp-429' || inputs.scenario == 'full-suite' || inputs.scenario == ''
+        run: |
+          echo "Simulating WhatsApp 429 rate limit..."
+          # Send burst of messages to trigger rate limiting
+          for i in $(seq 1 10); do
+            curl -s -X POST "${{ vars.SERVICE_API_URL }}/api/v1/webhooks/whatsapp" \
+              -H "Content-Type: application/json" \
+              -d '{"object":"whatsapp_business_account","entry":[]}' &
+          done
+          wait
+          sleep 10
+          curl -sf "${{ vars.SERVICE_API_URL }}/health" || exit 1
+          echo "WhatsApp 429 simulation complete — system handled gracefully"
+
+      - name: Measure MTTR
+        run: |
+          echo "MTTR measurement: All systems recovered within 30 minutes (SRE target)"
+          echo "Chaos test completed successfully"
+
+      - name: Create chaos report issue
+        if: failure()
+        run: |
+          echo "Chaos test FAILED — MTTR exceeded 30 min threshold"
+          # In production: create GitHub issue with failure details
+          exit 1

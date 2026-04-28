@@ -1,0 +1,22 @@
+{
+  "name": "@itsm3/teams-app",
+  "version": "0.0.1",
+  "description": "Microsoft Teams App — Bot + Tab + Message Extension",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src --ext .ts",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@itsm3/ai-prompts": "workspace:*",
+    "@itsm3/graph-client": "workspace:*",
+    "botbuilder": "^4.23.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.4.0"
+  }
+}

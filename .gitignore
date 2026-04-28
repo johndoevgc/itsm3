@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+dist/
+.next/
+.turbo/
+*.js.map
+*.d.ts
+!**/src/**/*.d.ts
+
+# Azure Developer CLI
+.azure/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Bicep transpiled
+*.json.bak
+
+# Azure Functions
+local.settings.json
+bin/
+obj/

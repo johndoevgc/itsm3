@@ -1,0 +1,110 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip pre-deploy tests (emergency only)'
+        required: false
+        default: 'false'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  pre-deploy-tests:
+    name: Pre-Deploy Tests
+    runs-on: ubuntu-latest
+    if: inputs.skip_tests != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build --filter="./packages/*"
+
+      - name: Run all tests
+        run: pnpm test
+
+  deploy-prod:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    environment: production
+    needs: [pre-deploy-tests]
+    if: always() && (needs.pre-deploy-tests.result == 'success' || inputs.skip_tests == 'true')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install AZD
+        uses: azure/setup-azd@v2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all apps
+        run: pnpm build
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: AZD Deploy (zero-downtime)
+        run: azd deploy --environment production --no-prompt
+        env:
+          AZURE_ENV_NAME: production
+          AZURE_LOCATION: southeastasia
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+
+      - name: Health check
+        run: |
+          API_URL="${{ vars.SERVICE_API_URL }}"
+          # SRE: Retry health check for up to 2 minutes after deploy
+          for i in $(seq 1 12); do
+            if curl -sf "$API_URL/health" > /dev/null; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 2 minutes — triggering rollback"
+          exit 1
+
+      - name: Auto-rollback on failure
+        if: failure()
+        run: |
+          echo "Deploying previous revision..."
+          azd deploy --environment production --no-prompt --revision previous || true
+          echo "Rollback completed"

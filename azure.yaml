@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: itsm3
+metadata:
+  template: itsm3@0.0.1
+
+hooks:
+  preprovision:
+    shell: sh
+    run: ./scripts/preprovision.sh
+    interactive: true
+    continueOnError: false
+
+services:
+  api:
+    project: ./apps/api
+    language: ts
+    host: containerapp
+    docker:
+      path: ./apps/api/Dockerfile
+      context: .
+
+  web:
+    project: ./apps/web
+    language: ts
+    host: containerapp
+    docker:
+      path: ./apps/web/Dockerfile
+      context: .
+
+  functions:
+    project: ./apps/functions
+    language: ts
+    host: containerapp
+    docker:
+      path: ./apps/functions/Dockerfile
+      context: .

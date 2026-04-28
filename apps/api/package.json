@@ -1,0 +1,41 @@
+{
+  "name": "@itsm3/api",
+  "version": "0.0.1",
+  "description": "VGC ITSM API - Fastify backend",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@azure/app-configuration": "^1.7.0",
+    "@azure/cosmos": "^4.1.0",
+    "@azure/identity": "^4.4.0",
+    "@azure/keyvault-secrets": "^4.9.0",
+    "@itsm3/ai-prompts": "workspace:*",
+    "@itsm3/graph-client": "workspace:*",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-node": "^0.53.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.53.0",
+    "fastify": "^5.0.0",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/helmet": "^12.0.0",
+    "@fastify/jwt": "^9.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@fastify/sensible": "^6.0.0",
+    "openai": "^4.65.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "rimraf": "^5.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
