@@ -45,6 +45,14 @@ const DEFAULTS = {
   // Phase E5 — per-sender 24h throttle on auto-confirmation emails.
   // payload.windowHours = throttle window (default 24).
   internal_quiet_hours:{ enabled: true, scope: "all", payload: { windowHours: 24 } },
+
+  // Phase G — Outbound push from ITSM → Zendesk (status changes, escalations,
+  // sync-incident comments). Default OFF in prod to stop "[ITSM Sync] Status
+  // changed to ..." comment spam on linked ZD tickets. UI "Push to Zendesk"
+  // button uses the same endpoint, so when off, manual pushes no-op too —
+  // engineers must edit in ZD directly. Flip on per-tenant when bidirectional
+  // sync is wanted.
+  zd_push_back:        { enabled: false, scope: "prod" },
 };
 
 let _db = null;

@@ -216,6 +216,8 @@ const CUSTOMER_REDIRECT_TARGET = process.env.CUSTOMER_REDIRECT_TARGET || "johndo
 const PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
 const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
+// Phase G — in-memory dedup of outbound ZD sync comments (key: ticketId|commentText, value: ts)
+const _zdPushDedup = new Map();
 // Phase E1: internal Entra/customer domains — ticket is created but NO confirmation
 // email is sent back (they can see it on the dashboard). Override with env var.
 const INTERNAL_DOMAINS = (process.env.INTERNAL_DOMAINS || "vgctechnology.com,vgcsg.com")
@@ -3721,9 +3723,34 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       if (pathname === "/api/zendesk/sync-incident" && req.method === "POST") {
         // Block outbound sync in Production Test Mode (one-way ZD→ITSM only)
         if (PROD_TEST_MODE) return json(res, 200, { skipped: true, reason: "Production Test Mode — one-way sync only (ZD→ITSM)" });
+        // Phase G1+G2 — zd_push_back flag gates ALL outbound pushes
+        if (!featureFlags.isEnabled("zd_push_back")) {
+          try {
+            const _b = await parseBody(req);
+            await db.audit("zendesk_sync", String(_b && _b.zdTicketId || "unknown"), "push_suppressed_flag", JSON.stringify({ action: _b && _b.action, status: _b && _b.status }), "system");
+          } catch {}
+          return json(res, 200, { suppressed: true, reason: "flag_off:zd_push_back" });
+        }
         const body = await parseBody(req);
         const { zdTicketId, action, status, priority, comment, assignee, isInternal } = body;
         if (!zdTicketId) return json(res, 400, { error: "zdTicketId required" });
+
+        // Phase G3 — 60s duplicate-comment dedup (catches save→status→save bursts)
+        if (comment) {
+          const _key = `${zdTicketId}|${String(comment).trim().substring(0, 200)}`;
+          const _last = _zdPushDedup.get(_key);
+          if (_last && Date.now() - _last < 60_000) {
+            try { await db.audit("zendesk_sync", String(zdTicketId), "push_suppressed_dedup", JSON.stringify({ action, withinSec: Math.round((Date.now()-_last)/1000) }), "system"); } catch {}
+            console.log(`[ZD Sync] Dedup-suppressed comment to #${zdTicketId} (within 60s)`);
+            return json(res, 200, { suppressed: true, reason: "dedup_60s" });
+          }
+          _zdPushDedup.set(_key, Date.now());
+          // GC old entries when map grows large
+          if (_zdPushDedup.size > 500) {
+            const cutoff = Date.now() - 120_000;
+            for (const [k, t] of _zdPushDedup) if (t < cutoff) _zdPushDedup.delete(k);
+          }
+        }
 
         const priorityMap = { "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" };
         const statusMap = { "New": "new", "Open": "open", "In Progress": "open", "Pending": "pending", "On Hold": "hold", "Resolved": "solved", "Closed": "closed", "Reopened": "open" };
