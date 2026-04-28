@@ -1,9 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  experimental: {
-    serverComponentsExternalPackages: ['@azure/identity', '@azure/cosmos'],
-  },
+  // Next.js 15: serverExternalPackages replaces experimental.serverComponentsExternalPackages
+  serverExternalPackages: ['@azure/identity', '@azure/cosmos'],
   // Security headers
   async headers() {
     return [
