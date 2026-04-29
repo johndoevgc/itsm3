@@ -820,4 +820,5 @@ const KnowledgeModule = useStableComponent(() => {
   </div>
   );
 });
+return <KnowledgeModule />;
 }

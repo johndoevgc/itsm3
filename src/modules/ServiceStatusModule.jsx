@@ -11,9 +11,6 @@ export default function ServiceStatusModule({ ctx }) {
   const {
     currentUser, incidents, changes,
   } = ctx;
-
-// ─── Service Status Page ─────────────────────────────────────────────
-const ServiceStatusPage = () => {
   const SERVICES_LIST = [
     { name: "Email & Collaboration", icon: "📧", group: "Communication" },
     { name: "Network Services", icon: "🌐", group: "Infrastructure" },
@@ -124,5 +121,4 @@ const ServiceStatusPage = () => {
       </div>
     </div>
   );
-};
 }

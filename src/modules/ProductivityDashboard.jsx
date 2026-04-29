@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-export default function ProductivityDashboard({ changes, incidents, smartTasks, setSmartTasks, _save }) {
+export default function ProductivityDashboard({ changes, incidents, smartTasks, setSmartTasks, _save, productivityView, setProductivityView }) {
   const cardBase = { background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 20, transition: "all 0.3s ease" };
   const headerGrad = "linear-gradient(135deg, #0078D4, #00BCF2)";
   const recurrenceColors = { daily: "#FF6B6B", weekly: "#FFB347", monthly: "#6366F1", quarterly: "#06B6D4", "6-monthly": "#CE93D8", yearly: "#81C784" };

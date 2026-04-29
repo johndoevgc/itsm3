@@ -438,4 +438,5 @@ const IncidentsModule = useStableComponent(() => {
     </div>
   );
 });
+return <IncidentsModule />;
 }

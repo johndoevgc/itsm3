@@ -342,4 +342,5 @@ const SLAModule = useStableComponent(() => {
     </div>
   );
 });
+return <SLAModule />;
 }

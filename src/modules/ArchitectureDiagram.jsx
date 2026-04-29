@@ -5,8 +5,6 @@ import {
 
 // Architecture Diagram — extracted from itsm-tool.jsx
 export default function ArchitectureDiagram() {
-// ─── Architecture Diagram Component ───────────────────────────────────
-const ArchitectureDiagram = () => {
   const [selectedLayer, setSelectedLayer] = useState(null);
   const [hoveredNode, setHoveredNode] = useState(null);
 
@@ -187,5 +185,4 @@ const ArchitectureDiagram = () => {
       </div>
     </div>
   );
-};
 }

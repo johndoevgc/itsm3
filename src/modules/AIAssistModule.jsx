@@ -22,6 +22,7 @@ export default function AIAssistModule({ ctx }) {
     handleFileUpload, aiEditingIdx, setAiEditingIdx,
     aiEditText, setAiEditText,
     aiActionCards, processActionCard,
+    incidents, requests, problems, changes, azureOpenAI,
   } = ctx;
 
 // ─── AI Assist Module ───
@@ -258,4 +259,5 @@ const AIAssistModule = useStableComponent(() => {
     </div>
   );
 });
+return <AIAssistModule />;
 }

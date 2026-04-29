@@ -3129,7 +3129,7 @@ export default function ITSMApp() {
         {opsTab === "problems" && <ProblemsModule />}
         {opsTab === "changes" && <ChangesModule />}
         {opsTab === "requests" && <RequestsModule />}
-        {opsTab === "calendar" && <ChangeCalendarModule ctx={{ changes, setDetailItem, setModal, calendarView, setCalendarView, calendarMonth, setCalendarMonth, calendarYear, setCalendarYear, showCalendarForm, setShowCalendarForm }} />}
+        {opsTab === "calendar" && <ChangeCalendarModule ctx={{ changes, setDetailItem, setModal, calendarView, setCalendarView, calendarMonth, setCalendarMonth, calendarYear, setCalendarYear, showCalendarForm, setShowCalendarForm, calendarData, fetchCalendarData, calendarSelectedDay, setCalendarSelectedDay }} />}
       </div>
     );
   });
@@ -4231,6 +4231,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         handleFileUpload, aiEditingIdx, setAiEditingIdx,
         aiEditText, setAiEditText,
         aiActionCards, processActionCard,
+        incidents, requests, problems, changes, azureOpenAI,
       }} />);
       case "analytics": return (<AnalyticsModuleWrapper ctx={{
         analyticsSubTab, setAnalyticsSubTab,
@@ -4313,7 +4314,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         historicalCloseCutoff, setHistoricalCloseCutoff,
         setVendors, setSearch,
       }} />);
-      case "productivity": return (<ProductivityDashboard changes={changes} incidents={incidents} smartTasks={smartTasks} setSmartTasks={setSmartTasks} _save={_save} />);
+      case "productivity": return (<ProductivityDashboard changes={changes} incidents={incidents} smartTasks={smartTasks} setSmartTasks={setSmartTasks} _save={_save} productivityView={productivityView} setProductivityView={setProductivityView} />);
       default: return (<DashboardModule ctx={dashboardCtx} />);
     }
   };

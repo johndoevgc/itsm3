@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   COLORS, STATUS_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
@@ -11,11 +11,9 @@ export default function ChangeCalendarModule({ ctx }) {
   const {
     changes, setDetailItem, setModal, calendarView, setCalendarView,
     calendarMonth, setCalendarMonth, calendarYear, setCalendarYear,
-    showCalendarForm, setShowCalendarForm,
+    showCalendarForm, setShowCalendarForm, calendarData, fetchCalendarData,
+    calendarSelectedDay, setCalendarSelectedDay,
   } = ctx;
-
-// ─── Change Calendar Module (Phase 8) ─────────────────────────────────
-const ChangeCalendar = () => {
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const TYPE_COLORS = { Emergency: "#FF4444", Normal: "#64B5F6", Standard: "#81C784" };
@@ -261,5 +259,4 @@ const ChangeCalendar = () => {
       )}
     </div>
   );
-};
 }
