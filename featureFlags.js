@@ -18,8 +18,8 @@
 //   app.use(ff.middleware());        // adds req.flag(name) and req.flagPayload(name)
 
 const DEFAULTS = {
-  // Phase 2 shadow-mode flags — default OFF in prod, can be enabled per slot
-  shadow_sla_v2:       { enabled: false, scope: "staging" },
+  // Phase 2 shadow-mode flags — v2 SLA promoted to prod-ready
+  shadow_sla_v2:       { enabled: true,  scope: "all" },
   shadow_workflow_v2:  { enabled: false, scope: "staging" },
 
   // Phase B — operational maturity gates

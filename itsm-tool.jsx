@@ -23,6 +23,7 @@ import {
 import {
   EmailAuditTab, FeatureFlagsTab, AIDecisionsTab, ComplianceTab,
 } from "./src/components/AdminTabs.jsx";
+import { useLocale, SUPPORTED_LOCALES } from "./src/i18n/i18nProvider.jsx";
 // ─── Lazy-loaded modules (code-split into separate chunks) ───────────
 const AdminSettingsModule = lazy(() => import("./src/modules/AdminSettingsModule.jsx"));
 const DashboardModule = lazy(() => import("./src/modules/DashboardModule.jsx"));
@@ -4867,6 +4868,16 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             <span style={{ fontSize: 9, color: "#3A3F55", fontFamily: "'JetBrains Mono', monospace", marginLeft: 4 }}>v{APP_VERSION.version}</span>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {/* Language Switcher */}
+            {(() => { const { locale, setLocale } = useLocale(); return (
+              <select value={locale} onChange={e => setLocale(e.target.value)} title="Language" style={{
+                background: "#0F1117", border: "1px solid #1E2130", borderRadius: 8,
+                color: "#E8ECF4", fontSize: 11, padding: "6px 28px 6px 8px", cursor: "pointer",
+                fontFamily: "'Space Grotesk', sans-serif", minWidth: 80
+              }}>
+                {SUPPORTED_LOCALES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+              </select>
+            ); })()}
             {/* Glassy Singapore Weather + Date/Time */}
             <div style={{
               display: "flex", alignItems: "center", gap: 10, padding: "7px 14px",

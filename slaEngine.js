@@ -216,7 +216,37 @@ class SlaEngine {
     } catch (err) {
       console.warn("[SLA Engine] Could not load policy:", err.message);
     }
+    // Per-customer SLA tiers: load overrides keyed by customer name
+    this._customerPolicies = {};
+    try {
+      const tiers = await this.db.getAll("sla_customer_tiers");
+      for (const r of tiers) {
+        try {
+          const tier = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (tier && tier.customer) {
+            this._customerPolicies[tier.customer] = tier;
+          }
+        } catch {}
+      }
+      if (Object.keys(this._customerPolicies).length > 0) {
+        console.log(`[SLA Engine] Loaded ${Object.keys(this._customerPolicies).length} customer SLA tier overrides`);
+      }
+    } catch {}
     this.currentPolicy = this.policy;
+  }
+
+  // Get effective policy for a specific incident (supports per-customer overrides)
+  getPolicyForIncident(incident) {
+    const customer = incident.customer || incident.company || incident.organization;
+    if (customer && this._customerPolicies && this._customerPolicies[customer]) {
+      const override = this._customerPolicies[customer];
+      return {
+        supportHours: override.supportHours || this.policy.supportHours,
+        severities: { ...this.policy.severities, ...(override.severities || {}) },
+        holidays: override.holidays || this.policy.holidays || [],
+      };
+    }
+    return this.policy;
   }
 
   getSlaMap() {
@@ -263,17 +293,19 @@ class SlaEngine {
       const slaUpdates = []; // batch SLA tracking upserts
 
       for (const inc of openIncidents) {
-        // Phase 2 shadow mode: when `shadow_sla_v2` flag is on, run a
-        // candidate computeSlaStatus_v2 alongside and log diffs. The
-        // control implementation's value is always what we use.
-        const shadowOn = _featureFlags && _shadow && _featureFlags.isEnabled("shadow_sla_v2");
+        // Use per-customer SLA policy if available
+        const incPolicy = this.getPolicyForIncident(inc);
+
+        // Phase 2 shadow mode: when `shadow_sla_v2` flag is on, use v2 directly
+        // (promoted from shadow to production). Otherwise fall back to v1.
+        const v2On = _featureFlags && _featureFlags.isEnabled("shadow_sla_v2");
         let sla;
-        if (shadowOn) {
+        if (v2On && _shadow) {
           sla = await _shadow.run({
             name:      "shadow_sla_v2",
             enabled:   true,
-            control:   () => computeSlaStatus(inc, this.policy),
-            candidate: () => computeSlaStatus_v2(inc, this.policy),
+            control:   () => computeSlaStatus_v2(inc, incPolicy),
+            candidate: () => computeSlaStatus(inc, incPolicy),
             keys:      ["status", "breached", "hoursElapsed", "firstResponseTarget", "worstResponseTarget"],
             onDiff:    async (d) => {
               try {
@@ -283,8 +315,10 @@ class SlaEngine {
               } catch { /* non-fatal */ }
             },
           });
+        } else if (v2On) {
+          sla = computeSlaStatus_v2(inc, incPolicy);
         } else {
-          sla = computeSlaStatus(inc, this.policy);
+          sla = computeSlaStatus(inc, incPolicy);
         }
 
         // Collect SLA tracking update (batch later)
@@ -361,6 +395,58 @@ class SlaEngine {
 
   getStats() {
     return { ...this.stats, policy: this.policy };
+  }
+
+  // Daily SLA snapshot — called by server cron or compliance cycle
+  async saveDailySnapshot() {
+    try {
+      const now = new Date();
+      const dateKey = now.toISOString().slice(0, 10);
+      const snapshotId = `sla_snap_${dateKey}`;
+
+      // Check if already saved today
+      try {
+        const existing = await this.db.getOne("sla_history", snapshotId);
+        if (existing) return; // already logged today
+      } catch {}
+
+      const incRows = await this.db.getAll("incidents");
+      const incidents = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+
+      const resolved = incidents.filter(i => ["Resolved", "Closed"].includes(i.status));
+      const open = incidents.filter(i => !["Resolved", "Closed"].includes(i.status));
+      const slaMet = resolved.filter(i => i.slaStatus === "met" || i.slaStatus === "within").length;
+      const slaBreached = resolved.filter(i => i.slaStatus === "breached").length;
+
+      // Current open SLA statuses
+      let openAtRisk = 0, openBreached = 0;
+      for (const inc of open) {
+        const policy = this.getPolicyForIncident(inc);
+        const v2On = _featureFlags && _featureFlags.isEnabled("shadow_sla_v2");
+        const sla = v2On ? computeSlaStatus_v2(inc, policy) : computeSlaStatus(inc, policy);
+        if (sla.status === "at_risk" || sla.status === "critical") openAtRisk++;
+        if (sla.breached) openBreached++;
+      }
+
+      const snapshot = {
+        id: snapshotId,
+        date: dateKey,
+        totalIncidents: incidents.length,
+        totalResolved: resolved.length,
+        totalOpen: open.length,
+        slaMet,
+        slaBreached,
+        complianceRate: resolved.length > 0 ? Math.round((slaMet / resolved.length) * 10000) / 100 : 100,
+        openAtRisk,
+        openBreached,
+        timestamp: now.toISOString(),
+      };
+
+      await this.db.upsert("sla_history", snapshotId, JSON.stringify(snapshot));
+      console.log(`[SLA Engine] Daily snapshot saved: ${dateKey} (compliance=${snapshot.complianceRate}%)`);
+    } catch (e) {
+      console.warn("[SLA Engine] Daily snapshot failed:", e.message);
+    }
   }
 }
 

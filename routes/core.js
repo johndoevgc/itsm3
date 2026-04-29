@@ -52,6 +52,78 @@ module.exports = function createCoreRoutes(ctx) {
     } catch (err) { return json(res, 500, { error: err.message }); }
   }
 
+  // ─── GET /api/sla/trends — SLA historical trending from sla_history ───
+  if (pathname === "/api/sla/trends" && req.method === "GET") {
+    try {
+      const days = Math.min(parseInt(urlObj.searchParams.get("days") || "30", 10), 365);
+      const rows = await db.getAll("sla_history");
+      const items = rows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(Boolean);
+      const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+      const filtered = items.filter(i => i.date && i.date >= cutoff).sort((a, b) => a.date.localeCompare(b.date));
+      const avgCompliance = filtered.length > 0
+        ? Math.round(filtered.reduce((s, i) => s + (i.complianceRate || 0), 0) / filtered.length * 100) / 100
+        : null;
+      return json(res, 200, {
+        days,
+        totalSnapshots: filtered.length,
+        averageCompliance: avgCompliance,
+        trend: filtered,
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── POST /api/sla/pause — Pause SLA clock for an incident ────────────
+  if (pathname === "/api/sla/pause" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { incidentId, reason } = body;
+      if (!incidentId) return json(res, 400, { error: "incidentId required" });
+      const row = await db.getOne("incidents", incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      if (!inc.slaPauseHistory) inc.slaPauseHistory = [];
+      // Check if already paused
+      const lastPause = inc.slaPauseHistory[inc.slaPauseHistory.length - 1];
+      if (lastPause && !lastPause.resumedAt) {
+        return json(res, 409, { error: "SLA already paused for this incident" });
+      }
+      inc.slaPauseHistory.push({ pausedAt: new Date().toISOString(), reason: reason || "Manual pause", pausedBy: authResult.user?.email || "system" });
+      inc.slaPaused = true;
+      await db.upsert("incidents", incidentId, JSON.stringify(inc));
+      await db.audit("incidents", incidentId, "sla_pause", JSON.stringify({ reason }), authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+      return json(res, 200, { ok: true, incidentId, slaPaused: true, pauseHistory: inc.slaPauseHistory });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
+  // ─── POST /api/sla/resume — Resume SLA clock for an incident ──────────
+  if (pathname === "/api/sla/resume" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { incidentId } = body;
+      if (!incidentId) return json(res, 400, { error: "incidentId required" });
+      const row = await db.getOne("incidents", incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      if (!inc.slaPauseHistory || inc.slaPauseHistory.length === 0) {
+        return json(res, 409, { error: "SLA is not paused" });
+      }
+      const lastPause = inc.slaPauseHistory[inc.slaPauseHistory.length - 1];
+      if (lastPause.resumedAt) {
+        return json(res, 409, { error: "SLA is not paused" });
+      }
+      lastPause.resumedAt = new Date().toISOString();
+      lastPause.resumedBy = authResult.user?.email || "system";
+      inc.slaPaused = false;
+      await db.upsert("incidents", incidentId, JSON.stringify(inc));
+      await db.audit("incidents", incidentId, "sla_resume", JSON.stringify({}), authResult.user?.email || "system");
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+      return json(res, 200, { ok: true, incidentId, slaPaused: false, pauseHistory: inc.slaPauseHistory });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // ─── Analytics Engine API ─────────────────────────────────────────────────
   if (pathname === "/api/analytics/kpis" && req.method === "GET") {
     if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
@@ -1737,6 +1809,77 @@ module.exports = function createCoreRoutes(ctx) {
     });
   }
 
+  // ─── GET /api/status — Public status page endpoint (no auth required) ──
+  if (pathname === "/api/status" && req.method === "GET") {
+    let dbOk = false;
+    try { dbOk = await db.ping(); } catch {}
+    const aiOk = !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT);
+    const slaOk = slaEngine ? !!slaEngine.timer : false;
+    const wsOk = wsServer ? wsServer.getStats().totalConnections >= 0 : false;
+    const allOk = dbOk && slaOk;
+    const uptimeSec = process.uptime();
+
+    // Read persisted uptime history
+    let uptimePct30d = null;
+    try {
+      const logs = await db.getAll("uptime_log");
+      if (logs.length > 0) {
+        const thirtyDaysAgo = Date.now() - 30 * 86400000;
+        let okCount = 0, totalCount = 0;
+        for (const r of logs) {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (item && new Date(item.timestamp).getTime() >= thirtyDaysAgo) {
+            totalCount++;
+            if (item.status === "ok") okCount++;
+          }
+        }
+        if (totalCount > 0) uptimePct30d = Math.round((okCount / totalCount) * 10000) / 100;
+      }
+    } catch {}
+
+    return json(res, 200, {
+      status: allOk ? "operational" : (dbOk ? "degraded" : "down"),
+      version: APP_VERSION.version,
+      components: {
+        api: { status: "operational" },
+        database: { status: dbOk ? "operational" : "down" },
+        ai_engine: { status: aiOk ? "operational" : "disabled" },
+        sla_engine: { status: slaOk ? "operational" : "stopped" },
+        websocket: { status: wsOk ? "operational" : "down" },
+      },
+      uptime: {
+        currentSeconds: Math.round(uptimeSec),
+        currentFormatted: `${Math.floor(uptimeSec / 86400)}d ${Math.floor((uptimeSec % 86400) / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`,
+        last30DaysPercent: uptimePct30d,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // ─── GET /api/uptime — Detailed uptime history (authenticated) ────────
+  if (pathname === "/api/uptime" && req.method === "GET") {
+    try {
+      const logs = await db.getAll("uptime_log");
+      const items = logs.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(Boolean).sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
+
+      const thirtyDaysAgo = Date.now() - 30 * 86400000;
+      const recent = items.filter(i => new Date(i.timestamp).getTime() >= thirtyDaysAgo);
+      const okCount = recent.filter(i => i.status === "ok").length;
+      const uptimePct = recent.length > 0 ? Math.round((okCount / recent.length) * 10000) / 100 : null;
+      const downtimeEvents = recent.filter(i => i.status !== "ok");
+
+      return json(res, 200, {
+        currentUptime: Math.round(process.uptime()),
+        last30Days: { totalChecks: recent.length, okChecks: okCount, uptimePercent: uptimePct, downtimeEvents: downtimeEvents.length },
+        recentDowntime: downtimeEvents.slice(0, 20),
+        lastCheck: items[0] || null,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) { return json(res, 500, { error: err.message }); }
+  }
+
   // ─── Phase 5: Compliance Report (uptime, data residency, SLA) ────────
   if (pathname === "/api/compliance/report" && req.method === "GET") {
     try {
@@ -1874,6 +2017,79 @@ module.exports = function createCoreRoutes(ctx) {
       await db.deleteOne("ai_actions", actionId);
       if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
       return json(res, 200, { deleted: true, id: actionId });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // ─── POST /api/ai/actions/purge — Advanced AI actions purge with filters ──────
+  if (pathname === "/api/ai/actions/purge" && req.method === "POST") {
+    try {
+      const body = await parseBody(req, 5000);
+      const {
+        olderThanDays = 7,
+        statuses = ["rejected", "dismissed", "failed", "applied", "auto_applied"],
+        types,
+        dryRun = false,
+        requestedBy
+      } = body;
+
+      const validStatuses = ["pending_approval", "rejected", "dismissed", "failed", "applied", "auto_applied", "superseded"];
+      const filterStatuses = statuses.filter(s => validStatuses.includes(s));
+      if (filterStatuses.length === 0) {
+        return json(res, 400, { error: `No valid statuses. Allowed: ${validStatuses.join(", ")}` });
+      }
+
+      const cutoff = new Date(Date.now() - olderThanDays * 86400000);
+      const actionRows = await db.getAll("ai_actions");
+      const candidates = [];
+
+      for (const r of actionRows) {
+        try {
+          const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!item) continue;
+          if (!filterStatuses.includes(item.status)) continue;
+          if (types && types.length > 0 && !types.includes(item.type)) continue;
+          const ts = item.timestamp || item.createdAt || item.created;
+          if (ts && new Date(ts) >= cutoff) continue;
+          candidates.push({ id: r.id || item.id, status: item.status, type: item.type, timestamp: ts });
+        } catch {}
+      }
+
+      if (dryRun) {
+        const breakdown = {};
+        for (const c of candidates) {
+          const key = c.status || "unknown";
+          breakdown[key] = (breakdown[key] || 0) + 1;
+        }
+        return json(res, 200, {
+          dryRun: true,
+          wouldDelete: candidates.length,
+          breakdown,
+          filters: { olderThanDays, statuses: filterStatuses, types: types || "all" }
+        });
+      }
+
+      let deleted = 0;
+      for (const c of candidates) {
+        try { await db.deleteOne("ai_actions", c.id); deleted++; } catch {}
+      }
+      if (deleted > 0 && cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
+
+      // Audit log the purge
+      try {
+        await db.upsert("ai_audit_log", `purge_${Date.now()}`, {
+          id: `purge_${Date.now()}`,
+          action: "manual_purge",
+          requestedBy: requestedBy || "system",
+          deleted,
+          filters: { olderThanDays, statuses: filterStatuses, types: types || "all" },
+          timestamp: new Date().toISOString(),
+        });
+      } catch {}
+
+      console.log(`[AI Purge] Manual purge: ${deleted} records (olderThan=${olderThanDays}d, statuses=${filterStatuses.join(",")})`);
+      return json(res, 200, { deleted, filters: { olderThanDays, statuses: filterStatuses, types: types || "all" } });
     } catch (err) {
       return json(res, 500, { error: err.message });
     }

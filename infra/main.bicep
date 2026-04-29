@@ -326,6 +326,83 @@ resource stagingSlotKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+// ─── Autoscale Settings (Standard / Premium SKUs only) ──────────────────
+var enableAutoscale = appServiceSku != 'B1' && appServiceSku != 'B2'
+resource autoscaleSettings 'Microsoft.Insights/autoscalesettings@2022-10-01' = if (enableAutoscale) {
+  name: '${prefix}-autoscale'
+  location: location
+  properties: {
+    enabled: true
+    targetResourceUri: appServicePlan.id
+    profiles: [
+      {
+        name: 'Auto Scale Profile'
+        capacity: {
+          minimum: '1'
+          maximum: '3'
+          default: '1'
+        }
+        rules: [
+          {
+            scaleAction: {
+              direction: 'Increase'
+              type: 'ChangeCount'
+              value: '1'
+              cooldown: 'PT5M'
+            }
+            metricTrigger: {
+              metricName: 'CpuPercentage'
+              metricResourceUri: appServicePlan.id
+              timeGrain: 'PT1M'
+              statistic: 'Average'
+              timeWindow: 'PT5M'
+              timeAggregation: 'Average'
+              operator: 'GreaterThan'
+              threshold: 70
+            }
+          }
+          {
+            scaleAction: {
+              direction: 'Decrease'
+              type: 'ChangeCount'
+              value: '1'
+              cooldown: 'PT10M'
+            }
+            metricTrigger: {
+              metricName: 'CpuPercentage'
+              metricResourceUri: appServicePlan.id
+              timeGrain: 'PT1M'
+              statistic: 'Average'
+              timeWindow: 'PT10M'
+              timeAggregation: 'Average'
+              operator: 'LessThan'
+              threshold: 30
+            }
+          }
+          {
+            scaleAction: {
+              direction: 'Increase'
+              type: 'ChangeCount'
+              value: '1'
+              cooldown: 'PT5M'
+            }
+            metricTrigger: {
+              metricName: 'MemoryPercentage'
+              metricResourceUri: appServicePlan.id
+              timeGrain: 'PT1M'
+              statistic: 'Average'
+              timeWindow: 'PT5M'
+              timeAggregation: 'Average'
+              operator: 'GreaterThan'
+              threshold: 85
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+
 // ─── Outputs ───
 output appUrl string = 'https://${webApp.properties.defaultHostName}'
 output appName string = webApp.name

@@ -2851,6 +2851,18 @@ async function start() {
     // Start SLA Engine
     slaEngine.start().catch(err => console.error("[SLA Engine] Start failed:", err.message));
 
+    // Daily SLA history snapshot (every 24h, first run after 5 min)
+    const SLA_SNAPSHOT_INTERVAL = 24 * 60 * 60 * 1000;
+    const runSlaDailySnapshot = () => {
+      if (slaEngine && slaEngine.saveDailySnapshot) {
+        slaEngine.saveDailySnapshot().catch(e => console.warn("[SLA Snapshot] Failed:", e.message));
+      }
+    };
+    setTimeout(runSlaDailySnapshot, 5 * 60 * 1000);
+    const slaSnapshotInterval = setInterval(runSlaDailySnapshot, SLA_SNAPSHOT_INTERVAL);
+    _shutdownIntervals.push(slaSnapshotInterval);
+    console.log("[SLA Engine] Daily SLA history snapshots enabled");
+
     // Start Workflow Engine
     workflowEngine.start().catch(err => console.error("[WorkflowEngine] Start failed:", err.message));
 
@@ -3040,8 +3052,8 @@ async function start() {
     // Deletes auto_applied, auto_approved, approved, executed, rejected records older than 7 days
     const TERMINAL_PURGE_INTERVAL = 6 * 60 * 60 * 1000;
     const TERMINAL_STATUSES = new Set(["auto_applied", "auto_approved", "approved", "executed", "rejected", "failed"]);
-    const TERMINAL_KEEP_DAYS = 7;
-    const MAX_AI_ACTIONS = 500; // cap: if still over 500 after age-based purge, delete oldest terminal records
+    const TERMINAL_KEEP_DAYS = parseInt(process.env.TERMINAL_KEEP_DAYS || "7", 10);
+    const MAX_AI_ACTIONS = parseInt(process.env.MAX_AI_ACTIONS || "500", 10); // cap: if still over limit after age-based purge, delete oldest terminal records
     const runTerminalPurge = async () => {
       const startTime = Date.now();
       try {
@@ -3161,6 +3173,56 @@ async function start() {
       console.log("[Audit Purge] Running initial audit log purge...");
       runAuditPurge();
     }, 150000);
+
+    // ─── Uptime Snapshot (hourly) ───────────────────────────────────
+    const UPTIME_INTERVAL = 60 * 60 * 1000; // 1 hour
+    const runUptimeSnapshot = async () => {
+      try {
+        let dbOk = false;
+        try { dbOk = await db.ping(); } catch {}
+        const slaOk = slaEngine ? !!slaEngine.timer : false;
+        const allOk = dbOk && slaOk;
+        const snapshot = {
+          id: `uptime_${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          status: allOk ? "ok" : (dbOk ? "degraded" : "down"),
+          components: {
+            database: dbOk ? "ok" : "down",
+            slaEngine: slaOk ? "ok" : "stopped",
+            wsConnections: wsServer ? wsServer.getStats().totalConnections : 0,
+          },
+          processUptime: Math.round(process.uptime()),
+          memoryMB: Math.round(process.memoryUsage().rss / 1048576),
+        };
+        await db.upsert("uptime_log", snapshot.id, snapshot);
+        console.log(`[Uptime] Snapshot: ${snapshot.status} (db=${dbOk}, sla=${slaOk})`);
+
+        // Prune uptime_log older than 90 days
+        const cutoff90 = Date.now() - 90 * 86400000;
+        const allLogs = await db.getAll("uptime_log");
+        let pruned = 0;
+        for (const r of allLogs) {
+          try {
+            const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            if (item && item.timestamp && new Date(item.timestamp).getTime() < cutoff90) {
+              await db.deleteOne("uptime_log", r.id || item.id);
+              pruned++;
+            }
+          } catch {}
+        }
+        if (pruned > 0) console.log(`[Uptime] Pruned ${pruned} snapshots older than 90 days`);
+      } catch (e) {
+        console.warn("[Uptime] Snapshot error:", e.message);
+      }
+    };
+    const uptimeInterval = setInterval(runUptimeSnapshot, UPTIME_INTERVAL);
+    _shutdownIntervals.push(uptimeInterval);
+    setTimeout(() => {
+      console.log("[Uptime] Running initial snapshot...");
+      runUptimeSnapshot();
+    }, 30000);
+    console.log("[Uptime] Hourly uptime snapshots enabled");
+
     // Set initial nextRun times
     purgeStatus.queueCleanup.nextRun = new Date(Date.now() + 60000).toISOString();
     purgeStatus.logPurge.nextRun = new Date(Date.now() + 90000).toISOString();

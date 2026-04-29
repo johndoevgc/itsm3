@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   COLORS, PRIORITY_COLORS, STATUS_COLORS, PERM_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
+
+const WorkflowDesignerModule = lazy(() => import("./WorkflowDesignerModule.jsx"));
 import {
   STATUS, OPEN_STATUSES, PRIORITY, SLA_TARGETS, DEFAULT_SLA_POLICY,
 } from "../constants/status.js";
@@ -59,6 +61,7 @@ export default function AdminSettingsModule({ ctx }) {
 const isTenantAdmin = currentUser.rbacRole === "Tenant Admin";
 const allTabs = [
   { section: "AUTOMATION" },
+  { id: "workflowDesigner", label: "Workflow Designer", icon: "🎨" },
   { id: "ai", label: "AI Config", icon: "🤖", devOnly: true },
   { id: "workflows", label: "Workflows", icon: "⟳" },
   { id: "templates", label: "Templates", icon: "📋" },
@@ -562,6 +565,22 @@ return (
           </div>
         )}
       </div>
+    )}
+
+    {/* Visual Workflow Designer */}
+    {activeTab === "workflowDesigner" && (
+      <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "#5A6178" }}>Loading Workflow Designer...</div>}>
+        <WorkflowDesignerModule
+          workflowRules={workflowRules}
+          setWorkflowRules={setWorkflowRules}
+          automationRules={automationRules}
+          setAutomationRules={setAutomationRules}
+          currentUser={currentUser}
+          API={API}
+          _save={_save}
+          toast={toast}
+        />
+      </Suspense>
     )}
 
     {/* Workflow Automation Rules — Enhanced */}
@@ -4049,6 +4068,50 @@ return (
                   {(!Array.isArray(aiGovData.audit) || aiGovData.audit.length === 0) && (
                     <div style={{ color: "#5A6178", fontSize: 11, padding: 12, textAlign: "center" }}>No audit entries yet</div>
                   )}
+                </div>
+              </div>
+
+              {/* AI Actions Purge Tool */}
+              <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #1E2130", marginTop: 20 }}>
+                <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 8 }}>🗑️ AI Actions Purge</div>
+                <p style={{ fontSize: 11, color: "#5A6178", margin: "0 0 12px" }}>Remove old AI action records by age and status. Use "Dry Run" to preview before deleting.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <FormField label="Older Than (days)">
+                    <input type="number" min="1" max="365" style={inputStyle} defaultValue="7" id="purge-days" />
+                  </FormField>
+                  <FormField label="Statuses">
+                    <select multiple style={{ ...inputStyle, height: 60 }} id="purge-statuses" defaultValue={["rejected","dismissed","failed"]}>
+                      <option value="rejected">Rejected</option>
+                      <option value="dismissed">Dismissed</option>
+                      <option value="failed">Failed</option>
+                      <option value="applied">Applied</option>
+                      <option value="auto_applied">Auto Applied</option>
+                      <option value="superseded">Superseded</option>
+                    </select>
+                  </FormField>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "flex-end" }}>
+                    <button style={{ padding: "6px 16px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600 }} onClick={async () => {
+                      const days = parseInt(document.getElementById("purge-days")?.value || "7", 10);
+                      const sel = document.getElementById("purge-statuses");
+                      const statuses = Array.from(sel?.selectedOptions || []).map(o => o.value);
+                      try {
+                        const r = await fetch("/api/ai/actions/purge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ olderThanDays: days, statuses, dryRun: true }) });
+                        const d = await r.json();
+                        showToast(`Dry run: ${d.wouldDelete} records would be deleted`, "info");
+                      } catch (e) { showToast("Dry run failed: " + e.message, "error"); }
+                    }}>🔍 Dry Run</button>
+                    <button style={{ padding: "6px 16px", borderRadius: 6, border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }} onClick={async () => {
+                      if (!confirm("This will permanently delete matching AI action records. Continue?")) return;
+                      const days = parseInt(document.getElementById("purge-days")?.value || "7", 10);
+                      const sel = document.getElementById("purge-statuses");
+                      const statuses = Array.from(sel?.selectedOptions || []).map(o => o.value);
+                      try {
+                        const r = await fetch("/api/ai/actions/purge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ olderThanDays: days, statuses, requestedBy: ctx?.userEmail || "admin" }) });
+                        const d = await r.json();
+                        showToast(`Purged ${d.deleted} AI action records`, "success");
+                      } catch (e) { showToast("Purge failed: " + e.message, "error"); }
+                    }}>🗑️ Purge Now</button>
+                  </div>
                 </div>
               </div>
             </>

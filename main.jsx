@@ -2,6 +2,7 @@ import React, { Component, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { MsalProvider } from "@azure/msal-react";
 import { msalInstance } from "./msalConfig.js";
+import { I18nProvider } from "./src/i18n/i18nProvider.jsx";
 import ITSMApp from "./itsm-tool.jsx";
 
 class ErrorBoundary extends Component {
@@ -22,7 +23,9 @@ function renderApp() {
   createRoot(document.getElementById("root")).render(
     <ErrorBoundary>
       <MsalProvider instance={msalInstance}>
-        <ITSMApp />
+        <I18nProvider>
+          <ITSMApp />
+        </I18nProvider>
       </MsalProvider>
     </ErrorBoundary>
   );

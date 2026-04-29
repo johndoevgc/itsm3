@@ -69,36 +69,70 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: Deploy to staging slot
+      - name: Deploy all server files to staging slot
         env:
           DEPLOY_CREDS: ${{ secrets.KUDU_CREDENTIALS }}
           APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
         run: |
           CRED=$(echo -n "$DEPLOY_CREDS" | base64)
           SLOT_SCM="https://${APP_NAME}-staging.scm.azurewebsites.net"
-          
-          # Upload server.js to staging
-          curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/server.js" \
-            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-            --data-binary @server.js
-          
-          # Upload VERSION.json
-          curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/VERSION.json" \
-            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-            --data-binary @dist/VERSION.json
 
-          # Upload index.html
-          curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/index.html" \
-            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-            --data-binary @dist/index.html
+          upload() {
+            local remote="$1" local_file="$2"
+            curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/${remote}" \
+              -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
+              --data-binary @"$local_file" && echo "  ✓ ${remote}" || echo "  ✗ ${remote}"
+          }
 
-          # Upload JS assets
+          # Server core files
+          SERVER_FILES="server.js authMiddleware.js cacheLayer.js graphService.js msalConfig.js
+            notificationEngine.js slaEngine.js workflowEngine.js analyticsEngine.js wsServer.js
+            featureFlags.js piiRedact.js shadowMode.js shadowWorkflow.js incidentIndex.js cluster.js"
+          echo "Uploading server files..."
+          for f in $SERVER_FILES; do
+            [ -f "$f" ] && upload "$f" "$f"
+          done
+
+          # Route handlers — ensure routes/ directory exists
+          curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/routes/" \
+            -H "Authorization: Basic ${CRED}" || true
+          echo "Uploading route files..."
+          for f in routes/*.js; do
+            [ -f "$f" ] && upload "$f" "$f"
+          done
+          # Upload nested route dirs (e.g. routes/ai/)
+          if [ -d "routes/ai" ]; then
+            curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/routes/ai/" \
+              -H "Authorization: Basic ${CRED}" || true
+            for f in routes/ai/*.js; do
+              [ -f "$f" ] && upload "$f" "$f"
+            done
+          fi
+
+          # Config files
+          for f in profiles.json sw_clients.xml kb-enterprise-articles.json; do
+            [ -f "$f" ] && upload "$f" "$f"
+          done
+
+          # VERSION.json (from build artifact)
+          upload "VERSION.json" "dist/VERSION.json"
+
+          # Frontend assets
+          upload "index.html" "dist/index.html"
           for f in dist/assets/*.js; do
             fname=$(basename "$f")
-            curl -s -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/assets/${fname}" \
-              -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-              --data-binary @"$f"
+            upload "assets/${fname}" "$f"
           done
+
+          # i18n translation files (if present)
+          if [ -d "src/i18n" ]; then
+            curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/i18n/" \
+              -H "Authorization: Basic ${CRED}" || true
+            for f in src/i18n/*.json; do
+              [ -f "$f" ] && upload "i18n/$(basename $f)" "$f"
+            done
+          fi
+
           echo "Staging deployment complete"
 
       - name: Smoke test staging
@@ -129,74 +163,114 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: Deploy via Kudu VFS API
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy all server files to staging slot
         env:
           DEPLOY_CREDS: ${{ secrets.KUDU_CREDENTIALS }}
           APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
         run: |
           CRED=$(echo -n "$DEPLOY_CREDS" | base64)
-          SCM="https://${APP_NAME}.scm.azurewebsites.net"
-          
-          # Delete stale dist/ on Azure
-          curl -s -X POST "${SCM}/api/command" \
-            -H "Authorization: Basic ${CRED}" \
-            -H "Content-Type: application/json" \
-            -d '{"command":"rm -rf /home/site/wwwroot/dist","dir":"/home/site/wwwroot"}' || true
-          
-          # Delete old JS bundles
-          curl -s "${SCM}/api/vfs/site/wwwroot/assets/" \
-            -H "Authorization: Basic ${CRED}" | \
-            jq -r '.[] | select(.name | endswith(".js")) | .name' | \
-            while read f; do
-              curl -s -X DELETE "${SCM}/api/vfs/site/wwwroot/assets/${f}" \
-                -H "Authorization: Basic ${CRED}" -H "If-Match: *"
-              echo "Deleted ${f}"
-            done
-          
-          # Upload server.js
-          curl -s -X PUT "${SCM}/api/vfs/site/wwwroot/server.js" \
-            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-            --data-binary @server.js
-          echo "Uploaded server.js"
-          
-          # Upload VERSION.json
-          curl -s -X PUT "${SCM}/api/vfs/site/wwwroot/VERSION.json" \
-            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-            --data-binary @dist/VERSION.json
-          echo "Uploaded VERSION.json"
-          
-          # Upload index.html
-          curl -s -X PUT "${SCM}/api/vfs/site/wwwroot/index.html" \
-            -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-            --data-binary @dist/index.html
-          echo "Uploaded index.html"
-          
-          # Upload JS assets
-          for f in dist/assets/*.js; do
-            fname=$(basename "$f")
-            curl -s -X PUT "${SCM}/api/vfs/site/wwwroot/assets/${fname}" \
+          SLOT_SCM="https://${APP_NAME}-staging.scm.azurewebsites.net"
+
+          upload() {
+            local remote="$1" local_file="$2"
+            curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/${remote}" \
               -H "Authorization: Basic ${CRED}" -H "If-Match: *" \
-              --data-binary @"$f"
-            echo "Uploaded ${fname}"
+              --data-binary @"$local_file" && echo "  ✓ ${remote}" || echo "  ✗ ${remote}"
+          }
+
+          # Clean old JS bundles in staging
+          curl -s "${SLOT_SCM}/api/vfs/site/wwwroot/assets/" \
+            -H "Authorization: Basic ${CRED}" | \
+            jq -r '.[]? | select(.name | endswith(".js")) | .name' 2>/dev/null | \
+            while read f; do
+              curl -s -X DELETE "${SLOT_SCM}/api/vfs/site/wwwroot/assets/${f}" \
+                -H "Authorization: Basic ${CRED}" -H "If-Match: *"
+            done
+
+          # Server core files
+          SERVER_FILES="server.js authMiddleware.js cacheLayer.js graphService.js msalConfig.js
+            notificationEngine.js slaEngine.js workflowEngine.js analyticsEngine.js wsServer.js
+            featureFlags.js piiRedact.js shadowMode.js shadowWorkflow.js incidentIndex.js cluster.js"
+          echo "Uploading server files..."
+          for f in $SERVER_FILES; do
+            [ -f "$f" ] && upload "$f" "$f"
           done
 
-      - name: Restart App Service
+          # Route handlers
+          curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/routes/" \
+            -H "Authorization: Basic ${CRED}" || true
+          for f in routes/*.js; do
+            [ -f "$f" ] && upload "$f" "$f"
+          done
+          if [ -d "routes/ai" ]; then
+            curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/routes/ai/" \
+              -H "Authorization: Basic ${CRED}" || true
+            for f in routes/ai/*.js; do
+              [ -f "$f" ] && upload "$f" "$f"
+            done
+          fi
+
+          # Config + frontend
+          for f in profiles.json sw_clients.xml kb-enterprise-articles.json; do
+            [ -f "$f" ] && upload "$f" "$f"
+          done
+          upload "VERSION.json" "dist/VERSION.json"
+          upload "index.html" "dist/index.html"
+          for f in dist/assets/*.js; do
+            fname=$(basename "$f")
+            upload "assets/${fname}" "$f"
+          done
+
+          # i18n translation files
+          if [ -d "src/i18n" ]; then
+            curl -sf -X PUT "${SLOT_SCM}/api/vfs/site/wwwroot/i18n/" \
+              -H "Authorization: Basic ${CRED}" || true
+            for f in src/i18n/*.json; do
+              [ -f "$f" ] && upload "i18n/$(basename $f)" "$f"
+            done
+          fi
+
+          echo "Staging pre-swap deployment complete"
+
+      - name: Smoke test staging before swap
+        env:
+          APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
+        run: |
+          STAGING_URL="https://${APP_NAME}-staging.azurewebsites.net"
+          sleep 10
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${STAGING_URL}/api/health")
+            if [ "$STATUS" = "200" ]; then
+              echo "Staging health check passed — ready for swap"
+              exit 0
+            fi
+            echo "Staging attempt $i: HTTP $STATUS, retrying..."
+            sleep 5
+          done
+          echo "Staging health check failed — aborting swap"
+          exit 1
+
+      - name: Swap staging to production
         env:
           APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
           RG_NAME: ${{ secrets.RG_NAME || 'vgc-itsm-1-RG' }}
         run: |
-          # Use Azure CLI if available, otherwise use Kudu
-          if command -v az &> /dev/null; then
-            az webapp restart --name "$APP_NAME" --resource-group "$RG_NAME"
-          else
-            CRED=$(echo -n "${{ secrets.KUDU_CREDENTIALS }}" | base64)
-            curl -s -X POST "https://${APP_NAME}.scm.azurewebsites.net/api/command" \
-              -H "Authorization: Basic ${CRED}" \
-              -H "Content-Type: application/json" \
-              -d '{"command":"kill 1","dir":"/"}'
-          fi
+          echo "Swapping staging → production..."
+          az webapp deployment slot swap \
+            --name "$APP_NAME" \
+            --resource-group "$RG_NAME" \
+            --slot staging \
+            --target-slot production
+          echo "Swap complete"
 
-      - name: Health check
+      - name: Health check production
+        id: health_check
         env:
           APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
         run: |
@@ -204,12 +278,26 @@ jobs:
           for i in 1 2 3 4 5; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://${APP_NAME}.azurewebsites.net/api/health")
             if [ "$STATUS" = "200" ]; then
-              echo "Health check passed (attempt $i)"
+              echo "Production health check passed (attempt $i)"
               curl -s "https://${APP_NAME}.azurewebsites.net/api/health" | jq .
               exit 0
             fi
             echo "Health check attempt $i: HTTP $STATUS, retrying..."
             sleep 5
           done
-          echo "Health check failed after 5 attempts"
+          echo "Production health check FAILED after 5 attempts"
           exit 1
+
+      - name: Rollback on failure
+        if: failure() && steps.health_check.outcome == 'failure'
+        env:
+          APP_NAME: ${{ secrets.APP_NAME || 'vgc-itsm1-app' }}
+          RG_NAME: ${{ secrets.RG_NAME || 'vgc-itsm-1-RG' }}
+        run: |
+          echo "⚠️ Rolling back — swapping production → staging..."
+          az webapp deployment slot swap \
+            --name "$APP_NAME" \
+            --resource-group "$RG_NAME" \
+            --slot staging \
+            --target-slot production
+          echo "Rollback complete — previous version restored"

@@ -18,7 +18,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Copy server files
 COPY server.js authMiddleware.js cacheLayer.js graphService.js msalConfig.js \
      notificationEngine.js slaEngine.js workflowEngine.js analyticsEngine.js \
-     wsServer.js ./
+     wsServer.js featureFlags.js piiRedact.js shadowMode.js shadowWorkflow.js \
+     incidentIndex.js cluster.js ./
+
+# Copy route handlers
+COPY routes/ ./routes/
 
 # Copy built frontend from builder stage
 COPY --from=builder /app/dist ./dist
