@@ -6,10 +6,10 @@ import {
   STATUS, OPEN_STATUSES, PRIORITY, SLA_TARGETS,
 } from "../constants/status.js";
 import {
-  RBAC_ROLES, RBAC_PERMISSIONS, DEV_ADMIN_EMAILS, ADMIN_EMAILS,
+  RBAC_ROLES, RBAC_PERMISSIONS, DEV_ADMIN_EMAILS, ADMIN_EMAILS, USERS,
 } from "../constants/rbac.js";
 import {
-  CATEGORIES, SERVICES, SECURITY_ALERTS,
+  CATEGORIES, SERVICES, SECURITY_ALERTS, AI_FEATURE_EXPLAINERS,
 } from "../constants/categories.js";
 import { APP_VERSION } from "../constants/version.js";
 import {
@@ -621,13 +621,35 @@ export default function Dashboard({ ctx }) {
     approvalInstances, escalationConfig,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
+    setVendors, softDelete,
+    zdConnected, wsBridgeConnected, zdAutoStats, zdAiQueue, setZdTab,
+    showAiPanel, setShowAiPanel,
+    fetchCsatScores, csatLoading, csatScores,
+    fetchAiActions, setIncidents, pdpaConfig,
     zdStats: _zdStats, aiConfig: _aiConfig,
   } = ctx;
+
+// Local UI state for vendor card section
+const [showVendorCard, setShowVendorCard] = useState(false);
+const [showAddVendor, setShowAddVendor] = useState(false);
+const [vendorDetailId, setVendorDetailId] = useState(null);
+
+// Local UI state for workload/correlation cards
+const [workloadData, setWorkloadData] = useState(null);
+const [workloadLoading, setWorkloadLoading] = useState(false);
+const [correlationData, setCorrelationData] = useState(null);
+const [correlationLoading, setCorrelationLoading] = useState(false);
+
+// API helpers (relative paths, no base URL needed)
+const API = "";
+const authHeaders = () => ({ "Content-Type": "application/json" });
 
 const zdStats = _zdStats || { open: 0, pending: 0, hold: 0, solved: 0 };
 const aiConfig = _aiConfig || { automationLevel: 0, humanLoopPct: 0 };
 
 const role = currentUser.rbacRole;
+const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(role));
+const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
 const isManagement = ["VGC Dev Admin", "Tenant Admin", "Administrator", "Service Desk Lead", "Change Manager", "Problem Manager", "Asset Manager"].includes(role);
 const isEngineer = ["L1 Support Engineer", "L2 Support Engineer", "Network Engineer"].includes(role);
 

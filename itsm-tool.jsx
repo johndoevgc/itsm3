@@ -4402,6 +4402,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     approvalInstances, escalationConfig,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
+    setVendors, softDelete,
+    zdConnected, wsBridgeConnected, zdAutoStats, zdAiQueue, setZdTab,
+    showAiPanel, setShowAiPanel,
+    fetchCsatScores, csatLoading, csatScores,
+    fetchAiActions, setIncidents, pdpaConfig,
     zdStats, aiConfig,
   };
 
