@@ -35,12 +35,12 @@
   .nav-link:hover { text-decoration: underline; }
 </style>
 </head>
-<body data-version="3.0" data-doc="architecture-guide">
+<body data-version="3.20" data-doc="architecture-guide">
 
 <div class="header">
   <h1>Architecture Guide</h1>
   <div class="subtitle">VGC-ITSM — AI-Powered IT Service Management Platform</div>
-  <span class="badge">Version 3.0</span>
+  <span class="badge">Version 3.20</span>
 </div>
 
 <div class="meta-bar">
@@ -103,7 +103,7 @@
         <tr><td><code>itsm_data</code></td><td>All domain data</td><td><code>id</code> (UUID), <code>collection</code> (varchar), <code>data</code> (JSON), <code>created_at</code>, <code>updated_at</code></td></tr>
         <tr><td><code>audit_log</code></td><td>Compliance audit trail</td><td><code>id</code>, <code>action</code>, <code>collection</code>, <code>record_id</code>, <code>user</code>, <code>details</code> (JSON), <code>timestamp</code></td></tr>
       </table>
-      <p>74 logical collections stored in <code>itsm_data</code> — each row is a JSON document keyed by collection + UUID. New in v3.0: <code>pdpa_config</code>, <code>dsar_requests</code>, <code>billing_entries</code>, <code>sg_holidays</code>, <code>portal_sessions</code>, <code>ai_usage</code>, <code>ai_audit_log</code>.</p>
+      <p>74 logical collections stored in <code>itsm_data</code> — each row is a JSON document keyed by collection + UUID. New in v3.20: <code>pdpa_config</code>, <code>dsar_requests</code>, <code>billing_entries</code>, <code>sg_holidays</code>, <code>portal_sessions</code>, <code>ai_usage</code>, <code>ai_audit_log</code>.</p>
     </div>
 
     <h3>2.4 Engine Layer</h3>
@@ -169,7 +169,7 @@
       <tr><td>Local Authentication</td><td>Username + SHA-256 hashed password</td><td>Dev Admins</td></tr>
     </table>
 
-    <h3>4.2 Multi-Tenant Architecture (v3.0)</h3>
+    <h3>4.2 Multi-Tenant Architecture (v3.20)</h3>
     <ul>
       <li>Each customer deploys with their own M365 tenant — <code>ALLOWED_TENANT_IDS</code> env var restricts access</li>
       <li><code>AUTHORITY_MODE=multi</code> enables multi-tenant Entra authority (<code>https://login.microsoftonline.com/common</code>)</li>
@@ -273,7 +273,7 @@
   </div>
 
   <div class="section">
-    <h2>8. Singapore SME Productization (v3.0)</h2>
+    <h2>8. Singapore SME Productization (v3.20)</h2>
     <ul>
       <li><strong>Setup Wizard</strong>: First-run configuration for company info, admin user, Entra settings, PDPA, branding</li>
       <li><strong>PDPA Compliance</strong>: Personal Data Protection Act consent management, data retention policies, DSAR workflow</li>
@@ -288,7 +288,7 @@
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Documentation · Version 3.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Documentation · Version 3.20 · April 2026</div>
 </div>
 </body>
 </html>

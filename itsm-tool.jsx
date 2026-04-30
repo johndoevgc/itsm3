@@ -92,7 +92,7 @@ export default function ITSMApp() {
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
   const DATA_VERSION = "v2.8";
-  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers"];
+  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers","vgc_assets","vgc_kb","vgc_services"];
   // Universal filter: remove any E2E/test/seed records by ID pattern
   const _isTestRecord = (id) => /^(INC-D|INC-[A-Z]{4,}|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)/.test(id);
   const _cleanTestRecords = (arr) => Array.isArray(arr) ? arr.filter(r => !_isTestRecord(r.id)) : arr;

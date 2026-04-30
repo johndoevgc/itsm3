@@ -38,7 +38,7 @@
   .base-url { background: #e8eaf6; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 13px; margin: 12px 0; }
 </style>
 </head>
-<body data-version="3.0" data-doc="api-reference">
+<body data-version="3.20" data-doc="api-reference">
 
 <div class="header">
   <h1>API Reference</h1>
@@ -522,15 +522,15 @@
       <tr><td><span class="method get">GET</span></td><td><code>/api/ws/stats</code></td><td>WebSocket connection stats</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/i18n/languages</code></td><td>Available languages</td></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/i18n/pack</code></td><td>Language pack</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/healthz</code></td><td>Liveness probe (v3.0)</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/readyz</code></td><td>Readiness probe — DB + AI status (v3.0)</td></tr>
-      <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td>Client config — feature flags, region, branding (v3.0)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/healthz</code></td><td>Liveness probe (v3.20)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/readyz</code></td><td>Readiness probe — DB + AI status (v3.20)</td></tr>
+      <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td>Client config — feature flags, region, branding (v3.20)</td></tr>
     </table>
   </div>
 
-  <!-- Setup Wizard (v3.0) -->
+  <!-- Setup Wizard (v3.20) -->
   <div class="section" id="setup">
-    <h2>Setup Wizard (v3.0)</h2>
+    <h2>Setup Wizard (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/setup/status</code></td><td>Check if initial setup is complete</td></tr>
@@ -541,9 +541,9 @@
     </table>
   </div>
 
-  <!-- PDPA (v3.0) -->
+  <!-- PDPA (v3.20) -->
   <div class="section" id="pdpa">
-    <h2>PDPA Compliance (v3.0)</h2>
+    <h2>PDPA Compliance (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/pdpa/config</code></td><td>Get PDPA configuration</td></tr>
@@ -555,9 +555,9 @@
     </table>
   </div>
 
-  <!-- Portal (v3.0) -->
+  <!-- Portal (v3.20) -->
   <div class="section" id="portal">
-    <h2>Customer Portal (v3.0)</h2>
+    <h2>Customer Portal (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method post">POST</span></td><td><code>/api/portal/login</code></td><td>Portal user login</td></tr>
@@ -568,9 +568,9 @@
     </table>
   </div>
 
-  <!-- Billing (v3.0) -->
+  <!-- Billing (v3.20) -->
   <div class="section" id="billing">
-    <h2>Billing Engine (v3.0)</h2>
+    <h2>Billing Engine (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/billing/entries</code></td><td>List billing entries</td></tr>
@@ -580,9 +580,9 @@
     </table>
   </div>
 
-  <!-- SG Holidays (v3.0) -->
+  <!-- SG Holidays (v3.20) -->
   <div class="section" id="sg-holidays">
-    <h2>Singapore Holidays (v3.0)</h2>
+    <h2>Singapore Holidays (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/sg-holidays</code></td><td>List all SG public holidays</td></tr>
@@ -591,9 +591,9 @@
     </table>
   </div>
 
-  <!-- AI Governance (v3.0) -->
+  <!-- AI Governance (v3.20) -->
   <div class="section" id="ai-governance">
-    <h2>AI Governance (v3.0)</h2>
+    <h2>AI Governance (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/ai/usage</code></td><td>Current month AI usage — tokens, cost, budget remaining</td></tr>
@@ -603,9 +603,9 @@
     </table>
   </div>
 
-  <!-- Automation Rules (v3.0) -->
+  <!-- Automation Rules (v3.20) -->
   <div class="section" id="automation-rules">
-    <h2>Automation Rules (v3.0)</h2>
+    <h2>Automation Rules (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/automation/rules</code></td><td>List all automation rules</td></tr>
@@ -616,9 +616,9 @@
     </table>
   </div>
 
-  <!-- Compliance Report (v3.0) -->
+  <!-- Compliance Report (v3.20) -->
   <div class="section" id="compliance-report">
-    <h2>Compliance Report (v3.0)</h2>
+    <h2>Compliance Report (v3.20)</h2>
     <table>
       <tr><th>Method</th><th>Path</th><th>Description</th></tr>
       <tr><td><span class="method get">GET</span></td><td><code>/api/compliance/report</code></td><td>Consolidated compliance report (PDPA + SLA + AI governance)</td></tr>

@@ -2,6 +2,8 @@
 .vite/
 vite.log
 applogs*/
+app-logs/
+app-logs2/
 applogs*.zip
 deploy.zip
 deploy_pkg/

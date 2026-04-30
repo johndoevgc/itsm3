@@ -308,7 +308,7 @@ module.exports = function createCoreRoutes(ctx) {
         } else {
           const id = body.id || recordId || String(Date.now());
           body.id = id;
-          // Phase 5 — Zod validation for known collections
+          // Phase 5 — Input validation for known collections
           const vResult = validate(collection, body);
           if (!vResult.success) return json(res, 400, { error: "Validation failed", details: vResult.error });
           if (collection === "incidents" && body.category) body.category = normalizeCategory(body.category);
@@ -422,7 +422,7 @@ module.exports = function createCoreRoutes(ctx) {
       if (req.method === "PUT" && recordId) {
         const body = await readBody(req);
         body.id = recordId;
-        // Phase 5 — Zod validation for known collections
+        // Phase 5 — Input validation for known collections
         const vResult = validate(collection, body);
         if (!vResult.success) return json(res, 400, { error: "Validation failed", details: vResult.error });
 

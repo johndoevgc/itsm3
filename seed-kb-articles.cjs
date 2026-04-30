@@ -37,7 +37,7 @@ const articles = [
   // ───────────────────────────────────────────────────────────────────────
   {
     id: "KB0010",
-    title: "VGC-ITSM v4.3.0 — Competitive Comparison & Market Analysis",
+    title: "VGC-ITSM v3.20 — Competitive Comparison & Market Analysis",
     category: "SOP",
     status: "Published",
     author: "System",
@@ -46,11 +46,11 @@ const articles = [
     whenToUse: "Use this article when evaluating ITSM platforms, preparing vendor comparison reports, or justifying VGC-ITSM adoption to stakeholders.",
     bestFor: "IT Decision Makers, Procurement Teams, C-Level Executives",
     quickFix: "See the Feature Matrix table below for a quick side-by-side comparison across 25+ capabilities.",
-    content: `# VGC-ITSM v4.3.0 — Competitive Comparison & Market Analysis
+    content: `# VGC-ITSM v3.20 — Competitive Comparison & Market Analysis
 
 ## Executive Summary
 
-VGC-ITSM v4.3.0 is an AI-first, cloud-native IT Service Management platform purpose-built for Singapore SMEs and mid-market enterprises. Unlike legacy ITSM tools requiring months of deployment and dedicated administrators, VGC-ITSM delivers enterprise-grade capabilities at a fraction of the cost — powered by Azure OpenAI GPT-5.4 models, React 19, and a modern single-page architecture.
+VGC-ITSM v3.20 is an AI-first, cloud-native IT Service Management platform purpose-built for Singapore SMEs and mid-market enterprises. Unlike legacy ITSM tools requiring months of deployment and dedicated administrators, VGC-ITSM delivers enterprise-grade capabilities at a fraction of the cost — powered by Azure OpenAI GPT-5.4 models, React 19, and a modern single-page architecture.
 
 This document compares VGC-ITSM against six leading platforms: **ServiceNow**, **Freshservice**, **Jira Service Management**, **ManageEngine ServiceDesk Plus**, **HaloITSM**, and **SysAid**.
 
@@ -60,7 +60,7 @@ This document compares VGC-ITSM against six leading platforms: **ServiceNow**, *
 
 | Platform | Target Market | Deployment | AI Engine | Pricing Model |
 |----------|---------------|------------|-----------|---------------|
-| **VGC-ITSM v4.3.0** | Singapore SME / Mid-Market | Azure App Service (SaaS) | Azure OpenAI GPT-5.4 (multi-model) | Per-tenant flat rate |
+| **VGC-ITSM v3.20** | Singapore SME / Mid-Market | Azure App Service (SaaS) | Azure OpenAI GPT-5.4 (multi-model) | Per-tenant flat rate |
 | ServiceNow | Enterprise (5000+ seats) | Cloud (proprietary) | Now Assist (GenAI) | Per-user, tiered modules |
 | Freshservice | SMB / Mid-Market | Cloud (AWS) | Freddy AI | Per-agent / month |
 | Jira Service Management | Dev-centric teams | Cloud (AWS) / DC | Atlassian Intelligence | Per-agent / month |
@@ -74,7 +74,7 @@ This document compares VGC-ITSM against six leading platforms: **ServiceNow**, *
 
 ### Core ITIL Processes
 
-| Capability | VGC-ITSM v4.3.0 | ServiceNow | Freshservice | Jira SM | ManageEngine | HaloITSM | SysAid |
+| Capability | VGC-ITSM v3.20 | ServiceNow | Freshservice | Jira SM | ManageEngine | HaloITSM | SysAid |
 |-----------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Incident Management | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
 | Problem Management | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Basic |
@@ -86,7 +86,7 @@ This document compares VGC-ITSM against six leading platforms: **ServiceNow**, *
 
 ### AI & Automation
 
-| Capability | VGC-ITSM v4.3.0 | ServiceNow | Freshservice | Jira SM | ManageEngine | HaloITSM | SysAid |
+| Capability | VGC-ITSM v3.20 | ServiceNow | Freshservice | Jira SM | ManageEngine | HaloITSM | SysAid |
 |-----------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | AI Auto-Triage & Assignment | ✅ GPT-5.4 | ✅ Now Assist | ✅ Freddy AI | ⚠️ Basic | ⚠️ Basic | ❌ | ⚠️ Basic |
 | AI Chat Assistant | ✅ Streaming + file upload | ✅ Virtual Agent | ✅ Freddy | ⚠️ Rovo | ❌ | ❌ | ✅ Copilot |
@@ -102,7 +102,7 @@ This document compares VGC-ITSM against six leading platforms: **ServiceNow**, *
 
 ### Integration & Platform
 
-| Capability | VGC-ITSM v4.3.0 | ServiceNow | Freshservice | Jira SM | ManageEngine | HaloITSM | SysAid |
+| Capability | VGC-ITSM v3.20 | ServiceNow | Freshservice | Jira SM | ManageEngine | HaloITSM | SysAid |
 |-----------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Zendesk Bi-directional Sync | ✅ Native | ⚠️ Connector | ⚠️ Connector | ⚠️ Plugin | ⚠️ Plugin | ❌ | ❌ |
 | Microsoft 365 Integration | ✅ Graph API native | ✅ Full | ✅ Full | ⚠️ Basic | ✅ Full | ⚠️ Basic | ✅ Full |
@@ -116,7 +116,7 @@ This document compares VGC-ITSM against six leading platforms: **ServiceNow**, *
 
 ## Total Cost of Ownership (TCO) — Singapore SME (50 users, 3 years)
 
-| Cost Component | VGC-ITSM v4.3.0 | ServiceNow | Freshservice (Pro) | Jira SM (Premium) |
+| Cost Component | VGC-ITSM v3.20 | ServiceNow | Freshservice (Pro) | Jira SM (Premium) |
 |---------------|:---:|:---:|:---:|:---:|
 | License / Subscription | ~SGD 2,400/yr flat | ~SGD 180,000/yr | ~SGD 36,000/yr | ~SGD 24,000/yr |
 | Implementation | Included | SGD 100,000+ | SGD 15,000 | SGD 10,000 |
@@ -202,7 +202,7 @@ For organizations migrating from other platforms:
 
 ## Conclusion
 
-VGC-ITSM v4.3.0 delivers enterprise ITSM capabilities at SME pricing, with AI automation that rivals or exceeds platforms costing 10–40x more. For Singapore organizations seeking a modern, compliant, and cost-effective ITSM solution, VGC-ITSM represents the optimal balance of capability, cost, and operational simplicity.
+VGC-ITSM v3.20 delivers enterprise ITSM capabilities at SME pricing, with AI automation that rivals or exceeds platforms costing 10–40x more. For Singapore organizations seeking a modern, compliant, and cost-effective ITSM solution, VGC-ITSM represents the optimal balance of capability, cost, and operational simplicity.
 
 *Document Version: 4.3.0 | Last Updated: ${new Date().toLocaleDateString("en-SG")} | Classification: Internal*`
   },
@@ -221,7 +221,7 @@ VGC-ITSM v4.3.0 delivers enterprise ITSM capabilities at SME pricing, with AI au
     whenToUse: "Reference this article when onboarding developers, troubleshooting infrastructure, or planning capacity.",
     bestFor: "Developers, DevOps Engineers, Platform Administrators",
     quickFix: "See the Architecture Overview diagram for a quick understanding of system components.",
-    content: `# Platform Architecture & Technical Reference — VGC-ITSM v4.3.0
+    content: `# Platform Architecture & Technical Reference — VGC-ITSM v3.20
 
 ## Architecture Overview
 
@@ -362,7 +362,7 @@ Organized by function:
     whenToUse: "Reference when configuring AI features, training the AI knowledge base, or understanding AI-driven automation capabilities.",
     bestFor: "IT Administrators, Service Desk Leads, AI Configuration Managers",
     quickFix: "AI auto-triage is enabled by default. To train AI with custom knowledge, go to AI Assist → Train AI.",
-    content: `# AI Capabilities & Automation Guide — VGC-ITSM v4.3.0
+    content: `# AI Capabilities & Automation Guide — VGC-ITSM v3.20
 
 ## AI Engine Overview
 
@@ -518,7 +518,7 @@ Integrated into the email-to-ticket pipeline. When emails arrive:
     whenToUse: "Reference when setting SLA targets, investigating SLA breaches, or configuring escalation rules.",
     bestFor: "Service Desk Leads, IT Managers, Compliance Officers",
     quickFix: "SLA targets: Sev-A = 30min response / 4h resolution, Sev-B = 1h / 4h, Sev-C = 4h / 9h, Sev-D = 9h / 27h. All in business hours (Mon–Fri 9AM–6PM SGT).",
-    content: `# SLA Policy & Compliance Framework — VGC-ITSM v4.3.0
+    content: `# SLA Policy & Compliance Framework — VGC-ITSM v3.20
 
 ## SLA Targets by Priority
 
@@ -627,7 +627,7 @@ The AI continuously monitors all open tickets and:
     whenToUse: "Reference for security audits, compliance reviews, PDPA assessments, or onboarding security-conscious customers.",
     bestFor: "Security Officers, Compliance Managers, IT Auditors",
     quickFix: "VGC-ITSM uses Entra ID SSO, 12-role RBAC, full audit logging, and Azure-managed encryption. Data resides in Azure Southeast Asia (Singapore).",
-    content: `# Security & Compliance Guide — VGC-ITSM v4.3.0
+    content: `# Security & Compliance Guide — VGC-ITSM v3.20
 
 ## Security Architecture Overview
 
@@ -791,7 +791,7 @@ Every operation in VGC-ITSM is logged to the audit_log table:
     whenToUse: "Reference when configuring integrations, troubleshooting sync issues, or planning new integration deployments.",
     bestFor: "IT Administrators, Integration Engineers, DevOps Teams",
     quickFix: "Zendesk sync runs every 60 seconds automatically. M365 email-to-ticket uses Graph API. Meraki dashboard data is fetched via Dashboard API.",
-    content: `# Integration Reference Guide — VGC-ITSM v4.3.0
+    content: `# Integration Reference Guide — VGC-ITSM v3.20
 
 ## Integration Architecture
 
@@ -952,7 +952,7 @@ All integrations are configurable via the Administration module:
     whenToUse: "Reference when submitting service requests, reviewing available IT services, or configuring the service catalog.",
     bestFor: "End Users, Service Desk Engineers, IT Managers",
     quickFix: "Browse the Service Catalog module in VGC-ITSM to submit a request. Each service card shows SLA target and description.",
-    content: `# Service Catalog Reference — VGC-ITSM v4.3.0
+    content: `# Service Catalog Reference — VGC-ITSM v3.20
 
 ## Overview
 
@@ -1088,7 +1088,7 @@ Each service request benefits from AI automation:
     whenToUse: "Reference when configuring automation rules, troubleshooting workflow behavior, or designing new automation.",
     bestFor: "IT Administrators, Service Desk Leads, Workflow Designers",
     quickFix: "View active rules in Admin → Workflow Automation. Toggle rules on/off without deletion.",
-    content: `# Workflow Automation & Rules Engine — VGC-ITSM v4.3.0
+    content: `# Workflow Automation & Rules Engine — VGC-ITSM v3.20
 
 ## Overview
 
@@ -1269,7 +1269,7 @@ The WorkflowEngine class (workflowEngine.js) operates as follows:
     whenToUse: "Reference when onboarding new users, configuring system settings, or understanding module access and permissions.",
     bestFor: "All Users, IT Administrators, New Staff Onboarding",
     quickFix: "Your role determines what you can see and do. Check with your admin if you need additional access.",
-    content: `# User & Administration Guide — VGC-ITSM v4.3.0
+    content: `# User & Administration Guide — VGC-ITSM v3.20
 
 ## Getting Started
 

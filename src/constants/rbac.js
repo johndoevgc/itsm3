@@ -37,10 +37,6 @@ export const ADMIN_EMAILS = [
   "hlaing@vgctechnology.com",
 ];
 
-export const USERS = [
-  { id: "DEMO-001", name: "Dev Admin", role: "Platform Super Admin", avatar: "DA", team: "VGC Engineering", gender: "unspecified", rbacRole: "VGC Dev Admin", email: "devadmin@demo-itsm.local", phone: "+65 9000 0001", location: "Singapore", department: "Engineering", pcName: "VGC-DEV-01", employeeId: "VGC001" },
-  { id: "DEMO-002", name: "VGC Helpdesk", role: "Tenant Administrator", avatar: "VH", team: "IT Operations", gender: "unspecified", rbacRole: "Administrator", email: "helpdesk@demo-itsm.local", phone: "+65 9000 0002", location: "Singapore", department: "IT", pcName: "VGC-ADM-01", employeeId: "VGC002" },
-  { id: "DEMO-003", name: "Support Engineer", role: "L1 Support", avatar: "SE", team: "Service Desk", gender: "unspecified", rbacRole: "L1 Support Engineer", email: "engineer@demo-itsm.local", phone: "+65 9000 0003", location: "Singapore", department: "IT Support", pcName: "VGC-ENG-01", employeeId: "VGC003" },
-];
+export const USERS = [];
 
 export const INITIAL_CUSTOMERS = [];

@@ -33,12 +33,12 @@
   .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
 </style>
 </head>
-<body data-version="3.0" data-doc="admin-guide">
+<body data-version="3.20" data-doc="admin-guide">
 
 <div class="header">
   <h1>Administrator Guide</h1>
   <div class="subtitle">VGC-ITSM — Setup, Configuration & Troubleshooting</div>
-  <span class="badge">Version 3.0</span>
+  <span class="badge">Version 3.20</span>
 </div>
 
 <div class="meta-bar">
@@ -78,7 +78,7 @@
       <tr><td><code>ZENDESK_EMAIL</code></td><td>Zendesk admin email</td><td><code>admin@example.com</code></td></tr>
     </table>
 
-    <h3>1.3 v3.0 Environment Variables</h3>
+    <h3>1.3 v3.20 Environment Variables</h3>
     <table>
       <tr><th>Variable</th><th>Purpose</th><th>Example</th></tr>
       <tr><td><code>ALLOWED_TENANT_IDS</code></td><td>Comma-separated M365 tenant IDs</td><td><code>tid1,tid2,tid3</code></td></tr>
@@ -194,7 +194,7 @@ GET https://vgc-itsm1-app.azurewebsites.net/readyz</pre>
   </div>
 
   <div class="section">
-    <h2>5A. Docker Deployment (v3.0)</h2>
+    <h2>5A. Docker Deployment (v3.20)</h2>
     <pre># Build Docker image
 docker build -t vgc-itsm:latest .
 
@@ -202,15 +202,15 @@ docker build -t vgc-itsm:latest .
 docker run -p 3001:3001 --env-file .env vgc-itsm:latest
 
 # Push to Azure Container Registry
-az acr build --registry &lt;acr-name&gt; --image vgc-itsm:v3.0 .
+az acr build --registry &lt;acr-name&gt; --image vgc-itsm:v3.20 .
 
 # Deploy via App Service
 az webapp config container set --name &lt;app-name&gt; --resource-group &lt;rg&gt; \
-  --container-image-name &lt;acr-name&gt;.azurecr.io/vgc-itsm:v3.0</pre>
+  --container-image-name &lt;acr-name&gt;.azurecr.io/vgc-itsm:v3.20</pre>
   </div>
 
   <div class="section">
-    <h2>5B. Infrastructure as Code (v3.0)</h2>
+    <h2>5B. Infrastructure as Code (v3.20)</h2>
     <pre># Deploy with Bicep
 az deployment group create --resource-group &lt;rg&gt; \
   --template-file infra/main.bicep \
@@ -224,7 +224,7 @@ az deployment group create --resource-group &lt;rg&gt; \
   </div>
 
   <div class="section">
-    <h2>5C. CI/CD Pipeline (v3.0)</h2>
+    <h2>5C. CI/CD Pipeline (v3.20)</h2>
     <p>GitHub Actions workflow at <code>.github/workflows/deploy.yml</code>:</p>
     <ol>
       <li><strong>Lint:</strong> ESLint check on server.js</li>
@@ -237,7 +237,7 @@ az deployment group create --resource-group &lt;rg&gt; \
   </div>
 
   <div class="section">
-    <h2>5D. Multi-Tenant Customer Onboarding (v3.0)</h2>
+    <h2>5D. Multi-Tenant Customer Onboarding (v3.20)</h2>
     <ol>
       <li>Add customer to <code>scripts/customers.json</code></li>
       <li>Run <code>scripts/provision-customer.sh</code> — creates DB, Entra app reg, DNS</li>
@@ -273,7 +273,7 @@ az deployment group create --resource-group &lt;rg&gt; \
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Admin Guide · Version 3.0 · April 2026</div>
+  <div class="footer">VGC-ITSM Admin Guide · Version 3.20 · April 2026</div>
 </div>
 </body>
 </html>

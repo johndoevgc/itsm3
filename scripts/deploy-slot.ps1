@@ -16,6 +16,7 @@ param(
   [string]$Slot         = "staging",
   [string]$AppName      = "vgc-itsm1-app",
   [string]$ResourceGroup = "vgc-itsm-1-RG",
+  [string]$Subscription  = "2bec625d-6acc-4a9d-b4c2-349ca8d955f0",
   [bool]$Build          = $true,
   [switch]$Swap,
   [switch]$Rollback,
@@ -39,7 +40,7 @@ $cmdUrl     = "https://$scmHost/api/command"
 
 function Get-AuthHeaders {
   $creds = az webapp deployment list-publishing-credentials `
-    -g $ResourceGroup -n $AppName @slotArgs | ConvertFrom-Json
+    -g $ResourceGroup -n $AppName --subscription $Subscription @slotArgs | ConvertFrom-Json
   $pair = "$($creds.publishingUserName):$($creds.publishingPassword)"
   $auth = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
   return @{ Authorization = $auth; "If-Match" = "*" }
@@ -64,12 +65,12 @@ if ($Swap) {
   if ($Rollback) {
     Info "Rollback: swapping production -> staging (reverts the last swap)"
     az webapp deployment slot swap -g $ResourceGroup -n $AppName `
-      --slot production --target-slot staging | Out-Null
+      --subscription $Subscription --slot production --target-slot staging | Out-Null
     Ok "Rolled back. Verifying prod health..."
   } else {
     Info "Swapping staging -> production"
     az webapp deployment slot swap -g $ResourceGroup -n $AppName `
-      --slot staging --target-slot production | Out-Null
+      --subscription $Subscription --slot staging --target-slot production | Out-Null
     Ok "Swap complete. Verifying prod health..."
   }
   $Slot = "production"; $publicHost = "$AppName.azurewebsites.net"; $baseUrl = "https://$publicHost"
@@ -77,7 +78,7 @@ if ($Swap) {
   if (-not $h) {
     Write-Host "[FAIL] Prod unhealthy after swap. Auto-reverting..." -ForegroundColor Red
     az webapp deployment slot swap -g $ResourceGroup -n $AppName `
-      --slot production --target-slot staging | Out-Null
+      --subscription $Subscription --slot production --target-slot staging | Out-Null
     Fail "Prod failed health check; auto-rolled back."
   }
   Ok "Prod health: $($h | ConvertTo-Json -Depth 3 -Compress)"
@@ -117,12 +118,13 @@ try {
 Info "Uploading index.html"
 Invoke-WebRequest -Method PUT -Uri "$vfsBase/index.html" -Headers $h -InFile "deploy/index.html" | Out-Null
 
-# Upload assets bundle(s)
-$assets = Get-ChildItem "deploy/assets" -Filter "*.js" -ErrorAction SilentlyContinue
+# Upload assets (JS + CSS)
+$assets = Get-ChildItem "deploy/assets" -Include "*.js","*.css" -ErrorAction SilentlyContinue
 foreach ($f in $assets) {
   Info "Uploading assets/$($f.Name)"
   Invoke-WebRequest -Method PUT -Uri "$vfsBase/assets/$($f.Name)" -Headers $h -InFile $f.FullName | Out-Null
 }
+Info "Uploaded $($assets.Count) asset files"
 
 # Upload server.js
 Info "Uploading server.js"
@@ -153,6 +155,19 @@ if (Test-Path $routesDir) {
   Info "Uploaded $($routeFiles.Count) route files"
 }
 
+# Upload src/server/ directory (validation.js, etc.)
+$srcServerDir = "src/server"
+if (Test-Path $srcServerDir) {
+  try { Invoke-WebRequest -Method PUT -Uri "$vfsBase/src/" -Headers $h | Out-Null } catch {}
+  try { Invoke-WebRequest -Method PUT -Uri "$vfsBase/src/server/" -Headers $h | Out-Null } catch {}
+  $srcServerFiles = Get-ChildItem $srcServerDir -Filter "*.js" -ErrorAction SilentlyContinue
+  foreach ($sf in $srcServerFiles) {
+    Info "Uploading src/server/$($sf.Name)"
+    Invoke-WebRequest -Method PUT -Uri "$vfsBase/src/server/$($sf.Name)" -Headers $h -InFile $sf.FullName | Out-Null
+  }
+  Info "Uploaded $($srcServerFiles.Count) src/server files"
+}
+
 # Upload config/data files
 @("profiles.json","VERSION.json","kb-enterprise-articles.json") | Where-Object { Test-Path $_ } | ForEach-Object {
   Info "Uploading $_"
@@ -161,7 +176,7 @@ if (Test-Path $routesDir) {
 
 # ─── RESTART + HEALTH ─────────────────────────────────────────────────────
 Info "Restarting slot..."
-az webapp restart -g $ResourceGroup -n $AppName @slotArgs | Out-Null
+az webapp restart -g $ResourceGroup -n $AppName --subscription $Subscription @slotArgs | Out-Null
 
 Info "Waiting for /api/health on $baseUrl ..."
 $h2 = Test-Health
