@@ -24,7 +24,19 @@ export default function AIAssistModule({ ctx }) {
     aiEditText, setAiEditText,
     detectAiActionCards, handleCardAction,
     incidents, requests, problems, changes, azureOpenAI,
+    setActiveModule = null,
+    aiConfig = null,
+    runSlaPrediction = null,
+    generateBriefing = null,
+    aiBriefings = [],
+    runPatternDetection = null,
+    aiPatterns = [],
+    setShowAiActionsPanel = null,
+    aiActions = [],
+    createProblemFromPattern = null,
+    setShowAiPanel = null,
   } = ctx;
+  const currentBriefing = aiBriefings?.[0] || null;
 
 // ─── AI Assist Module ───
 const AIAssistModule = useStableComponent(() => {

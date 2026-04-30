@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  COLORS, STATUS_COLORS, inputStyle, btnStyle,
+  COLORS, STATUS_COLORS, PRIORITY_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
 import {
   Badge, useStableComponent,
@@ -13,7 +13,11 @@ export default function ChangeCalendarModule({ ctx }) {
     calendarMonth, setCalendarMonth, calendarYear, setCalendarYear,
     showCalendarForm, setShowCalendarForm, calendarData, fetchCalendarData,
     calendarSelectedDay, setCalendarSelectedDay,
+    createFreezeWindow = null,
+    deleteFreezeWindow = null,
   } = ctx;
+  const [freezeForm, setFreezeForm] = useState({ name: "", start: "", end: "", reason: "" });
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const TYPE_COLORS = { Emergency: "#FF4444", Normal: "#64B5F6", Standard: "#81C784" };

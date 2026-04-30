@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 
-export default function CyberNewsModule({ users, vendors }) {
+export default function CyberNewsModule({ users, vendors, azureOpenAI }) {
+  const [threatEmailDraft, setThreatEmailDraft] = React.useState("");
+  const [cyberNewsLog, setCyberNewsLog] = React.useState([]);
   const [liveThreats, setLiveThreats] = useState([]);
   const [newsLoading, setNewsLoading] = useState(true);
   const [lastSyncTime, setLastSyncTime] = useState(null);

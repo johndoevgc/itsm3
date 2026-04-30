@@ -14,7 +14,7 @@ import {
   CATEGORIES, SERVICES, AI_FEATURE_EXPLAINERS, INTEGRATION_CATALOG,
 } from "../constants/categories.js";
 import { APP_VERSION } from "../constants/version.js";
-import { genId, sanitizeHTML } from "../utils/slaHelpers.js";
+import { genId, sanitizeHTML , getBusinessHoursElapsed } from "../utils/slaHelpers.js";
 import {
   Badge, PriorityDot, StatCard, DataTable, Modal, FormField, SearchBar,
 } from "../components/SharedComponents.jsx";
@@ -56,7 +56,76 @@ export default function AdminSettingsModule({ ctx }) {
     wfAnimStep, setWfAnimStep, wfAnimPlaying, setWfAnimPlaying,
     historicalCloseCutoff, setHistoricalCloseCutoff,
     setVendors, setSearch,
+    setIntegrations = null,
+    integrations = {},
+    softDelete = null,
+    fetchAuditLogs = null,
+    isLoggedIn = false,
+    token = null,
+    slaTick = 0,
+    aiMessages = [],
+    serviceReports = [],
+    zdConnected = false,
+    zdStats = null,
+    zdAiQueue = [],
+    zdAutoMode = false,
+    rbacAuditLog = [],
+    setRbacAuditLog = null,
+    trackAction = null,
+    restartTour = null,
+    managedUsers = [],
+    setManagedUsers = null,
   } = ctx;
+  const API = "";
+  const DB_API = "";
+  const NAV = { incidents: "incidents", requests: "requests", problems: "problems", changes: "changes" };
+  const isEditAdmin = currentUser?.rbacRole === "admin" || currentUser?.rbacRole === "super_admin";
+  const toast = showToast;
+  const SUPPORTED_UPLOAD_TYPES = [".csv", ".xlsx", ".json", ".pdf", ".docx", ".txt"];
+  const TOUR_STEPS = [];
+  const kbForm = {};
+  const [generalSettings, setGeneralSettings] = useState({ siteName: "VGC ITSM", language: "en", timezone: "Asia/Singapore", dateFormat: "DD/MM/YYYY", theme: "dark" });
+  const [brandingSettings, setBrandingSettings] = useState({ logo: "", primaryColor: "#64B5F6", accentColor: "#81C784" });
+  const [smtpConfig, setSmtpConfig] = useState({ host: "", port: 587, user: "", pass: "", from: "", secure: true });
+  const [pdpaConfig, setPdpaConfig] = useState({ enabled: false, retentionDays: 365, autoAnonymize: false });
+  const [infraConfig, setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90 });
+  const [infraLive, setInfraLive] = useState(null);
+  const [infraLoading, setInfraLoading] = useState(false);
+  const [swConfig, setSwConfig] = useState({});
+  const [swSettingsOpen, setSwSettingsOpen] = useState(false);
+  const [workflowRules, setWorkflowRules] = useState([]);
+  const [showAddRule, setShowAddRule] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ email: "", role: "viewer", name: "" });
+  const [showInviteUser, setShowInviteUser] = useState(false);
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [showEntraImport, setShowEntraImport] = useState(false);
+  const [entraIdConfig, setEntraIdConfig] = useState({ tenantId: "", clientId: "", enabled: false });
+  const [entraGroups, setEntraGroups] = useState([]);
+  const [entraSelectedGroup, setEntraSelectedGroup] = useState(null);
+  const [entraGroupMembers, setEntraGroupMembers] = useState([]);
+  const [entraSelectedUsers, setEntraSelectedUsers] = useState([]);
+  const [entraImporting, setEntraImporting] = useState(false);
+  const [entraImportMode, setEntraImportMode] = useState("merge");
+  const [entraSearchQuery, setEntraSearchQuery] = useState("");
+  const [entraSearchResults, setEntraSearchResults] = useState([]);
+  const [entraSearching, setEntraSearching] = useState(false);
+  const [entraRoleMappings, setEntraRoleMappings] = useState({});
+  const [entraAiSuggestions, setEntraAiSuggestions] = useState(null);
+  const [rbacViewMode, setRbacViewMode] = useState("list");
+  const [rbacUserSearch, setRbacUserSearch] = useState("");
+  const [rbacRoleFilter, setRbacRoleFilter] = useState("All");
+  const [permMatrixEditing, setPermMatrixEditing] = useState(false);
+  const [permMatrixDraft, setPermMatrixDraft] = useState({});
+  const [customPermissions, setCustomPermissions] = useState({});
+  const [aiRoleSuggestions, setAiRoleSuggestions] = useState(null);
+  const [aiRuleSuggestions, setAiRuleSuggestions] = useState(null);
+  const [aiGovData, setAiGovData] = useState(null);
+  const [surveyTemplates, setSurveyTemplates] = useState([]);
+  const [surveyDrafts, setSurveyDrafts] = useState([]);
+  const [historicalCloseRunning, setHistoricalCloseRunning] = useState(false);
+  const [historicalCloseResult, setHistoricalCloseResult] = useState(null);
+
+  const runHistoricalClose = async () => { setHistoricalCloseRunning(true); try { const r = await fetch("/api/incidents/historical-close", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ cutoff: historicalCloseCutoff }) }); const d = await r.json(); setHistoricalCloseResult(d); showToast("Historical close completed"); } catch(e) { showToast("Error: " + e.message); } finally { setHistoricalCloseRunning(false); } };
 
 const isTenantAdmin = currentUser.rbacRole === "Tenant Admin";
 const allTabs = [

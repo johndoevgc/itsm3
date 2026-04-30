@@ -17,6 +17,15 @@ import {
 export default function SLATrackerModule({ ctx }) {
   const {
     incidents, slaPolicy, currentUser, showToast, search, setSearch,
+    isLocalDemoUser = false,
+    setIncidents = null,
+    setActiveModule = null,
+    requests = [],
+    changes = [],
+    problems = [],
+    zdConnected = false,
+    runSlaPrediction = null,
+    slaPredictions = [],
   } = ctx;
 
 // ─── SLA Tracker ──────────────────────────────────────────────────────

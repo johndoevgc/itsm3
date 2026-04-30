@@ -1,6 +1,6 @@
 import React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { PRIORITY_COLORS } from "../constants/theme.js";
+import { PRIORITY_COLORS, inputStyle } from "../constants/theme.js";
 
 export const Badge = ({ children, color }) => {
   const c = color || { bg: "#1A1A2E", text: "#A0AEC0" };

@@ -22,7 +22,10 @@ export default function CustomersModule({ ctx }) {
     showAddCustomer, setShowAddCustomer,
     customerForm, setCustomerForm,
     editingCustomerId, setEditingCustomerId,
+    softDelete = null,
+    isLocalDemoUser = false,
   } = ctx;
+  const [customerViewMode, setCustomerViewMode] = useState("list");
 
 const perms = RBAC_PERMISSIONS[currentUser?.rbacRole] || {};
 const canEdit = ["full","manage","edit"].includes(perms.customers);

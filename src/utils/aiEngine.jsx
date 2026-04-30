@@ -2,6 +2,9 @@ import React from "react";
 import { COLORS } from "../constants/theme.js";
 import { PRIORITY } from "../constants/status.js";
 import { CATEGORIES } from "../constants/categories.js";
+import { computeIncidentSla } from "./slaHelpers.js";
+import { DEFAULT_SLA_POLICY } from "../constants/status.js";
+import { SHAREPOINT_KB_CONFIG, KB_CATEGORIES } from "../constants/categories.js";
 
 // ─── AI Engine (Simulated) ───────────────────────────────────────────────
 export const AI_CONFIDENCE_COLORS = {

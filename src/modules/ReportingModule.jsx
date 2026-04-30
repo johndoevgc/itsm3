@@ -1,9 +1,25 @@
 import React, { useEffect, useRef, useState } from "react";
+import { RBAC_PERMISSIONS } from "../constants/rbac.js";
 import { btnStyle, inputStyle } from "../constants/theme.js";
 import { Modal, FormField, SearchBar } from "../components/SharedComponents.jsx";
-import { sanitizeHTML } from "../utils/slaHelpers.js";
+import { sanitizeHTML , computeIncidentSla, computeMTTR } from "../utils/slaHelpers.js";
 
-export default function ReportingModule({ assets, changes, csatAiAnalysis, currentUser, customers, incidents, problems, requests, serviceReports, setActiveModule, setServiceReports, showToast, softDelete }) {
+export default function ReportingModule({  assets, changes, csatAiAnalysis, currentUser, customers, incidents, problems, requests, serviceReports, setActiveModule, setServiceReports, showToast, softDelete,
+  smtpConfig, isLocalDemoUser, fetchCsatScores, runCsatAiAnalysis, submitCsatResponse
+ }) {
+  const [reportForm, setReportForm] = useState({ name: "", type: "Incident Summary", period: "This Month", format: "PDF", schedule: "None" });
+  const [editingReportId, setEditingReportId] = useState(null);
+  const [showAddReport, setShowAddReport] = useState(false);
+  const [reportViewId, setReportViewId] = useState(null);
+  const [zdLoading, setZdLoading] = useState(false);
+  const [zdAnalytics, setZdAnalytics] = useState(null);
+  const [zdCsat, setZdCsat] = useState(null);
+  const [csatScores, setCsatScores] = useState([]);
+  const [csatView, setCsatView] = useState("list");
+  const [csatLoading, setCsatLoading] = useState(false);
+  const [csatAiLoading, setCsatAiLoading] = useState(false);
+  const [csatSubmitForm, setCsatSubmitForm] = useState(null);
+  const [csatSubmitting, setCsatSubmitting] = useState(false);
   const [reportTab, setReportTab] = useState("generate");
   const [reportType, setReportType] = useState("daily");
   const [reportCustomer, setReportCustomer] = useState("All");

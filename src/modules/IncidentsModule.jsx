@@ -59,7 +59,14 @@ export default function IncidentsModule({ ctx }) {
     historicalCloseRunning, runBulkCloseTickets,
     runAiAutoFollowUp, aiFollowUpLoading,
     runCleanupQueue, cleanupLoading,
+    zdStats = null,
+    globalSyncActive = false,
+    globalLastSync = null,
   } = ctx;
+  const [dupScanning, setDupScanning] = useState(false);
+  const [dupGroups, setDupGroups] = useState([]);
+  const [showDupPanel, setShowDupPanel] = useState(false);
+  const [dupMerging, setDupMerging] = useState(false);
 
 const STATUS_SORT_ORDER = { "New": 0, "Open": 1, "In Progress": 2, "Pending": 3, "On Hold": 4, "Reopened": 5, "Resolved": 6, "Closed": 7 };
 const IncidentsModule = useStableComponent(() => {

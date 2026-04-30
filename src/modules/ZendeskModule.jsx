@@ -1,7 +1,48 @@
-import React from "react";
+import React, { useState } from "react";
 import { Modal } from "../components/SharedComponents.jsx";
+import { genId } from "../utils/slaHelpers.js";
 
-export default function ZendeskModule({ assets, changes, currentUser, customers, incidents, requests, setActiveModule, setDetailItem, setModal, showToast, users }) {
+export default function ZendeskModule({  assets, changes, currentUser, customers, incidents, requests, setActiveModule, setDetailItem, setModal, showToast, users,
+  setIncidents, setCustomers, azureOpenAI, isLocalDemoUser
+ }) {
+  const [zdTab, setZdTab] = useState("tickets");
+  const [zdTickets, setZdTickets] = useState([]);
+  const [zdStats, setZdStats] = useState(null);
+  const [zdConnected, setZdConnected] = useState(false);
+  const [zdLoading, setZdLoading] = useState(false);
+  const [zdError, setZdError] = useState(null);
+  const [zdFilter, setZdFilter] = useState({ status: "All", priority: "All", type: "All" });
+  const [zdSelectedTicket, setZdSelectedTicket] = useState(null);
+  const [zdDetailItem, setZdDetailItem] = useState(null);
+  const [zdPage, setZdPage] = useState(1);
+  const [zdRenderLimit, setZdRenderLimit] = useState(20);
+  const [zdExpandedSections, setZdExpandedSections] = useState({});
+  const [zdComments, setZdComments] = useState([]);
+  const [zdTriagedIds, setZdTriagedIds] = useState([]);
+  const [zdAiQueue, setZdAiQueue] = useState([]);
+  const [zdAutoMode, setZdAutoMode] = useState(false);
+  const [zdAutoStats, setZdAutoStats] = useState({ processed: 0, success: 0, failed: 0 });
+  const [zdAiProcessing, setZdAiProcessing] = useState(false);
+  const [zdSyncInProgress, setZdSyncInProgress] = useState(false);
+  const [zdSyncProgress, setZdSyncProgress] = useState(null);
+  const [zdSyncStatus, setZdSyncStatus] = useState(null);
+  const [zdImportProgress, setZdImportProgress] = useState(null);
+  const [zdUser, setZdUser] = useState(null);
+  const [zdAutoLog, setZdAutoLog] = useState([]);
+  const [zdRealTimeEnabled, setZdRealTimeEnabled] = useState(false);
+  const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(true);
+  const [zdEditingDraft, setZdEditingDraft] = useState(null);
+  const [zdEditedText, setZdEditedText] = useState("");
+  const [zdExpandedRule, setZdExpandedRule] = useState(null);
+
+  const addAutoLog = (msg) => setZdAutoLog(prev => [...prev, { time: new Date().toISOString(), msg }]);
+  const zdFetchTickets = async () => { setZdLoading(true); try { const r = await fetch("/api/zendesk/tickets"); const d = await r.json(); setZdTickets(d.tickets || []); } catch(e) { setZdError(e.message); } finally { setZdLoading(false); } };
+  const zdFetchStats = async () => { try { const r = await fetch("/api/zendesk/stats"); const d = await r.json(); setZdStats(d); } catch(e) { console.error(e); } };
+  const zdConnect = async () => { setZdLoading(true); try { const r = await fetch("/api/zendesk/connect", { method: "POST" }); if (r.ok) { setZdConnected(true); await zdFetchTickets(); await zdFetchStats(); } } catch(e) { setZdError(e.message); } finally { setZdLoading(false); } };
+  const zdAutoTriageBatch = async () => { setZdAiProcessing(true); try { for (const t of zdAiQueue) { await new Promise(r => setTimeout(r, 200)); } setZdAiQueue([]); } catch(e) { console.error(e); } finally { setZdAiProcessing(false); } };
+  const zdAiTriageSingle = async (ticket) => { setZdAiProcessing(true); try { const r = await fetch("/api/zendesk/ai-triage", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ticket }) }); return await r.json(); } catch(e) { console.error(e); return null; } finally { setZdAiProcessing(false); } };
+  const zdSelectTicket = (t) => setZdSelectedTicket(t);
+  const zdToggleSection = (key) => setZdExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
 
   // ── Human Approve & Send ──
   const zdApproveAndSend = async (queueItem) => {

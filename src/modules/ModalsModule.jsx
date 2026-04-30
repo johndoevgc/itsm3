@@ -112,11 +112,11 @@ function AiResolveTab({ inc, addActivity, showToast }) {
   );
 }
 import {
-  CATEGORIES, SERVICES, KB_CATEGORIES, ASSETS,
+  CATEGORIES, SERVICES, KB_CATEGORIES, ASSETS, SHAREPOINT_KB_CONFIG,
 } from "../constants/categories.js";
 import { APP_VERSION } from "../constants/version.js";
 import {
-  computeIncidentSla, genId, timeAgo, sanitizeHTML,
+  computeIncidentSla, genId, timeAgo, sanitizeHTML, getBusinessHoursElapsed, formatSlaCountdown,
 } from "../utils/slaHelpers.js";
 import {
   Badge, PriorityDot, Modal, FormField, SearchBar,
@@ -137,6 +137,18 @@ export default function ModalsModule({ ctx }) {
     detailItem, setDetailItem, modal, setModal,
     setActiveModule, slaPolicy,
     isEntraProductionUser, aiEngine, softDelete,
+    callAzureOpenAI = null,
+    incidentTemplates = [],
+    autoTriageTicket = null,
+    surveyTemplates = [],
+    setSurveyDrafts = null,
+    azureOpenAI = null,
+    generateKBFromTicket = null,
+    smtpConfig = null,
+    customFields = [],
+    setShowAiPanel = null,
+    handleAiChat = null,
+    submitCsatResponse = null,
   } = ctx;
 
 const NewIncidentModal = () => {
