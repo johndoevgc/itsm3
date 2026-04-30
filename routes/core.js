@@ -2489,7 +2489,7 @@ AUTO-RESOLVABLE RULES:
 - Set autoResolvable=false for anything that could impact a customer, requires investigation, or involves security/compliance.
 
 Respond ONLY with valid JSON:
-{"resolution": "...", "rootCause": "...", "suggestedStatus": "Resolved", "confidence": 0-100, "customerEmail": "short message to customer about resolution", "relevance": "customer_critical|customer_important|internal_routine|noise_informational", "autoResolvable": true/false, "classificationReasoning": "brief explanation of why this classification was chosen"}`;
+{"resolution": "...", "rootCause": "...", "suggestedStatus": "Resolved", "confidence": 0-100, "customerEmail": "short plain-text message to customer about resolution", "customerEmailHtml": "<p>Professional HTML email body to customer. Use <p>, <ol>, <li>, <strong> tags with inline styles. Must be Outlook-compatible. Include greeting, resolution summary, next steps, and sign-off.</p>", "relevance": "customer_critical|customer_important|internal_routine|noise_informational", "autoResolvable": true/false, "classificationReasoning": "brief explanation of why this classification was chosen"}`;
 
           const payload = { model: getAIModel("tertiary"), input: [{ role: "system", content: "You are an expert IT support analyst for a managed services company. Classify incidents by relevance to customers and operations. Respond only in JSON." }, { role: "user", content: prompt }], max_output_tokens: 1000 };
           const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
@@ -2512,23 +2512,47 @@ Respond ONLY with valid JSON:
 
           const text = extractAIText(aiResult);
           let parsed;
-          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { resolution: text, rootCause: "Unknown", suggestedStatus: "Resolved", confidence: 50, customerEmail: "", relevance: "customer_important", autoResolvable: false, classificationReasoning: "Could not parse AI response — defaulting to human review" }; }
+          try { parsed = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()); } catch { parsed = { resolution: text, rootCause: "Unknown", suggestedStatus: "Resolved", confidence: 50, customerEmail: "", customerEmailHtml: "", relevance: "customer_important", autoResolvable: false, classificationReasoning: "Could not parse AI response — defaulting to human review" }; }
 
           const relevance = parsed.relevance || "customer_important";
           const autoResolvable = parsed.autoResolvable === true;
           const classificationReasoning = parsed.classificationReasoning || "";
 
+          // Look up customer company name from customers collection
+          let _customerCompany = "";
+          if (inc.customer) {
+            try {
+              const _custRows = await db.getAll("customers");
+              for (const cr of _custRows) {
+                try {
+                  const c = typeof cr.data === "string" ? JSON.parse(cr.data) : cr.data;
+                  if (c && (c.name === inc.customer || c.id === inc.customer || c.company === inc.customer)) {
+                    _customerCompany = c.company || c.name || "";
+                    break;
+                  }
+                } catch {}
+              }
+            } catch {}
+          }
+
           const suggestion = {
             id: `AIR-${inc.id}-${Date.now()}`,
             incidentId: inc.id,
             incidentTitle: inc.title,
+            incidentCreatedAt: inc.createdAt || "",
             priority: inc.priority,
             assignee: inc.assignee,
+            reporter: inc.reporter || inc.reporterName || inc.requesterName || "",
+            reporterEmail: inc.reporterEmail || inc.requesterEmail || "",
+            customer: inc.customer || "",
+            customerCompany: _customerCompany || inc.customer || "",
+            source: inc.source || inc.contactMethod || "",
             resolution: parsed.resolution || "",
             rootCause: parsed.rootCause || "",
             suggestedStatus: parsed.suggestedStatus || "Resolved",
             confidence: parsed.confidence || 50,
             customerEmail: parsed.customerEmail || "",
+            customerEmailHtml: parsed.customerEmailHtml || "",
             relevance,
             autoResolvable,
             classificationReasoning,
@@ -2668,7 +2692,7 @@ Respond ONLY with valid JSON:
   if (pathname === "/api/ai/resolve-queue/action" && req.method === "POST") {
     try {
       const body = await parseBody(req);
-      const { suggestionId, action, approvedBy, editedResolution, editedCustomerEmail } = body;
+      const { suggestionId, action, approvedBy, editedResolution, editedCustomerEmail, rejectionReason } = body;
       if (!suggestionId || !action) return json(res, 400, { error: "suggestionId and action required" });
       if (action === "approve" && !approvedBy) return json(res, 403, { error: "Human approval required — approvedBy is mandatory" });
 
@@ -2712,10 +2736,12 @@ Respond ONLY with valid JSON:
         suggestion.informedBy = informedBy;
         suggestion.racLockedAt = new Date().toISOString();
         if (editedResolution) suggestion.resolution = editedResolution;
+        if (editedCustomerEmail) suggestion.customerEmailHtml = editedCustomerEmail;
       } else if (action === "reject") {
         suggestion.status = "rejected";
         suggestion.rejectedBy = approvedBy || "unknown";
         suggestion.rejectedAt = new Date().toISOString();
+        if (rejectionReason) suggestion.rejectionReason = rejectionReason;
       }
 
       await db.upsert("ai_resolve_queue", suggestionId, suggestion);
@@ -2742,7 +2768,7 @@ Respond ONLY with valid JSON:
             title: incTitle,
             rootCause: suggestion.rootCause || "N/A",
             resolution: suggestion.resolution || "",
-            customerMessage: editedCustomerEmail || "",
+            customerMessage: editedCustomerEmail || suggestion.customerEmailHtml || suggestion.customerEmail || "",
             timestamp: suggestion.approvedAt || new Date().toISOString(),
             nextActions: [
               { label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" },
@@ -2764,7 +2790,7 @@ Respond ONLY with valid JSON:
             confidence: suggestion.confidence,
             resolution: suggestion.resolution || "",
             rootCause: suggestion.rootCause || "N/A",
-            customerMessage: editedCustomerEmail || "",
+            customerMessage: editedCustomerEmail || suggestion.customerEmailHtml || suggestion.customerEmail || "",
             additionalFields: { "Suggestion ID": suggestionId },
             footerNote: "All AI resolution actions are logged and auditable.",
           }),
@@ -2882,6 +2908,123 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
       return json(res, 200, { success: true, processed: pending.length, dismissed, kept });
     } catch (err) {
       console.error("[AI Bulk Dismiss]", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
+  // ─── POST /api/ai/resolve-queue/bulk-approve — Bulk approve high-confidence pending items ───
+  if (pathname === "/api/ai/resolve-queue/bulk-approve" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { approvedBy, minConfidence, consultedBy, informedBy } = body;
+      if (!approvedBy) return json(res, 403, { error: "Human approval required — approvedBy is mandatory" });
+      const threshold = Math.max(minConfidence || 80, 60); // minimum 60% floor
+      const _consultedBy = Array.isArray(consultedBy) ? consultedBy.filter(Boolean) : [];
+      const _informedBy = Array.isArray(informedBy) ? informedBy.filter(Boolean) : [];
+
+      const rows = await db.getAll("ai_resolve_queue");
+      const pending = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+        .filter(it => it && it.status === "pending_approval" && it.confidence >= threshold);
+
+      if (!pending.length) return json(res, 200, { success: true, approved: 0, skipped: 0, message: `No pending items with confidence >= ${threshold}%` });
+
+      let approved = 0, skipped = 0;
+      const approvedItems = [];
+      for (const item of pending) {
+        try {
+          // Skip Sev-A — Major Incident Process requires individual review
+          const sev = String(item.priority || "").toLowerCase().replace(/[\s_-]/g, "");
+          const isSevA = sev === "seva" || sev === "sev1" || sev === "p1" || sev === "critical";
+          if (isSevA) { skipped++; continue; }
+
+          // Sev-B requires consultedBy (RACI gate)
+          const isSevBPlus = sev === "sevb" || sev === "sev2" || sev === "p2" || sev === "high";
+          if (isSevBPlus && _consultedBy.length === 0) { skipped++; continue; }
+
+          // Update incident
+          const incRow = await db.getOne("incidents", item.incidentId);
+          if (incRow) {
+            const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+            inc.status = item.suggestedStatus || "Resolved";
+            inc.resolution = item.resolution;
+            inc.rootCause = item.rootCause;
+            inc.resolvedAt = new Date().toISOString();
+            inc.resolvedBy = `AI (bulk approved by ${approvedBy})`;
+            inc.updatedAt = new Date().toISOString();
+            inc.aiResolved = true;
+            inc.skipZendeskSync = true;
+            await db.upsert("incidents", inc.id, inc);
+            scheduleCsatSurvey(inc, `AI (bulk approved by ${approvedBy})`).catch(e => console.warn("[CSAT Schedule]", e.message));
+          }
+
+          // Update suggestion
+          item.status = "approved";
+          item.approvedBy = `${approvedBy} (bulk)`;
+          item.approvedAt = new Date().toISOString();
+          item.accountableBy = approvedBy;
+          item.consultedBy = _consultedBy;
+          item.informedBy = _informedBy;
+          item.racLockedAt = new Date().toISOString();
+          item.bulkApproved = true;
+          await db.upsert("ai_resolve_queue", item.id, item);
+
+          // Send customer email via gating pipeline
+          const _recipient = safeRecipient(item);
+          if (_recipient) {
+            queueOrSendCustomerEmail({
+              to: [_recipient],
+              subject: `[VGC ITSM] Your incident ${item.incidentId} has been resolved`,
+              isCustomerEmail: true,
+              from: senderFor("support"),
+              body: buildEmailTemplate({
+                type: "ai_approved_customer",
+                incidentId: item.incidentId || "",
+                title: item.incidentTitle || "",
+                rootCause: item.rootCause || "N/A",
+                resolution: item.resolution || "",
+                customerMessage: item.customerEmailHtml || item.customerEmail || "",
+                timestamp: item.approvedAt,
+                nextActions: [
+                  { label: "If this issue persists, please open a new support ticket", url: PORTAL_URL, linkLabel: "Open Portal" },
+                ],
+              }),
+            }, { incidentId: item.incidentId, severity: item.priority || "Sev-C", source: "ai_bulk_approve" })
+              .catch(e => console.warn(`[Bulk Approve] Customer email failed for ${item.incidentId}:`, e.message));
+          }
+
+          approved++;
+          approvedItems.push({ id: item.id, incidentId: item.incidentId, confidence: item.confidence });
+        } catch (err) {
+          console.warn(`[Bulk Approve] Failed for ${item.id}:`, err.message);
+          skipped++;
+        }
+      }
+
+      if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+
+      // Send summary email to approver
+      if (approved > 0) {
+        graphSendMail({
+          to: [approvedBy.includes("@") ? approvedBy : "itsupport@vgctechnology.com"],
+          subject: `[VGC AI Assist] Bulk approved ${approved} AI resolutions`,
+          body: buildEmailTemplate({
+            type: "ai_approved_internal",
+            incidentId: `${approved} incidents`,
+            title: `Bulk Approval Summary (≥${threshold}% confidence)`,
+            approvedBy: approvedBy,
+            confidence: threshold,
+            resolution: approvedItems.map(a => `${a.incidentId} (${a.confidence}%)`).join(", "),
+            rootCause: "Various — see individual incidents",
+            footerNote: `${skipped} items skipped (Sev-A or insufficient RACI). All actions are logged and auditable.`,
+          }),
+        }).catch(e => console.warn("[Bulk Approve] Summary email failed:", e.message));
+      }
+
+      console.log(`[AI Bulk Approve] ${approved} approved, ${skipped} skipped (threshold: ${threshold}%)`);
+      try { await db.audit("ai_resolve_queue", "bulk_approve", "bulk_approve", JSON.stringify({ approved, skipped, threshold, approvedBy }), approvedBy); } catch {}
+      return json(res, 200, { success: true, approved, skipped, threshold, approvedItems });
+    } catch (err) {
+      console.error("[AI Bulk Approve]", err.message);
       return json(res, 500, { error: "Internal server error" });
     }
   }

@@ -619,7 +619,6 @@ export default function Dashboard({ ctx }) {
     aiActions, showAiActionsPanel, setShowAiActionsPanel,
     setTicketsSubTab, setAnalyticsSubTab,
     approvalInstances, escalationConfig,
-    csatSurveyEngine, changeCalendar,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
     zdStats: _zdStats, aiConfig: _aiConfig,
@@ -2559,7 +2558,6 @@ return (
           {[
             { icon: "🎫", title: "Create Ticket", desc: "Open a new incident", color: "#FF6B6B", hoverAnim: "iconBounce", action: () => { setActiveModule("incidents"); setModal("newIncident"); } },
             { icon: "🔄", title: "Sync Zendesk", desc: "Align all statuses now", color: "#22D3EE", hoverAnim: "iconSpin", action: async () => {
-              if (isDemoModeRef.current) { showToast("🎭 Demo mode — Zendesk sync disabled", "info"); return; }
               try {
                 const resp = await fetch("/api/zendesk/sync-all-statuses", { method: "POST" });
                 const data = await resp.json();

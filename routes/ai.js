@@ -6,7 +6,7 @@ const https = require("https");
 
 module.exports = function createAIRoutes(ctx) {
   return async function handleAIRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getManagedIdentityToken, getOrgName, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
+    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
   if (pathname === "/api/ai/knowledge" && req.method === "GET") {
     try {
       const items = await db.getAll("ai_knowledge");
@@ -2421,34 +2421,8 @@ Respond with ONLY valid JSON (no markdown):
           if (inc.slaRemediated) { alreadyDone++; continue; }
 
           const target = inc.slaTarget || slaMap[inc.priority] || 9;
-          let elapsed = 0;
-          if (inc.createdAt) {
-            const start = new Date(inc.createdAt);
-            if (!isNaN(start.getTime())) {
-              const endTime = inc.resolvedAt ? new Date(inc.resolvedAt) : now;
-              const BH_START = 9, BH_END = 18;
-              let cursor = new Date(start);
-              while (cursor < endTime) {
-                const day = cursor.getDay();
-                if (day >= 1 && day <= 5) {
-                  const hrs = cursor.getHours() + cursor.getMinutes() / 60;
-                  if (hrs >= BH_START && hrs < BH_END) {
-                    const eob = new Date(cursor); eob.setHours(BH_END, 0, 0, 0);
-                    const chunk = eob < endTime ? eob : endTime;
-                    elapsed += (chunk - cursor) / 3600000;
-                    cursor = new Date(chunk);
-                  } else if (hrs < BH_START) { cursor.setHours(BH_START, 0, 0, 0); }
-                  else { cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0); }
-                } else {
-                  const daysToMon = day === 0 ? 1 : 8 - day;
-                  cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
-                }
-                if (cursor >= endTime) break;
-              }
-            }
-          } else {
-            elapsed = inc.created || 0;
-          }
+          const endTime = inc.resolvedAt ? new Date(inc.resolvedAt) : now;
+          let elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt, endTime) : (inc.created || 0);
           elapsed = Math.round(elapsed * 100) / 100;
           const breached = elapsed > target;
 
@@ -2495,37 +2469,11 @@ Respond with ONLY valid JSON (no markdown):
       const active = incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed");
       const resolved = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
 
-      // Business hours SLA computation
+      // Business hours SLA computation (uses shared slaEngine)
       const computeSla = (inc) => {
         const target = inc.slaTarget || slaMap[inc.priority] || 9;
-        let elapsed = 0;
-        if (inc.createdAt) {
-          const start = new Date(inc.createdAt);
-          if (!isNaN(start.getTime())) {
-            const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? new Date(inc.resolvedAt) : now;
-            const BH_START = 9, BH_END = 18;
-            let cursor = new Date(start);
-            while (cursor < endTime) {
-              const day = cursor.getDay();
-              if (day >= 1 && day <= 5) {
-                const hrs = cursor.getHours() + cursor.getMinutes() / 60;
-                if (hrs >= BH_START && hrs < BH_END) {
-                  const eob = new Date(cursor); eob.setHours(BH_END, 0, 0, 0);
-                  const chunk = eob < endTime ? eob : endTime;
-                  elapsed += (chunk - cursor) / 3600000;
-                  cursor = new Date(chunk);
-                } else if (hrs < BH_START) { cursor.setHours(BH_START, 0, 0, 0); }
-                else { cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0); }
-              } else {
-                const daysToMon = day === 0 ? 1 : 8 - day;
-                cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
-              }
-              if (cursor >= endTime) break;
-            }
-          }
-        } else {
-          elapsed = inc.created || 0;
-        }
+        const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? new Date(inc.resolvedAt) : now;
+        const elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt, endTime) : (inc.created || 0);
         return { elapsed: Math.round(elapsed * 100) / 100, target, breached: elapsed > target, pct: Math.round((elapsed / target) * 100) };
       };
 
@@ -3119,35 +3067,11 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
       const criticalOpen = openInc.filter(i => i.priority === "Sev-A" || i.priority === "Sev-B");
       const resolvedRecent = allInc.filter(i => (i.status === "Resolved" || i.status === "Closed"));
 
-      // Business-hours SLA breach calculation for briefing
+      // Business-hours SLA breach calculation for briefing (uses shared slaEngine)
       const computeBriefingSla = (inc) => {
         const target = inc.slaTarget || 9;
-        let elapsed = 0;
-        if (inc.createdAt) {
-          const start = new Date(inc.createdAt);
-          if (!isNaN(start.getTime())) {
-            const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? new Date(inc.resolvedAt) : now;
-            const BH_START = 9, BH_END = 18;
-            let cursor = new Date(start);
-            while (cursor < endTime) {
-              const day = cursor.getDay();
-              if (day >= 1 && day <= 5) {
-                const hrs = cursor.getHours() + cursor.getMinutes() / 60;
-                if (hrs >= BH_START && hrs < BH_END) {
-                  const eob = new Date(cursor); eob.setHours(BH_END, 0, 0, 0);
-                  const chunk = eob < endTime ? eob : endTime;
-                  elapsed += (chunk - cursor) / 3600000;
-                  cursor = new Date(chunk);
-                } else if (hrs < BH_START) { cursor.setHours(BH_START, 0, 0, 0); }
-                else { cursor.setDate(cursor.getDate() + 1); cursor.setHours(BH_START, 0, 0, 0); }
-              } else {
-                const daysToMon = day === 0 ? 1 : 8 - day;
-                cursor.setDate(cursor.getDate() + daysToMon); cursor.setHours(BH_START, 0, 0, 0);
-              }
-              if (cursor >= endTime) break;
-            }
-          } else { elapsed = inc.created || 0; }
-        } else { elapsed = inc.created || 0; }
+        const endTime = (inc.status === "Resolved" || inc.status === "Closed") && inc.resolvedAt ? new Date(inc.resolvedAt) : now;
+        const elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt, endTime) : (inc.created || 0);
         return elapsed > target;
       };
       const totalSLABreaches = openInc.filter(i => computeBriefingSla(i)).length;

@@ -96,8 +96,10 @@ async function validateToken(token, tenantId, clientId, allowedTenantIds) {
     const verified = verifyJWTSignature(token, signingKey);
     if (!verified) return { valid: false, error: "Signature verification failed" };
   } catch (err) {
-    // If JWKS fetch fails, log but don't block (graceful degradation)
-    console.warn("[Auth] JWKS verification skipped:", err.message);
+    // Fail closed: if JWKS fetch fails, reject the token — never skip verification.
+    // Previous "graceful degradation" allowed unsigned tokens when Entra was unreachable.
+    console.error("[Auth] JWKS verification FAILED — rejecting token:", err.message);
+    return { valid: false, error: "Signature verification unavailable" };
   }
 
   return {

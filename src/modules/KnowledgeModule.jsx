@@ -99,7 +99,6 @@ export default function KnowledgeModule({ ctx }) {
     kbAutoGenRunning, kbAutoGenProgress,
     kbGapReport, setKbGapReport,
     aiEngine, generateGuide, generateSpDoc, mdToHtml, exportToWord,
-    bulkUploadAndTrain, loadVersionHistory,
   } = ctx;
 
 const [kbCategoryFilter, setKbCategoryFilter] = useState("All");

@@ -66,8 +66,8 @@ export default function ZendeskModule({ assets, changes, currentUser, customers,
       // Refresh sync status
       const statusR = await fetch("/api/zendesk/sync-status");
       if (statusR.ok) setZdSyncStatus(await statusR.json());
-      // Refresh incidents (skip in demo mode to preserve seed data)
-      if (!isDemoModeRef.current) {
+      // Refresh incidents
+      {
         const incR = await fetch("/api/db/incidents");
         if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
         // Refresh customers
@@ -1260,7 +1260,6 @@ export default function ZendeskModule({ assets, changes, currentUser, customers,
                   🧠 Train AI from Resolved Zendesk Tickets
                 </button>
                 <button onClick={async () => {
-                  if (isDemoModeRef.current) { addAutoLog({ type: "info", message: "🎭 Demo mode — org sync disabled" }); return; }
                   try {
                     const r = await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
                     if (r.ok) { const data = await r.json(); addAutoLog({ type: "info", message: `Orgs synced: ${data.synced} updated, ${data.created} new customers created` }); const custR = await fetch("/api/db/customers"); if (custR.ok) { const custData = await custR.json(); if (custData.data) setCustomers(custData.data); } }

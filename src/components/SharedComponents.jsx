@@ -274,14 +274,14 @@ export const WorkflowHeader = ({ module, version, stepCounts }) => {
             display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8,
             background: i === activeStep ? `${step.color}15` : "transparent",
             border: i === activeStep ? `1px solid ${step.color}33` : "1px solid transparent",
-            transition: "all 0.5s ease", flex: 1, minWidth: 0, cursor: "default",
+            transition: "background 0.5s ease, border-color 0.5s ease", flex: 1, minWidth: 0, cursor: "default",
           }}>
             <span style={{
               fontSize: 16, display: "inline-flex", alignItems: "center", justifyContent: "center",
               width: 28, height: 28, borderRadius: 8,
               background: i === activeStep ? `${step.color}22` : "#1E213022",
               boxShadow: i === activeStep ? `0 0 12px ${step.color}33` : "none",
-              transition: "all 0.5s ease",
+              transition: "background 0.5s ease, box-shadow 0.5s ease",
               animation: i === activeStep ? "wfIconPulse 2s ease-in-out infinite" : "none",
             }}>{step.icon}</span>
             <div style={{ overflow: "hidden" }}>

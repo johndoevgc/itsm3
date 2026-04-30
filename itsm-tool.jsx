@@ -62,9 +62,8 @@ import {
 } from "./src/utils/aiEngine.jsx";
 
 export default function ITSMApp() {
-  // Demo mode removed — production only
+  // Demo mode flag — hardcoded false for production
   const isDemoMode = false;
-  const isDemoModeRef = useRef(false);
 
   // ─── Runtime Config (fetched from server /api/config) ──────────────
   const [runtimeConfig, setRuntimeConfig] = useState(null);
@@ -355,10 +354,14 @@ export default function ITSMApp() {
   const [aiResolveScanLoading, setAiResolveScanLoading] = useState(false);
   const [aiResolveFilter, setAiResolveFilter] = useState("pending"); // "pending" | "all" | "dismissed"
   const [aiBulkDismissLoading, setAiBulkDismissLoading] = useState(false);
+  const [aiBulkApproveLoading, setAiBulkApproveLoading] = useState(false);
   // ─── AI Workflow Assist State ──────────────────────────────────
   const [aiWorkflowQueue, setAiWorkflowQueue] = useState([]);
   const [aiWorkflowLoading, setAiWorkflowLoading] = useState(false);
   const [aiWorkflowScanLoading, setAiWorkflowScanLoading] = useState(false);
+  // ─── AI Follow-Up & Cleanup State ─────────────────────────────
+  const [aiFollowUpLoading, setAiFollowUpLoading] = useState(false);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
   // ─── KB Learning from Incidents State ─────────────────────────
   const [kbLearningLoading, setKbLearningLoading] = useState(false);
   // ─── AI Chat Correction/Edit State ──────────────────────────────────
@@ -379,9 +382,15 @@ export default function ITSMApp() {
     ] }
   ]);
   const chatMemoryRef = useRef(createChatMemory());
+  const chatContainerRef = useRef(null);
+  const chatInputRef = useRef(null);
   const [aiInput, setAiInput] = useState("");
   const [aiAttachments, setAiAttachments] = useState([]);
   const [aiUploadingFiles, setAiUploadingFiles] = useState(false);
+  const [aiNudge, setAiNudge] = useState(null);
+  const aiNudgeDismissed = useRef(false);
+  const [aiFilePreview, setAiFilePreview] = useState(null);
+  const [aiError, setAiError] = useState(null);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
   const [adminTab, setAdminTab] = useState("ai");
@@ -705,6 +714,8 @@ export default function ITSMApp() {
   const [calendarData, setCalendarData] = useState(null); // { changes, freezeWindows, conflicts, stats }
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarSelectedDay, setCalendarSelectedDay] = useState(null);
+  const [calendarView, setCalendarView] = useState("month");
+  const [showCalendarForm, setShowCalendarForm] = useState(false);
   const [freezeForm, setFreezeForm] = useState({ startDate: "", endDate: "", reason: "", show: false });
   const [conflictCheckResult, setConflictCheckResult] = useState(null);
   // ─── Productivity Dashboard State ──────────────────────────────────────
@@ -735,9 +746,9 @@ export default function ITSMApp() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => _ls("vgc_current_user", null) !== null);
 
   // ─── HARD RULE: Data Isolation Mode ────────────────────────────────
-  // Demo mode: ?demo=true in URL → forces demo seed data only (no production data exposure)
-  // Production mode = Entra ID users (without ?demo=true) → only real Zendesk/API data
-  // isDemoMode already declared at top of component (before _ls, so localStorage is bypassed for demo)
+  // User classification for data isolation
+  // isLocalDemoUser: non-Entra demo/dev users → seed data only, no production API calls
+  // isEntraProductionUser: Entra ID users → real Zendesk/API data only
   const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
   const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
@@ -1770,6 +1781,20 @@ export default function ITSMApp() {
     } catch (err) { showToast("Failed: " + err.message, "error"); }
   }, [currentUser?.name]);
 
+  // ─── Shared: refresh incidents from DB ─────────────────────────────
+  const refreshIncidentsFromDB = useCallback(async () => {
+    try {
+      const incR = await fetch("/api/db/incidents");
+      if (incR.ok) {
+        const incData = await incR.json();
+        const items = (Array.isArray(incData) ? incData : (incData.data || []))
+          .map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } })
+          .filter(Boolean);
+        setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
+      }
+    } catch (e) {}
+  }, []);
+
   // ─── Phase 6: AI Historical Incident Closure ──────────────────────
   const runHistoricalClose = useCallback(async (dryRun = true) => {
     if (isLocalDemoUser) { showToast("Demo mode — Historical close unavailable", "info"); return; }
@@ -1784,16 +1809,7 @@ export default function ITSMApp() {
       setHistoricalCloseResult(data);
       if (!dryRun && data.success) {
         showToast(`🗄️ AI closed ${data.closedCount} historical incidents (no notifications sent)`, "success");
-        // Refresh incidents from server
-        try {
-          const incR = await fetch("/api/db/incidents");
-          if (incR.ok) {
-            const incData = await incR.json();
-            const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
-            const seedPattern = /^(INC000)\d$/;
-            setIncidents(items.filter(i => !seedPattern.test(i.id)));
-          }
-        } catch (e) {}
+        await refreshIncidentsFromDB();
       } else if (dryRun) {
         showToast(`🔍 Found ${data.eligibleCount} incidents eligible for closure`, "info");
       }
@@ -1848,26 +1864,35 @@ export default function ITSMApp() {
     setAiBulkDismissLoading(false);
   }, [currentUser?.name, fetchAiResolveQueue]);
 
-  const handleAiResolveAction = useCallback(async (suggestionId, action, editedResolution) => {
+  const handleBulkApprove = useCallback(async (consultedBy = []) => {
+    if (isLocalDemoUser) return;
+    setAiBulkApproveLoading(true);
+    try {
+      const res = await fetch("/api/ai/resolve-queue/bulk-approve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approvedBy: currentUser?.name || "System", minConfidence: 80, consultedBy: Array.isArray(consultedBy) ? consultedBy : [] })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Bulk approve failed", "error"); setAiBulkApproveLoading(false); return; }
+      const data = await res.json();
+      showToast(`✅ Bulk approved ${data.approved} items (≥${data.threshold}% confidence). ${data.skipped} skipped (Sev-A/RACI).`, "success");
+      await fetchAiResolveQueue();
+      await refreshIncidentsFromDB();
+    } catch (err) { showToast("Bulk approve failed: " + err.message, "error"); }
+    setAiBulkApproveLoading(false);
+  }, [currentUser?.name, fetchAiResolveQueue]);
+
+  const handleAiResolveAction = useCallback(async (suggestionId, action, editedResolution, editedCustomerEmail, rejectionReason) => {
     setAiResolveLoading(true);
     try {
       const res = await fetch("/api/ai/resolve-queue/action", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ suggestionId, action, approvedBy: currentUser?.name || "System", editedResolution })
+        body: JSON.stringify({ suggestionId, action, approvedBy: currentUser?.name || "System", editedResolution, editedCustomerEmail, rejectionReason })
       });
       if (!res.ok) { const err = await res.json(); showToast(err.error || "Action failed", "error"); setAiResolveLoading(false); return; }
       const data = await res.json();
       if (action === "approve") {
         showToast(`✅ Incident ${data.suggestion.incidentId} resolved by AI (approved by ${currentUser?.name}). Zendesk NOT updated (one-way pull).`, "success");
-        // Refresh incidents
-        try {
-          const incR = await fetch("/api/db/incidents");
-          if (incR.ok) {
-            const incData = await incR.json();
-            const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
-            setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
-          }
-        } catch (e) {}
+        await refreshIncidentsFromDB();
       } else {
         showToast(`❌ AI suggestion rejected`, "info");
       }
@@ -1875,6 +1900,39 @@ export default function ITSMApp() {
     } catch (err) { showToast("Action failed: " + err.message, "error"); }
     setAiResolveLoading(false);
   }, [currentUser?.name]);
+
+  // ─── AI Auto Follow-Up Handler ──────────────────────────────────────
+  const runAiAutoFollowUp = useCallback(async () => {
+    if (isLocalDemoUser) return;
+    setAiFollowUpLoading(true);
+    try {
+      const res = await fetch("/api/ai/auto-followup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedBy: currentUser?.name || "System" })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Follow-up failed", "error"); setAiFollowUpLoading(false); return; }
+      const data = await res.json();
+      showToast(`📨 AI Follow-Up: ${data.processed || 0} incidents reviewed, ${data.emailsSent || 0} emails sent`, "success");
+    } catch (err) { showToast("Follow-up failed: " + err.message, "error"); }
+    setAiFollowUpLoading(false);
+  }, [currentUser?.name]);
+
+  // ─── Cleanup Stale Queue Handler ────────────────────────────────────
+  const runCleanupQueue = useCallback(async () => {
+    if (isLocalDemoUser) return;
+    setCleanupLoading(true);
+    try {
+      const res = await fetch("/api/ai/cleanup-queue", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedBy: currentUser?.name || "System", maxAgeDays: 7 })
+      });
+      if (!res.ok) { const err = await res.json(); showToast(err.error || "Cleanup failed", "error"); setCleanupLoading(false); return; }
+      const data = await res.json();
+      showToast(`🧹 Queue cleanup: ${data.dismissed || 0} stale dismissed, ${data.deduped || 0} deduped`, "success");
+      await fetchAiResolveQueue();
+    } catch (err) { showToast("Cleanup failed: " + err.message, "error"); }
+    setCleanupLoading(false);
+  }, [currentUser?.name, fetchAiResolveQueue]);
 
   // Fetch AI resolve queue on login
   useEffect(() => {
@@ -1920,14 +1978,7 @@ export default function ITSMApp() {
       const data = await res.json();
       if (action === "approve") {
         showToast(`✅ Workflow action "${data.suggestion.action}" applied to ${data.suggestion.incidentId}${data.suggestion.zdSynced ? " (internal note posted to Zendesk)" : ""}`, "success");
-        try {
-          const incR = await fetch("/api/db/incidents");
-          if (incR.ok) {
-            const incData = await incR.json();
-            const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
-            setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
-          }
-        } catch (e) {}
+        await refreshIncidentsFromDB();
       } else {
         showToast(`❌ Workflow suggestion rejected`, "info");
       }
@@ -1986,14 +2037,7 @@ export default function ITSMApp() {
         }
       } else if (data.closedCount > 0) {
         showToast(`🗄️ AI closed ${data.closedCount} historical incidents (no Zendesk sync, no notifications)`, "success");
-        try {
-          const incR = await fetch("/api/db/incidents");
-          if (incR.ok) {
-            const incData = await incR.json();
-            const items = (Array.isArray(incData) ? incData : (incData.data || [])).map(d => { try { return typeof d.data === "string" ? JSON.parse(d.data) : (d.data || d); } catch { return null; } }).filter(Boolean);
-            setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
-          }
-        } catch (e) {}
+        await refreshIncidentsFromDB();
       }
     } catch (err) { showToast("Bulk close failed: " + err.message, "error"); }
     setHistoricalCloseRunning(false);
@@ -2712,7 +2756,6 @@ export default function ITSMApp() {
   // HARD RULE: Demo users must NEVER write to the shared production DB
   const _dbSyncTimers = useRef({});
   const _dbSync = useCallback((collection, data) => {
-    if (isDemoModeRef.current) return; // Use ref to avoid stale closure
     if (!data || !Array.isArray(data)) return;
     // Trailing debounce per collection — coalesces bursts (bulk imports, undo/redo, rapid edits)
     if (_dbSyncTimers.current[collection]) clearTimeout(_dbSyncTimers.current[collection]);
@@ -2728,7 +2771,6 @@ export default function ITSMApp() {
   // Sync a single record to the SQLite backend
   // HARD RULE: Demo users must NEVER write to the shared production DB
   const _dbSyncOne = useCallback((collection, record) => {
-    if (isDemoModeRef.current) return; // Use ref to avoid stale closure
     if (!record || !record.id) return;
     fetch(`${DB_API}/${collection}/${encodeURIComponent(record.id)}`, {
       method: "PUT",
@@ -2859,7 +2901,6 @@ export default function ITSMApp() {
   const _seedPattern = /^(INC-D\d|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d*$/;
   const _isSeedLinked = (item) => item.title?.includes("Problem from INC000") || item.linkedIncidents?.some(id => /^(INC000\d|INC-D\d)$/.test(id));
   const _safeDbSync = (coll, data) => {
-    if (isDemoModeRef.current) return; // HARD RULE: Demo mode must NEVER write to production DB
     if (!data || !Array.isArray(data) || data.length === 0) return;
     // For Entra users: filter out seed data and seed-linked records before syncing
     if (isEntraProductionUser) {
@@ -2869,27 +2910,26 @@ export default function ITSMApp() {
     }
     _dbSync(coll, data);
   };
-  const _demoSafeSave = (key, data) => { _save(key, data); };
-  useEffect(() => { _demoSafeSave("vgc_incidents", incidents); _safeDbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_problems", problems); _safeDbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_changes", changes); _safeDbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_requests", requests); _safeDbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_assets", assets); _dbSync("assets", assets); }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_profile_photo", profilePhoto); }, [profilePhoto]);
-  useEffect(() => { _demoSafeSave("vgc_custom_fields", customFields); _dbSync("custom_fields", customFields); }, [customFields]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_notif_prefs", notifPrefs); }, [notifPrefs]);
-  useEffect(() => { _demoSafeSave("vgc_contracts", contracts); _dbSync("contracts", contracts); }, [contracts]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_automation_rules", automationRules); _dbSync("automation_rules", automationRules); }, [automationRules]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_avatar", avatarConfig); }, [avatarConfig]);
-  useEffect(() => { _demoSafeSave("vgc_current_user", currentUser); }, [currentUser]);
-  useEffect(() => { _demoSafeSave("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_rbac_audit", rbacAuditLog); }, [rbacAuditLog]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_custom_permissions", customPermissions); }, [customPermissions]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { _demoSafeSave("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_incidents", incidents); _safeDbSync("incidents", incidents); }, [incidents]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_problems", problems); _safeDbSync("problems", problems); }, [problems]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_changes", changes); _safeDbSync("changes", changes); }, [changes]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_requests", requests); _safeDbSync("requests", requests); }, [requests]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_assets", assets); _dbSync("assets", assets); }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_kb", kbArticles); _dbSync("kb", kbArticles); }, [kbArticles]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_services", serviceCatalog); _dbSync("services", serviceCatalog); }, [serviceCatalog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_profile_photo", profilePhoto); }, [profilePhoto]);
+  useEffect(() => { _save("vgc_custom_fields", customFields); _dbSync("custom_fields", customFields); }, [customFields]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_notif_prefs", notifPrefs); }, [notifPrefs]);
+  useEffect(() => { _save("vgc_contracts", contracts); _dbSync("contracts", contracts); }, [contracts]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_automation_rules", automationRules); _dbSync("automation_rules", automationRules); }, [automationRules]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_avatar", avatarConfig); }, [avatarConfig]);
+  useEffect(() => { _save("vgc_current_user", currentUser); }, [currentUser]);
+  useEffect(() => { _save("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_rbac_audit", rbacAuditLog); }, [rbacAuditLog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_custom_permissions", customPermissions); }, [customPermissions]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_customers", customers); _dbSync("customers", customers); }, [customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _save("vgc_service_reports", serviceReports); _dbSync("service_reports", serviceReports); }, [serviceReports]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (emailWhitelist.length > 0) _dbSync("email_whitelist", emailWhitelist); }, [emailWhitelist]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Global Auto-Sync: Zendesk ↔ ITSM (every 60s) ─────────────────
@@ -2912,11 +2952,7 @@ export default function ITSMApp() {
         if (incSyncR.ok) {
           const syncData = await incSyncR.json();
           if (syncData.stats && (syncData.stats.ticketsCreated > 0 || syncData.stats.ticketsUpdated > 0)) {
-            // Refresh ITSM incidents from server
-            try {
-              const incR = await fetch("/api/db/incidents");
-              if (incR.ok) { const incData = await incR.json(); if (incData.data) setIncidents(incData.data); }
-            } catch (e) {}
+            await refreshIncidentsFromDB();
           }
         }
         // 4) Auto-sync Zendesk organizations → ITSM customers
@@ -3926,6 +3962,32 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     setShowFloatingKbTraining,
   }), [addCards]);
 
+  // ─── AI File Upload Handler ──
+  const handleFileUpload = useCallback(async (e) => {
+    const file = e?.target?.files?.[0];
+    if (!file) return;
+    setAiFilePreview({ name: file.name, size: file.size, type: file.type });
+    showToast(`File attached: ${file.name}`, "info");
+  }, []);
+
+  // ─── Zendesk Approve & Send (Engineer Review Hub) ──
+  const zdApproveAndSend = useCallback(async (itemId) => {
+    const item = zdAiQueue.find(q => q.ticketId === itemId || q.id === itemId);
+    if (!item) { showToast("Queue item not found", "error"); return; }
+    try {
+      const r = await fetch("/api/zendesk/auto-respond", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticketId: item.ticketId, response: item.draftResponse || item.aiDraft, priority: item.priority, tags: item.tags || [], approvedBy: `${currentUser.name} (engineer-approved)` }),
+      });
+      if (r.ok) {
+        setZdAiQueue(prev => prev.map(q => (q.ticketId === item.ticketId ? { ...q, status: "sent", reviewedBy: currentUser.name } : q)));
+        showToast(`✅ Response sent for ticket #${item.ticketId}`, "success");
+      } else {
+        showToast(`Failed to send response for #${item.ticketId}`, "error");
+      }
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  }, [zdAiQueue, currentUser]);
+
   // ─── AI Assist Module (extracted) ──
 
   // ─── Extracted Tab Components (moved to src/components/ExtractedTabs.jsx) ──
@@ -4237,13 +4299,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               addAutoLog({ type: "info", message: `Real-time sync: ${data.stats.ticketsCreated} new, ${data.stats.ticketsUpdated} updated, ${data.stats.commentsAdded} comments` });
               zdFetchTickets(); zdFetchStats();
               // Refresh ITSM incidents — sync may have updated status/priority in DB
-              try {
-                const incR = await fetch("/api/db/incidents");
-                if (incR.ok) {
-                  const incData = await incR.json();
-                  if (incData.data) setIncidents(incData.data);
-                }
-              } catch (e) {}
+              await refreshIncidentsFromDB();
               // Auto-triage newly discovered tickets (90% AI rule)
               if (data.stats.ticketsCreated > 0 && zdAutoMode && azureOpenAI.enabled) {
                 addAutoLog({ type: "info", message: `${data.stats.ticketsCreated} new ticket(s) found — triggering AI auto-triage...` });
@@ -4288,7 +4344,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
-        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users }} />)}
+        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading }} />)}
         {ticketsSubTab === "zendesk" && (<ZendeskModule assets={assets} changes={changes} currentUser={currentUser} customers={customers} incidents={incidents} requests={requests} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} users={users} />)}
         {ticketsSubTab === "operations" && (<OperationsModule />)}
       </div>
@@ -4328,7 +4384,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   const dashboardCtx = {
     currentUser, showToast, _save, incidents, problems, changes, requests,
-    assets, kbArticles, serviceCatalog, customers, users, vendors, search,
+    assets, kbArticles, serviceCatalog, customers, users: managedUsers, vendors, search,
     setActiveModule, setDetailItem, setModal, setSearch,
     slaPolicy, slaTick, proactiveAlerts, dismissedProactiveAlerts, setDismissedProactiveAlerts,
     dashboardThreats, dismissedThreats, setDismissedThreats, threatEmailDraft, setThreatEmailDraft,
@@ -4347,7 +4403,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     aiActions, showAiActionsPanel, setShowAiActionsPanel,
     setTicketsSubTab, setAnalyticsSubTab,
     approvalInstances, escalationConfig,
-    csatSurveyEngine, changeCalendar,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
     zdStats, aiConfig,
@@ -4401,7 +4456,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         kbAutoGenRunning, kbAutoGenProgress,
         kbGapReport, setKbGapReport,
         aiEngine, generateGuide, generateSpDoc, mdToHtml, exportToWord,
-        bulkUploadAndTrain, loadVersionHistory,
       }} />);
       case "assets": return (<AssetsModule />);
       case "customers": return (<CustomersModule ctx={{
@@ -4420,74 +4474,42 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         vendors, setVendors, incidents,
       }} />);
       case "ai": return (<AIAssistModule ctx={{
-        currentUser, showToast, chatHistory, setChatHistory,
+        currentUser, showToast,
+        aiMessages, setAiMessages,
         aiInput, setAiInput, aiLoading, setAiLoading,
-        aiError, setAiError, handleSendChat, slashCommands,
+        aiError, setAiError, handleAiChat, SLASH_COMMANDS,
         chatContainerRef, chatInputRef,
         aiNudge, setAiNudge, aiNudgeDismissed,
         aiFilePreview, setAiFilePreview,
         handleFileUpload, aiEditingIdx, setAiEditingIdx,
         aiEditText, setAiEditText,
-        aiActionCards, processActionCard,
+        detectAiActionCards, handleCardAction,
         incidents, requests, problems, changes, azureOpenAI,
       }} />);
-      case "analytics": return (<AnalyticsModuleWrapper ctx={{
-        analyticsSubTab, setAnalyticsSubTab,
-        serviceReports, setServiceReports,
-        csatAiAnalysis,
-        incidents,
-        currentUser, customers, problems, requests, changes, assets,
-        users, vendors,
-        setActiveModule, showToast, softDelete,
-        fetchAiLearningData, deleteAiFeedback,
-        aiLearningLoading, aiLearningMetrics, aiModelHealth,
-        aiLearningTrends, aiLearningTrendPeriod, setAiLearningTrendPeriod,
-        aiLearningFeedback,
-      }} />);
-      case "reports": return (<AnalyticsModuleWrapper ctx={{
-        analyticsSubTab, setAnalyticsSubTab,
-        serviceReports, setServiceReports,
-        csatAiAnalysis,
-        incidents,
-        currentUser, customers, problems, requests, changes, assets,
-        users, vendors,
-        setActiveModule, showToast, softDelete,
-        fetchAiLearningData, deleteAiFeedback,
-        aiLearningLoading, aiLearningMetrics, aiModelHealth,
-        aiLearningTrends, aiLearningTrendPeriod, setAiLearningTrendPeriod,
-        aiLearningFeedback,
-      }} />);
+      case "analytics":
+      case "reports":
+      case "cybernews":
+      case "architecture": {
+        const analyticsCtx = {
+          analyticsSubTab, setAnalyticsSubTab,
+          serviceReports, setServiceReports,
+          csatAiAnalysis,
+          incidents,
+          currentUser, customers, problems, requests, changes, assets,
+          users: managedUsers, vendors,
+          setActiveModule, showToast, softDelete,
+          fetchAiLearningData, deleteAiFeedback,
+          aiLearningLoading, aiLearningMetrics, aiModelHealth,
+          aiLearningTrends, aiLearningTrendPeriod, setAiLearningTrendPeriod,
+          aiLearningFeedback,
+        };
+        return (<AnalyticsModuleWrapper ctx={analyticsCtx} />);
+      }
       case "serviceStatus": return (<ServiceStatusModule ctx={{ currentUser, incidents, changes }} />);
-      case "cybernews": return (<AnalyticsModuleWrapper ctx={{
-        analyticsSubTab, setAnalyticsSubTab,
-        serviceReports, setServiceReports,
-        csatAiAnalysis,
-        incidents,
-        currentUser, customers, problems, requests, changes, assets,
-        users, vendors,
-        setActiveModule, showToast, softDelete,
-        fetchAiLearningData, deleteAiFeedback,
-        aiLearningLoading, aiLearningMetrics, aiModelHealth,
-        aiLearningTrends, aiLearningTrendPeriod, setAiLearningTrendPeriod,
-        aiLearningFeedback,
-      }} />);
-      case "architecture": return (<AnalyticsModuleWrapper ctx={{
-        analyticsSubTab, setAnalyticsSubTab,
-        serviceReports, setServiceReports,
-        csatAiAnalysis,
-        incidents,
-        currentUser, customers, problems, requests, changes, assets,
-        users, vendors,
-        setActiveModule, showToast, softDelete,
-        fetchAiLearningData, deleteAiFeedback,
-        aiLearningLoading, aiLearningMetrics, aiModelHealth,
-        aiLearningTrends, aiLearningTrendPeriod, setAiLearningTrendPeriod,
-        aiLearningFeedback,
-      }} />);
       case "admin": return (<AdminSettingsModule ctx={{
         currentUser, showToast, _save, adminTab, setAdminTab,
         incidents, problems, changes, requests, assets, kbArticles, serviceCatalog, customers,
-        users, vendors, search,
+        users: managedUsers, vendors, search,
         slaPolicy, setSlaPolicy, slaEditingSev, setSlaEditingSev,
         notifChannels, setNotifChannels,
         emailWhitelist, setEmailWhitelist, emailRejections,

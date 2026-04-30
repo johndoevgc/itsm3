@@ -5,7 +5,7 @@ const https = require("https");
 const crypto = require("crypto");
 const zlib = require("zlib");
 const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware");
-const { SlaEngine, computeSlaStatus } = require("./slaEngine");
+const { SlaEngine, computeSlaStatus, getBusinessHoursElapsed } = require("./slaEngine");
 const { WebSocketServer } = require("./wsServer");
 const { NotificationEngine } = require("./notificationEngine");
 const { WorkflowEngine } = require("./workflowEngine");
@@ -2665,7 +2665,7 @@ async function start() {
     processInboundEmails, generateKBDraft,
     queueOrSendCustomerEmail,
     shouldSkipAction, trackNewAction, getAiActionsDedupState,
-    getSlaMap, getSlaDescription, computeSlaStatus,
+    getSlaMap, getSlaDescription, computeSlaStatus, getBusinessHoursElapsed,
     cachedGetAll, cachedGetOne,
     getOrgName, purgeStatus, checkPermission, decodeJWT,
     // Config & constants

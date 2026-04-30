@@ -13,15 +13,16 @@ import {
 // AI Assist Module — extracted from itsm-tool.jsx
 export default function AIAssistModule({ ctx }) {
   const {
-    currentUser, showToast, chatHistory, setChatHistory,
+    currentUser, showToast,
+    aiMessages, setAiMessages,
     aiInput, setAiInput, aiLoading, setAiLoading,
-    aiError, setAiError, handleSendChat, slashCommands,
+    aiError, setAiError, handleAiChat, SLASH_COMMANDS,
     chatContainerRef, chatInputRef,
     aiNudge, setAiNudge, aiNudgeDismissed,
     aiFilePreview, setAiFilePreview,
     handleFileUpload, aiEditingIdx, setAiEditingIdx,
     aiEditText, setAiEditText,
-    aiActionCards, processActionCard,
+    detectAiActionCards, handleCardAction,
     incidents, requests, problems, changes, azureOpenAI,
   } = ctx;
 

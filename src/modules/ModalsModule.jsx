@@ -480,11 +480,9 @@ const NewIncidentModal = () => {
               ]
             };
             setIncidents(prev => [newInc, ...prev]);
-            if (!isDemoModeRef.current) {
-              try {
-                await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
-              } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
-            }
+            try {
+              await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
+            } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
             if (!aiSuggestion) {
               autoTriageTicket(newInc).catch(() => {});
             }
@@ -1406,7 +1404,7 @@ const IncidentDetailModal = () => {
           {detailTab === "workflow" && (
             <>
               <style>{`
-                @keyframes wfSlideIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+                @keyframes wfSlideIn { from { opacity: 0; } to { opacity: 1; } }
                 @keyframes wfPulseNode { 0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.4); } 50% { box-shadow: 0 0 0 10px rgba(99,102,241,0); } }
                 @keyframes wfFlowLine { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
                 @keyframes wfGlow { 0%, 100% { filter: drop-shadow(0 0 4px rgba(99,102,241,0.3)); } 50% { filter: drop-shadow(0 0 12px rgba(99,102,241,0.6)); } }
@@ -1451,7 +1449,7 @@ const IncidentDetailModal = () => {
                               background: isActive ? `linear-gradient(135deg, ${step.color}33, ${step.color}11)` : isPast ? "#0D2D1A" : "#0A0C14",
                               border: `2px solid ${isActive ? step.color : isPast ? "#4CAF50" : "#1E2130"}`,
                               animation: isActive ? "wfPulseNode 2s infinite" : "none",
-                              transition: "all 0.4s ease", position: "relative",
+                              transition: "background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease", position: "relative",
                               boxShadow: isActive ? `0 0 20px ${step.color}33` : "none",
                             }}>
                               {isPast ? <span style={{ animation: "wfCheckPop 0.4s ease", color: "#4CAF50", fontSize: 18, fontWeight: 700 }}>✓</span> : <span style={{ opacity: isFuture ? 0.35 : 1 }}>{step.icon}</span>}
