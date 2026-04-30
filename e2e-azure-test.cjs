@@ -2,6 +2,8 @@
 const https = require("https");
 
 const BASE = "https://vgc-itsm1-app.azurewebsites.net";
+const AUTH_HASH = "94e3cdf1d4691811f46c8ad2e12724992e652d2aa3d66cecbf86e147a61739a8";
+const AUTH_HEADER = `Bearer local-hash:${AUTH_HASH}`;
 let pass = 0, fail = 0, tests = [];
 
 function get(path) {
@@ -22,7 +24,7 @@ function postJson(path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${BASE}${path}`);
     const data = JSON.stringify(body);
-    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } }, res => {
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), "Authorization": AUTH_HEADER } }, res => {
       let buf = "";
       res.on("data", c => buf += c);
       res.on("end", () => { try { resolve({ status: res.statusCode, headers: res.headers, json: JSON.parse(buf), body: buf }); } catch { resolve({ status: res.statusCode, headers: res.headers, json: {}, body: buf }); } });
@@ -37,7 +39,7 @@ function putJson(path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${BASE}${path}`);
     const data = JSON.stringify(body);
-    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "PUT", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } }, res => {
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "PUT", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), "Authorization": AUTH_HEADER } }, res => {
       let buf = "";
       res.on("data", c => buf += c);
       res.on("end", () => { try { resolve({ status: res.statusCode, headers: res.headers, json: JSON.parse(buf), body: buf }); } catch { resolve({ status: res.statusCode, headers: res.headers, json: {}, body: buf }); } });
@@ -410,7 +412,7 @@ async function main() {
   // 53. Delete freeze window
   const freezeDelRes = await new Promise((resolve, reject) => {
     const url = new URL(`${BASE}/api/changes/freeze-window?id=${encodeURIComponent(freezeId || '')}`);
-    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "DELETE" }, res => {
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname + url.search, method: "DELETE", headers: { "Authorization": AUTH_HEADER } }, res => {
       let buf = "";
       res.on("data", c => buf += c);
       res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(buf) }); } catch { resolve({ status: res.statusCode, json: {} }); } });
@@ -478,7 +480,7 @@ async function main() {
   // 73. DELETE /api/ai/learning/feedback/:id
   const fbDelRes = await new Promise((resolve, reject) => {
     const url = new URL(`${BASE}/api/ai/learning/feedback/${testFeedbackId}`);
-    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "DELETE" }, res => {
+    const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "DELETE", headers: { "Authorization": AUTH_HEADER } }, res => {
       let buf = "";
       res.on("data", c => buf += c);
       res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(buf) }); } catch { resolve({ status: res.statusCode, json: {} }); } });
@@ -512,7 +514,7 @@ async function main() {
   if (fbCorrRes.json.feedback?.id) {
     await new Promise((resolve, reject) => {
       const url = new URL(`${BASE}/api/ai/learning/feedback/${fbCorrRes.json.feedback.id}`);
-      const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "DELETE" }, res => {
+      const req = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "DELETE", headers: { "Authorization": AUTH_HEADER } }, res => {
         let buf = ""; res.on("data", c => buf += c); res.on("end", () => resolve());
       });
       req.on("error", reject);

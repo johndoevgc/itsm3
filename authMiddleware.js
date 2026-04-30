@@ -232,9 +232,14 @@ setInterval(() => {
 const PUBLIC_ROUTES = new Set([
   "/api/health",
   "/api/auth/local",
+  "/api/csat/submit",
+  "/api/status/public",
 ]);
 const PUBLIC_PREFIXES = [
   "/api/zendesk/webhook", // Zendesk sends webhooks without our auth
+  "/api/self-service/",   // End-user self-service portal
+  "/api/status/subscribe", // Status page subscription
+  "/api/ingest/email",    // Inbound email webhook
 ];
 
 function isPublicRoute(pathname) {

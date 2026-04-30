@@ -32,9 +32,17 @@ module.exports = function createCoreRoutes(ctx) {
   // ─── SLA Config API (persist policy to DB) ─────────────────────────────
   if (pathname === "/api/sla/config" && req.method === "GET") {
     try {
+      const defaults = slaEngine ? slaEngine.currentPolicy || slaEngine.policy : {};
       const row = await db.getOne("sla_config", "active_policy");
-      if (row) return json(res, 200, JSON.parse(row.data));
-      return json(res, 200, slaEngine ? slaEngine.currentPolicy : {});
+      if (row) {
+        const saved = JSON.parse(row.data);
+        // Merge saved config with defaults so severities/supportHours are always present
+        const merged = { ...defaults, ...saved };
+        if (defaults.severities && !saved.severities) merged.severities = defaults.severities;
+        if (defaults.supportHours && !saved.supportHours) merged.supportHours = defaults.supportHours;
+        return json(res, 200, merged);
+      }
+      return json(res, 200, defaults);
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
   if (pathname === "/api/sla/config" && req.method === "POST") {
@@ -268,16 +276,37 @@ module.exports = function createCoreRoutes(ctx) {
           return out;
         } : (item) => item;
 
+        // Hydrate parsed row: inject SQL-level id, unwrap nested data, normalize title
+        const hydrate = (r) => {
+          let item;
+          try { item = typeof r.data === 'string' ? JSON.parse(r.data) : r.data || {}; } catch { item = {}; }
+          if (!item.id) item.id = r.id;
+          // Handle double-wrapped data (Zendesk sync / migration artefacts)
+          if (typeof item.data === 'string') {
+            try {
+              const inner = JSON.parse(item.data);
+              if (inner && typeof inner === 'object') {
+                const src = inner.data && typeof inner.data === 'object' ? inner.data : inner;
+                for (const k of Object.keys(src)) {
+                  if (k !== 'data' && !(k in item)) item[k] = src[k];
+                }
+              }
+            } catch { /* ignore nested parse failures */ }
+          }
+          if (!item.title && item.subject) item.title = item.subject;
+          return item;
+        };
+
         // Use SQL-level pagination when no search filter and db.getPage is available
         if (limit > 0 && !search && db.getPage) {
           const totalCount = await db.count(collection);
           const pageRows = await db.getPage(collection, { limit, offset });
-          const items = pageRows.map(r => project(JSON.parse(r.data)));
+          const items = pageRows.map(r => project(hydrate(r)));
           return json(res, 200, { collection, count: items.length, total: totalCount, data: items });
         }
 
         const rows = await cachedGetAll(collection);
-        const allItems = rows.map(r => JSON.parse(r.data));
+        const allItems = rows.map(hydrate);
         let items = allItems;
         if (search) {
           const q = search.toLowerCase();
@@ -293,7 +322,22 @@ module.exports = function createCoreRoutes(ctx) {
       if (req.method === "GET" && recordId) {
         const row = await cachedGetOne(collection, recordId);
         if (!row) return json(res, 404, { error: "Not found" });
-        return json(res, 200, JSON.parse(row.data));
+        let item;
+        try { item = typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {}; } catch { item = {}; }
+        if (!item.id) item.id = recordId;
+        if (typeof item.data === 'string') {
+          try {
+            const inner = JSON.parse(item.data);
+            if (inner && typeof inner === 'object') {
+              const src = inner.data && typeof inner.data === 'object' ? inner.data : inner;
+              for (const k of Object.keys(src)) {
+                if (k !== 'data' && !(k in item)) item[k] = src[k];
+              }
+            }
+          } catch { /* ignore */ }
+        }
+        if (!item.title && item.subject) item.title = item.subject;
+        return json(res, 200, item);
       }
 
       // POST /api/db/:collection — create or bulk upsert
@@ -1873,7 +1917,7 @@ module.exports = function createCoreRoutes(ctx) {
         ticket.timeline.push({ action: "automation", details: `${fired.length} rule(s) fired: ${fired.map(f => f.ruleName).join(", ")}`, timestamp: new Date().toISOString(), by: "Automation Engine" });
         await db.upsert("incidents", body.incidentId, JSON.stringify(ticket));
       }
-      return json(res, 200, { incidentId: body.incidentId, rulesFired: fired.length, fired, autonomyLevel: AI_AUTONOMY_LEVEL });
+      return json(res, 200, { incidentId: body.incidentId, rulesEvaluated: rules.length, rulesFired: fired.length, fired, autonomyLevel: AI_AUTONOMY_LEVEL });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
