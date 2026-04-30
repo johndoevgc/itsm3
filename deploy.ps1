@@ -175,7 +175,7 @@ az webapp create `
     --name $AppName `
     --resource-group $ResourceGroup `
     --plan $planName `
-    --runtime "NODE:20-lts" `
+    --runtime "NODE|22-lts" `
     --output none
 Write-Ok "Web App '$AppName' created"
 
@@ -346,7 +346,22 @@ Write-Ok "Vite build completed"
 Write-Step "Deploying to Azure Web App"
 $zipPath = Join-Path $env:TEMP "vgc-itsm-deploy.zip"
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-Compress-Archive -Path @("./server.js", "./package.json", "./dist") -DestinationPath $zipPath -Force
+
+# Collect all backend modules, routes, and config files for zip deploy
+$deployItems = @(
+    "./server.js", "./package.json", "./cluster.js",
+    "./workflowEngine.js", "./slaEngine.js", "./notificationEngine.js", "./analyticsEngine.js",
+    "./authMiddleware.js", "./cacheLayer.js", "./graphService.js", "./wsServer.js",
+    "./featureFlags.js", "./shadowMode.js", "./shadowWorkflow.js", "./piiRedact.js",
+    "./incidentIndex.js",
+    "./routes",
+    "./dist",
+    "./profiles.json", "./VERSION.json"
+) | Where-Object { Test-Path $_ }
+# Add optional config files
+@("./kb-enterprise-articles.json", "./sw_clients.xml") | ForEach-Object { if (Test-Path $_) { $deployItems += $_ } }
+Compress-Archive -Path $deployItems -DestinationPath $zipPath -Force
+Write-Ok "Deploy package created with $($deployItems.Count) items"
 
 az webapp deploy `
     --name $AppName `

@@ -74,6 +74,32 @@ var planName = '${prefix}-plan'
 var mysqlServerName = '${prefix}-mysql'
 var kvName = 'kv-itsm-${customerName}'
 var dbName = 'itsm_data'
+var appInsightsName = '${prefix}-insights'
+var logAnalyticsName = '${prefix}-logs'
+
+// ─── Log Analytics Workspace (required by App Insights) ───
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: logAnalyticsName
+  location: location
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: 30
+  }
+}
+
+// ─── Application Insights ───
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: appInsightsName
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+    RetentionInDays: 30
+  }
+}
 
 // ─── App Service Plan ───
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
@@ -106,7 +132,7 @@ resource mysqlServer 'Microsoft.DBforMySQL/flexibleServers@2023-12-30' = if (!us
     }
     backup: {
       backupRetentionDays: 7
-      geoRedundantBackup: 'Disabled'
+      geoRedundantBackup: 'Enabled'
     }
     highAvailability: {
       mode: 'Disabled'
@@ -146,7 +172,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     }
     enableRbacAuthorization: true
     enableSoftDelete: true
-    softDeleteRetentionInDays: 7
+    softDeleteRetentionInDays: 90
   }
 }
 
@@ -212,9 +238,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         // ─── AI (optional) ───
         { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAiEndpoint }
         { name: 'AZURE_OPENAI_API_KEY', value: empty(azureOpenAiKey) ? '' : '@Microsoft.KeyVault(SecretUri=${secretOpenAiKey!.properties.secretUri})' }
+        // ─── Application Insights ───
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+        { name: 'ApplicationInsightsAgent_EXTENSION_VERSION', value: '~3' }
         // ─── Safety defaults (PRODUCTION slot) ───
-        { name: 'NODE_ENV', value: 'production' }
-        { name: 'APP_DISPLAY_NAME', value: '${orgShortName} ITSM' }
         { name: 'PROD_TEST_MODE', value: 'false' }
         { name: 'EMAIL_REDIRECT_MODE', value: 'false' }
         { name: 'NOTIFICATIONS_MODE', value: 'live' }
@@ -410,3 +437,5 @@ output stagingUrl string = enableStagingSlot ? 'https://${stagingSlot!.propertie
 output mysqlHost string = mysqlHost
 output keyVaultName string = keyVault.name
 output keyVaultUri string = keyVault.properties.vaultUri
+output appInsightsName string = appInsights.name
+output appInsightsKey string = appInsights.properties.InstrumentationKey

@@ -618,10 +618,53 @@ export default function ZendeskModule({ assets, changes, currentUser, customers,
                       ⚡ Batch Approve ({pendingQueue.filter(q => q.autoSendable && q.confidence >= 85).length} high-confidence)
                     </button>
                   )}
+                  {(() => {
+                    const routineCategories = ["Password Reset", "Access/Identity", "Software", "Email", "Printing", "General"];
+                    const routineItems = pendingQueue.filter(q => q.autoSendable && routineCategories.includes(q.category) && (q.confidence || 0) >= 70);
+                    return routineItems.length > 0 ? (
+                      <button onClick={async () => {
+                        if (!confirm(`Auto-approve ${routineItems.length} routine category tickets?\n\nCategories: ${[...new Set(routineItems.map(q => q.category))].join(", ")}\n\n${routineItems.map(q => `  #${q.ticketId} — ${q.category} (${q.confidence}%)`).join("\n")}`)) return;
+                        addAutoLog({ type: "info", message: `Batch approving ${routineItems.length} routine category items...` });
+                        let sent = 0;
+                        for (const q of routineItems) {
+                          try { await zdApproveAndSend(q); sent++; } catch (e) {}
+                        }
+                        addAutoLog({ type: "human_approved", message: `Routine batch: ${sent}/${routineItems.length} sent successfully` });
+                      }} disabled={zdLoading}
+                        style={{ padding: "7px 16px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #818CF8)", color: "#fff", cursor: zdLoading ? "wait" : "pointer", fontSize: 10, fontWeight: 700, boxShadow: "0 2px 8px #6366F133", whiteSpace: "nowrap" }}>
+                        🏷️ Approve Routine ({routineItems.length})
+                      </button>
+                    ) : null;
+                  })()}
                   <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>⚠️ Human approval required</span>
                 </div>
               </div>
-              {pendingQueue.map((q, i) => {
+              {/* ── Category-grouped review queue ── */}
+              {(() => {
+                const categoryGroups = {};
+                pendingQueue.forEach((q, i) => {
+                  const cat = q.category || "Uncategorized";
+                  if (!categoryGroups[cat]) categoryGroups[cat] = [];
+                  categoryGroups[cat].push({ ...q, _origIdx: i });
+                });
+                const categoryOrder = Object.keys(categoryGroups).sort((a, b) => {
+                  // Sort by highest priority item in each group
+                  const priOrder = { "Sev-A": 0, "Sev-B": 1, "Sev-C": 2, "Sev-D": 3 };
+                  const aMin = Math.min(...categoryGroups[a].map(q => priOrder[q.slaPriority] ?? 3));
+                  const bMin = Math.min(...categoryGroups[b].map(q => priOrder[q.slaPriority] ?? 3));
+                  return aMin - bMin || a.localeCompare(b);
+                });
+                return categoryOrder.map(cat => (
+                  <div key={cat}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", margin: "8px 0 4px", background: "#1E213008", borderBottom: "1px solid #1E2130" }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>
+                        🏷️ {cat}
+                      </span>
+                      <span style={{ fontSize: 9, padding: "1px 8px", borderRadius: 8, background: "#818CF822", color: "#818CF8", fontWeight: 600 }}>
+                        {categoryGroups[cat].length}
+                      </span>
+                    </div>
+                    {categoryGroups[cat].map((q, i) => {
                 // SLA countdown calculation
                 const slaDeadlineMs = q.slaDeadline ? new Date(q.slaDeadline).getTime() : 0;
                 const nowMs = Date.now();
@@ -778,7 +821,10 @@ export default function ZendeskModule({ assets, changes, currentUser, customers,
                   </div>
                 </div>
                 );
-              })}
+                    })}
+                  </div>
+                ));
+              })()}
             </div>
           )}
         </div>

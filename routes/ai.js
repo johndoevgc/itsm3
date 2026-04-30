@@ -798,7 +798,24 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
 
       const text = extractAIText(aiResult);
       if (!text) return json(res, 502, { error: "Empty response from Azure OpenAI" });
-      return json(res, 200, { text, model: getAIModel("secondary") });
+
+      // ─── Server-side card hints — detect intent from user prompt ───
+      const cardHints = [];
+      const lc = (userPrompt || '').toLowerCase();
+      if (lc.includes('create') && (lc.includes('incident') || lc.includes('ticket')))
+        cardHints.push({ type: 'form', template: 'incident_quick' });
+      if (lc.includes('approve') || lc.includes('approval'))
+        cardHints.push({ type: 'approval', scope: 'pending' });
+      if ((lc.includes('morning') || lc.includes('briefing') || lc.includes('summary')) && !lc.includes('email'))
+        cardHints.push({ type: 'briefing' });
+      if (lc.includes('sla') || lc.includes('breach'))
+        cardHints.push({ type: 'sla_alert' });
+      if (lc.includes('report') || lc.includes('metric') || lc.includes('kpi'))
+        cardHints.push({ type: 'metrics' });
+      if (lc.includes('knowledge') || lc.includes('kb') || lc.includes('article'))
+        cardHints.push({ type: 'kb_search', query: userPrompt });
+
+      return json(res, 200, { text, model: getAIModel("secondary"), cardHints: cardHints.length > 0 ? cardHints : undefined });
     } catch (err) {
       console.error("[Azure OpenAI Proxy]", err.message);
       return json(res, 502, { error: err.message });
@@ -1450,6 +1467,27 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       const { ticket, requestedBy } = body;
       if (!ticket || !requestedBy) return json(res, 400, { error: "ticket and requestedBy required" });
 
+      // v3.13 Layer 2: ensure Zendesk ticket is fresh before AI triage (best-effort, ≤2s)
+      if (ticket.zdTicketId && ctx.ZENDESK_SUBDOMAIN) {
+        try {
+          await new Promise((resolve) => {
+            const http = require("http");
+            const r = http.request({
+              hostname: "127.0.0.1", port: ctx.PORT || process.env.PORT || 8080,
+              path: `/api/zendesk/sync-ticket/${ticket.zdTicketId}`,
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Content-Length": 0, "x-internal-sync": "1" },
+            }, (rr) => { rr.on("data", () => {}); rr.on("end", resolve); });
+            r.on("error", () => resolve());
+            r.setTimeout(2000, () => { try { r.destroy(); } catch {} resolve(); });
+            r.end();
+          });
+          // Re-read incident from DB in case timestamps were updated
+          const fresh = await db.getOne("incidents", ticket.id);
+          if (fresh) { try { Object.assign(ticket, JSON.parse(fresh.data)); } catch {} }
+        } catch {}
+      }
+
       // Gather context for AI
       const allUsersRaw = await db.getAll("users");
       const teamMembers = allUsersRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
@@ -1478,7 +1516,13 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
         const cat = inc.category || "General";
         if (!categoryStats[cat]) categoryStats[cat] = { count: 0, totalHours: 0, assignees: {} };
         categoryStats[cat].count++;
-        categoryStats[cat].totalHours += inc.created || 0;
+        // Compute actual resolution hours from timestamps
+        const created = inc.createdAt || inc.created;
+        const resolved = inc.resolvedAt || inc.closedAt;
+        if (created && resolved) {
+          const hours = (new Date(resolved) - new Date(created)) / 3600000;
+          if (!isNaN(hours) && hours > 0 && hours < 8760) categoryStats[cat].totalHours += hours;
+        }
         if (inc.assignee) categoryStats[cat].assignees[inc.assignee] = (categoryStats[cat].assignees[inc.assignee] || 0) + 1;
       }
 
@@ -1531,6 +1575,19 @@ RULES:
 7. DUPLICATE CHECK: Compare the new ticket title+description against CURRENTLY OPEN TICKETS. If >70% semantically similar, flag it.
 8. KB COVERAGE: Check if EXISTING KB ARTICLES already cover this issue topic. If not, flag the gap.
 
+EXAMPLES:
+Example 1 — Network outage affecting entire floor:
+  Input: "Internet down on 3rd floor, 40+ users affected, no connectivity since 8am"
+  Output: { "category": "Network", "priority": "Sev-A", "assignmentGroup": "Network Team", "confidence": 95 }
+
+Example 2 — Password reset request:
+  Input: "I forgot my password and need it reset for my laptop login"
+  Output: { "category": "Access Management", "priority": "Sev-D", "assignmentGroup": "Service Desk", "confidence": 92 }
+
+Example 3 — Application crash:
+  Input: "SAP keeps crashing when I try to generate monthly report, error code 0x80041003"
+  Output: { "category": "Software", "subcategory": "Application Error", "priority": "Sev-C", "assignmentGroup": "Application Support", "confidence": 88 }
+
 Respond with ONLY valid JSON (no markdown):
 {
   "category": "string",
@@ -1553,7 +1610,7 @@ Respond with ONLY valid JSON (no markdown):
       const userPrompt = `TICKET TO TRIAGE:
 ID: ${ticket.id || "NEW"}
 Title: ${ticket.title || "Untitled"}
-Description: ${ticket.description || "No description"}
+Description: ${(ticket.description || "No description").substring(0, 3000)}
 Reporter: ${ticket.reporter || ticket.reporterEmail || "Unknown"}
 Customer: ${ticket.customer || "Unknown"}
 Contact Method: ${ticket.contactMethod || "Portal"}
@@ -1564,9 +1621,10 @@ Zendesk Ticket: ${ticket.zdTicketId ? "#" + ticket.zdTicketId : "N/A"}
 Created: ${ticket.createdAt || new Date().toISOString()}`;
 
       const payload = {
-        model: getAIModel("secondary"),
+        model: getAIModel("primary"),
         input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
-        max_output_tokens: 1000
+        max_output_tokens: 1000,
+        temperature: 0.1
       };
 
       const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
@@ -2398,6 +2456,7 @@ Respond with ONLY valid JSON (no markdown):
           inc.slaStatus = breached ? "Breached" : "Met";
           inc.slaRemediated = true;
           inc.slaRemediatedAt = now.toISOString();
+          inc.updatedAt = now.toISOString();
 
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
           remediated++;

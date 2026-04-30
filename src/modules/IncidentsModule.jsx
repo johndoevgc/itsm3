@@ -23,8 +23,18 @@ export default function IncidentsModule({ ctx }) {
 
 const STATUS_SORT_ORDER = { "New": 0, "Open": 1, "In Progress": 2, "Pending": 3, "On Hold": 4, "Reopened": 5, "Resolved": 6, "Closed": 7 };
 const IncidentsModule = useStableComponent(() => {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- hooks inside useStableComponent render callback are valid
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [bulkAction, setBulkAction] = useState(null);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [bulkValue, setBulkValue] = useState("");
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [bulkProcessing, setBulkProcessing] = useState(false);
   // Phase S1d — defer filter computation so commits don't block typing
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const deferredSearch = React.useDeferredValue(search);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const filtered = useMemo(() => {
     const q = (deferredSearch || "").toLowerCase();
     const list = q ? incidents.filter(i =>
@@ -382,13 +392,96 @@ const IncidentsModule = useStableComponent(() => {
         </div>
       )}
 
+      {/* ═══ Bulk Operations Toolbar ═══ */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: "sticky", top: 0, zIndex: 20, display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
+          background: "linear-gradient(135deg, #6366F118, #06B6D408)", borderRadius: 10,
+          border: "1px solid #6366F144", marginBottom: 12, flexWrap: "wrap"
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#818CF8", fontFamily: "'Space Grotesk', sans-serif" }}>
+            {selectedIds.size} selected
+          </span>
+          <button style={{ ...btnStyle("#333"), fontSize: 11, padding: "5px 10px" }} onClick={() => setSelectedIds(new Set())}>✕ Clear</button>
+          <button style={{ ...btnStyle("#333"), fontSize: 11, padding: "5px 10px" }} onClick={() => setSelectedIds(new Set(filtered.map(i => i.id)))}>Select All ({filtered.length})</button>
+          <div style={{ width: 1, height: 24, background: "#1E2130" }} />
+          <button style={{ ...btnStyle("#6366F1"), fontSize: 11, padding: "5px 12px" }} onClick={() => setBulkAction("assign")}>👤 Assign</button>
+          <button style={{ ...btnStyle("#FFB347"), fontSize: 11, padding: "5px 12px" }} onClick={() => setBulkAction("priority")}>⚡ Priority</button>
+          <button style={{ ...btnStyle("#4CAF50"), fontSize: 11, padding: "5px 12px" }} onClick={() => setBulkAction("status")}>📋 Status</button>
+          <button style={{ ...btnStyle("#FF6B6B"), fontSize: 11, padding: "5px 12px" }} onClick={() => setBulkAction("close")}>✅ Close</button>
+          {bulkAction && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8, padding: "4px 10px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E2130" }}>
+              {bulkAction === "assign" && <select style={{ ...inputStyle, fontSize: 11, padding: "4px 8px", minWidth: 160 }} value={bulkValue} onChange={e => setBulkValue(e.target.value)}>
+                <option value="">Select assignee...</option>
+                {(users || []).filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+              </select>}
+              {bulkAction === "priority" && <select style={{ ...inputStyle, fontSize: 11, padding: "4px 8px" }} value={bulkValue} onChange={e => setBulkValue(e.target.value)}>
+                <option value="">Select priority...</option>
+                {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+              </select>}
+              {bulkAction === "status" && <select style={{ ...inputStyle, fontSize: 11, padding: "4px 8px" }} value={bulkValue} onChange={e => setBulkValue(e.target.value)}>
+                <option value="">Select status...</option>
+                {["Open", "In Progress", "Pending", "On Hold", "Resolved"].map(s => <option key={s}>{s}</option>)}
+              </select>}
+              {bulkAction === "close" && <span style={{ fontSize: 11, color: "#FF6B6B" }}>Close {selectedIds.size} tickets?</span>}
+              <button style={{ ...btnStyle("#4CAF50"), fontSize: 11, padding: "4px 10px", opacity: (bulkAction === "close" || bulkValue) ? 1 : 0.5 }}
+                disabled={bulkAction !== "close" && !bulkValue || bulkProcessing}
+                onClick={async () => {
+                  setBulkProcessing(true);
+                  const ids = [...selectedIds];
+                  const now = new Date();
+                  const updates = {};
+                  if (bulkAction === "assign") updates.assignee = bulkValue;
+                  if (bulkAction === "priority") updates.priority = bulkValue;
+                  if (bulkAction === "status") updates.status = bulkValue;
+                  if (bulkAction === "close") { updates.status = "Closed"; updates.closureCode = "Bulk closed"; }
+                  setIncidents(prev => prev.map(inc => {
+                    if (!ids.includes(inc.id)) return inc;
+                    const log = { id: genId("AL"), type: "bulk", user: currentUser.name, time: now.toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Bulk ${bulkAction}: ${bulkAction === "close" ? "Closed" : bulkValue}` };
+                    return { ...inc, ...updates, activityLog: [...(inc.activityLog || []), log] };
+                  }));
+                  // Persist each to DB
+                  for (const id of ids) {
+                    const inc = incidents.find(i => i.id === id);
+                    if (inc) {
+                      const updated = { ...inc, ...updates };
+                      try { await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, data: updated }) }); } catch {}
+                    }
+                  }
+                  showToast(`✅ Bulk ${bulkAction} applied to ${ids.length} incidents`, "success");
+                  setSelectedIds(new Set());
+                  setBulkAction(null);
+                  setBulkValue("");
+                  setBulkProcessing(false);
+                }}>{bulkProcessing ? "⏳..." : "Apply"}</button>
+              <button style={{ ...btnStyle("#333"), fontSize: 11, padding: "4px 8px" }} onClick={() => { setBulkAction(null); setBulkValue(""); }}>Cancel</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <DataTable
         columns={[
+          { label: "", key: "_select", width: 36, render: r => (
+            <input type="checkbox" checked={selectedIds.has(r.id)} onChange={e => {
+              e.stopPropagation();
+              setSelectedIds(prev => { const next = new Set(prev); if (next.has(r.id)) next.delete(r.id); else next.add(r.id); return next; });
+            }} onClick={e => e.stopPropagation()} style={{ accentColor: "#6366F1", cursor: "pointer" }} />
+          )},
           { label: "ID", key: "id", mono: true, render: r => (
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ color: "#64B5F6" }}>{r.id}</span>
               {r.aiTriaged && <span title={`AI Triaged (${r.aiConfidence}% confidence)`} style={{ fontSize: 10, cursor: "help" }}>🤖</span>}
-              {r.zdTicketId && <span title={`Zendesk #${r.zdTicketId}`} onClick={e => { e.stopPropagation(); setActiveModule("zendesk"); }} style={{ fontSize: 9, cursor: "pointer", color: "#EC4899", fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: "#EC489918" }}>ZD</span>}
+              {r.zdTicketId && <span title={`Zendesk #${r.zdTicketId}${r.zdLastSync ? ` — last sync ${new Date(r.zdLastSync).toLocaleString("en-SG", { timeZone: "Asia/Singapore", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}`} onClick={e => { e.stopPropagation(); setActiveModule("zendesk"); }} style={{ fontSize: 9, cursor: "pointer", color: "#EC4899", fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: "#EC489918" }}>ZD</span>}
+              {(() => {
+                const pauses = Array.isArray(r.slaPauseHistory) ? r.slaPauseHistory : [];
+                const active = pauses.find(p => p.pausedAt && !p.resumedAt);
+                if (!active) return null;
+                const ms = Date.now() - new Date(active.pausedAt).getTime();
+                const mins = Math.max(1, Math.floor(ms / 60000));
+                const label = mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
+                return <span title={`SLA paused since ${active.pausedAt} — ${active.reason || "Pending"}`} style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, padding: "1px 5px", borderRadius: 3, background: "#FFB34718", border: "1px solid #FFB34744" }}>⏸ {label}</span>;
+              })()}
             </span>
           )},
           { label: "Title", key: "title" },

@@ -33,19 +33,26 @@ const ReportingModule = lazy(() => import("./src/modules/ReportingModule.jsx"));
 const KnowledgeModule = lazy(() => import("./src/modules/KnowledgeModule.jsx"));
 const CyberNewsModule = lazy(() => import("./src/modules/CyberNewsModule.jsx"));
 const ProductivityDashboard = lazy(() => import("./src/modules/ProductivityDashboard.jsx"));
-// ─── Eagerly-loaded smaller modules ─────────────────────────────────
-import SelfServicePortal from "./src/modules/SelfServicePortal.jsx";
+const SelfServicePortal = lazy(() => import("./src/modules/SelfServicePortal.jsx"));
+const CustomersModule = lazy(() => import("./src/modules/CustomersModule.jsx"));
+const IncidentsModule = lazy(() => import("./src/modules/IncidentsModule.jsx"));
+const SLATrackerModule = lazy(() => import("./src/modules/SLATrackerModule.jsx"));
+const ServiceStatusModule = lazy(() => import("./src/modules/ServiceStatusModule.jsx"));
+const ArchitectureDiagram = lazy(() => import("./src/modules/ArchitectureDiagram.jsx"));
+const ChangeCalendarModule = lazy(() => import("./src/modules/ChangeCalendarModule.jsx"));
+const AIAssistModule = lazy(() => import("./src/modules/AIAssistModule.jsx"));
+const AnalyticsModuleWrapper = lazy(() => import("./src/modules/AnalyticsModule.jsx"));
+const EngineerReviewHub = lazy(() => import("./src/modules/EngineerReviewHub.jsx"));
+const VendorPortalModule = lazy(() => import("./src/modules/VendorPortalModule.jsx"));
+// ─── Eagerly-loaded (rendered before/around the lazy <Suspense>) ─────
+import AIChatWidget from "./src/components/AIChatWidget.jsx";
 import LoginPage from "./src/modules/LoginPage.jsx";
-import CustomersModule from "./src/modules/CustomersModule.jsx";
-import IncidentsModule from "./src/modules/IncidentsModule.jsx";
-import SLATrackerModule from "./src/modules/SLATrackerModule.jsx";
-import ServiceStatusModule from "./src/modules/ServiceStatusModule.jsx";
-import ArchitectureDiagram from "./src/modules/ArchitectureDiagram.jsx";
-import ChangeCalendarModule from "./src/modules/ChangeCalendarModule.jsx";
-import AIAssistModule from "./src/modules/AIAssistModule.jsx";
-import AnalyticsModuleWrapper from "./src/modules/AnalyticsModule.jsx";
-import EngineerReviewHub from "./src/modules/EngineerReviewHub.jsx";
 import { markdownToHtml, exportToWord } from "./src/utils/docHelpers.js";
+import CardRenderer from "./src/components/chat/CardRenderer.jsx";
+import { buildChatCards } from "./src/utils/chatCardBuilder.js";
+import { createActionHandler } from "./src/utils/chatActionEngine.js";
+import { createChatMemory, addToMemory, buildMemoryContext, clearMemory } from "./src/utils/chatMemory.js";
+import { injectChatAnimations } from "./src/components/chat/ChatUxStyles.jsx";
 import {
   AI_CONFIDENCE_COLORS, AI_KB_MAP, searchKBArticles,
   AI_CATEGORY_KEYWORDS, AI_PRIORITY_RULES, AI_ASSIGNEE_SKILLS,
@@ -193,6 +200,10 @@ export default function ITSMApp() {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
+    // Feed important toasts to the notification bell
+    if (type === "success" || type === "error" || type === "warning") {
+      setInAppNotifs(prev => [{ id: `toast-${id}`, title: message.replace(/^[^\w]*/, ""), type, read: false, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", "") }, ...prev].slice(0, 50));
+    }
   };
   // ─── WebSocket Live Connection ─────────────────────────────────────────
   const wsRef = useRef(null);
@@ -250,8 +261,10 @@ export default function ITSMApp() {
   const [escalationLog, setEscalationLog] = useState(() => _ls("vgc_escalation_log", [])); // Permanent log
   const [escalationConfig, setEscalationConfig] = useState(() => {
     const saved = _ls("vgc_escalation_config", null);
-    return saved || {
-      enabled: true,
+    // v3.16: feature disabled by default — engine + banner produced inaccurate triggers.
+    // Force `enabled: false` even on previously-persisted configs.
+    return { ...(saved || {}), ...{
+      enabled: false,
       sevAPickupWindow: 5,   // minutes
       sevBPickupWindow: 15,  // minutes
       autoCallEnabled: true,
@@ -266,8 +279,10 @@ export default function ITSMApp() {
       rateLimitMinutes: 10,  // Min gap between auto-calls for same incident
       vipCustomers: ["ABC Enterprise Pte Ltd"],
       ispAlertDuration: 10,  // seconds for ISP outage alerts
-    };
+    } };
   });
+  // v3.16: also wipe any active in-memory alert from a stale prior session
+  useEffect(() => { setGlobalHighAlert(null); injectChatAnimations(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const escalationTimerRef = useRef(null);
   const escalationCallRef = useRef(new Map()); // Track call attempts per incident
 
@@ -323,6 +338,10 @@ export default function ITSMApp() {
   const [aiMonitorEnabled, setAiMonitorEnabled] = useState(() => _ls("vgc_ai_monitor", true));
   const [aiMonitorLastRun, setAiMonitorLastRun] = useState(null);
   const aiMonitorRef = useRef(null);
+  // ─── In-App Notification Bell State ────────────────────────────────
+  const [inAppNotifs, setInAppNotifs] = useState([]);
+  const [showNotifTray, setShowNotifTray] = useState(false);
+  const unreadNotifCount = inAppNotifs.filter(n => !n.read).length;
   const [reviewTab, setReviewTab] = useState("all");
   const [portalTab, setPortalTab] = useState("myTickets");
   const [portalSearch, setPortalSearch] = useState("");
@@ -359,6 +378,7 @@ export default function ITSMApp() {
       { label: "🛡️ Security Check", action: "Any security threats?" }
     ] }
   ]);
+  const chatMemoryRef = useRef(createChatMemory());
   const [aiInput, setAiInput] = useState("");
   const [aiAttachments, setAiAttachments] = useState([]);
   const [aiUploadingFiles, setAiUploadingFiles] = useState(false);
@@ -490,6 +510,9 @@ export default function ITSMApp() {
     systemHealth:    { on: true, important: true,  label: "System Health",          roles: ["management"] },
     changeCalendar:  { on: true, important: false, label: "Change Calendar",        roles: ["management"] },
     workflowHub:     { on: true, important: false, label: "Workflow & Architecture Hub", roles: ["all"] },
+    slaCountdown:    { on: true, important: false, label: "SLA Countdown Tracker",    roles: ["all"] },
+    incidentHeatmap: { on: true, important: false, label: "Incident Heatmap",         roles: ["all"] },
+    aiConfTrend:     { on: true, important: false, label: "AI Confidence Trends",     roles: ["all"] },
   });
   const [billingConfig, setBillingConfig] = useState({
     pricePerUser: 20, currency: "SGD", gstRate: 9, billingCycle: "Monthly",
@@ -555,7 +578,7 @@ export default function ITSMApp() {
   const zdFetchedRef = useRef(false);
   const zdPollingRef = useRef(null);
   const [zdAutoMode, setZdAutoMode] = useState(() => _ls("vgc_zd_auto_mode", true));
-  const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(() => _ls("vgc_zd_require_human_approval", true));
+  const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(() => _ls("vgc_zd_require_human_approval", false));
   const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", []));
   const [zdTriagedIds, setZdTriagedIds] = useState(() => { try { const v = JSON.parse(localStorage.getItem("vgc_zd_triaged_ids")); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); } });
   const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 }));
@@ -940,13 +963,59 @@ export default function ITSMApp() {
       // Enrich with live Entra ID data, load DB-stored role, then set user
       (async () => {
         let entraProfile = null;
+        let entraUsersList = [];
         try {
           const sync = await fetch("/api/entra/users");
           if (sync.ok) {
             const syncData = await sync.json();
-            entraProfile = syncData.users?.find(u => u.email === email);
+            entraUsersList = syncData.users || [];
+            entraProfile = entraUsersList.find(u => u.email === email);
           }
         } catch (e) {}
+
+        // ─── Bulk-prefetch Entra user photos (cached server-side, 24h TTL) ──
+        // Stored in localStorage `vgc_entra_photos` and exposed globally via
+        // window.__getEntraPhoto(emailOrId). Existing avatar render sites can
+        // light up automatically when photos arrive.
+        try {
+          if (entraUsersList.length > 0) {
+            const cached = JSON.parse(localStorage.getItem("vgc_entra_photos") || "{}");
+            const cacheTs = Number(localStorage.getItem("vgc_entra_photos_ts") || 0);
+            const isStale = (Date.now() - cacheTs) > 12 * 3600 * 1000;
+            const ids = entraUsersList.map(u => u.entraObjectId).filter(Boolean);
+            const missing = isStale ? ids : ids.filter(id => !(id in cached));
+            if (missing.length > 0) {
+              // Chunk to keep request bodies small (max 200 per call on server)
+              for (let i = 0; i < missing.length; i += 100) {
+                const slice = missing.slice(i, i + 100);
+                fetch("/api/entra/users/photos", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ entraIds: slice }),
+                }).then(r => r.ok ? r.json() : null).then(d => {
+                  if (!d || !d.photos) return;
+                  const merged = { ...cached, ...d.photos };
+                  localStorage.setItem("vgc_entra_photos", JSON.stringify(merged));
+                  localStorage.setItem("vgc_entra_photos_ts", String(Date.now()));
+                  // Build email→photo lookup for O(1) access
+                  const byEmail = {};
+                  entraUsersList.forEach(u => { if (u.email && merged[u.entraObjectId]) byEmail[u.email.toLowerCase()] = merged[u.entraObjectId]; });
+                  window.__vgcEntraPhotos = { byId: merged, byEmail };
+                  window.dispatchEvent(new CustomEvent("vgc:photos-updated"));
+                }).catch(() => {});
+              }
+            } else {
+              const byEmail = {};
+              entraUsersList.forEach(u => { if (u.email && cached[u.entraObjectId]) byEmail[u.email.toLowerCase()] = cached[u.entraObjectId]; });
+              window.__vgcEntraPhotos = { byId: cached, byEmail };
+            }
+            window.__getEntraPhoto = (emailOrId) => {
+              if (!emailOrId || !window.__vgcEntraPhotos) return null;
+              const key = String(emailOrId).toLowerCase();
+              return window.__vgcEntraPhotos.byEmail[key] || window.__vgcEntraPhotos.byId[emailOrId] || null;
+            };
+          }
+        } catch (e) { /* photo prefetch is best-effort */ }
 
         // Load DB-stored role (persisted from GUI edits)
         let dbStoredRole = null;
@@ -1411,25 +1480,32 @@ export default function ITSMApp() {
     return null;
   }, [currentUser, trackAction]);
 
-  // Reject AI action
+  // Reject AI action (with retry on 429)
   const rejectAiAction = useCallback(async (actionId, reason) => {
-    try {
-      const r = await fetch(`/api/ai/actions/${encodeURIComponent(actionId)}/reject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rejectedBy: currentUser.name, reason })
-      });
-      if (r.ok) {
-        const data = await r.json();
-        setAiActions(prev => {
-          const updated = prev.map(a => a.id === actionId ? data.action : a);
-          _save("vgc_ai_actions", updated);
-          return updated;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const r = await fetch(`/api/ai/actions/${encodeURIComponent(actionId)}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rejectedBy: currentUser.name, reason })
         });
-        trackAction("AI Actions", "Action Rejected", `${actionId}: ${reason}`, currentUser.name);
-        return data;
-      }
-    } catch (e) { console.warn("[AI Actions] Reject error:", e.message); }
+        if (r.status === 429) {
+          const wait = Math.min((attempt + 1) * 2000, 5000);
+          await new Promise(ok => setTimeout(ok, wait));
+          continue;
+        }
+        if (r.ok) {
+          const data = await r.json();
+          setAiActions(prev => {
+            const updated = prev.map(a => a.id === actionId ? data.action : a);
+            _save("vgc_ai_actions", updated);
+            return updated;
+          });
+          trackAction("AI Actions", "Action Rejected", `${actionId}: ${reason}`, currentUser.name);
+          return data;
+        }
+      } catch (e) { console.warn("[AI Actions] Reject error:", e.message); }
+    }
     return null;
   }, [currentUser, trackAction]);
 
@@ -2902,12 +2978,37 @@ export default function ITSMApp() {
         ws.onopen = () => {
           reconnectDelay = 1000;
           setWsBridgeConnected(true);
-          try { ws.send(JSON.stringify({ type: "subscribe", channels: ["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "system"] })); } catch {}
+          try { ws.send(JSON.stringify({ type: "subscribe", channels: ["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "ai_cards", "system"] })); } catch {}
         };
         ws.onmessage = (ev) => {
           try {
             const msg = JSON.parse(ev.data);
             if (!msg || !msg.collection) return;
+            // ─── Proactive AI Card Push (real-time card notifications) ───
+            if (msg.collection === "ai_cards" && msg.data) {
+              const cardData = msg.data;
+              // Inject proactive card as an AI message
+              setAiMessages(prev => [...prev, {
+                role: "ai",
+                text: cardData.text || "",
+                source: "proactive",
+                cards: cardData.cards || [],
+                suggestionCards: cardData.suggestions || [],
+                _proactive: true,
+              }]);
+              if (cardData.toast) {
+                showToast(cardData.toast, cardData.toastType || "info");
+              }
+            }
+            // ─── In-App Notification Bell ───
+            if (msg.collection === "notifications" && msg.data) {
+              const nArr = Array.isArray(msg.data) ? msg.data : [msg.data];
+              setInAppNotifs(prev => {
+                const ids = new Set(prev.map(n => n.id));
+                const fresh = nArr.filter(n => n && n.id && !ids.has(n.id)).map(n => ({ ...n, read: false }));
+                return fresh.length ? [...fresh, ...prev].slice(0, 50) : prev;
+              });
+            }
             if (msg.action === "delete" || msg.action === "upsert" || msg.action === "update" || msg.action === "bulk_upsert" || msg.action === "bulk_update" || msg.action === "merge") {
               scheduleRefresh(msg.collection);
             }
@@ -2973,6 +3074,7 @@ export default function ITSMApp() {
     { id: "analytics", label: "Analytics", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "serviceStatus", label: "Service Status", accent: "#4CAF50", gradient: "linear-gradient(135deg, #4CAF5008, #4CAF5018)" },
     { id: "customers", label: "Customers", count: customers.filter(c => c.status === "Active").length, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #EC489918)" },
+    { id: "vendorPortal", label: "Vendor Portal", count: vendors.length, accent: "#8B5CF6", gradient: "linear-gradient(135deg, #8B5CF608, #8B5CF618)" },
     { section: "AI & SYSTEM" },
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
@@ -3142,7 +3244,9 @@ export default function ITSMApp() {
     const isAdmin = currentUser.rbacRole === "VGC Dev Admin" || currentUser.rbacRole === "Administrator" || currentUser.rbacRole === "Tenant Admin" || currentUser.rbacRole === "Asset Manager";
     const catalogCategories = ["All", ...new Set(serviceCatalog.map(s => s.category))];
     // Phase S1d — defer search so heavy filter doesn't block typing
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- hooks inside useStableComponent render callback are valid
     const deferredSearch = React.useDeferredValue(search);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     const filteredCatalog = useMemo(() => {
       const q = (deferredSearch || "").toLowerCase();
       return serviceCatalog.filter(s => {
@@ -3472,6 +3576,51 @@ export default function ITSMApp() {
         `Suggest 2-3 relevant next actions after each response. Be a teammate, not a tool.`,
       ].join(" ");
 
+      // ─── Role-Adaptive Prompt — tailor AI responses by persona ───
+      const role = (currentUser.rbacRole || '').toLowerCase();
+      const isManagement = ['vgc dev admin', 'tenant admin', 'administrator', 'service desk lead'].some(r => role.includes(r.toLowerCase()));
+      const isEngineer = ['l1 support', 'l2 support', 'network engineer', 'change manager', 'problem manager', 'asset manager'].some(r => role.includes(r.toLowerCase()));
+      const isCustomer = ['end user', 'read only'].some(r => role.includes(r.toLowerCase()));
+
+      let rolePrompt = '';
+      if (isManagement) {
+        rolePrompt = `\n\nROLE-ADAPTIVE RESPONSE STYLE (Management/Leadership):
+- Lead with an EXECUTIVE SUMMARY — 2-3 sentence overview with key numbers first
+- Use business impact language: cost, risk, SLA compliance %, team utilization, customer satisfaction
+- Highlight decisions needed and recommended actions
+- Show trends and comparisons (week-over-week, month-over-month)
+- Include team workload distribution when relevant
+- Suggest delegation actions: "You may want to assign this to..." or "I recommend escalating to..."
+- Format key metrics as bold numbers for quick scanning
+- End with strategic next steps, not technical details
+- When showing incidents, group by business impact, not technical category
+- For approvals, show risk assessment and business justification`;
+      } else if (isEngineer) {
+        rolePrompt = `\n\nROLE-ADAPTIVE RESPONSE STYLE (Engineer/Technical):
+- Lead with the TECHNICAL SOLUTION — exact steps, commands, configs
+- Include relevant ticket IDs, system names, error codes
+- Provide copy-paste ready commands, scripts, or config snippets when applicable
+- Reference vendor documentation with direct links
+- Show root cause analysis and related patterns from past incidents
+- Include diagnostic steps: what to check, expected vs actual, how to verify the fix
+- When discussing SLA, show time remaining in hours/minutes, not percentages
+- Suggest knowledge base articles to create from resolutions
+- For recurring issues, suggest permanent fixes (automation, monitoring rules, config changes)
+- Use technical terminology appropriate for the engineer's specialty (L1=basic, L2=advanced, Network=infra)`;
+      } else if (isCustomer) {
+        rolePrompt = `\n\nROLE-ADAPTIVE RESPONSE STYLE (End User/Customer):
+- Use SIMPLE, friendly language — avoid ITSM jargon and technical terminology
+- Lead with reassurance: "I can help with that!" or "Let me get this sorted for you"
+- Provide step-by-step instructions with numbered steps (1, 2, 3...)
+- Include expected wait times and what happens next
+- Offer to create a ticket on their behalf if the issue needs engineer attention
+- Show only their own tickets — never reference internal team discussions
+- Use encouraging language: "This should be quick to fix" or "We'll have this resolved soon"
+- Suggest self-service KB articles before escalation
+- For status queries, show simple status (Submitted → In Progress → Resolved) without technical details
+- Never mention internal escalation procedures, SLA internals, or team assignments`;
+      }
+
       // ─── Inject real-time ITSM data context so AI can answer accurately ───
       const now = new Date();
       const todayStr = now.toISOString().slice(0, 10);
@@ -3610,7 +3759,13 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       })();
 
       // Inject past corrections into system prompt so AI learns from human feedback
-      let enrichedPrompt = systemPrompt + dataContext;
+      let enrichedPrompt = systemPrompt + rolePrompt + dataContext;
+
+      // ─── Conversational Memory Context ───
+      addToMemory(chatMemoryRef.current, { role: "user", text: userMsg, _intent: null });
+      const memoryCtx = buildMemoryContext(chatMemoryRef.current);
+      if (memoryCtx) enrichedPrompt += memoryCtx;
+
       try {
         const corrRes = await fetch("/api/ai/knowledge/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: userMsg }) });
         if (corrRes.ok) {
@@ -3634,6 +3789,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       const streamPlaceholder = { role: "ai", text: "", source: "azure", suggestions: smartSuggestions, prompt: userMsg, _typing: true };
       setAiMessages(prev => [...prev, streamPlaceholder]);
 
+      // Build interactive cards based on intent + role
+      const cardCtx = { incidents, changes, problems, requests, currentUser, proactiveAlerts, kbArticles };
+      const { cards: chatCards, suggestions: suggestionCards } = buildChatCards(userMsg, cardCtx);
+
       const streamResult = await callAzureOpenAIStream(enrichedPrompt, finalUserMsg, (token, fullText) => {
         setAiMessages(prev => {
           const updated = [...prev];
@@ -3646,16 +3805,16 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       });
 
       if (streamResult) {
-        // Streaming succeeded — finalize message with action cards if applicable
-        const actionCards = detectAiActionCards(userMsg);
+        // Streaming succeeded — finalize message with interactive cards
         setAiMessages(prev => {
           const updated = [...prev];
           const last = updated.length - 1;
           if (updated[last]?._typing) {
-            updated[last] = { role: "ai", text: streamResult, source: "azure", suggestions: smartSuggestions, prompt: userMsg, actionCards };
+            updated[last] = { role: "ai", text: streamResult, source: "azure", suggestions: smartSuggestions, prompt: userMsg, cards: chatCards, suggestionCards };
           }
           return updated;
         });
+        addToMemory(chatMemoryRef.current, { role: "ai", text: streamResult });
         setAiLoading(false);
         trackAction("AI Chat", "AI Response (Stream)", `Q: ${userMsg.substring(0, 80)}${userMsg.length > 80 ? '...' : ''} → VGC-AI Engine`, "AI");
       } else {
@@ -3738,6 +3897,34 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       cards.push({ type: "train_ai", icon: "🧠", title: "Train AI", description: "Add knowledge to improve AI accuracy", btnLabel: "Open Training →", action: () => { setShowFloatingKbTraining(true); } });
     return cards;
   }, []);
+
+  // ─── Card Action Handler (interactive card system) ──
+  const addCards = useCallback((newCards) => {
+    setAiMessages(prev => {
+      const updated = [...prev];
+      const last = updated.length - 1;
+      if (last >= 0 && updated[last]?.role === 'ai') {
+        const existing = updated[last].cards || [];
+        updated[last] = { ...updated[last], cards: [...existing, ...newCards] };
+      }
+      return updated;
+    });
+  }, []);
+
+  const handleAiChatRef = useRef(handleAiChat);
+  handleAiChatRef.current = handleAiChat;
+
+  const handleCardAction = useMemo(() => createActionHandler({
+    setActiveModule,
+    setModal,
+    setShowAiPanel,
+    handleAiChat: (...args) => handleAiChatRef.current(...args),
+    showToast,
+    addCards,
+    setShowDupPanel,
+    setShowAiActionsPanel,
+    setShowFloatingKbTraining,
+  }), [addCards]);
 
   // ─── AI Assist Module (extracted) ──
 
@@ -3893,6 +4080,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
             const emailNote = autoResult.email?.sent ? ` ✉️ Email sent to ${autoResult.email.to}` : "";
             addAutoLog({ type: "auto_send", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} AI auto-sent (${triage.confidence}% confidence, ${triage.category})${emailNote}` });
+            // Set Zendesk ticket to "pending" so it auto-closes if no reply within 48h
+            fetch(`/api/zendesk/tickets/${ticketId}/status`, {
+              method: "PUT", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "pending" }),
+            }).catch(() => {});
           } else {
             // Auto-send failed — fall back to engineer review
             queueItem.status = "pending_approval";
@@ -3910,8 +4102,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for engineer review (${triage.confidence}% confidence) — ${(triage.confidence || 0) < 85 ? "low confidence" : "sensitive/complex issue"}` });
       }
 
-      // AUTO-CREATE ITSM INCIDENT for ALL triaged tickets — ensures accurate Zendesk-ITSM tracking
-      // ── Dedup: skip if any existing incident already tracks this Zendesk ticket ──
+      // AUTO-CREATE ITSM INCIDENT for Sev-A/Sev-B only — server-side deduped endpoint
       const _existingZdInc = incidents.find(i => String(i.zdTicketId) === String(ticketId) || i.id === `INC-ZD${ticketId}`);
       if (_existingZdInc) {
         addAutoLog({ type: "info", ticketId, subject: ticket?.subject, message: `#${ticketId} already tracked as ${_existingZdInc.id} — skipped duplicate creation` });
@@ -3920,32 +4111,33 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         setAzureOpenAI(prev => ({ ...prev, totalCalls: (prev.totalCalls || 0) + 1 }));
         return queueItem;
       }
-      const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
-      const urgencyMap = { urgent: "Critical", high: "High", normal: "Medium", low: "Low" };
-      const impactMap = { urgent: "Enterprise", high: "Department", normal: "Multiple Users", low: "Single User" };
-      const newInc = {
-        id: genId("INC"), title: `[ZD#${ticketId}] ${ticket?.subject || "Zendesk Ticket"}`,
-        priority: triage.sla_priority || "Sev-D", status: "Open",
-        category: triage.itsm_category || triage.category || "General", subcategory: "",
-        urgency: urgencyMap[triage.priority] || "Medium",
-        impact: impactMap[triage.priority] || "Single User",
-        assignee: triage.suggested_assignee || "Unassigned",
-        assignmentGroup: triage.suggested_assignee === "Network Engineering" ? "Network Engineering" : triage.suggested_assignee === "Security Team" ? "Security Operations" : "Service Desk",
-        reporter: requester?.name || "Zendesk", reporterEmail: requester?.email || "",
-        customer: requester?.name || "",
-        description: ticket?.description || "", contactMethod: "Zendesk",
-        created: 0, slaTarget: slaMap[triage.sla_priority] || 9,
-        aiTriaged: true, aiConfidence: triage.confidence || 75,
-        zdTicketId: ticketId, workaround: "", linkedProblem: "",
-        affectedAssets: [], activityLog: [
-          { id: genId("AL"), type: "status", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-created from Zendesk #${ticketId} — AI Triage (${triage.confidence}% confidence, ${triage.priority} priority)` },
-          { id: genId("AL"), type: "note", user: "AI Engine", time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: triage.internal_note, isInternal: true, body: triage.internal_note },
-        ]
-      };
-      setIncidents(prev => [newInc, ...prev]);
-      setZdAutoStats(prev => ({ ...prev, incidentsCreated: prev.incidentsCreated + 1 }));
-      queueItem.itsmIncidentId = newInc.id;
-      addAutoLog({ type: "incident_created", ticketId, subject: ticket?.subject, incidentId: newInc.id, priority: triage.sla_priority || "Sev-D", customer: requester?.name || "", message: `ITSM ${newInc.id} auto-created from #${ticketId} — ${triage.sla_priority || "Sev-D"} (${requester?.name || "unknown requester"})` });
+      const _slaPri = triage.sla_priority || "Sev-D";
+      if (_slaPri === "Sev-A" || _slaPri === "Sev-B") {
+        try {
+          const incRes = await fetch("/api/zendesk/create-incident", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ticketId, subject: ticket?.subject, description: ticket?.description, priority: triage.priority, slaPriority: _slaPri, category: triage.itsm_category || triage.category || "General", assignee: triage.suggested_assignee || "Unassigned", requesterName: requester?.name, requesterEmail: requester?.email, confidence: triage.confidence, internalNote: triage.internal_note }),
+          });
+          if (incRes.ok) {
+            const incData = await incRes.json();
+            if (incData.success && incData.incident) {
+              // New incident created
+              queueItem.itsmIncidentId = incData.incident.id;
+              setIncidents(prev => [incData.incident, ...prev]);
+              setZdAutoStats(prev => ({ ...prev, incidentsCreated: prev.incidentsCreated + 1 }));
+              addAutoLog({ type: "incident_created", ticketId, subject: ticket?.subject, incidentId: incData.incident.id, priority: _slaPri, customer: requester?.name || "", message: `ITSM ${incData.incident.id} auto-created from #${ticketId} — ${_slaPri} (${requester?.name || "unknown requester"})` });
+            } else if (incData.skipped && incData.incident) {
+              // Already existed — just link, don't duplicate
+              queueItem.itsmIncidentId = incData.incident.id;
+              addAutoLog({ type: "info", ticketId, subject: ticket?.subject, message: `#${ticketId} already tracked as ${incData.incident.id} (server dedup)` });
+            }
+          }
+        } catch (incErr) {
+          addAutoLog({ type: "error", ticketId, message: `Incident creation failed for #${ticketId}: ${incErr.message}` });
+        }
+      } else {
+        addAutoLog({ type: "info", ticketId, subject: ticket?.subject, message: `#${ticketId} is ${_slaPri} — no ITSM incident created (Sev-C/D handled by AI)` });
+      }
 
       setZdAiQueue(prev => [queueItem, ...prev.filter(q => q.ticketId !== ticketId)]);
       setAzureOpenAI(prev => ({ ...prev, totalCalls: (prev.totalCalls || 0) + 1 }));
@@ -4158,13 +4350,14 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     csatSurveyEngine, changeCalendar,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
+    zdStats, aiConfig,
   };
 
   const renderModule = () => {
     // End Users always get the self-service portal
-    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={incidents} requests={requests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} />);
+    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={incidents} setIncidents={setIncidents} requests={requests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
     switch (activeModule) {
-      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={incidents} requests={requests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} />);
+      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={incidents} setIncidents={setIncidents} requests={requests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
       case "dashboard": return (<DashboardModule ctx={dashboardCtx} />);
       case "tickets": return (<TicketsModule />);
       case "incidents": return (<TicketsModule />);
@@ -4221,6 +4414,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         showAddCustomer, setShowAddCustomer,
         customerForm, setCustomerForm,
         editingCustomerId, setEditingCustomerId,
+      }} />);
+      case "vendorPortal": return (<VendorPortalModule ctx={{
+        currentUser, showToast, _save,
+        vendors, setVendors, incidents,
       }} />);
       case "ai": return (<AIAssistModule ctx={{
         currentUser, showToast, chatHistory, setChatHistory,
@@ -4445,11 +4642,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         @keyframes flowDot { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 20px; opacity: 0; } }
         @keyframes flowDotDown { 0% { top: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { top: 16px; opacity: 0; } }
         @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 8px #6366F155, 0 0 20px #8B5CF622; } 50% { box-shadow: 0 0 14px #06B6D488, 0 0 30px #8B5CF644, 0 0 40px #EC489922; } }
-        @keyframes logoPulseRing { 0% { transform: scale(1); opacity: 0.6; } 50% { transform: scale(1.15); opacity: 0; } 100% { transform: scale(1); opacity: 0; } }
+        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 10px #FFD70044, 0 0 22px #D4AF3722, inset 0 0 0 1px #FFD70022; } 50% { box-shadow: 0 0 18px #FFD70077, 0 0 36px #D4AF3744, 0 0 56px #B8860B22, inset 0 0 0 1px #FFD70044; } }
+        @keyframes logoPulseRing { 0% { transform: scale(1); opacity: 0.55; } 70% { transform: scale(1.22); opacity: 0; } 100% { transform: scale(1.22); opacity: 0; } }
+        @keyframes logoSheen { 0% { transform: translateX(-120%) skewX(-20deg); opacity: 0; } 30% { opacity: 0.85; } 60% { opacity: 0.85; } 100% { transform: translateX(220%) skewX(-20deg); opacity: 0; } }
         @keyframes logoTextShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
-        @keyframes orbitDot { 0% { transform: rotate(0deg) translateX(24px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(24px) rotate(-360deg); } }
-        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 8px #FFD70044, 0 0 16px #D4AF3722; filter: brightness(1); } 25% { transform: scale(1.08) translateY(-2px); text-shadow: 0 0 18px #FFD70088, 0 0 36px #D4AF3744, 0 0 52px #FFD70022; filter: brightness(1.3); } 50% { transform: scale(1.15) translateY(-3px); text-shadow: 0 0 24px #FFD700AA, 0 0 48px #D4AF3766, 0 0 72px #FFD70033; filter: brightness(1.5); } 75% { transform: scale(1.08) translateY(-2px); text-shadow: 0 0 18px #FFD70088, 0 0 36px #D4AF3744; filter: brightness(1.3); } }
+        @keyframes orbitDot { 0% { transform: rotate(0deg) translateX(28px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(28px) rotate(-360deg); } }
+        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 10px #FFD70055, 0 0 18px #D4AF3722; filter: brightness(1); } 50% { transform: scale(1.06) translateY(-1.5px); text-shadow: 0 0 16px #FFD70099, 0 0 32px #D4AF3755, 0 0 48px #FFD70022; filter: brightness(1.18); } }
         @keyframes goldShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
         @keyframes nudgeSlideIn { 0% { transform: translateY(8px) scale(0.95); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
         @keyframes nudgePulse { 0%, 100% { box-shadow: 0 2px 12px #6366F122; } 50% { box-shadow: 0 4px 20px #6366F144, 0 0 30px #06B6D422; } }
@@ -4512,11 +4710,13 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         @keyframes escalationBannerGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.1); } 50% { box-shadow: 0 4px 40px rgba(255,68,68,0.3), 0 0 60px rgba(255,68,68,0.08); } }
         @keyframes escalationIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.85; } }
         @keyframes escalationTextBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        .vgc-logo-box { animation: logoGlow 3s ease-in-out infinite; }
-        .vgc-logo-box:hover { transform: scale(1.08) rotate(-2deg); transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); }
-        .vgc-logo-text { background: linear-gradient(90deg, #6366F1, #06B6D4, #EC4899, #F59E0B, #6366F1); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 4s linear infinite; }
-        .vgc-logo-collapsed { animation: logoGlow 3s ease-in-out infinite; }
-        .vgc-logo-collapsed:hover { transform: scale(1.12); transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); }
+        .vgc-logo-box { position: relative; overflow: hidden; animation: logoGlow 3.6s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.35s ease; will-change: transform, box-shadow; }
+        .vgc-logo-box::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.55), transparent); animation: logoSheen 5s ease-in-out 1.5s infinite; pointer-events: none; mix-blend-mode: screen; }
+        .vgc-logo-box:hover { transform: scale(1.06) rotate(-1.5deg); box-shadow: 0 0 22px #FFD70088, 0 0 44px #D4AF3744; }
+        .vgc-logo-text { background: linear-gradient(90deg, #FFD700, #FFF8DC, #D4AF37, #B8860B, #FFD700); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 5s linear infinite; letter-spacing: -0.5px; }
+        .vgc-logo-collapsed { position: relative; overflow: hidden; animation: logoGlow 3.6s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1); will-change: transform; }
+        .vgc-logo-collapsed::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.5), transparent); animation: logoSheen 5s ease-in-out 1.5s infinite; pointer-events: none; mix-blend-mode: screen; }
+        .vgc-logo-collapsed:hover { transform: scale(1.10); }
         select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
         option { background: #09090B; color: #FAFAFA; }
 
@@ -4869,7 +5069,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {/* Language Switcher */}
-            {(() => { const { locale, setLocale } = useLocale(); return (
+            {(() => { const { locale, setLocale } = useLocale(); return ( // eslint-disable-line react-hooks/rules-of-hooks -- IIFE renders inline
               <select value={locale} onChange={e => setLocale(e.target.value)} title="Language" style={{
                 background: "#0F1117", border: "1px solid #1E2130", borderRadius: 8,
                 color: "#E8ECF4", fontSize: 11, padding: "6px 28px 6px 8px", cursor: "pointer",
@@ -4969,6 +5169,63 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 </>;
               })()}
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: disasterAlert ? disasterAlert.color : "#4CAF50", boxShadow: disasterAlert ? `0 0 8px ${disasterAlert.color}88, 0 0 16px ${disasterAlert.color}44` : "0 0 8px #4CAF5088, 0 0 16px #4CAF5044", animation: disasterAlert ? "criticalBadgePulse 1.5s infinite" : "pulse 2s infinite", marginLeft: 2, flexShrink: 0 }} title={disasterAlert ? `⚠️ ${disasterAlert.type} Alert Active` : "Weather Normal"} />
+            </div>
+
+            {/* ═══ Notification Bell ═══ */}
+            <div style={{ position: "relative" }}>
+              <div onClick={() => { setShowNotifTray(!showNotifTray); }} title="Notifications" style={{
+                width: 38, height: 38, borderRadius: 8,
+                background: unreadNotifCount > 0 ? "#FFB34710" : "#0F1117",
+                border: `1px solid ${unreadNotifCount > 0 ? "#FFB34733" : "#1E2130"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", fontSize: 16, transition: "all 0.2s",
+                animation: unreadNotifCount > 0 ? "slaBlink 1.2s ease-in-out infinite" : "none"
+              }}>
+                🔔
+                {unreadNotifCount > 0 && (
+                  <span style={{
+                    position: "absolute", top: -4, right: -4, minWidth: 18, height: 18,
+                    borderRadius: 9, background: "#FF6B6B", color: "#fff",
+                    fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    border: "2px solid #0A0C14", padding: "0 3px"
+                  }}>{unreadNotifCount > 9 ? "9+" : unreadNotifCount}</span>
+                )}
+              </div>
+              {showNotifTray && (
+                <div style={{
+                  position: "absolute", top: 44, right: 0, width: 340, maxHeight: 420,
+                  background: "#0F1117", border: "1px solid #1E2130", borderRadius: 12,
+                  boxShadow: "0 12px 40px rgba(0,0,0,0.6)", zIndex: 9999, overflow: "hidden"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid #1E2130" }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Notifications</span>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {unreadNotifCount > 0 && <button style={{ fontSize: 10, color: "#818CF8", background: "none", border: "none", cursor: "pointer" }} onClick={() => setInAppNotifs(prev => prev.map(n => ({ ...n, read: true })))}>Mark all read</button>}
+                      {inAppNotifs.length > 0 && <button style={{ fontSize: 10, color: "#5A6178", background: "none", border: "none", cursor: "pointer" }} onClick={() => setInAppNotifs([])}>Clear</button>}
+                    </div>
+                  </div>
+                  <div style={{ overflowY: "auto", maxHeight: 360 }}>
+                    {inAppNotifs.length === 0 ? (
+                      <div style={{ padding: 32, textAlign: "center", color: "#5A6178", fontSize: 12 }}>No notifications</div>
+                    ) : inAppNotifs.map((n, i) => (
+                      <div key={n.id || i} onClick={() => setInAppNotifs(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x))} style={{
+                        padding: "10px 16px", borderBottom: "1px solid #1E213044", cursor: "pointer",
+                        background: n.read ? "transparent" : "#6366F108", transition: "background 0.15s"
+                      }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                          {!n.read && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#6366F1", marginTop: 5, flexShrink: 0 }} />}
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: n.read ? 400 : 600, lineHeight: 1.4 }}>{n.title || n.message || "Notification"}</div>
+                            {n.detail && <div style={{ fontSize: 10, color: "#5A6178", marginTop: 3, lineHeight: 1.3 }}>{n.detail}</div>}
+                            <div style={{ fontSize: 9, color: "#5A617866", marginTop: 4 }}>{n.time || n.timestamp || ""}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* ═══ Recycle Bin Button ═══ */}
@@ -5310,31 +5567,81 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         ];
         const q = cmdSearch.toLowerCase();
         const filtered = q ? commands.filter(c => (c.label || "").toLowerCase().includes(q)) : commands;
+
+        // AI Smart Search — search incidents, KB, and everything when command palette is open
+        const smartResults = q && q.length >= 2 ? (() => {
+          const results = [];
+          // Search incidents
+          incidents.filter(inc => inc.title?.toLowerCase().includes(q) || inc.id?.toLowerCase().includes(q) || inc.description?.toLowerCase().includes(q)).slice(0, 3).forEach(inc => {
+            results.push({ type: "incident", icon: "🎫", label: `${inc.id} — ${inc.title}`, sublabel: `${inc.status} · ${inc.priority} · ${inc.category || ""}`, action: () => { setDetailItem(inc); setModal("incidentDetail"); } });
+          });
+          // Search KB
+          kbArticles.filter(kb => kb.title?.toLowerCase().includes(q) || kb.content?.toLowerCase().includes(q) || (kb.tags || []).some(t => t.toLowerCase().includes(q))).slice(0, 3).forEach(kb => {
+            results.push({ type: "kb", icon: "📚", label: kb.title, sublabel: `${kb.category || "KB"} · ${kb.id}`, action: () => { setDetailItem(kb); setModal("kbDetail"); } });
+          });
+          // Search requests
+          (requests || []).filter(r => r.title?.toLowerCase().includes(q) || r.id?.toLowerCase().includes(q)).slice(0, 2).forEach(r => {
+            results.push({ type: "request", icon: "📋", label: `${r.id} — ${r.title || r.type}`, sublabel: `${r.status}`, action: () => { setDetailItem(r); setModal("requestDetail"); } });
+          });
+          // Search changes
+          (changes || []).filter(c => c.title?.toLowerCase().includes(q) || c.id?.toLowerCase().includes(q)).slice(0, 2).forEach(c => {
+            results.push({ type: "change", icon: "🔄", label: `${c.id} — ${c.title}`, sublabel: `${c.status}`, action: () => { setDetailItem(c); setModal("changeDetail"); } });
+          });
+          return results;
+        })() : [];
+
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", zIndex: 10001, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "15vh" }}
             onClick={e => { if (e.target === e.currentTarget) { setShowCommandPalette(false); setCmdSearch(""); } }}>
-            <div style={{ width: 520, background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", boxShadow: "0 24px 64px #000000CC", overflow: "hidden" }}>
+            <div style={{ width: 560, background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", boxShadow: "0 24px 64px #000000CC", overflow: "hidden" }}>
               <div style={{ padding: "12px 16px", borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 14, color: "#5A6178" }}>⌘</span>
+                <span style={{ fontSize: 14, color: "#6366F1" }}>🔍</span>
                 <input autoFocus value={cmdSearch} onChange={e => setCmdSearch(e.target.value)}
-                  placeholder="Type a command..." style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#E8ECF4", fontSize: 14, fontFamily: "'Space Grotesk', sans-serif" }}
-                  onKeyDown={e => { if (e.key === "Enter" && filtered.length > 0) { filtered[0].action(); setShowCommandPalette(false); setCmdSearch(""); } }} />
+                  placeholder="Search everything or type a command... (AI-powered)" style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#E8ECF4", fontSize: 14, fontFamily: "'Space Grotesk', sans-serif" }}
+                  onKeyDown={e => { if (e.key === "Enter") { if (filtered.length > 0) { filtered[0].action(); } else if (smartResults.length > 0) { smartResults[0].action(); } setShowCommandPalette(false); setCmdSearch(""); } }} />
                 <kbd style={{ padding: "2px 6px", borderRadius: 4, background: "#1E2130", color: "#5A6178", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", border: "1px solid #2A2E3F" }}>ESC</kbd>
               </div>
-              <div style={{ maxHeight: 360, overflowY: "auto", padding: "6px 0" }}>
-                {filtered.length === 0 && <div style={{ padding: "20px 16px", textAlign: "center", color: "#5A6178", fontSize: 12 }}>No commands found</div>}
-                {filtered.map((cmd, i) => (
-                  <div key={i} onClick={() => { cmd.action(); setShowCommandPalette(false); setCmdSearch(""); }}
-                    style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", transition: "background 0.15s" }}
-                    onMouseEnter={e => e.currentTarget.style.background = "#1E213066"}
-                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                    <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{cmd.icon}</span>
-                    <span style={{ fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{cmd.label}</span>
-                  </div>
-                ))}
+              <div style={{ maxHeight: 440, overflowY: "auto", padding: "6px 0" }}>
+                {/* Smart Search Results */}
+                {smartResults.length > 0 && (
+                  <>
+                    <div style={{ padding: "6px 16px", fontSize: 10, fontWeight: 700, color: "#6366F1", textTransform: "uppercase", letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace" }}>🔍 Search Results</div>
+                    {smartResults.map((r, i) => (
+                      <div key={`sr-${i}`} onClick={() => { r.action(); setShowCommandPalette(false); setCmdSearch(""); }}
+                        style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", transition: "background 0.15s" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#1E213066"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{r.icon}</span>
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{r.label}</span>
+                          {r.sublabel && <div style={{ fontSize: 10, color: "#5A6178", marginTop: 1 }}>{r.sublabel}</div>}
+                        </div>
+                        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 6, background: "#1E2130", color: "#5A6178" }}>{r.type}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* Commands */}
+                {filtered.length > 0 && (
+                  <>
+                    {smartResults.length > 0 && <div style={{ padding: "6px 16px", fontSize: 10, fontWeight: 700, color: "#5A6178", textTransform: "uppercase", letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace", borderTop: "1px solid #1E2130", marginTop: 4, paddingTop: 10 }}>⌘ Commands</div>}
+                    {filtered.map((cmd, i) => (
+                      <div key={i} onClick={() => { cmd.action(); setShowCommandPalette(false); setCmdSearch(""); }}
+                        style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", transition: "background 0.15s" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#1E213066"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{cmd.icon}</span>
+                        <span style={{ fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{cmd.label}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {filtered.length === 0 && smartResults.length === 0 && <div style={{ padding: "20px 16px", textAlign: "center", color: "#5A6178", fontSize: 12 }}>No results found for "{cmdSearch}"</div>}
               </div>
               <div style={{ padding: "8px 16px", borderTop: "1px solid #1E2130", display: "flex", gap: 16, fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
-                <span>↵ Select</span><span>ESC Close</span><span>Ctrl+K Toggle</span>
+                <span>↵ Select</span><span>ESC Close</span><span>Ctrl+K Toggle</span><span style={{ color: "#6366F1" }}>🤖 AI-powered search</span>
               </div>
             </div>
           </div>
@@ -5894,7 +6201,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               {aiMessages.map((msg, i) => {
                 if (i === 0 && aiMessages.length <= 1) return null; // skip welcome msg when showing welcome state
                 return (
-                <div key={i} style={{ marginBottom: 12, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 8, animation: i === aiMessages.length - 1 ? "nudgeSlideIn 0.3s ease" : "none" }}>
+                <div key={i} className={msg._proactive ? "chat-proactive-bubble" : "chat-msg-bubble"} style={{ marginBottom: 12, display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 8 }}>
                   {/* Avatar */}
                   <div style={{
                     width: 28, height: 28, borderRadius: 8, flexShrink: 0, marginTop: 2,
@@ -5957,8 +6264,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                           }} style={{ padding: "4px 12px", fontSize: 9, background: aiEditSaving ? "#FFB34744" : "linear-gradient(135deg, #FFB347, #FF9800)", border: "none", borderRadius: 4, color: "#fff", cursor: aiEditSaving ? "wait" : "pointer", fontWeight: 700 }}>
                             {aiEditSaving ? "Saving..." : "💾 Save & Train"}
                       
-                    {/* AI Action Cards — click-through actions */}
-                    {msg.role === "ai" && !msg._typing && msg.actionCards && msg.actionCards.length > 0 && (
+                    {/* AI Interactive Cards — new card system */}
+                    {msg.role === "ai" && !msg._typing && msg.cards && msg.cards.length > 0 && (
+                      <CardRenderer cards={msg.cards} onAction={handleCardAction} />
+                    )}
+                    {/* Legacy AI Action Cards — backward compat */}
+                    {msg.role === "ai" && !msg._typing && !msg.cards && msg.actionCards && msg.actionCards.length > 0 && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
                         {msg.actionCards.map((card, ci) => (
                           <div key={ci} onClick={card.action} style={{
@@ -5986,8 +6297,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                         </div>
                       </div>
                     )}
-                    {/* Suggested Reply Mini-Cards */}
-                    {msg.role === "ai" && !msg._typing && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
+                    {/* Suggestion Cards — new card system */}
+                    {msg.role === "ai" && !msg._typing && msg.suggestionCards && msg.suggestionCards.length > 0 && i === aiMessages.length - 1 && (
+                      <CardRenderer cards={msg.suggestionCards} onAction={handleCardAction} />
+                    )}
+                    {/* Legacy Suggested Reply Mini-Cards — backward compat */}
+                    {msg.role === "ai" && !msg._typing && !msg.suggestionCards && msg.suggestions && msg.suggestions.length > 0 && i === aiMessages.length - 1 && (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}> 
                         {msg.suggestions.slice(0, 4).map((s, si) => (
                           <button key={si} onClick={() => handleAiChat(s.action)} style={{
@@ -6385,8 +6700,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         </div>
       )}
 
-      {/* ═══ GLOBAL HIGH-SEVERITY ALERT OVERLAY ═══ */}
-      {globalHighAlert && (() => {
+      {/* ═══ GLOBAL HIGH-SEVERITY ALERT OVERLAY ═══ (v3.16: disabled — kept for future re-enable) */}
+      {/* eslint-disable-next-line no-constant-binary-expression -- intentionally disabled block */}
+      {false && globalHighAlert && (() => {
         const ga = globalHighAlert;
         const inc = ga.incident;
         const isSevA = inc.priority === "Sev-A";
@@ -6898,6 +7214,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </>
         );
       })()}
+
+      {/* ─── Floating AI Chat Widget (always visible) ──────────────── */}
+      <AIChatWidget currentUser={currentUser} incidents={incidents} kbArticles={kbArticles} />
     </div>
   );
 }

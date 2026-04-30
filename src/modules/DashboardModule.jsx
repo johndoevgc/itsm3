@@ -20,6 +20,581 @@ import {
   Badge, PriorityDot, StatCard, DataTable, Modal, FormField, SearchBar, WorkflowHeader,
 } from "../components/SharedComponents.jsx";
 
+/* ─── Sub-components (hooks-safe) ────────────────────────── */
+
+function CsatAiInsightsWidget({ incidents, btnStyle }) {
+  const [csatAiInsights, setCsatAiInsights] = React.useState(null);
+  const [csatAiLoading, setCsatAiLoading] = React.useState(false);
+  const csatMetrics = useMemo(() => {
+    const resolved = incidents.filter(i => ["Resolved", "Closed"].includes(i.status));
+    const avgResTime = resolved.length > 0 ? resolved.reduce((s, i) => {
+      const created = new Date(i.createdAt || i.created || 0).getTime();
+      const res = new Date(i.resolvedAt || i.updatedAt || Date.now()).getTime();
+      return s + (res - created);
+    }, 0) / resolved.length / 3600000 : 0;
+    const reopened = incidents.filter(i => (i.activityLog || []).some(a => (a.message || "").toLowerCase().includes("reopen"))).length;
+    const escalated = incidents.filter(i => (i.activityLog || []).some(a => (a.message || "").toLowerCase().includes("escalat"))).length;
+    const catCounts = {};
+    incidents.forEach(i => { const c = i.category || "Other"; catCounts[c] = (catCounts[c] || 0) + 1; });
+    const worstCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0];
+    const satisfactionScore = Math.max(0, Math.min(100, Math.round(100 - (reopened / Math.max(resolved.length, 1)) * 100 - (escalated / Math.max(incidents.length, 1)) * 50)));
+    return { resolved: resolved.length, total: incidents.length, avgResTime: Math.round(avgResTime * 10) / 10, reopened, escalated, worstCat, satisfactionScore };
+  }, [incidents]);
+  return (
+    <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #EC489922", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h4 style={{ margin: 0, fontSize: 12, color: "#EC4899", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+          🧠 AI Customer Satisfaction Insights
+        </h4>
+        <button disabled={csatAiLoading} onClick={async () => {
+          setCsatAiLoading(true);
+          try {
+            const r = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: `Analyze CSAT metrics and provide 3-4 actionable insights:\n- Total tickets: ${csatMetrics.total}, Resolved: ${csatMetrics.resolved}\n- Avg resolution: ${csatMetrics.avgResTime}h\n- Reopened: ${csatMetrics.reopened}, Escalated: ${csatMetrics.escalated}\n- Top category: ${csatMetrics.worstCat?.[0] || "N/A"} (${csatMetrics.worstCat?.[1] || 0} tickets)\n- Satisfaction score: ${csatMetrics.satisfactionScore}%\nProvide brief insights as JSON array: [{"title":"...","detail":"...","impact":"high|medium|low","action":"..."}]` })
+            });
+            const d = await r.json();
+            try { setCsatAiInsights(JSON.parse(d.reply || "[]")); } catch { setCsatAiInsights([{ title: "AI Analysis", detail: d.reply || d.message || "No insights", impact: "medium", action: "Review manually" }]); }
+          } catch { setCsatAiInsights([{ title: "Service Unavailable", detail: "AI analysis service is currently unavailable", impact: "low", action: "Try again later" }]); }
+          setCsatAiLoading(false);
+        }} style={{ ...btnStyle("#EC4899"), fontSize: 9, padding: "3px 10px" }}>
+          {csatAiLoading ? "⏳ Analyzing..." : "🧠 Analyze"}
+        </button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 12 }}>
+        {[
+          { label: "Satisfaction", value: `${csatMetrics.satisfactionScore}%`, color: csatMetrics.satisfactionScore >= 80 ? "#81C784" : csatMetrics.satisfactionScore >= 60 ? "#FFB347" : "#FF6B6B" },
+          { label: "Resolution Rate", value: `${csatMetrics.total > 0 ? Math.round((csatMetrics.resolved / csatMetrics.total) * 100) : 0}%`, color: "#64B5F6" },
+          { label: "Avg Res. Time", value: `${csatMetrics.avgResTime}h`, color: csatMetrics.avgResTime < 24 ? "#81C784" : "#FFB347" },
+          { label: "Reopened", value: csatMetrics.reopened, color: csatMetrics.reopened > 0 ? "#FF6B6B" : "#81C784" },
+          { label: "Escalated", value: csatMetrics.escalated, color: csatMetrics.escalated > 0 ? "#FFB347" : "#81C784" },
+        ].map((m, i) => (
+          <div key={i} style={{ textAlign: "center", padding: "8px 4px", borderRadius: 6, background: `${m.color}08`, border: `1px solid ${m.color}22` }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: m.color, fontFamily: "'JetBrains Mono', monospace" }}>{m.value}</div>
+            <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>{m.label}</div>
+          </div>
+        ))}
+      </div>
+      {csatAiInsights ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {csatAiInsights.map((ins, i) => {
+            const impactColor = ins.impact === "high" ? "#FF6B6B" : ins.impact === "medium" ? "#FFB347" : "#64B5F6";
+            return (
+              <div key={i} style={{ padding: 10, borderRadius: 6, background: "#0F1117", border: `1px solid ${impactColor}22` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: `${impactColor}18`, color: impactColor, fontWeight: 600, textTransform: "uppercase" }}>{ins.impact}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4" }}>{ins.title}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "#8A94A6", lineHeight: 1.5, marginBottom: 6 }}>{ins.detail}</div>
+                <div style={{ fontSize: 9, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace" }}>→ {ins.action}</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{ textAlign: "center", padding: 12, color: "#5A6178", fontSize: 10 }}>Click "Analyze" for AI-powered insights on customer satisfaction drivers</div>
+      )}
+    </div>
+  );
+}
+
+function SentimentAnalysisWidget({ incidents }) {
+  const sentimentData = useMemo(() => {
+    const recent = incidents.filter(i => {
+      const d = new Date(i.createdAt || i.created || 0);
+      return !isNaN(d.getTime()) && Date.now() - d.getTime() < 30 * 86400000;
+    });
+    const analyze = (text = "") => {
+      const t = text.toLowerCase();
+      const negWords = ["urgent","critical","broken","down","fail","error","crash","angry","frustrated","terrible","worst","unacceptable","outage","stuck","impossible","slow","delay"];
+      const posWords = ["thank","great","resolved","fixed","excellent","appreciate","wonderful","helpful","good","happy","satisfied","quick","fast","smooth"];
+      const neg = negWords.filter(w => t.includes(w)).length;
+      const pos = posWords.filter(w => t.includes(w)).length;
+      if (neg > pos) return "negative";
+      if (pos > neg) return "positive";
+      return "neutral";
+    };
+    let positive = 0, neutral = 0, negative = 0;
+    recent.forEach(i => {
+      const s = analyze(`${i.title} ${i.description || ""}`);
+      if (s === "positive") positive++;
+      else if (s === "negative") negative++;
+      else neutral++;
+    });
+    const total = positive + neutral + negative || 1;
+    const weeks = [0, 1, 2, 3].map(w => {
+      const start = Date.now() - (w + 1) * 7 * 86400000;
+      const end = Date.now() - w * 7 * 86400000;
+      const wk = incidents.filter(i => {
+        const d = new Date(i.createdAt || i.created || 0).getTime();
+        return d >= start && d < end;
+      });
+      let wp = 0, wn = 0;
+      wk.forEach(i => { const s = analyze(`${i.title} ${i.description || ""}`); if (s === "positive") wp++; if (s === "negative") wn++; });
+      return { week: `W-${w}`, positive: wp, negative: wn, total: wk.length || 1 };
+    }).reverse();
+    const catNeg = {};
+    recent.filter(i => analyze(`${i.title} ${i.description || ""}`) === "negative").forEach(i => {
+      const cat = i.category || "Other";
+      catNeg[cat] = (catNeg[cat] || 0) + 1;
+    });
+    const topNegCats = Object.entries(catNeg).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    return { positive, neutral, negative, total, weeks, topNegCats, score: Math.round((positive / total) * 100) };
+  }, [incidents]);
+
+  const score = sentimentData.score;
+  const scoreColor = score >= 60 ? "#4CAF50" : score >= 40 ? "#FFB347" : "#FF6B6B";
+
+  return (
+    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>💬</span> AI Sentiment Analysis
+          <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400 }}>Last 30 days</span>
+        </h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 22, fontWeight: 800, color: scoreColor, fontFamily: "'JetBrains Mono', monospace" }}>{score}%</span>
+          <span style={{ fontSize: 10, color: "#5A6178" }}>positive</span>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+        {[
+          { label: "Positive", value: sentimentData.positive, icon: "😊", color: "#4CAF50", bg: "#0D2D1A" },
+          { label: "Neutral", value: sentimentData.neutral, icon: "😐", color: "#FFB347", bg: "#3B1F00" },
+          { label: "Negative", value: sentimentData.negative, icon: "😠", color: "#FF6B6B", bg: "#2D0D0D" },
+        ].map((s, i) => (
+          <div key={i} style={{ background: s.bg, borderRadius: 8, padding: "12px 14px", border: `1px solid ${s.color}22`, textAlign: "center" }}>
+            <div style={{ fontSize: 20, marginBottom: 4 }}>{s.icon}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: s.color, fontFamily: "'JetBrains Mono', monospace" }}>{s.value}</div>
+            <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{s.label}</div>
+            <div style={{ fontSize: 9, color: s.color, fontFamily: "'JetBrains Mono', monospace" }}>{Math.round((s.value / sentimentData.total) * 100)}%</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+        <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 10 }}>Weekly Sentiment Trend</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 60 }}>
+            {sentimentData.weeks.map((w, i) => {
+              const posPct = (w.positive / w.total) * 100;
+              const negPct = (w.negative / w.total) * 100;
+              return (
+                <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                  <div style={{ width: "80%", display: "flex", flexDirection: "column", gap: 1 }}>
+                    <div style={{ height: `${Math.max(2, posPct * 0.5)}px`, background: "#4CAF50", borderRadius: "2px 2px 0 0", transition: "height 0.3s" }} />
+                    <div style={{ height: `${Math.max(2, negPct * 0.5)}px`, background: "#FF6B6B", borderRadius: "0 0 2px 2px", transition: "height 0.3s" }} />
+                  </div>
+                  <span style={{ fontSize: 8, color: "#5A6178" }}>{w.week}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "center" }}>
+            <span style={{ fontSize: 9, color: "#4CAF50", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: "#4CAF50", display: "inline-block" }} /> Positive</span>
+            <span style={{ fontSize: 9, color: "#FF6B6B", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: "#FF6B6B", display: "inline-block" }} /> Negative</span>
+          </div>
+        </div>
+
+        <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 10 }}>Top Pain Points</div>
+          {sentimentData.topNegCats.length === 0 && <div style={{ fontSize: 11, color: "#5A6178", textAlign: "center", padding: 10 }}>No negative sentiment detected 🎉</div>}
+          {sentimentData.topNegCats.map(([cat, count], i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: i < sentimentData.topNegCats.length - 1 ? "1px solid #1E213033" : "none" }}>
+              <span style={{ fontSize: 11, color: "#C4CAD6", flex: 1 }}>{cat}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{count}</span>
+              <div style={{ width: 40, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(100, (count / (sentimentData.topNegCats[0]?.[1] || 1)) * 100)}%`, height: "100%", background: "#FF6B6B", borderRadius: 2 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PredictiveAnalyticsWidget({ incidents }) {
+  const predData = useMemo(() => {
+    const weeklyVols = [];
+    for (let w = 7; w >= 0; w--) {
+      const start = Date.now() - (w + 1) * 7 * 86400000;
+      const end = Date.now() - w * 7 * 86400000;
+      const count = incidents.filter(i => {
+        const d = new Date(i.createdAt || i.created || 0).getTime();
+        return d >= start && d < end;
+      }).length;
+      weeklyVols.push({ week: `W-${w}`, count });
+    }
+    const n = weeklyVols.length;
+    const sumX = weeklyVols.reduce((s, _, i) => s + i, 0);
+    const sumY = weeklyVols.reduce((s, w) => s + w.count, 0);
+    const sumXY = weeklyVols.reduce((s, w, i) => s + i * w.count, 0);
+    const sumX2 = weeklyVols.reduce((s, _, i) => s + i * i, 0);
+    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX || 1);
+    const intercept = (sumY - slope * sumX) / n;
+    const forecast = [1, 2, 3, 4].map(fw => ({
+      week: `F+${fw}`,
+      predicted: Math.max(0, Math.round(intercept + slope * (n + fw - 1))),
+    }));
+    const trend = slope > 0.5 ? "increasing" : slope < -0.5 ? "decreasing" : "stable";
+    const trendColor = slope > 0.5 ? "#FF6B6B" : slope < -0.5 ? "#4CAF50" : "#FFB347";
+    const catCounts = {};
+    incidents.forEach(i => { const c = i.category || "Other"; catCounts[c] = (catCounts[c] || 0) + 1; });
+    const topCats = Object.entries(catCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const hourCounts = new Array(24).fill(0);
+    incidents.forEach(i => {
+      const d = new Date(i.createdAt || i.created || 0);
+      if (!isNaN(d.getTime())) hourCounts[d.getHours()]++;
+    });
+    const peakHour = hourCounts.indexOf(Math.max(...hourCounts));
+    return { weeklyVols, forecast, trend, trendColor, slope: Math.round(slope * 10) / 10, topCats, peakHour, hourCounts, avgWeekly: Math.round(sumY / n) };
+  }, [incidents]);
+
+  const maxVol = Math.max(...predData.weeklyVols.map(w => w.count), ...predData.forecast.map(f => f.predicted), 1);
+
+  return (
+    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>📈</span> AI Predictive Analytics
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: `${predData.trendColor}15`, color: predData.trendColor, fontWeight: 600 }}>
+            {predData.trend === "increasing" ? "↗ Increasing" : predData.trend === "decreasing" ? "↘ Decreasing" : "→ Stable"} ({predData.slope > 0 ? "+" : ""}{predData.slope}/wk)
+          </span>
+        </h3>
+        <div style={{ fontSize: 10, color: "#5A6178" }}>Avg {predData.avgWeekly} tickets/week · Peak hour: {predData.peakHour}:00</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+        <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 10 }}>Volume Trend & 4-Week Forecast</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 80 }}>
+            {predData.weeklyVols.map((w, i) => (
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <span style={{ fontSize: 8, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{w.count}</span>
+                <div style={{ width: "100%", height: `${(w.count / maxVol) * 60}px`, background: "linear-gradient(180deg, #64B5F6, #64B5F644)", borderRadius: "3px 3px 0 0", minHeight: 2, transition: "height 0.3s" }} />
+                <span style={{ fontSize: 7, color: "#5A6178" }}>{w.week}</span>
+              </div>
+            ))}
+            <div style={{ width: 1, height: 60, background: "#5A617844", margin: "0 2px" }} />
+            {predData.forecast.map((f, i) => (
+              <div key={`f-${i}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <span style={{ fontSize: 8, color: "#8B5CF6", fontFamily: "'JetBrains Mono', monospace" }}>{f.predicted}</span>
+                <div style={{ width: "100%", height: `${(f.predicted / maxVol) * 60}px`, background: "linear-gradient(180deg, #8B5CF6, #8B5CF644)", borderRadius: "3px 3px 0 0", minHeight: 2, transition: "height 0.3s", borderStyle: "dashed", borderWidth: "1px 1px 0 1px", borderColor: "#8B5CF644" }} />
+                <span style={{ fontSize: 7, color: "#8B5CF6" }}>{f.week}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "center" }}>
+            <span style={{ fontSize: 9, color: "#64B5F6", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: "#64B5F6", display: "inline-block" }} /> Actual</span>
+            <span style={{ fontSize: 9, color: "#8B5CF6", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: "#8B5CF6", display: "inline-block", borderStyle: "dashed", borderWidth: 1 }} /> Forecast</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044", flex: 1 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 8 }}>Predicted Hot Categories</div>
+            {predData.topCats.map(([cat, count], i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0" }}>
+                <span style={{ fontSize: 11, color: "#C4CAD6", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cat}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", minWidth: 24, textAlign: "right" }}>{count}</span>
+                <div style={{ width: 30, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ width: `${(count / (predData.topCats[0]?.[1] || 1)) * 100}%`, height: "100%", background: i === 0 ? "#FF6B6B" : i === 1 ? "#FFB347" : "#64B5F6", borderRadius: 2 }} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 6 }}>Peak Activity Hours</div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 30 }}>
+              {predData.hourCounts.map((c, h) => {
+                const maxH = Math.max(...predData.hourCounts, 1);
+                return <div key={h} title={`${h}:00 — ${c} tickets`} style={{ flex: 1, height: `${(c / maxH) * 28}px`, background: h === predData.peakHour ? "#FF6B6B" : c > maxH * 0.7 ? "#FFB347" : "#64B5F644", borderRadius: "1px 1px 0 0", minHeight: c > 0 ? 2 : 0 }} />;
+              })}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+              <span style={{ fontSize: 7, color: "#5A6178" }}>0h</span>
+              <span style={{ fontSize: 7, color: "#5A6178" }}>12h</span>
+              <span style={{ fontSize: 7, color: "#5A6178" }}>23h</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Phase 11.1: SLA Countdown Tracker ─────────────────── */
+function SlaCountdownWidget({ incidents, computeIncidentSla, setActiveModule }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 30000); return () => clearInterval(id); }, []);
+
+  const atRisk = useMemo(() => {
+    return incidents
+      .filter(i => i.status !== "Resolved" && i.status !== "Closed")
+      .map(i => {
+        const sla = computeIncidentSla(i);
+        return { ...i, sla };
+      })
+      .filter(i => i.sla.isAtRisk || i.sla.isBreached)
+      .sort((a, b) => (a.sla.remainingMs || 0) - (b.sla.remainingMs || 0))
+      .slice(0, 8);
+  }, [incidents, tick]);
+
+  const fmtTime = (ms) => {
+    if (ms == null) return "—";
+    const neg = ms < 0;
+    const abs = Math.abs(ms);
+    const h = Math.floor(abs / 3600000);
+    const m = Math.floor((abs % 3600000) / 60000);
+    return `${neg ? "-" : ""}${h}h ${m}m`;
+  };
+
+  if (atRisk.length === 0) return (
+    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #4CAF5033", padding: 20, marginBottom: 20, textAlign: "center" }}>
+      <div style={{ fontSize: 14, color: "#4CAF50", fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        <span style={{ fontSize: 18 }}>✅</span> All SLAs On Track
+      </div>
+      <div style={{ fontSize: 11, color: "#5A6178", marginTop: 4 }}>No incidents approaching SLA breach</div>
+    </div>
+  );
+
+  return (
+    <div role="region" aria-label="SLA Countdown Tracker" style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #FF6B6B22", padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #FF6B6B, #FFB347, #4CAF50)" }} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16 }}>⏱️</span> SLA Countdown Tracker
+          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: "#FF6B6B22", color: "#FF6B6B", fontWeight: 600 }}>{atRisk.length} AT RISK</span>
+        </h3>
+        <button onClick={() => setActiveModule("sla")} aria-label="Open SLA module" style={{ padding: "5px 12px", borderRadius: 6, background: "#FFB34718", border: "1px solid #FFB34733", color: "#FFB347", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>View All →</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+        {atRisk.map(inc => {
+          const breached = inc.sla.isBreached;
+          const pct = inc.sla.percentUsed || 0;
+          const barColor = breached ? "#FF4444" : pct >= 90 ? "#FF6B6B" : pct >= 75 ? "#FFB347" : "#4CAF50";
+          const remaining = inc.sla.remainingMs;
+          return (
+            <div key={inc.id} role="listitem" style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: `1px solid ${barColor}33`, position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: barColor }} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: barColor, fontFamily: "'JetBrains Mono', monospace" }}>{inc.id}</div>
+                  <div style={{ fontSize: 10, color: "#C4CAD6", maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{inc.title || inc.subject || "Untitled"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: barColor, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1 }}>{fmtTime(remaining)}</div>
+                  <div style={{ fontSize: 8, color: breached ? "#FF4444" : "#FFB347", fontWeight: 600, textTransform: "uppercase" }}>{breached ? "BREACHED" : "REMAINING"}</div>
+                </div>
+              </div>
+              <div style={{ background: "#1E2130", borderRadius: 3, height: 4, overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: barColor, borderRadius: 3, transition: "width 0.5s" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                <span style={{ fontSize: 9, color: "#5A6178" }}>{inc.priority}</span>
+                <span style={{ fontSize: 9, color: "#5A6178" }}>{inc.assignee || "Unassigned"}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Phase 11.2: Incident Heatmap ──────────────────────── */
+function IncidentHeatmapWidget({ incidents }) {
+  const heatData = useMemo(() => {
+    const cats = ["Network", "Hardware", "Software", "Email", "Security", "Database", "Cloud", "Other"];
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const grid = cats.map(() => new Array(7).fill(0));
+    let maxVal = 0;
+    incidents.forEach(i => {
+      const d = new Date(i.createdAt || i.created || 0);
+      if (isNaN(d.getTime())) return;
+      let cat = i.category || "Other";
+      let ci = cats.indexOf(cat);
+      if (ci < 0) ci = cats.length - 1;
+      const day = (d.getDay() + 6) % 7; // Mon=0
+      grid[ci][day]++;
+      if (grid[ci][day] > maxVal) maxVal = grid[ci][day];
+    });
+    // Also compute hourly distribution for the mini chart
+    const hours = new Array(24).fill(0);
+    incidents.forEach(i => {
+      const d = new Date(i.createdAt || i.created || 0);
+      if (!isNaN(d.getTime())) hours[d.getHours()]++;
+    });
+    return { cats, days, grid, maxVal: maxVal || 1, hours };
+  }, [incidents]);
+
+  const cellColor = (val) => {
+    if (val === 0) return "#1E213033";
+    const intensity = val / heatData.maxVal;
+    if (intensity > 0.75) return "#FF6B6B";
+    if (intensity > 0.5) return "#FFB347";
+    if (intensity > 0.25) return "#06B6D4";
+    return "#06B6D444";
+  };
+
+  return (
+    <div role="region" aria-label="Incident Heatmap" style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, flex: 1, minWidth: 0 }}>
+      <h3 style={{ margin: "0 0 14px", fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 16 }}>🗺️</span> Incident Heatmap
+        <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400 }}>Category × Day</span>
+      </h3>
+      {/* Header row */}
+      <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, 1fr)", gap: 3, marginBottom: 3 }}>
+        <div />
+        {heatData.days.map(d => (
+          <div key={d} style={{ textAlign: "center", fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{d}</div>
+        ))}
+      </div>
+      {/* Grid */}
+      {heatData.cats.map((cat, ci) => (
+        <div key={cat} style={{ display: "grid", gridTemplateColumns: "70px repeat(7, 1fr)", gap: 3, marginBottom: 3 }}>
+          <div style={{ fontSize: 10, color: "#C4CAD6", display: "flex", alignItems: "center", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cat}</div>
+          {heatData.grid[ci].map((val, di) => (
+            <div key={di} title={`${cat} · ${heatData.days[di]}: ${val} incidents`} style={{
+              height: 22, borderRadius: 3, background: cellColor(val), display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 9, fontWeight: 600, color: val > 0 ? "#fff" : "transparent",
+              fontFamily: "'JetBrains Mono', monospace", cursor: "default", transition: "transform 0.15s",
+            }}
+            onMouseEnter={e => e.currentTarget.style.transform = "scale(1.15)"}
+            onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+              {val > 0 ? val : ""}
+            </div>
+          ))}
+        </div>
+      ))}
+      {/* Legend */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, justifyContent: "flex-end" }}>
+        <span style={{ fontSize: 9, color: "#5A6178" }}>Less</span>
+        {["#1E213066", "#06B6D444", "#06B6D4", "#FFB347", "#FF6B6B"].map((c, i) => (
+          <div key={i} style={{ width: 14, height: 14, borderRadius: 2, background: c }} />
+        ))}
+        <span style={{ fontSize: 9, color: "#5A6178" }}>More</span>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Phase 11.3: AI Confidence Trend Sparklines ────────── */
+function AiConfidenceWidget({ incidents }) {
+  const trendData = useMemo(() => {
+    const days = 14;
+    const daily = [];
+    const now = Date.now();
+    for (let d = days - 1; d >= 0; d--) {
+      const start = now - (d + 1) * 86400000;
+      const end = now - d * 86400000;
+      const dayIncs = incidents.filter(i => {
+        const t = new Date(i.createdAt || i.created || 0).getTime();
+        return t >= start && t < end && i.aiTriaged;
+      });
+      const avgConf = dayIncs.length > 0
+        ? Math.round(dayIncs.reduce((s, i) => s + (i.aiConfidence || 0), 0) / dayIncs.length)
+        : null;
+      const dt = new Date(end);
+      daily.push({ day: `${dt.getDate()}/${dt.getMonth() + 1}`, avgConf, count: dayIncs.length });
+    }
+    // Category breakdown
+    const catConf = {};
+    incidents.filter(i => i.aiTriaged && i.aiConfidence).forEach(i => {
+      const cat = i.category || "Other";
+      if (!catConf[cat]) catConf[cat] = { total: 0, count: 0 };
+      catConf[cat].total += i.aiConfidence;
+      catConf[cat].count++;
+    });
+    const catAvgs = Object.entries(catConf)
+      .map(([cat, v]) => ({ cat, avg: Math.round(v.total / v.count), count: v.count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+
+    const triaged = incidents.filter(i => i.aiTriaged).length;
+    const total = incidents.length;
+    const overallAvg = triaged > 0
+      ? Math.round(incidents.filter(i => i.aiTriaged).reduce((s, i) => s + (i.aiConfidence || 0), 0) / triaged)
+      : 0;
+
+    return { daily, catAvgs, overallAvg, triaged, total };
+  }, [incidents]);
+
+  // Sparkline SVG
+  const sparkW = 280, sparkH = 50;
+  const validPts = trendData.daily.filter(d => d.avgConf != null);
+  const minConf = validPts.length > 0 ? Math.min(...validPts.map(d => d.avgConf)) : 0;
+  const maxConf = validPts.length > 0 ? Math.max(...validPts.map(d => d.avgConf)) : 100;
+  const range = (maxConf - minConf) || 1;
+  const points = trendData.daily.map((d, i) => {
+    if (d.avgConf == null) return null;
+    const x = (i / (trendData.daily.length - 1)) * sparkW;
+    const y = sparkH - ((d.avgConf - minConf) / range) * (sparkH - 6);
+    return { x, y, ...d };
+  }).filter(Boolean);
+
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  const overallColor = trendData.overallAvg >= 80 ? "#4CAF50" : trendData.overallAvg >= 60 ? "#FFB347" : "#FF6B6B";
+
+  return (
+    <div role="region" aria-label="AI Confidence Trends" style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, flex: 1, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16 }}>🎯</span> AI Confidence Trends
+          <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400 }}>14-day</span>
+        </h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 22, fontWeight: 800, color: overallColor, fontFamily: "'Space Grotesk', sans-serif" }}>{trendData.overallAvg}%</span>
+          <span style={{ fontSize: 10, color: "#5A6178" }}>avg</span>
+        </div>
+      </div>
+      {/* Sparkline */}
+      <div style={{ background: "#0A0C14", borderRadius: 8, padding: "12px 14px", border: "1px solid #1E213044", marginBottom: 14 }}>
+        <svg width="100%" height={sparkH + 10} viewBox={`-4 -4 ${sparkW + 8} ${sparkH + 12}`} preserveAspectRatio="none" style={{ display: "block" }}>
+          {/* Grid lines */}
+          {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
+            <line key={i} x1="0" y1={sparkH - pct * (sparkH - 6)} x2={sparkW} y2={sparkH - pct * (sparkH - 6)} stroke="#1E2130" strokeWidth="0.5" />
+          ))}
+          {/* Area fill */}
+          {points.length > 1 && (
+            <path d={`${pathD} L ${points[points.length - 1].x.toFixed(1)} ${sparkH} L ${points[0].x.toFixed(1)} ${sparkH} Z`} fill="url(#confGrad)" opacity="0.3" />
+          )}
+          <defs><linearGradient id="confGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6366F1" /><stop offset="100%" stopColor="#6366F100" /></linearGradient></defs>
+          {/* Line */}
+          {points.length > 1 && <path d={pathD} fill="none" stroke="#6366F1" strokeWidth="2" strokeLinecap="round" />}
+          {/* Dots */}
+          {points.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r="3" fill={p.avgConf >= 80 ? "#4CAF50" : p.avgConf >= 60 ? "#FFB347" : "#FF6B6B"} stroke="#0A0C14" strokeWidth="1">
+              <title>{p.day}: {p.avgConf}% ({p.count} tickets)</title>
+            </circle>
+          ))}
+        </svg>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+          <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{trendData.daily[0]?.day}</span>
+          <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{trendData.daily[trendData.daily.length - 1]?.day}</span>
+        </div>
+      </div>
+      {/* Category breakdown */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 8 }}>Confidence by Category</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {trendData.catAvgs.map((c, i) => {
+          const cColor = c.avg >= 80 ? "#4CAF50" : c.avg >= 60 ? "#FFB347" : "#FF6B6B";
+          return (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "#0A0C14", borderRadius: 6, border: `1px solid ${cColor}18` }}>
+              <span style={{ fontSize: 10, color: "#C4CAD6", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.cat}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: cColor, fontFamily: "'JetBrains Mono', monospace", minWidth: 32, textAlign: "right" }}>{c.avg}%</span>
+              <div style={{ width: 30, height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ width: `${c.avg}%`, height: "100%", background: cColor, borderRadius: 2 }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Dashboard module — extracted from itsm-tool.jsx
 // Receives all parent state/setters via ctx prop object
 export default function Dashboard({ ctx }) {
@@ -47,7 +622,11 @@ export default function Dashboard({ ctx }) {
     csatSurveyEngine, changeCalendar,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
+    zdStats: _zdStats, aiConfig: _aiConfig,
   } = ctx;
+
+const zdStats = _zdStats || { open: 0, pending: 0, hold: 0, solved: 0 };
+const aiConfig = _aiConfig || { automationLevel: 0, humanLoopPct: 0 };
 
 const role = currentUser.rbacRole;
 const isManagement = ["VGC Dev Admin", "Tenant Admin", "Administrator", "Service Desk Lead", "Change Manager", "Problem Manager", "Asset Manager"].includes(role);
@@ -115,7 +694,7 @@ const DonutKPI = ({ value, max, label, color, sub }) => (
       <svg width="72" height="72" viewBox="0 0 72 72">
         <circle cx="36" cy="36" r="30" fill="none" stroke="#1E2130" strokeWidth="5" />
         <circle cx="36" cy="36" r="30" fill="none" stroke={color} strokeWidth="5"
-          strokeDasharray={`${(value / max) * 188.5} 188.5`}
+          strokeDasharray={`${(value / (max || 1)) * 188.5} 188.5`}
           strokeLinecap="round" transform="rotate(-90 36 36)" style={{ transition: "stroke-dasharray 0.6s" }} />
       </svg>
       <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color, fontFamily: "'Space Grotesk', sans-serif" }}>{value}{typeof max === "number" && max <= 100 ? "%" : ""}</div>
@@ -227,7 +806,15 @@ const CardHeader = ({ cardId, children }) => {
 };
 
 return (
-  <div>
+  <div role="main" aria-label="ITSM Dashboard" className="vgc-dash">
+    {/* Phase 11.4: Keyboard focus & accessibility */}
+    <style>{`
+      .vgc-dash button:focus-visible, .vgc-dash [role="button"]:focus-visible, .vgc-dash a:focus-visible {
+        outline: 2px solid #6366F1; outline-offset: 2px; border-radius: 4px;
+      }
+      .vgc-dash [role="listitem"]:focus-visible { outline: 2px solid #6366F1; outline-offset: 1px; }
+      @media (prefers-reduced-motion: reduce) { .vgc-dash * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+    `}</style>
     {/* ═══ VGC HELPDESK CONTACT — Always Visible ═══ */}
     <div style={{
       background: "linear-gradient(135deg, #0078D412, #6366F112, #06B6D412)", borderRadius: 10,
@@ -1136,6 +1723,9 @@ return (
             )}
           </div>
 
+          {/* AI Customer Satisfaction Insights Widget */}
+          <CsatAiInsightsWidget incidents={incidents} btnStyle={btnStyle} />
+
           {/* AI Proactive Suggestions — Prevent future damage */}
           <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #06B6D422", marginBottom: 18 }}>
             <h4 style={{ margin: "0 0 12px", fontSize: 12, color: "#06B6D4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
@@ -1777,6 +2367,17 @@ return (
       </div>
     </div>}
 
+    {/* ═══ Phase 11.1: SLA COUNTDOWN TRACKER ═══ */}
+    {cardVisibility.slaCountdown?.on && <SlaCountdownWidget incidents={incidents} computeIncidentSla={computeIncidentSla} setActiveModule={setActiveModule} />}
+
+    {/* ═══ Phase 11.2 & 11.3: INCIDENT HEATMAP + AI CONFIDENCE TRENDS ═══ */}
+    {(cardVisibility.incidentHeatmap?.on || cardVisibility.aiConfTrend?.on) && (
+      <div style={{ display: "grid", gridTemplateColumns: cardVisibility.incidentHeatmap?.on && cardVisibility.aiConfTrend?.on ? "1fr 1fr" : "1fr", gap: 16, marginBottom: 20 }}>
+        {cardVisibility.incidentHeatmap?.on && <IncidentHeatmapWidget incidents={incidents} />}
+        {cardVisibility.aiConfTrend?.on && <AiConfidenceWidget incidents={incidents} />}
+      </div>
+    )}
+
     {/* ═══ GLOBAL CYBER SECURITY THREAT FEED ═══ */}
     {cardVisibility.threatFeed.on && <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, #FF4444, #FF6B6B, #FFB347)" }} />
@@ -2359,6 +2960,12 @@ return (
         </div>
       </div>
     )}
+    {/* ─── AI Sentiment Analysis Widget ─── */}
+    <SentimentAnalysisWidget incidents={incidents} />
+
+    {/* ─── AI Predictive Analytics Widget ─── */}
+    <PredictiveAnalyticsWidget incidents={incidents} />
+
   </div>
 );
 }

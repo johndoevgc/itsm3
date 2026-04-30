@@ -2340,6 +2340,30 @@ return (
 
     {/* ═══════════ Audit & Version History ═══════════ */}
     {activeTab === "audit" && (() => {
+      // v3.15: also surface cross-module activityLog[] from incidents/changes/problems
+      const activityFromRecords = [];
+      const harvest = (records, moduleName) => {
+        for (const r of (records || [])) {
+          for (const a of (r.activityLog || [])) {
+            if (!a || !a.time) continue;
+            const isAi = /AI|sync|webhook|auto/i.test(`${a.user || ""} ${a.type || ""}`);
+            activityFromRecords.push({
+              id: `ACT_${moduleName}_${r.id}_${a.id || a.time}`,
+              timestamp: a.time,
+              module: moduleName,
+              action: a.type || "activity",
+              detail: `${r.id} — ${a.detail || a.message || ""}`.slice(0, 200),
+              actor: a.user || "System",
+              actorType: isAi ? "ai" : "human",
+              source: "activity",
+            });
+          }
+        }
+      };
+      harvest(incidents, "Incidents");
+      harvest(changes, "Changes");
+      harvest(problems, "Problems");
+
       const allLogs = [
         ...versionHistory.map(v => ({ ...v, source: "local" })),
         ...auditLogs.map(a => {
@@ -2355,7 +2379,8 @@ return (
             actorType: (a.user_name === "system" || a.user_name === "AI" || a.collection === "ai_knowledge") ? "ai" : "human",
             source: "server"
           };
-        })
+        }),
+        ...activityFromRecords,
       ];
       // Deduplicate by id
       const seen = new Set();
@@ -2456,6 +2481,7 @@ return (
                         <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 4, background: `${actionColor}18`, color: actionColor, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{log.action}</span>
                         <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "#1E2130", color: "#5A6178" }}>{log.module}</span>
                         {log.source === "server" && <span style={{ fontSize: 8, padding: "1px 4px", borderRadius: 3, background: "#6366F118", color: "#6366F1" }}>DB</span>}
+                        {log.source === "activity" && <span title="From record activityLog" style={{ fontSize: 8, padding: "1px 4px", borderRadius: 3, background: "#FFB34718", color: "#FFB347" }}>ACT</span>}
                       </div>
                       <div style={{ color: "#C4CAD6", fontSize: 11, lineHeight: 1.4, wordBreak: "break-word" }}>{(log.detail || "").substring(0, 200)}</div>
                     </div>

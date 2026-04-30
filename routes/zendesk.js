@@ -3,12 +3,41 @@
  * Extracted from server.js — Phase 4
  */
 const https = require("https");
+const crypto = require("crypto");
 
 module.exports = function createZendeskRoutes(ctx) {
   return async function handleZendeskRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, callAI, extractAIText, cacheLayer, wsServer, incidentIndex, normalizeCategory, graphSendMail, featureFlags, isHighSeverity, getAIModel, getSlaMap, getSlaDescription, cachedGetAll, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, MAIL_FROM, _zdPushDedup, PROD_TEST_MODE, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN } = ctx;
+    const { db, json, readBody, parseBody, callAI, extractAIText, cacheLayer, wsServer, incidentIndex, normalizeCategory, graphSendMail, featureFlags, isHighSeverity, getAIModel, getSlaMap, getSlaDescription, cachedGetAll, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, MAIL_FROM, _zdPushDedup, PROD_TEST_MODE, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET } = ctx;
 
   if (!pathname.startsWith("/api/zendesk")) return false;
+
+  // ─── Phase 8.1: RBAC enforcement on Zendesk routes ──────────────
+  // Webhook endpoint is public (handled by PUBLIC_PREFIXES in authMiddleware).
+  // All other Zendesk routes require authentication + role-based access.
+  const isWebhook = pathname === "/api/zendesk/webhook";
+  if (!isWebhook) {
+    const role = authResult?.role || auth?.role || "anonymous";
+    if (role === "anonymous") {
+      return json(res, 401, { error: "Authentication required" });
+    }
+    // Write operations: POST/PUT/DELETE — require manage-level incident access
+    const WRITE_ROLES = new Set([
+      "VGC Dev Admin", "Tenant Admin", "Administrator",
+      "Service Desk Lead", "L1 Support Engineer", "L2 Support Engineer",
+      "Network Engineer",
+    ]);
+    const READ_ROLES = new Set([
+      ...WRITE_ROLES, "Change Manager", "Problem Manager",
+      "Asset Manager", "Read Only",
+    ]);
+    const isWrite = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
+    if (isWrite && !WRITE_ROLES.has(role)) {
+      return json(res, 403, { error: "Insufficient permissions for Zendesk write operations" });
+    }
+    if (!isWrite && !READ_ROLES.has(role)) {
+      return json(res, 403, { error: "Insufficient permissions for Zendesk access" });
+    }
+  }
 
   if (!ZENDESK_SUBDOMAIN || !ZENDESK_EMAIL || !ZENDESK_API_TOKEN) {
     return json(res, 503, { error: "Zendesk not configured. Set ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN." });
@@ -61,6 +90,11 @@ module.exports = function createZendeskRoutes(ctx) {
   };
 
   try {
+      // Phase 8.3: Input validation helpers
+      const VALID_ZD_STATUSES = new Set(["new", "open", "pending", "hold", "solved", "closed"]);
+      const VALID_ZD_PRIORITIES = new Set(["urgent", "high", "normal", "low"]);
+      const isValidTicketId = (id) => /^\d{1,15}$/.test(String(id));
+
       if (pathname === "/api/zendesk/me" && req.method === "GET") {
         const result = await zdRequest("GET", "/users/me.json");
         return json(res, 200, result);
@@ -83,13 +117,62 @@ module.exports = function createZendeskRoutes(ctx) {
       // GET /api/zendesk/tickets/:id
       if (pathname.match(/^\/api\/zendesk\/tickets\/\d+$/) && req.method === "GET") {
         const ticketId = pathname.split("/").pop();
+        if (!isValidTicketId(ticketId)) return json(res, 400, { error: "Invalid ticket ID" });
         const result = await zdRequest("GET", `/tickets/${ticketId}.json`);
         return json(res, 200, result);
+      }
+
+      // v3.13 Layer 2: POST /api/zendesk/sync-ticket/:id — on-demand single-ticket pull (used before AI triage)
+      if (pathname.match(/^\/api\/zendesk\/sync-ticket\/\d+$/) && req.method === "POST") {
+        const ticketId = pathname.split("/").pop();
+        if (!isValidTicketId(ticketId)) return json(res, 400, { error: "Invalid ticket ID" });
+        try {
+          const result = await zdRequest("GET", `/tickets/${ticketId}.json?include=metric_sets`);
+          const t = result.ticket;
+          if (!t) return json(res, 404, { error: "Ticket not found in Zendesk" });
+          const ms = (result.metric_sets && result.metric_sets[0]) || t.metric_set || {};
+          const ticketData = {
+            id: t.id, subject: t.subject, description: t.description,
+            status: t.status, priority: t.priority || "normal", type: t.type,
+            tags: t.tags || [], requesterId: t.requester_id, assigneeId: t.assignee_id,
+            organizationId: t.organization_id, groupId: t.group_id,
+            createdAt: t.created_at, updatedAt: t.updated_at,
+            channel: t.via?.channel || "unknown",
+            importedAt: new Date().toISOString(), source: "on_demand_sync",
+          };
+          await db.upsert("zendesk_tickets", String(t.id), JSON.stringify(ticketData));
+          let updated = false, incId = null;
+          const linked = incidentIndex && incidentIndex.getByZdTicketId ? incidentIndex.getByZdTicketId(t.id) : null;
+          if (linked) {
+            const inc = linked;
+            const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+            const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+            const newStatus = statusMap[t.status];
+            const newPriority = priorityMap[t.priority];
+            if (newStatus && newStatus !== inc.status) { inc.status = newStatus; updated = true; }
+            if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; updated = true; }
+            const fpc = t.first_public_comment_at || ms.first_public_comment_at || null;
+            const solved = t.solved_at || ms.solved_at || null;
+            if (t.created_at && inc.slaStartAt !== t.created_at) { inc.slaStartAt = t.created_at; updated = true; }
+            if (fpc && inc.firstResponseAt !== fpc) { inc.firstResponseAt = fpc; updated = true; }
+            if (solved && inc.resolvedAt !== solved) { inc.resolvedAt = solved; updated = true; }
+            if (updated) {
+              inc.zdLastSync = new Date().toISOString();
+              await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            }
+            incId = inc.id;
+          }
+          return json(res, 200, { ok: true, updated, incidentId: incId, zdTicketId: t.id });
+        } catch (e) {
+          console.warn(`[ZD sync-ticket] failed for ${ticketId}:`, e.message);
+          return json(res, 502, { error: "Zendesk sync failed", detail: e.message });
+        }
       }
 
       // GET /api/zendesk/tickets/:id/comments
       if (pathname.match(/^\/api\/zendesk\/tickets\/\d+\/comments$/) && req.method === "GET") {
         const ticketId = pathname.split("/")[4];
+        if (!isValidTicketId(ticketId)) return json(res, 400, { error: "Invalid ticket ID" });
         const result = await zdRequest("GET", `/tickets/${ticketId}/comments.json`);
         // Resolve author_id numbers to display names (read-only, graceful fallback)
         const authorIds = [...new Set((result.comments || []).map(c => c.author_id).filter(Boolean))];
@@ -106,7 +189,15 @@ module.exports = function createZendeskRoutes(ctx) {
       // PUT /api/zendesk/tickets/:id — update ticket (status, priority, comment)
       if (pathname.match(/^\/api\/zendesk\/tickets\/\d+$/) && req.method === "PUT") {
         const ticketId = pathname.split("/").pop();
+        if (!isValidTicketId(ticketId)) return json(res, 400, { error: "Invalid ticket ID" });
         const body = await parseBody(req);
+        // Phase 8.3: Validate status/priority if provided
+        if (body?.ticket?.status && !VALID_ZD_STATUSES.has(body.ticket.status)) {
+          return json(res, 400, { error: `Invalid status. Allowed: ${[...VALID_ZD_STATUSES].join(", ")}` });
+        }
+        if (body?.ticket?.priority && !VALID_ZD_PRIORITIES.has(body.ticket.priority)) {
+          return json(res, 400, { error: `Invalid priority. Allowed: ${[...VALID_ZD_PRIORITIES].join(", ")}` });
+        }
         const result = await zdRequest("PUT", `/tickets/${ticketId}.json`, body);
         return json(res, 200, result);
       }
@@ -114,6 +205,13 @@ module.exports = function createZendeskRoutes(ctx) {
       // POST /api/zendesk/tickets — create new ticket
       if (pathname === "/api/zendesk/tickets" && req.method === "POST") {
         const body = await parseBody(req);
+        // Phase 8.3: Require subject for new tickets
+        if (!body?.ticket?.subject || typeof body.ticket.subject !== "string" || body.ticket.subject.trim().length === 0) {
+          return json(res, 400, { error: "Ticket subject is required" });
+        }
+        if (body.ticket.priority && !VALID_ZD_PRIORITIES.has(body.ticket.priority)) {
+          return json(res, 400, { error: `Invalid priority. Allowed: ${[...VALID_ZD_PRIORITIES].join(", ")}` });
+        }
         const result = await zdRequest("POST", "/tickets.json", body);
         return json(res, 200, result);
       }
@@ -133,15 +231,20 @@ module.exports = function createZendeskRoutes(ctx) {
         return json(res, 200, result);
       }
 
-      // GET /api/zendesk/stats — ticket counts by status
+      // GET /api/zendesk/stats — ticket counts by status (Phase 9.5: cached 120s)
       if (pathname === "/api/zendesk/stats" && req.method === "GET") {
+        const cacheKey = "zd_stats";
+        const cached = cacheLayer && cacheLayer.get(cacheKey);
+        if (cached) return json(res, 200, cached);
         const [open, pending, hold, solved] = await Promise.all([
           zdRequest("GET", "/search.json?query=type:ticket status:open").catch(() => ({ count: 0 })),
           zdRequest("GET", "/search.json?query=type:ticket status:pending").catch(() => ({ count: 0 })),
           zdRequest("GET", "/search.json?query=type:ticket status:hold").catch(() => ({ count: 0 })),
           zdRequest("GET", "/search.json?query=type:ticket status:solved").catch(() => ({ count: 0 })),
         ]);
-        return json(res, 200, { open: open.count || 0, pending: pending.count || 0, hold: hold.count || 0, solved: solved.count || 0 });
+        const stats = { open: open.count || 0, pending: pending.count || 0, hold: hold.count || 0, solved: solved.count || 0 };
+        if (cacheLayer) cacheLayer.set(cacheKey, stats, 120000); // 2 minute TTL
+        return json(res, 200, stats);
       }
 
       // POST /api/zendesk/auto-triage — AI auto-triage a ticket (server-side for automation)
@@ -151,7 +254,7 @@ module.exports = function createZendeskRoutes(ctx) {
         }
         const body = await parseBody(req, 100000);
         const { ticketId } = body;
-        if (!ticketId) return json(res, 400, { error: "ticketId required" });
+        if (!ticketId || !isValidTicketId(ticketId)) return json(res, 400, { error: "Valid numeric ticketId required" });
 
         // Fetch ticket + comments + requester from Zendesk
         const ticket = await zdRequest("GET", `/tickets/${ticketId}.json`);
@@ -299,6 +402,64 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         });
       }
 
+      // POST /api/zendesk/create-incident — centralized, deduped, priority-filtered incident creation
+      if (pathname === "/api/zendesk/create-incident" && req.method === "POST") {
+        const body = await parseBody(req);
+        const { ticketId, subject, description, priority, slaPriority, category, assignee, requesterName, requesterEmail, confidence, internalNote } = body;
+        if (!ticketId || !isValidTicketId(ticketId)) return json(res, 400, { error: "Valid numeric ticketId required" });
+
+        // Only allow Sev-A/Sev-B
+        const _slaPri = slaPriority || "Sev-D";
+        if (_slaPri !== "Sev-A" && _slaPri !== "Sev-B") {
+          return json(res, 200, { skipped: true, reason: `${_slaPri} tickets do not require ITSM incidents` });
+        }
+
+        // Dedup: check if incident already exists for this ticket
+        const existing = await db.getOne("incidents", `INC-ZD${ticketId}`);
+        if (existing) {
+          return json(res, 200, { skipped: true, reason: "Incident already exists", incident: JSON.parse(existing.data) });
+        }
+        // Phase 9.4: Use index for O(1) dedup by zdTicketId (fallback to scan)
+        const _idxMatch = incidentIndex && incidentIndex.getByZdTicketId(ticketId);
+        if (_idxMatch) {
+          return json(res, 200, { skipped: true, reason: "Incident already exists (by zdTicketId)", incident: _idxMatch });
+        }
+        if (!_idxMatch) {
+          const allIncs = await db.getAll("incidents");
+          const dupInc = allIncs.find(i => { try { const d = JSON.parse(i.data); return String(d.zdTicketId) === String(ticketId); } catch { return false; } });
+          if (dupInc) {
+            return json(res, 200, { skipped: true, reason: "Incident already exists (by zdTicketId)", incident: JSON.parse(dupInc.data) });
+          }
+        }
+
+        const slaMap = getSlaMap();
+        const urgencyMap = { urgent: "Critical", high: "High", normal: "Medium", low: "Low" };
+        const impactMap = { urgent: "Enterprise", high: "Department", normal: "Multiple Users", low: "Single User" };
+        const assignmentGroup = assignee === "Network Engineering" ? "Network Engineering" : assignee === "Security Team" ? "Security Operations" : "Service Desk";
+        const newInc = {
+          id: `INC-ZD${ticketId}`, title: `[ZD#${ticketId}] ${subject || "Zendesk Ticket"}`,
+          priority: _slaPri, status: "Open",
+          category: category || "General", subcategory: "",
+          urgency: urgencyMap[priority] || "Medium",
+          impact: impactMap[priority] || "Single User",
+          assignee: assignee || "Unassigned", assignmentGroup,
+          reporter: requesterName || "Zendesk", reporterEmail: requesterEmail || "",
+          customer: requesterName || "", contactMethod: "Zendesk",
+          description: description || "",
+          created: 0, slaTarget: slaMap[_slaPri] || 4,
+          aiTriaged: true, aiConfidence: confidence || 75,
+          zdTicketId: ticketId, workaround: "", linkedProblem: "",
+          affectedAssets: [],
+          activityLog: [
+            { id: `AL-CI-${ticketId}`, type: "status", user: "AI Engine", time: new Date().toISOString(), detail: `Auto-created from Zendesk #${ticketId} — AI Triage (${confidence || 0}% confidence, ${priority} priority)` },
+            ...(internalNote ? [{ id: `AL-CI-N-${ticketId}`, type: "note", user: "AI Engine", time: new Date().toISOString(), detail: internalNote, isInternal: true, body: internalNote }] : []),
+          ],
+        };
+        await db.upsert("incidents", newInc.id, JSON.stringify(newInc));
+        console.log(`[ZD Create-Incident] Created ITSM ${newInc.id} from Zendesk #${ticketId} (${_slaPri})`);
+        return json(res, 201, { success: true, incident: newInc });
+      }
+
       // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)
       if (pathname === "/api/zendesk/auto-respond" && req.method === "POST") {
         const body = await parseBody(req);
@@ -331,6 +492,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
             const requesterEmail = requester?.user?.email;
             const ticketSubject = ticket?.ticket?.subject || `Ticket #${ticketId} Response`;
             if (requesterEmail) {
+              // Route all customer notification emails to designated IT support contact
+              const notificationRecipient = "johndoe@vgcsg.com";
               const htmlBody = `<div style="font-family:Arial,sans-serif;max-width:600px;">
                 <h3 style="color:#1a1a2e;">Re: ${ticketSubject}</h3>
                 <div style="background:#f8f9fa;padding:16px;border-radius:8px;border-left:4px solid #4CAF50;margin:12px 0;">
@@ -338,12 +501,12 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 </div>
                 <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
                 <p style="color:#666;font-size:12px;">This response was reviewed and approved by ${approvedBy}.<br/>
-                Ticket Reference: #${ticketId}<br/>
+                Ticket Reference: #${ticketId} | Original requester: ${requesterEmail}<br/>
                 VGC IT Support — <a href="mailto:${MAIL_FROM}">${MAIL_FROM}</a></p>
               </div>`;
-              await graphSendMail({ to: requesterEmail, subject: `Re: ${ticketSubject} [#${ticketId}]`, body: htmlBody, isCustomerEmail: true });
-              emailResult = { sent: true, to: requesterEmail };
-              console.log(`[M365 Mail] Ticket #${ticketId} response emailed to ${requesterEmail}`);
+              await graphSendMail({ to: notificationRecipient, subject: `Re: ${ticketSubject} [#${ticketId}]`, body: htmlBody, isCustomerEmail: true });
+              emailResult = { sent: true, to: notificationRecipient };
+              console.log(`[M365 Mail] Ticket #${ticketId} response emailed to ${notificationRecipient} (requester: ${requesterEmail})`);
             }
           }
         } catch (emailErr) {
@@ -353,6 +516,21 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
         console.log(`[AUDIT] Ticket #${ticketId} response sent — approved by: ${approvedBy}`);
         return json(res, 200, { success: true, approvedBy, result, email: emailResult });
+      }
+
+      // PUT /api/zendesk/tickets/:id/status — update ticket status (e.g. set to pending after AI auto-send)
+      const statusMatch = pathname.match(/^\/api\/zendesk\/tickets\/(\d+)\/status$/);
+      if (statusMatch && req.method === "PUT") {
+        const tktId = statusMatch[1];
+        if (!isValidTicketId(tktId)) return json(res, 400, { error: "Invalid ticket ID" });
+        const body = await parseBody(req);
+        const { status } = body;
+        if (!status || !VALID_ZD_STATUSES.has(status)) {
+          return json(res, 400, { error: `Invalid status. Allowed: ${[...VALID_ZD_STATUSES].join(", ")}` });
+        }
+        const result = await zdRequest("PUT", `/tickets/${tktId}.json`, { ticket: { status } });
+        console.log(`[ZD Status] Ticket #${tktId} status set to ${status}`);
+        return json(res, 200, { success: true, ticketId: tktId, status, result });
       }
 
       // GET /api/zendesk/new-tickets — fetch only new/open tickets for automation polling
@@ -588,16 +766,26 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
 
           // 3) Import ALL tickets (including closed)
           let ticketPage = 1; let hasMore = true;
-          // Pre-load incidents ONCE for dedup (avoid N+1 inside ticket loop)
-          const _fiIncRows = await db.getAll("incidents");
-          const _fiIncByZdId = new Set();
-          const _fiIncById = new Set();
-          for (const row of _fiIncRows) {
-            try {
-              const inc = JSON.parse(row.data);
+          // Phase 9.4: Use incidentIndex for O(1) dedup where available, fallback to DB scan
+          let _fiIncByZdId, _fiIncById;
+          if (incidentIndex && incidentIndex.size() > 0) {
+            _fiIncByZdId = new Set();
+            _fiIncById = new Set();
+            for (const inc of incidentIndex.all()) {
               if (inc.zdTicketId) _fiIncByZdId.add(String(inc.zdTicketId));
               _fiIncById.add(inc.id);
-            } catch {}
+            }
+          } else {
+            const _fiIncRows = await db.getAll("incidents");
+            _fiIncByZdId = new Set();
+            _fiIncById = new Set();
+            for (const row of _fiIncRows) {
+              try {
+                const inc = JSON.parse(row.data);
+                if (inc.zdTicketId) _fiIncByZdId.add(String(inc.zdTicketId));
+                _fiIncById.add(inc.id);
+              } catch {}
+            }
           }
           while (hasMore) {
             try {
@@ -640,8 +828,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   } catch (e) { ctx.zdSyncStats.errors++; }
                 }
 
-                // Auto-create ITSM incidents from tickets (uses pre-loaded sets)
-                if (createIncidents) {
+                // Auto-create ITSM incidents from tickets — Sev-A/B only (routine handled by AI)
+                if (createIncidents && !['closed', 'solved'].includes(t.status) && ['urgent', 'high'].includes(t.priority)) {
                   const existing = _fiIncById.has(`INC-ZD${t.id}`);
                   const existsByZd = _fiIncByZdId.has(String(t.id));
                   if (!existing && !existsByZd) {
@@ -724,19 +912,29 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
             startTime = Math.floor((Date.now() - 30 * 86400000) / 1000);
           }
 
-          // Use Zendesk incremental ticket export
-          let url = `/incremental/tickets.json?start_time=${startTime}`;
+          // Use Zendesk incremental ticket export (include metric_sets for SLA timestamps)
+          let url = `/incremental/tickets.json?start_time=${startTime}&include=metric_sets`;
           let hasMore = true;
-          // Pre-load incidents ONCE (avoid N+1 inside ticket loop)
-          const _incRows = await db.getAll("incidents");
-          const _incByZdId = new Map();
-          const _incById = new Map();
-          for (const row of _incRows) {
-            try {
-              const inc = JSON.parse(row.data);
-              if (inc.zdTicketId) _incByZdId.set(String(inc.zdTicketId), { row, inc });
-              _incById.set(inc.id, { row, inc });
-            } catch {}
+          // Phase 9.4: Use incidentIndex for O(1) dedup where available
+          let _incByZdId, _incById;
+          if (incidentIndex && incidentIndex.size() > 0) {
+            _incByZdId = new Map();
+            _incById = new Map();
+            for (const inc of incidentIndex.all()) {
+              if (inc.zdTicketId) _incByZdId.set(String(inc.zdTicketId), { row: null, inc });
+              _incById.set(inc.id, { row: null, inc });
+            }
+          } else {
+            const _incRows = await db.getAll("incidents");
+            _incByZdId = new Map();
+            _incById = new Map();
+            for (const row of _incRows) {
+              try {
+                const inc = JSON.parse(row.data);
+                if (inc.zdTicketId) _incByZdId.set(String(inc.zdTicketId), { row, inc });
+                _incById.set(inc.id, { row, inc });
+              } catch {}
+            }
           }
           while (hasMore) {
             try {
@@ -771,6 +969,14 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   const newPriority = priorityMap[t.priority];
                   if (newStatus && newStatus !== inc.status) { inc.status = newStatus; changed = true; }
                   if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; changed = true; }
+                  // v3.13 Layer 1: anchor SLA timestamps to Zendesk source-of-truth
+                  const _ms = t.metric_set || {};
+                  const _zdCreated = t.created_at;
+                  const _zdFpc = t.first_public_comment_at || _ms.first_public_comment_at || null;
+                  const _zdSolved = t.solved_at || _ms.solved_at || null;
+                  if (_zdCreated && inc.slaStartAt !== _zdCreated) { inc.slaStartAt = _zdCreated; changed = true; }
+                  if (_zdFpc && inc.firstResponseAt !== _zdFpc) { inc.firstResponseAt = _zdFpc; changed = true; }
+                  if (_zdSolved && inc.resolvedAt !== _zdSolved) { inc.resolvedAt = _zdSolved; changed = true; }
                   if (changed) {
                     inc.zdLastSync = new Date().toISOString();
                     inc.activityLog = [...(inc.activityLog || []), {
@@ -787,8 +993,8 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   if (_incById.has(`INC-ZD${t.id}`)) hasLinkedIncident = true;
                 }
 
-                // Auto-create ITSM incident if no linked incident exists (Production Live)
-                if (!hasLinkedIncident && !["closed", "solved"].includes(t.status)) {
+                // Auto-create ITSM incident only for urgent/high priority (Sev-A/B) — routine tickets handled by AI
+                if (!hasLinkedIncident && !["closed", "solved"].includes(t.status) && ["urgent", "high"].includes(t.priority)) {
                   const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                   const slaMap = getSlaMap();
                   const itsmPriority = priorityMap[t.priority] || "Sev-C";
@@ -803,6 +1009,10 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                     reporter: "Zendesk Incremental Sync", reporterEmail: "",
                     customer: "", contactMethod: "Zendesk",
                     created: 0, createdAt: t.created_at, slaTarget: slaMap[itsmPriority] || 9,
+                    // v3.13 Layer 1: anchor SLA timestamps to Zendesk
+                    slaStartAt: t.created_at,
+                    firstResponseAt: t.first_public_comment_at || (t.metric_set && t.metric_set.first_public_comment_at) || null,
+                    resolvedAt: t.solved_at || (t.metric_set && t.metric_set.solved_at) || null,
                     aiTriaged: false, aiConfidence: 0, zdTicketId: t.id,
                     zdLastSync: new Date().toISOString(),
                     workaround: "", linkedProblem: "", affectedAssets: [],
@@ -911,6 +1121,93 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
             }
           } catch (staleErr) { console.warn("[ZD Incremental] Stale-check error:", staleErr.message); }
 
+          // ── Auto-close pending tickets with no new replies after 48 hours ──
+          try {
+            const allTickets = await db.getAll("zendesk_tickets");
+            const now = Date.now();
+            const STALE_PENDING_MS = 48 * 60 * 60 * 1000; // 48 hours
+            let pendingClosed = 0;
+            for (const row of allTickets) {
+              try {
+                const t = JSON.parse(row.data);
+                if (t.status === "pending") {
+                  const updatedAt = new Date(t.updated_at || t.updatedAt || t.created_at).getTime();
+                  if (now - updatedAt > STALE_PENDING_MS) {
+                    // Close in Zendesk
+                    await zdRequest("PUT", `/tickets/${t.id}.json`, {
+                      ticket: { status: "solved", comment: { body: "[Auto-Resolved] No customer reply received within 48 hours. This ticket has been automatically resolved by the AI support system. Please reopen if you still need assistance.", public: true } }
+                    }).catch(() => {});
+                    // Update local DB
+                    t.status = "solved";
+                    t.updated_at = new Date().toISOString();
+                    await db.upsert("zendesk_tickets", String(t.id), JSON.stringify(t));
+                    // Update linked ITSM incident if exists
+                    const linkedInc = await db.getOne("incidents", `INC-ZD${t.id}`);
+                    if (linkedInc) {
+                      const inc = JSON.parse(linkedInc.data);
+                      inc.status = "Resolved";
+                      inc.closedAt = new Date().toISOString();
+                      inc.activityLog = [...(inc.activityLog || []), { id: `AL-AC-${t.id}`, type: "auto_close", user: "AI Engine", time: new Date().toISOString(), detail: `Auto-resolved: no customer reply after 48h on Zendesk #${t.id}` }];
+                      await db.upsert("incidents", inc.id, JSON.stringify(inc));
+                    }
+                    pendingClosed++;
+                    console.log(`[ZD Auto-Close] Ticket #${t.id} auto-resolved (pending 48h+ with no reply)`);
+                  }
+                }
+              } catch { /* skip malformed */ }
+            }
+            if (pendingClosed > 0) { syncResult.pendingAutoClosed = pendingClosed; console.log(`[ZD Incremental] Auto-closed ${pendingClosed} stale pending tickets`); }
+          } catch (acErr) { console.warn("[ZD Auto-Close] Error:", acErr.message); }
+
+          // ── Dedup: remove duplicate incidents with same zdTicketId ──
+          try {
+            const allIncs = await db.getAll("incidents");
+            const zdTicketMap = new Map(); // zdTicketId -> best incident
+            let dupsRemoved = 0;
+            for (const row of allIncs) {
+              try {
+                const inc = JSON.parse(row.data);
+                if (!inc.zdTicketId) continue;
+                const key = String(inc.zdTicketId);
+                if (zdTicketMap.has(key)) {
+                  // Keep the one with INC-ZD prefix (canonical) or the one with more data
+                  const existing = zdTicketMap.get(key);
+                  const existingIsCanonical = existing.id.startsWith("INC-ZD");
+                  const currentIsCanonical = inc.id.startsWith("INC-ZD");
+                  if (currentIsCanonical && !existingIsCanonical) {
+                    // Current is canonical, remove old
+                    await db.deleteOne("incidents", existing.id);
+                    zdTicketMap.set(key, inc);
+                    dupsRemoved++;
+                  } else {
+                    // Existing is canonical or both non-canonical, remove current
+                    await db.deleteOne("incidents", inc.id);
+                    dupsRemoved++;
+                  }
+                } else {
+                  zdTicketMap.set(key, inc);
+                }
+              } catch { /* skip malformed */ }
+            }
+            if (dupsRemoved > 0) { syncResult.duplicatesRemoved = dupsRemoved; console.log(`[ZD Incremental] Dedup: removed ${dupsRemoved} duplicate incidents`); }
+          } catch (dedupErr) { console.warn("[ZD Dedup] Error:", dedupErr.message); }
+
+          // ── Purge routine (Sev-C/D) INC-ZD* incidents — these should not exist ──
+          try {
+            const routineIncs = await db.getAll("incidents");
+            let routinePurged = 0;
+            for (const row of routineIncs) {
+              try {
+                const inc = JSON.parse(row.data);
+                if (inc.id && inc.id.startsWith("INC-ZD") && (inc.priority === "Sev-C" || inc.priority === "Sev-D")) {
+                  await db.deleteOne("incidents", inc.id);
+                  routinePurged++;
+                }
+              } catch { /* skip malformed */ }
+            }
+            if (routinePurged > 0) { syncResult.routinePurged = routinePurged; console.log(`[ZD Incremental] Purged ${routinePurged} routine (Sev-C/D) INC-ZD* incidents`); }
+          } catch (purgeErr) { console.warn("[ZD Purge] Error:", purgeErr.message); }
+
           console.log(`[ZD Incremental] Updated: ${syncResult.ticketsUpdated}, Created: ${syncResult.ticketsCreated}, Comments: ${syncResult.commentsAdded}`);
           return json(res, 200, { success: true, stats: syncResult });
         } catch (err) {
@@ -1004,6 +1301,54 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           });
         } catch (err) {
           console.error("[Email Orphan Cleanup]", err);
+          return json(res, 500, { error: err.message });
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // PURGE ROUTINE INCIDENTS — Delete Sev-C/D INC-ZD* noise
+      // POST /api/zendesk/purge-routine-incidents
+      // Body: { dryRun?: bool }
+      // ═══════════════════════════════════════════════════════════════
+      if (pathname === "/api/zendesk/purge-routine-incidents" && req.method === "POST") {
+        try {
+          const body = await parseBody(req, 5000).catch(() => ({}));
+          const dryRun = body.dryRun === true;
+          const allIncs = await db.getAll("incidents");
+          const toPurge = [];
+          for (const row of allIncs) {
+            try {
+              const inc = JSON.parse(row.data);
+              if (inc.id && inc.id.startsWith("INC-ZD") && (inc.priority === "Sev-C" || inc.priority === "Sev-D")) {
+                toPurge.push(inc);
+              }
+            } catch { /* skip malformed */ }
+          }
+          if (dryRun) {
+            return json(res, 200, {
+              dryRun: true,
+              wouldPurge: toPurge.length,
+              sample: toPurge.slice(0, 30).map(i => ({ id: i.id, title: i.title, priority: i.priority, status: i.status, zdTicketId: i.zdTicketId })),
+              breakdown: {
+                sevC: toPurge.filter(i => i.priority === "Sev-C").length,
+                sevD: toPurge.filter(i => i.priority === "Sev-D").length,
+                open: toPurge.filter(i => ["New", "Open", "In Progress", "Pending"].includes(i.status)).length,
+                closed: toPurge.filter(i => ["Resolved", "Closed"].includes(i.status)).length,
+              },
+            });
+          }
+          let purged = 0;
+          for (const inc of toPurge) {
+            await db.deleteOne("incidents", inc.id);
+            await db.audit("incidents", inc.id, "purge_routine", JSON.stringify({ priority: inc.priority, zdTicketId: inc.zdTicketId }), "system");
+            purged++;
+          }
+          if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+          if (wsServer) wsServer.broadcast("incidents", { action: "bulk_delete", collection: "incidents", count: purged });
+          console.log(`[ZD Purge] Deleted ${purged} routine (Sev-C/D) INC-ZD* incidents`);
+          return json(res, 200, { success: true, purged, breakdown: { sevC: toPurge.filter(i => i.priority === "Sev-C").length, sevD: toPurge.filter(i => i.priority === "Sev-D").length } });
+        } catch (err) {
+          console.error("[ZD Purge]", err.message);
           return json(res, 500, { error: err.message });
         }
       }
@@ -1164,16 +1509,41 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
       // ═══════════════════════════════════════════════════════════════
       if (pathname === "/api/zendesk/webhook" && req.method === "POST") {
         try {
-          const event = await readBody(req);
+          // Phase 8.2: Webhook signature verification
+          // Read raw body first for HMAC verification, then parse JSON
+          const rawBody = await new Promise((resolve, reject) => {
+            let d = ""; req.on("data", c => { d += c; if (d.length > 500000) reject(new Error("Webhook payload too large")); });
+            req.on("end", () => resolve(d));
+            req.on("error", reject);
+          });
+          if (ZENDESK_WEBHOOK_SECRET) {
+            const sig = req.headers["x-zendesk-webhook-signature"];
+            const ts = req.headers["x-zendesk-webhook-signature-timestamp"];
+            if (!sig || !ts) {
+              console.warn("[ZD Webhook] Missing signature headers — rejected");
+              return json(res, 401, { error: "Missing webhook signature" });
+            }
+            const expected = crypto.createHmac("sha256", ZENDESK_WEBHOOK_SECRET)
+              .update(ts + rawBody).digest("base64");
+            const sigBuf = Buffer.from(sig);
+            const expBuf = Buffer.from(expected);
+            if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+              console.warn("[ZD Webhook] Invalid signature — rejected");
+              return json(res, 401, { error: "Invalid webhook signature" });
+            }
+          }
+          let event;
+          try { event = JSON.parse(rawBody); } catch { return json(res, 400, { error: "Invalid JSON in webhook body" }); }
           const eventType = event.type || event.event || "unknown";
           const ticketId = event.ticket_id || event.ticket?.id || event.payload?.ticket?.id;
 
           console.log(`[ZD Webhook] Event: ${eventType}, Ticket: ${ticketId || "N/A"}`);
 
           if (ticketId) {
-            // Fetch latest ticket state from Zendesk
-            const ticketResult = await zdRequest("GET", `/tickets/${ticketId}.json`);
+            // v3.14 Layer 5: include metric_sets for accurate SLA timestamps
+            const ticketResult = await zdRequest("GET", `/tickets/${ticketId}.json?include=metric_sets`);
             const t = ticketResult.ticket;
+            const _whMs = (ticketResult.metric_sets && ticketResult.metric_sets[0]) || (t && t.metric_set) || {};
             if (t) {
               // Update local Zendesk ticket store
               await db.upsert("zendesk_tickets", String(t.id), JSON.stringify({
@@ -1201,8 +1571,26 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                 const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
                 let changed = false;
-                if (statusMap[t.status] && statusMap[t.status] !== inc.status) { inc.status = statusMap[t.status]; changed = true; }
-                if (priorityMap[t.priority] && priorityMap[t.priority] !== inc.priority) { inc.priority = priorityMap[t.priority]; changed = true; }
+                const _newStatus = statusMap[t.status];
+                const _newPriority = priorityMap[t.priority];
+                if (_newStatus && _newStatus !== inc.status) {
+                  // v3.14 Layer 5: SLA pause/resume on Pending↔active transitions
+                  inc.slaPauseHistory = inc.slaPauseHistory || [];
+                  if (_newStatus === "Pending" && inc.status !== "Pending") {
+                    inc.slaPauseHistory.push({ pausedAt: new Date().toISOString(), reason: `Zendesk status → pending (webhook)` });
+                  } else if (inc.status === "Pending" && _newStatus !== "Pending") {
+                    const last = inc.slaPauseHistory[inc.slaPauseHistory.length - 1];
+                    if (last && !last.resumedAt) last.resumedAt = new Date().toISOString();
+                  }
+                  inc.status = _newStatus; changed = true;
+                }
+                if (_newPriority && _newPriority !== inc.priority) { inc.priority = _newPriority; changed = true; }
+                // v3.14 Layer 1: anchor SLA timestamps from webhook payload
+                const _whFpc = t.first_public_comment_at || _whMs.first_public_comment_at || null;
+                const _whSolved = t.solved_at || _whMs.solved_at || null;
+                if (t.created_at && inc.slaStartAt !== t.created_at) { inc.slaStartAt = t.created_at; changed = true; }
+                if (_whFpc && inc.firstResponseAt !== _whFpc) { inc.firstResponseAt = _whFpc; changed = true; }
+                if (_whSolved && inc.resolvedAt !== _whSolved) { inc.resolvedAt = _whSolved; changed = true; }
                 if (changed) {
                   inc.zdLastSync = new Date().toISOString();
                   inc.activityLog = [...(inc.activityLog || []), {
@@ -1215,11 +1603,11 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                 }
               }
 
-              // If new ticket and no ITSM incident exists, auto-create one
+              // If new ticket and no ITSM incident exists, auto-create one (Sev-A/B only)
               if (eventType === "ticket_created" || eventType === "zen:event-type:ticket.created") {
                 // Use pre-loaded map for dedup (no second getAll)
                 let hasIncident = _whIncByZdId.has(String(t.id));
-                if (!hasIncident) {
+                if (!hasIncident && ["urgent", "high"].includes(t.priority)) {
                   const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
                   const slaMap = getSlaMap();
                   const itsmPriority = priorityMap[t.priority] || "Sev-C";
@@ -1319,19 +1707,17 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           let cleaned = 0, updated = 0, alreadyMatched = 0, errors = 0;
           const zdLinked = []; // { inc, zdTicketId }
 
-          // Phase 1: Delete stale INC-ZD* incidents (from old reconciliation)
+          // Phase 1: Collect all ZD-linked incidents (INC-ZD* and zdTicketId-linked)
           for (const row of incRows) {
             try {
               const inc = JSON.parse(row.data);
-              if (inc.id && inc.id.startsWith("INC-ZD")) {
-                await db.deleteOne("incidents", inc.id);
-                cleaned++;
-              } else if (inc.zdTicketId && !inc._deleted) {
-                zdLinked.push({ inc, zdTicketId: inc.zdTicketId });
+              const zdId = inc.zdTicketId || (inc.id && inc.id.startsWith("INC-ZD") ? inc.id.replace("INC-ZD", "") : null);
+              if (zdId && !inc._deleted) {
+                zdLinked.push({ inc, zdTicketId: String(zdId) });
               }
             } catch {}
           }
-          console.log(`[ZD SyncAll] Phase 1: Cleaned ${cleaned} INC-ZD* incidents`);
+          console.log(`[ZD SyncAll] Phase 1: Found ${zdLinked.length} ZD-linked incidents`);
 
           // Phase 2: Batch-fetch ZD ticket statuses (100 per call)
           const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };

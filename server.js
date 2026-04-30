@@ -14,9 +14,27 @@ const { CacheLayer } = require("./cacheLayer");
 const incidentIndexFactory = require("./incidentIndex");
 const featureFlags = require("./featureFlags");
 const shadowMode = require("./shadowMode");
+const shadowWorkflow = require("./shadowWorkflow");
 const piiRedact = require("./piiRedact");
 
 const PORT = process.env.PORT || 8080;
+
+// ─── Phase 9.1: Structured JSON Logger ──────────────────────────────────
+// Outputs JSON lines with timestamp, level, module, and optional correlationId.
+// Falls back to console.log in dev for readability.
+const LOG_JSON = process.env.LOG_FORMAT === "json";
+function structuredLog(level, module, message, extra = {}) {
+  if (LOG_JSON) {
+    const entry = { ts: new Date().toISOString(), level, module, msg: message, ...extra };
+    process.stdout.write(JSON.stringify(entry) + "\n");
+  } else {
+    const prefix = `[${module}]`;
+    const extraStr = Object.keys(extra).length ? " " + JSON.stringify(extra) : "";
+    if (level === "error") console.error(`${prefix} ${message}${extraStr}`);
+    else if (level === "warn") console.warn(`${prefix} ${message}${extraStr}`);
+    else console.log(`${prefix} ${message}${extraStr}`);
+  }
+}
 const AZURE_SUBSCRIPTION_ID = process.env.AZURE_SUBSCRIPTION_ID || "";
 const AZURE_RESOURCE_GROUP = process.env.AZURE_RESOURCE_GROUP || "vgc-itsm-1-RG";
 const USE_MSSQL = !!(process.env.AZURE_SQL_SERVER || process.env.MSSQL_HOST);
@@ -52,14 +70,26 @@ let _cachedPrivateKey = null;
 let _cachedX5t = null;
 function buildClientAssertion() {
   if (!ENTRA_CERT_THUMBPRINT) return null;
+  // Defence in depth: thumbprint is interpolated into a file path / shell
+  // argument below. Reject anything that isn't a SHA-1 hex thumbprint so a
+  // hostile env var cannot inject shell metacharacters or path traversal.
+  if (!/^[0-9a-fA-F]{40}$/.test(ENTRA_CERT_THUMBPRINT)) {
+    console.error("[Entra] ENTRA_CERT_THUMBPRINT is not a 40-char hex value, refusing to use it");
+    return null;
+  }
   try {
-    // Cache private key after first extraction (avoid blocking execSync on every call)
+    // Cache private key after first extraction (avoid blocking spawn on every call)
     if (!_cachedPrivateKey) {
       const pfxPath = `/var/ssl/private/${ENTRA_CERT_THUMBPRINT}.p12`;
       if (!fs.existsSync(pfxPath)) { console.error("[Entra] PFX not found at", pfxPath); return null; }
-      const { execSync } = require("child_process");
-      const pem = execSync(`openssl pkcs12 -in "${pfxPath}" -nocerts -nodes -passin pass:`, { encoding: "utf8" });
-      _cachedPrivateKey = crypto.createPrivateKey(pem);
+      // spawnSync with an argv array bypasses the shell, so no metachar parsing.
+      const { spawnSync } = require("child_process");
+      const result = spawnSync("openssl", ["pkcs12", "-in", pfxPath, "-nocerts", "-nodes", "-passin", "pass:"], { encoding: "utf8" });
+      if (result.status !== 0) {
+        console.error("[Entra] openssl pkcs12 exited", result.status, result.stderr);
+        return null;
+      }
+      _cachedPrivateKey = crypto.createPrivateKey(result.stdout);
       _cachedX5t = Buffer.from(ENTRA_CERT_THUMBPRINT, "hex").toString("base64url");
       console.log("[Entra] Private key extracted and cached");
     }
@@ -137,7 +167,7 @@ async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens 
         const monthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
         const usageId = `usage_${monthKey}`;
         let usage = { month: monthKey, totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, estimatedCostUSD: 0, byModel: {}, byDay: {} };
-        try { const row = await db.getOne("ai_usage", usageId); if (row) usage = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch {}
+        try { const row = await db.getOne("ai_usage", usageId); if (row) usage = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch (e) { structuredLog("warn", "AI", "usage tracking read failed", { usageId, err: e.message }); }
         const inTok = result.usage?.input_tokens || result.usage?.prompt_tokens || 0;
         const outTok = result.usage?.output_tokens || result.usage?.completion_tokens || 0;
         const costPer1k = model.includes("nano") ? 0.0001 : model.includes("mini") ? 0.0004 : 0.003;
@@ -165,6 +195,7 @@ async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens 
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || "";
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL || "";
 const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN || "";
+const ZENDESK_WEBHOOK_SECRET = process.env.ZENDESK_WEBHOOK_SECRET || "";
 
 // Cisco Meraki Dashboard API (server-side only)
 const MERAKI_API_KEYS = (process.env.MERAKI_API_KEYS || "").split(",").map(k => k.trim()).filter(Boolean);
@@ -250,6 +281,7 @@ const LOCAL_USERS = process.env.LOCAL_ADMIN_PASSWORD_HASH ? {
     },
   },
 } : {};
+const localAuthEnabled = Object.keys(LOCAL_USERS).length > 0;
 
 const MIME = {
   ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
@@ -328,7 +360,7 @@ async function queueOrSendCustomerEmail(opts, meta) {
     const firstTo = Array.isArray(opts && opts.to) ? opts.to[0] : (opts && opts.to);
     const _gate = await shouldSendCustomerConfirmation(firstTo);
     if (!_gate.send) {
-      try { await db.audit("incidents", incidentId, "email_skipped_recipient_gate", JSON.stringify({ source, severity, to: firstTo, reason: _gate.reason }), source); } catch {}
+      try { await db.audit("incidents", incidentId, "email_skipped_recipient_gate", JSON.stringify({ source, severity, to: firstTo, reason: _gate.reason }), source); } catch (e) { structuredLog("warn", "Audit", "audit write failed", { incidentId, action: "email_skipped_recipient_gate", err: e.message }); }
       console.log(`[CustomerEmail] Recipient-gate skip for ${incidentId} → ${firstTo} (${_gate.reason})`);
       return { action: "skipped", reason: _gate.reason };
     }
@@ -338,7 +370,7 @@ async function queueOrSendCustomerEmail(opts, meta) {
 
   // Phase B1 — auto_customer_email gate
   if (!featureFlags.isEnabled("auto_customer_email")) {
-    try { await db.audit("incidents", incidentId, "email_skipped_flag_off", JSON.stringify({ source, severity, flag: "auto_customer_email" }), source); } catch {}
+    try { await db.audit("incidents", incidentId, "email_skipped_flag_off", JSON.stringify({ source, severity, flag: "auto_customer_email" }), source); } catch (e) { structuredLog("warn", "Audit", "audit write failed", { incidentId, action: "email_skipped_flag_off", err: e.message }); }
     console.log(`[CustomerEmail] auto_customer_email=off → skipped for ${incidentId} (${source})`);
     return { action: "skipped", reason: "auto_customer_email flag off" };
   }
@@ -350,7 +382,7 @@ async function queueOrSendCustomerEmail(opts, meta) {
     const key = _severityKey(severity);
     const minutes = typeof payload[key] === "number" ? payload[key] : 5;
     if (minutes < 0) {
-      try { await db.audit("incidents", incidentId, "email_blocked_severity", JSON.stringify({ source, severity, key }), source); } catch {}
+      try { await db.audit("incidents", incidentId, "email_blocked_severity", JSON.stringify({ source, severity, key }), source); } catch (e) { structuredLog("warn", "Audit", "audit write failed", { incidentId, action: "email_blocked_severity", err: e.message }); }
       console.warn(`[CustomerEmail] BLOCKED for ${incidentId} (${severity}) — cooling-off policy disallows`);
       return { action: "skipped", reason: `cooling-off blocks ${severity}` };
     }
@@ -401,7 +433,7 @@ async function _drainCustomerEmailOutbox() {
         rec.status = "failed";
         rec.failedAt = new Date().toISOString();
         rec.errorMessage = sendErr.message;
-        try { await db.upsert("ai_email_outbox", rec.id, JSON.stringify(rec)); } catch {}
+        try { await db.upsert("ai_email_outbox", rec.id, JSON.stringify(rec)); } catch (e) { structuredLog("warn", "Outbox", "outbox persist failed", { recId: rec.id, err: e.message }); }
         failed++;
       }
     }
@@ -1148,33 +1180,26 @@ function readBody(req) {
     const chunks = [];
     let size = 0;
     const MAX = 10 * 1024 * 1024; // 10MB limit
+    const timeout = setTimeout(() => { reject(new Error("Body read timeout")); req.destroy(); }, 30000);
     req.on("data", chunk => {
       size += chunk.length;
-      if (size > MAX) { reject(new Error("Payload too large")); req.destroy(); return; }
+      if (size > MAX) { clearTimeout(timeout); reject(new Error("Payload too large")); req.destroy(); return; }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      clearTimeout(timeout);
       try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
       catch { reject(new Error("Invalid JSON body")); }
     });
-    req.on("error", reject);
+    req.on("error", (err) => { clearTimeout(timeout); reject(err); });
   });
 }
 
 function json(res, status, data) {
   const body = JSON.stringify(data);
-  // Phase T2 — compress JSON responses > 1 KB. The caller doesn't have to
-  // change anything; we read Accept-Encoding from req which is stashed on
-  // res by the request handler. Massive savings on /api/db/* endpoints
-  // that can return multi-MB payloads.
   const req = res.req;
   const accept = (req && req.headers && req.headers["accept-encoding"] || "").toLowerCase();
 
-  // Phase T3 — ETag / 304 Not Modified. For idempotent GET responses we hash
-  // the body and compare to If-None-Match. Polling clients (every 30-60 s)
-  // get a 0-byte 304 instead of redownloading the entire payload when the
-  // data hasn't changed. Combined with brotli, an unchanged poll costs
-  // ~150 bytes total.
   let etag = null;
   if (status === 200 && req && req.method === "GET" && body.length > 256) {
     const hash = crypto.createHash("sha1").update(body).digest("base64").replace(/=+$/, "");
@@ -1187,20 +1212,38 @@ function json(res, status, data) {
   }
 
   if (body.length > 1024 && accept) {
-    try {
-      const headers = { "Content-Type": "application/json", "Vary": "Accept-Encoding" };
-      if (etag) { headers["ETag"] = etag; headers["Cache-Control"] = "private, must-revalidate"; }
-      if (accept.includes("br")) {
-        const buf = zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } });
-        res.writeHead(status, { ...headers, "Content-Encoding": "br" });
-        return res.end(buf);
-      }
-      if (accept.includes("gzip")) {
-        const buf = zlib.gzipSync(body, { level: 6 });
-        res.writeHead(status, { ...headers, "Content-Encoding": "gzip" });
-        return res.end(buf);
-      }
-    } catch { /* fall through to uncompressed */ }
+    const headers = { "Content-Type": "application/json", "Vary": "Accept-Encoding" };
+    if (etag) { headers["ETag"] = etag; headers["Cache-Control"] = "private, must-revalidate"; }
+    if (accept.includes("br")) {
+      return new Promise((resolve) => {
+        zlib.brotliCompress(Buffer.from(body), { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } }, (err, buf) => {
+          if (err) {
+            const fh = { "Content-Type": "application/json" };
+            if (etag) { fh["ETag"] = etag; fh["Cache-Control"] = "private, must-revalidate"; }
+            res.writeHead(status, fh);
+            resolve(res.end(body));
+          } else {
+            res.writeHead(status, { ...headers, "Content-Encoding": "br" });
+            resolve(res.end(buf));
+          }
+        });
+      });
+    }
+    if (accept.includes("gzip")) {
+      return new Promise((resolve) => {
+        zlib.gzip(Buffer.from(body), { level: 6 }, (err, buf) => {
+          if (err) {
+            const fh = { "Content-Type": "application/json" };
+            if (etag) { fh["ETag"] = etag; fh["Cache-Control"] = "private, must-revalidate"; }
+            res.writeHead(status, fh);
+            resolve(res.end(body));
+          } else {
+            res.writeHead(status, { ...headers, "Content-Encoding": "gzip" });
+            resolve(res.end(buf));
+          }
+        });
+      });
+    }
   }
   const finalHeaders = { "Content-Type": "application/json" };
   if (etag) { finalHeaders["ETag"] = etag; finalHeaders["Cache-Control"] = "private, must-revalidate"; }
@@ -1233,8 +1276,11 @@ function sendText(res, status, contentType, body, extraHeaders) {
 
 function parseBody(req, maxSize = 50000) {
   return new Promise((resolve, reject) => {
-    let d = ""; req.on("data", c => { d += c; if (d.length > maxSize) reject(new Error("Payload too large")); });
-    req.on("end", () => { try { resolve(JSON.parse(d)); } catch(e) { reject(new Error("Invalid JSON body")); } });
+    let d = "";
+    const timeout = setTimeout(() => reject(new Error("Body read timeout")), 15000);
+    req.on("data", c => { d += c; if (d.length > maxSize) { clearTimeout(timeout); reject(new Error("Payload too large")); } });
+    req.on("end", () => { clearTimeout(timeout); try { resolve(JSON.parse(d)); } catch(e) { reject(new Error("Invalid JSON body")); } });
+    req.on("error", (err) => { clearTimeout(timeout); reject(new Error("Body read error: " + err.message)); });
   });
 }
 
@@ -1629,6 +1675,13 @@ let zdSyncInProgress = false;
 let zdLastSyncTime = null;
 let zdSyncStats = { tickets: 0, users: 0, orgs: 0, comments: 0, errors: 0 };
 let zdAutoSyncInterval = null;
+
+// ─── Cluster scheduler gate ──────────────────────────────────────────
+// In a multi-worker cluster, only the worker with WORKER_INDEX=0 owns the
+// periodic jobs (SLA snapshot/guardian, Zendesk auto-sync, queue/log/audit
+// purges, uptime probes). When run standalone (no cluster), WORKER_INDEX is
+// unset and this resolves to true, preserving single-process behaviour.
+const IS_SCHEDULER_WORKER = !process.env.WORKER_INDEX || process.env.WORKER_INDEX === "0";
 // Shutdown handle registries — push any setInterval/setTimeout that needs cleanup on SIGTERM/SIGINT
 const _shutdownIntervals = [];
 const _shutdownTimeouts = [];
@@ -2173,7 +2226,7 @@ async function processInboundEmails() {
         // Phase E1+E3+E4+E5: send confirmation only when gate allows
         const _gate = await shouldSendCustomerConfirmation(fromAddr);
         if (!_gate.send) {
-          try { await db.audit("incidents", incId, "email_confirm_skipped", JSON.stringify({ to: fromAddr, reason: _gate.reason }), "email-pipeline"); } catch {}
+          try { await db.audit("incidents", incId, "email_confirm_skipped", JSON.stringify({ to: fromAddr, reason: _gate.reason }), "email-pipeline"); } catch (e) { structuredLog("warn", "Audit", "audit write failed", { incidentId: incId, action: "email_confirm_skipped", err: e.message }); }
           console.log(`[Email-to-Ticket] Confirmation suppressed for ${incId} → ${fromAddr} (${_gate.reason})`);
         } else {
           await _logConfirmation(fromAddr, incId);
@@ -2339,10 +2392,15 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://login.microsoftonline.com https://alcdn.msauth.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://*.azure.com https://*.cognitiveservices.azure.com; frame-src https://login.microsoftonline.com;");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://login.microsoftonline.com https://alcdn.msauth.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://*.azure.com https://*.cognitiveservices.azure.com; frame-src https://login.microsoftonline.com;");
 
   const urlObj = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = urlObj.pathname;
+
+  // ─── Phase 9.1: Correlation ID ─────────────────────────────────────
+  const correlationId = req.headers["x-correlation-id"] || crypto.randomUUID();
+  res.setHeader("X-Correlation-Id", correlationId);
+  req.correlationId = correlationId;
 
   // ─── Auth & Rate Limiting (API routes only) ────────────────────────
   let authResult = { authenticated: false, user: null, role: "anonymous", skipped: true };
@@ -2354,9 +2412,23 @@ const server = http.createServer(async (req, res) => {
 
 
   // ─── Phase 4: Route Delegation ───────────────────────────────────
-  if (handleCore && await handleCore(req, res, pathname, auth, authResult, urlObj)) return;
-  if (handleZendesk && await handleZendesk(req, res, pathname, auth, authResult, urlObj)) return;
-  if (handleAI && await handleAI(req, res, pathname, auth, authResult, urlObj)) return;
+  // Wrap handler invocation so a thrown handler cannot crash the worker.
+  // Without this guard a single bad route caused ERR_HTTP_HEADERS_SENT and
+  // the cluster supervisor restarted workers in a tight loop.
+  try {
+    if (handleCore && await handleCore(req, res, pathname, auth, authResult, urlObj)) return;
+    if (handleZendesk && await handleZendesk(req, res, pathname, auth, authResult, urlObj)) return;
+    if (handleAI && await handleAI(req, res, pathname, auth, authResult, urlObj)) return;
+  } catch (handlerErr) {
+    console.error(`[Route] ${req.method} ${pathname} crashed:`, handlerErr && handlerErr.stack || handlerErr);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal server error", correlationId }));
+    } else {
+      try { res.end(); } catch {}
+    }
+    return;
+  }
 
   // ─── Static File Serving ──────────────────────────────────────────────
   const distDir = path.join(__dirname, "dist");
@@ -2375,9 +2447,14 @@ const server = http.createServer(async (req, res) => {
     return res.end("Forbidden");
   }
   fs.readFile(filePath, (err, data) => {
+    // Client may have aborted, or another handler may have already responded
+    // (e.g. a route returned true after we entered the static branch). Avoid
+    // ERR_HTTP_HEADERS_SENT noise in the logs.
+    if (res.headersSent || res.writableEnded) return;
     if (err) {
       // SPA fallback
       fs.readFile(path.join(serveRoot, "index.html"), (e2, html) => {
+        if (res.headersSent || res.writableEnded) return;
         if (e2) { res.writeHead(500); return res.end("Server Error"); }
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(html);
@@ -2525,6 +2602,27 @@ async function start() {
   workflowEngine = new WorkflowEngine(db, { notifyEngine, wsServer, graphSendMail, interval: 15 * 60 * 1000 });
   workflowEngine._processInboundEmails = processInboundEmails;
 
+  // Phase 10.2: Default 3-tier escalation chain
+  workflowEngine.setEscalationChain([
+    { level: 1, thresholdMin: 15, notifyRoles: ["engineer"], channels: ["inapp"] },
+    { level: 2, thresholdMin: 30, notifyRoles: ["team_lead", "senior_engineer"], channels: ["inapp", "email"] },
+    { level: 3, thresholdMin: 60, notifyRoles: ["manager", "director"], channels: ["inapp", "email"] },
+  ]);
+
+  // Phase 10.3: Default skill-to-engineer mapping
+  workflowEngine.setSkillMap({
+    "Network": ["Hlaing Pyae Phyo", "Network Team"],
+    "Hardware": ["Desktop Support", "Hlaing Pyae Phyo"],
+    "Software": ["Application Support", "Hlaing Pyae Phyo"],
+    "Security": ["Security Team", "Hlaing Pyae Phyo"],
+    "Email": ["Hlaing Pyae Phyo", "Service Desk"],
+    "Cloud Services": ["Cloud Team", "Hlaing Pyae Phyo"],
+    "Database": ["Infrastructure", "Hlaing Pyae Phyo"],
+    "Access Management": ["Service Desk", "Hlaing Pyae Phyo"],
+    "VPN": ["Network Team", "Hlaing Pyae Phyo"],
+    "Backup": ["Infrastructure", "Hlaing Pyae Phyo"],
+  });
+
   // Initialize SLA Engine with breach notifications
   slaEngine = new SlaEngine(db, {
     interval: 5 * 60 * 1000,
@@ -2575,15 +2673,19 @@ async function start() {
     PORTAL_URL, ORG_NAME, ORG_SHORT_NAME,
     ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT,
     ALLOWED_TENANT_IDS, buildClientAssertion,
-    ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN,
+    ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET,
     AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL,
     SOLARWINDS_API_KEY, SOLARWINDS_API_HOST,
     LOCAL_USERS, localAuthEnabled,
     MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET,
     AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP,
-    PROD_TEST_MODE, MIME, _zdPushDedup,
+    PROD_TEST_MODE, MIME, _zdPushDedup, structuredLog,
     // Mutable state (Zendesk sync)
     zdSyncInProgress, zdLastSyncTime, zdSyncStats,
+    // Lazy getter so /api/health can report whether the auto-sync interval is
+    // installed without referencing the module-level variable from another file
+    // (which previously threw ReferenceError and crashed the worker).
+    get zdAutoSyncInterval() { return zdAutoSyncInterval; },
     // Setter functions for mutable config (syncs module-level vars + ctx)
     updateOpenAIConfig: ({ endpoint, key, model }) => {
       if (endpoint) { AZURE_OPENAI_ENDPOINT = endpoint; ctx.AZURE_OPENAI_ENDPOINT = endpoint; }
@@ -2841,30 +2943,42 @@ async function start() {
     // Hydrate zdLastSyncTime from DB (find latest ZD-synced incident)
     try {
       const allInc = await db.getAll("incidents");
-      const zdIncs = allInc.filter(i => i.zdTicketId).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+      const zdIncs = allInc
+        .map(row => { try { return typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { return null; } })
+        .filter(i => i && i.zdTicketId)
+        .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
       if (zdIncs.length > 0 && zdIncs[0].updatedAt) {
         zdLastSyncTime = zdIncs[0].updatedAt;
         console.log(`[ZD Sync] Hydrated zdLastSyncTime from DB: ${zdLastSyncTime}`);
       }
     } catch (e) { console.warn("[ZD Sync] Could not hydrate zdLastSyncTime:", e.message); }
 
-    // Start SLA Engine
-    slaEngine.start().catch(err => console.error("[SLA Engine] Start failed:", err.message));
+    // Start SLA Engine (scheduler worker only — cron-style work)
+    if (IS_SCHEDULER_WORKER) {
+      slaEngine.start().catch(err => console.error("[SLA Engine] Start failed:", err.message));
 
-    // Daily SLA history snapshot (every 24h, first run after 5 min)
-    const SLA_SNAPSHOT_INTERVAL = 24 * 60 * 60 * 1000;
-    const runSlaDailySnapshot = () => {
-      if (slaEngine && slaEngine.saveDailySnapshot) {
-        slaEngine.saveDailySnapshot().catch(e => console.warn("[SLA Snapshot] Failed:", e.message));
-      }
-    };
-    setTimeout(runSlaDailySnapshot, 5 * 60 * 1000);
-    const slaSnapshotInterval = setInterval(runSlaDailySnapshot, SLA_SNAPSHOT_INTERVAL);
-    _shutdownIntervals.push(slaSnapshotInterval);
-    console.log("[SLA Engine] Daily SLA history snapshots enabled");
+      // Daily SLA history snapshot (every 24h, first run after 5 min)
+      const SLA_SNAPSHOT_INTERVAL = 24 * 60 * 60 * 1000;
+      const runSlaDailySnapshot = () => {
+        if (slaEngine && slaEngine.saveDailySnapshot) {
+          slaEngine.saveDailySnapshot().catch(e => console.warn("[SLA Snapshot] Failed:", e.message));
+        }
+      };
+      setTimeout(runSlaDailySnapshot, 5 * 60 * 1000);
+      const slaSnapshotInterval = setInterval(runSlaDailySnapshot, SLA_SNAPSHOT_INTERVAL);
+      _shutdownIntervals.push(slaSnapshotInterval);
+      console.log("[SLA Engine] Daily SLA history snapshots enabled");
 
-    // Start Workflow Engine
-    workflowEngine.start().catch(err => console.error("[WorkflowEngine] Start failed:", err.message));
+      // Start Workflow Engine
+      workflowEngine.start().catch(err => console.error("[WorkflowEngine] Start failed:", err.message));
+    } else {
+      console.log(`[Cluster] Worker idx=${process.env.WORKER_INDEX} skipping SLA/Workflow scheduled jobs`);
+    }
+
+    // Wrap SLA Guardian / ZD AutoSync / Cleanup / Purge / Uptime jobs in
+    // the scheduler-worker gate too. Previously these ran on every worker,
+    // duplicating writes (visible as paired "[Uptime] Running initial snapshot..." etc.).
+    if (IS_SCHEDULER_WORKER) {
 
     // ─── SLA Guardian: Proactive SLA prediction scan (every 15 min) ──
     const SLA_GUARDIAN_INTERVAL = 15 * 60 * 1000; // 15 minutes
@@ -2913,23 +3027,59 @@ async function start() {
     _shutdownTimeouts.push(slaGuardianStartTimer);
     console.log("[SLA Guardian] Proactive SLA prediction scheduled every 15 minutes");
 
-    // ─── Scheduled Zendesk Incremental Sync (every 5 min) ───────────
+    // ─── v3.14 Layer 3: Adaptive Zendesk Incremental Sync ──────────
+    // Cadence based on open severity load:
+    //   60s  if any open Sev-A
+    //   120s if any open Sev-B (no Sev-A)
+    //   300s otherwise (default)
     if (ZENDESK_SUBDOMAIN && ZENDESK_EMAIL && ZENDESK_API_TOKEN) {
-      zdAutoSyncInterval = setInterval(async () => {
-        if (zdSyncInProgress) { console.log("[ZD AutoSync] Skipped — sync already in progress"); return; }
+      let _zdCurrentDelay = 300000;
+      const computeZdDelay = async () => {
         try {
-          console.log("[ZD AutoSync] Starting scheduled incremental sync...");
-          const http = require("http");
-          const syncReq = http.request({ hostname: "localhost", port: PORT, path: "/api/zendesk/incremental-sync", method: "POST", headers: { "Content-Type": "application/json" } }, (r) => {
-            let data = ""; r.on("data", c => data += c);
-            r.on("end", () => console.log("[ZD AutoSync] Result:", data.substring(0, 300)));
-          });
-          syncReq.on("error", e => console.warn("[ZD AutoSync] Error:", e.message));
-          syncReq.write("{}"); syncReq.end();
-        } catch (e) { console.warn("[ZD AutoSync] Failed:", e.message); }
-      }, 5 * 60 * 1000);
-      console.log("[ZD AutoSync] Scheduled Zendesk incremental sync every 5 minutes");
+          const rows = incidentIndex && incidentIndex.size && incidentIndex.size() > 0
+            ? incidentIndex.all()
+            : (await db.getAll("incidents")).map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+          let hasA = false, hasB = false;
+          const openStatuses = new Set(["New", "Open", "In Progress", "Pending"]);
+          for (const inc of rows) {
+            if (!openStatuses.has(inc.status)) continue;
+            if (inc.priority === "Sev-A") { hasA = true; break; }
+            if (inc.priority === "Sev-B") hasB = true;
+          }
+          return hasA ? 60000 : (hasB ? 120000 : 300000);
+        } catch { return 300000; }
+      };
+      const scheduleZdSync = (delay) => {
+        _zdCurrentDelay = delay;
+        zdAutoSyncInterval = setTimeout(async () => {
+          if (zdSyncInProgress) {
+            console.log("[ZD AutoSync] Skipped — sync already in progress");
+          } else {
+            try {
+              console.log(`[ZD AutoSync] Starting scheduled incremental sync (cadence ${Math.round(delay/1000)}s)...`);
+              const http = require("http");
+              const syncReq = http.request({ hostname: "localhost", port: PORT, path: "/api/zendesk/incremental-sync", method: "POST", headers: { "Content-Type": "application/json" } }, (r) => {
+                let data = ""; r.on("data", c => data += c);
+                r.on("end", () => console.log("[ZD AutoSync] Result:", data.substring(0, 300)));
+              });
+              syncReq.on("error", e => console.warn("[ZD AutoSync] Error:", e.message));
+              syncReq.write("{}"); syncReq.end();
+            } catch (e) { console.warn("[ZD AutoSync] Failed:", e.message); }
+          }
+          const next = await computeZdDelay();
+          if (next !== _zdCurrentDelay) console.log(`[ZD AutoSync] Adaptive cadence: ${Math.round(_zdCurrentDelay/1000)}s → ${Math.round(next/1000)}s`);
+          scheduleZdSync(next);
+        }, delay);
+      };
+      scheduleZdSync(300000);
+      console.log("[ZD AutoSync] Adaptive Zendesk incremental sync scheduled (60s/120s/300s based on open Sev-A/B load)");
     }
+
+    // NOTE: the IS_SCHEDULER_WORKER block remains open here so the periodic
+    // cleanup / purge / uptime jobs below also run only on the scheduler worker.
+    // (Previously these ran on every worker, doubling DB writes.)
+    // -- (the closing brace of `if (IS_SCHEDULER_WORKER) {` is intentionally
+    //    moved down past the uptime block below.)
 
     // ─── Scheduled Queue Cleanup (every 6 hours) ────────────────────
     const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
@@ -3194,14 +3344,16 @@ async function start() {
           processUptime: Math.round(process.uptime()),
           memoryMB: Math.round(process.memoryUsage().rss / 1048576),
         };
-        await db.upsert("uptime_log", snapshot.id, snapshot);
+        await db.upsert("uptime_log", snapshot.id, JSON.stringify(snapshot));
         console.log(`[Uptime] Snapshot: ${snapshot.status} (db=${dbOk}, sla=${slaOk})`);
 
-        // Prune uptime_log older than 90 days
+        // Prune uptime_log older than 90 days (batch limit to avoid large scans)
         const cutoff90 = Date.now() - 90 * 86400000;
         const allLogs = await db.getAll("uptime_log");
         let pruned = 0;
+        const PRUNE_BATCH = 100;
         for (const r of allLogs) {
+          if (pruned >= PRUNE_BATCH) break;
           try {
             const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
             if (item && item.timestamp && new Date(item.timestamp).getTime() < cutoff90) {
@@ -3210,7 +3362,7 @@ async function start() {
             }
           } catch {}
         }
-        if (pruned > 0) console.log(`[Uptime] Pruned ${pruned} snapshots older than 90 days`);
+        if (pruned > 0) console.log(`[Uptime] Pruned ${pruned} snapshots older than 90 days${pruned >= PRUNE_BATCH ? " (batch limit reached, more next cycle)" : ""}`);
       } catch (e) {
         console.warn("[Uptime] Snapshot error:", e.message);
       }
@@ -3232,6 +3384,21 @@ async function start() {
     console.log("[Scheduled Purge] Log auto-purge every 6 hours (keep 2 days)");
     console.log("[Terminal Purge] Terminal-status purge every 6 hours (keep 7 days, cap 500)");
     console.log("[Audit Purge] Audit log purge every 6 hours (keep " + AUDIT_KEEP_DAYS + " days)");
+
+    // ─── Daily AI Knowledge Sync (every 6h, first run 5 min after boot) ──
+    // Scans recent tickets/email bodies and refreshes/creates KB articles
+    // via the existing /api/ai/knowledge/sync endpoint (incidentIndex.js).
+    const KB_SYNC_INTERVAL = 6 * 60 * 60 * 1000;
+    const kbSyncTimer = setTimeout(() => {
+      runDailySync();
+      const kbSyncInterval = setInterval(runDailySync, KB_SYNC_INTERVAL);
+      _shutdownIntervals.push(kbSyncInterval);
+    }, 5 * 60 * 1000);
+    _shutdownTimeouts.push(kbSyncTimer);
+    console.log("[KB AI Sync] AI knowledge auto-refresh every 6 hours (first run in 5 min)");
+    } else {
+      console.log(`[Cluster] Worker idx=${process.env.WORKER_INDEX} skipping cleanup/purge/uptime jobs`);
+    }
   });
 }
 start().catch(err => { console.error("Fatal startup error:", err); process.exit(1); });

@@ -33,4 +33,19 @@ sw_clients.xml
 body_role.json
 deploy/
 
+# Temp/debug artifacts
+_acrlog*.txt
+_deploy*.ps1
+_hooks.txt
+prod-logs*
+output/
+output.txt
+response.txt
+stderr.txt
+body.txt
+test_output*.txt
+test_results.txt
+test_run*.txt
+acr-*.txt
+
 scripts/.staging-settings.json

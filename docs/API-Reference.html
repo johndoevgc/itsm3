@@ -43,7 +43,7 @@
 <div class="header">
   <h1>API Reference</h1>
   <div class="subtitle">VGC-ITSM — Complete REST API Documentation (250+ Endpoints)</div>
-  <span class="badge">Version 3.0</span>
+  <span class="badge">Version 3.1</span>
 </div>
 
 <div class="meta-bar">
@@ -625,8 +625,74 @@
     </table>
   </div>
 
+  <!-- Workflow Automation Engine (v3.1 — Phase 10) -->
+  <div class="section" id="workflow-automation">
+    <h2>Workflow Automation Engine (v3.1)</h2>
+    <h3>Scheduled Task Runner (10.1)</h3>
+    <p style="font-size:13px;color:#555;margin-bottom:8px;">Cron-like recurring task execution engine. Tasks are registered at server startup and evaluated every 15-minute cycle. Stats are included in the workflow engine's <code>getStats()</code> response.</p>
+    <table>
+      <tr><th>Method</th><th>Internal API</th><th>Description</th></tr>
+      <tr><td><code>registerScheduledTask(id, opts)</code></td><td>Server-side</td><td>Register a recurring task: <code>{ name, intervalMs, handler, enabled }</code></td></tr>
+      <tr><td><code>runScheduledTasks()</code></td><td>Auto (each cycle)</td><td>Execute all due tasks — tracks runCount, errors, lastRun, nextRun</td></tr>
+      <tr><td><code>getScheduledTaskStats()</code></td><td>Server-side</td><td>Returns array of task stats: id, name, enabled, intervalMin, lastRun, nextRun, runCount, errors</td></tr>
+    </table>
+
+    <h3>Multi-tier Escalation Chain (10.2)</h3>
+    <p style="font-size:13px;color:#555;margin-bottom:8px;">Automatic escalation of Sev-A/B incidents through configurable tiers. Sev-B thresholds are doubled. Supports in-app, email, and SMS notification channels. Escalation events are logged to the <code>escalation_log</code> collection.</p>
+    <table>
+      <tr><th>Config</th><th>Default</th><th>Description</th></tr>
+      <tr><td>Level 1</td><td>15 min (Sev-A) / 30 min (Sev-B)</td><td>Notify: engineer — Channel: in-app</td></tr>
+      <tr><td>Level 2</td><td>30 min / 60 min</td><td>Notify: team_lead, senior_engineer — Channel: in-app + email</td></tr>
+      <tr><td>Level 3</td><td>60 min / 120 min</td><td>Notify: manager, director — Channel: in-app + email</td></tr>
+    </table>
+
+    <h3>Skill-based Auto-Assignment (10.3)</h3>
+    <p style="font-size:13px;color:#555;margin-bottom:8px;">Automatically assigns unassigned incidents to engineers based on incident category and current workload. The engineer with the lowest active ticket count for a matching skill category is selected.</p>
+    <table>
+      <tr><th>Category</th><th>Assigned Engineers</th></tr>
+      <tr><td>Network / VPN</td><td>Hlaing Pyae Phyo, Network Team</td></tr>
+      <tr><td>Hardware</td><td>Desktop Support, Hlaing Pyae Phyo</td></tr>
+      <tr><td>Software</td><td>Application Support, Hlaing Pyae Phyo</td></tr>
+      <tr><td>Security</td><td>Security Team, Hlaing Pyae Phyo</td></tr>
+      <tr><td>Email / Cloud Services</td><td>Cloud Team / Service Desk, Hlaing Pyae Phyo</td></tr>
+      <tr><td>Database / Backup</td><td>Infrastructure, Hlaing Pyae Phyo</td></tr>
+      <tr><td>Access Management</td><td>Service Desk, Hlaing Pyae Phyo</td></tr>
+    </table>
+
+    <h3>Change Approval Pipeline (10.4)</h3>
+    <p style="font-size:13px;color:#555;margin-bottom:8px;">3-stage change approval workflow evaluated each cycle. Maintains full <code>approvalHistory</code> audit trail on each change record.</p>
+    <table>
+      <tr><th>Stage</th><th>Criteria</th><th>Action</th></tr>
+      <tr><td>Auto-Approve</td><td>Standard + Low/None risk</td><td>Automatically approved, <code>approvalStage: "auto"</code></td></tr>
+      <tr><td>Manager Approval</td><td>Normal or Standard + Medium/High risk</td><td>Status set to "Pending Approval", notification sent</td></tr>
+      <tr><td>CAB Review</td><td>Emergency changes</td><td>Flagged for CAB review, critical notification sent</td></tr>
+    </table>
+  </div>
+
+  <!-- Security & Observability (v3.1 — Phases 8-9) -->
+  <div class="section" id="security-observability">
+    <h2>Security &amp; Observability (v3.1)</h2>
+    <h3>Phase 8: Security Hardening</h3>
+    <table>
+      <tr><th>Feature</th><th>Details</th></tr>
+      <tr><td>RBAC Enforcement</td><td>All Zendesk routes enforce role-based access (12 roles × 14 permission dimensions)</td></tr>
+      <tr><td>Webhook HMAC-SHA256</td><td><code>X-Zendesk-Webhook-Signature</code> + <code>X-Zendesk-Webhook-Signature-Timestamp</code> verified with timing-safe comparison. Env: <code>ZENDESK_WEBHOOK_SECRET</code></td></tr>
+      <tr><td>Input Validation</td><td>ticketId, status, priority validated on all write endpoints. Max payload: 500KB (webhooks), 1MB (standard)</td></tr>
+    </table>
+
+    <h3>Phase 9: Observability &amp; Reliability</h3>
+    <table>
+      <tr><th>Feature</th><th>Details</th></tr>
+      <tr><td>Structured Logging</td><td><code>structuredLog(level, module, message, extra)</code> — JSON output when <code>LOG_FORMAT=json</code></td></tr>
+      <tr><td>Correlation IDs</td><td><code>X-Correlation-Id</code> header on every HTTP response for request tracing</td></tr>
+      <tr><td>Body Parser Safety</td><td><code>parseBody</code> / <code>readBody</code> with timeout + error handlers (15s/30s)</td></tr>
+      <tr><td>Index-based Dedup</td><td>In-memory incident index (<code>incidentIndex.getByZdTicketId</code>) avoids O(n) DB scans</td></tr>
+      <tr><td>Cached Stats</td><td><code>/api/zendesk/stats</code> cached with 2-min TTL via <code>cacheLayer</code></td></tr>
+    </table>
+  </div>
+
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM API Reference · Version 3.0 · April 2026</div>
+  <div class="footer">VGC-ITSM API Reference · Version 3.1 · April 2026</div>
 </div>
 </body>
 </html>

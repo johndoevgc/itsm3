@@ -5,7 +5,7 @@ const readline = require("readline");
 
 const BASE = "https://vgc-itsm1-app.azurewebsites.net";
 const TEST_ID = "INC-DEMO-VPN-" + Date.now().toString(36).toUpperCase();
-const AUTH_TOKEN = "local-hash:0493aa48e5f4856762afe7203c0edcd844d7aff683d9a810dc25de7c2c4627b5";
+const AUTH_TOKEN = process.env.TEST_AUTH_TOKEN || "";
 const cleanup = [];
 
 // ─── Helpers ───────────────────────────────────────────────────────

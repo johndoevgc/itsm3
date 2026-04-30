@@ -8,6 +8,109 @@ import {
 import {
   RBAC_PERMISSIONS, USERS,
 } from "../constants/rbac.js";
+
+/* ─── Sub-component: AI Resolution Tab (hooks-safe) ─── */
+function AiResolveTab({ inc, addActivity, showToast }) {
+  const [aiSuggestions, setAiSuggestions] = React.useState(null);
+  const [aiSugLoading, setAiSugLoading] = React.useState(false);
+  const fetchSuggestions = async () => {
+    setAiSugLoading(true);
+    try {
+      const resp = await fetch("/api/ai/resolve-error", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ error: `${inc.title}. ${inc.description || ""}`, context: `Incident ${inc.id}, category: ${inc.category}, priority: ${inc.priority}, status: ${inc.status}` })
+      });
+      const data = await resp.json();
+      setAiSuggestions(data);
+    } catch { setAiSuggestions({ error: "Failed to get AI suggestions" }); }
+    setAiSugLoading(false);
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, #6366F1, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🤖</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Resolution Assistant</div>
+          <div style={{ fontSize: 11, color: "#5A6178" }}>AI analyzes this incident and suggests resolution steps from the knowledge base</div>
+        </div>
+        <button onClick={fetchSuggestions} disabled={aiSugLoading} style={{ ...btnStyle("#6366F1"), padding: "8px 16px", fontSize: 12, background: "linear-gradient(135deg, #6366F1, #8B5CF6)", opacity: aiSugLoading ? 0.6 : 1 }}>
+          {aiSugLoading ? "⏳ Analyzing..." : "🤖 Get AI Suggestions"}
+        </button>
+      </div>
+
+      {aiSugLoading && (
+        <div style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 32, marginBottom: 12, animation: "pulse 1.5s ease-in-out infinite" }}>🤖</div>
+          <div style={{ color: "#818CF8", fontSize: 13, fontWeight: 600 }}>AI is analyzing the incident...</div>
+          <div style={{ color: "#5A6178", fontSize: 11, marginTop: 4 }}>Searching knowledge base, analyzing patterns, generating resolution steps</div>
+        </div>
+      )}
+
+      {aiSuggestions && !aiSuggestions.error && (
+        <div style={{ display: "grid", gap: 12 }}>
+          {aiSuggestions.rootCause && (
+            <div style={{ background: "#0A0C14", borderRadius: 10, border: "1px solid #FF6B6B22", padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#FF6B6B", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace" }}>🔍 Root Cause Analysis</div>
+              <div style={{ fontSize: 13, color: "#C4CAD6", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{aiSuggestions.rootCause}</div>
+            </div>
+          )}
+
+          {(aiSuggestions.steps || aiSuggestions.resolution) && (
+            <div style={{ background: "#0A0C14", borderRadius: 10, border: "1px solid #4CAF5022", padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#4CAF50", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace" }}>⚡ Resolution Steps</div>
+              {Array.isArray(aiSuggestions.steps) ? aiSuggestions.steps.map((step, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 13, color: "#C4CAD6", lineHeight: 1.6 }}>
+                  <span style={{ color: "#4CAF50", fontWeight: 700, minWidth: 22, fontFamily: "'JetBrains Mono', monospace" }}>{i + 1}.</span>
+                  <span>{typeof step === "string" ? step : step.description || step.step || JSON.stringify(step)}</span>
+                </div>
+              )) : (
+                <div style={{ fontSize: 13, color: "#C4CAD6", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{aiSuggestions.resolution}</div>
+              )}
+            </div>
+          )}
+
+          {aiSuggestions.prevention && (
+            <div style={{ background: "#0A0C14", borderRadius: 10, border: "1px solid #06B6D422", padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#06B6D4", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace" }}>🛡️ Prevention</div>
+              <div style={{ fontSize: 13, color: "#C4CAD6", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{aiSuggestions.prevention}</div>
+            </div>
+          )}
+
+          {(aiSuggestions.relatedArticles || aiSuggestions.kbArticles) && (
+            <div style={{ background: "#0A0C14", borderRadius: 10, border: "1px solid #FFB34722", padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#FFB347", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1, fontFamily: "'JetBrains Mono', monospace" }}>📚 Related Knowledge Articles</div>
+              {(aiSuggestions.relatedArticles || aiSuggestions.kbArticles || []).map((kb, i) => (
+                <div key={i} style={{ padding: "6px 0", borderBottom: "1px solid #1E213044", fontSize: 12, color: "#C4CAD6" }}>
+                  {typeof kb === "string" ? kb : kb.title || kb.id}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button onClick={() => { navigator.clipboard.writeText(JSON.stringify(aiSuggestions, null, 2)); showToast("📋 AI suggestions copied to clipboard", "success"); }} style={{ ...btnStyle("#06B6D4"), padding: "8px 16px", fontSize: 11 }}>📋 Copy</button>
+            <button onClick={() => {
+              addActivity("ai_resolution", `AI Resolution Suggestion applied.\n${aiSuggestions.rootCause ? "Root Cause: " + aiSuggestions.rootCause + "\n" : ""}${Array.isArray(aiSuggestions.steps) ? "Steps: " + aiSuggestions.steps.map((s, i) => `${i + 1}. ${typeof s === "string" ? s : s.description || s.step}`).join(", ") : ""}`);
+              showToast("✅ AI resolution applied to activity log", "success");
+            }} style={{ ...btnStyle("#4CAF50"), padding: "8px 16px", fontSize: 11 }}>✅ Apply to Activity Log</button>
+          </div>
+        </div>
+      )}
+
+      {aiSuggestions?.error && (
+        <div style={{ textAlign: "center", padding: 30, color: "#FF6B6B", fontSize: 12 }}>❌ {aiSuggestions.error}</div>
+      )}
+
+      {!aiSuggestions && !aiSugLoading && (
+        <div style={{ textAlign: "center", padding: "40px 20px", color: "#5A6178" }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🤖</div>
+          <div style={{ fontSize: 13, color: "#C4CAD6", marginBottom: 6 }}>Click "Get AI Suggestions" to analyze this incident</div>
+          <div style={{ fontSize: 11 }}>AI will search the knowledge base, analyze patterns, and suggest resolution steps</div>
+        </div>
+      )}
+    </div>
+  );
+}
 import {
   CATEGORIES, SERVICES, KB_CATEGORIES, ASSETS,
 } from "../constants/categories.js";
@@ -42,6 +145,7 @@ const NewIncidentModal = () => {
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [createInZendesk, setCreateInZendesk] = useState(isEntraProductionUser);
   const [submitting, setSubmitting] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1); // 1=Describe, 2=AI Review, 3=Details
 
   const SUBCATEGORIES = {
     Network: ["VPN / Remote Access", "WiFi / LAN", "DNS / DHCP", "Bandwidth / Latency", "Firewall / Proxy"],
@@ -106,242 +210,306 @@ const NewIncidentModal = () => {
 
   const selectedCustomer = customers.find(c => c.id === form.customerId);
 
+  // Auto-advance to step 2 when AI finishes analyzing
+  const goToStep2 = () => { if (form.title.length >= 3) { runAiAnalysis(); setWizardStep(2); } };
+
+  const wizardSteps = [
+    { num: 1, label: "Describe", icon: "✏️" },
+    { num: 2, label: "AI Review", icon: "🤖" },
+    { num: 3, label: "Details", icon: "📋" },
+  ];
+
   return (
     <Modal title="Create New Incident" onClose={() => setModal(null)} wide>
-      {incidentTemplates.length > 0 && (
-        <FormField label="Use Template">
-          <select style={inputStyle} onChange={e => {
-            const tpl = incidentTemplates.find(t => t.id === e.target.value);
-            if (tpl) setForm(prev => ({ ...prev, title: tpl.title || prev.title, category: tpl.category || prev.category, priority: tpl.priority || prev.priority, description: tpl.description || prev.description, assignee: tpl.assignee || prev.assignee }));
-          }}>
-            <option value="">— Select a template —</option>
-            {incidentTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </FormField>
-      )}
-      <FormField label="Customer / Company">
-        <select style={inputStyle} value={form.customerId} onChange={e => {
-          const cust = customers.find(c => c.id === e.target.value);
-          setForm({ ...form, customerId: e.target.value, customerContact: cust ? cust.contactPerson : "" });
-        }}>
-          <option value="">— Internal / Not a customer —</option>
-          {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </FormField>
-      {selectedCustomer && <FormField label="Contact Person">
-        <input style={inputStyle} value={form.customerContact} onChange={e => setForm({ ...form, customerContact: e.target.value })} placeholder={selectedCustomer.contactPerson} />
-      </FormField>}
-      <FormField label="Title">
-        <input style={inputStyle} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} onBlur={runAiAnalysis} placeholder="Brief description of the issue" />
-      </FormField>
-      <FormField label="Description">
-        <textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} onBlur={runAiAnalysis} placeholder="Detailed description..." />
-      </FormField>
-
-      {/* AI Suggestion Panel */}
-      {aiSuggestion && (
-        <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", padding: 16, marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>🤖</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif" }}>AI Recommendations</span>
-              <Badge color={aiSuggestion.confidence >= 85 ? AI_CONFIDENCE_COLORS.high : aiSuggestion.confidence >= 70 ? AI_CONFIDENCE_COLORS.medium : AI_CONFIDENCE_COLORS.low}>
-                {aiSuggestion.confidence}% confident
-              </Badge>
-            </div>
-            <button style={{ ...btnStyle("#6366F1"), fontSize: 11, padding: "5px 12px" }} onClick={applyAiSuggestions}>Apply All ✓</button>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
-            <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
-              onClick={() => setForm(prev => ({ ...prev, category: aiSuggestion.suggestedCategory }))}>
-              <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Category</div>
-              <div style={{ color: "#64B5F6", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedCategory}</div>
-            </div>
-            <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
-              onClick={() => setForm(prev => ({ ...prev, priority: aiSuggestion.suggestedPriority }))}>
-              <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Priority</div>
-              <PriorityDot priority={aiSuggestion.suggestedPriority} />
-            </div>
-            <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
-              onClick={() => { if (aiSuggestion.suggestedAssignee) setForm(prev => ({ ...prev, assignee: aiSuggestion.suggestedAssignee })); }}>
-              <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Assignee</div>
-              <div style={{ color: "#CE93D8", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedAssignee || "Manual"}</div>
-            </div>
-          </div>
-          {(aiSuggestion.kbSuggestions || []).length > 0 && (
-            <div>
-              <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 6 }}>Suggested KB Articles</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {(aiSuggestion.kbSuggestions || []).map(kbId => {
-                  const art = kbArticles.find(a => a.id === kbId);
-                  return art ? (
-                    <span key={kbId} style={{ cursor: "pointer" }} onClick={() => { setDetailItem(art); setModal("kbDetail"); }}>
-                      <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>📖 {art.title}</Badge>
-                    </span>
-                  ) : null;
-                })}
-              </div>
-            </div>
-          )}
-          {aiSuggestion?.reasoning && (
-            <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #6366F122", marginTop: 8 }}>
-              <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>🧠 AI REASONING</div>
-              <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.4 }}>{aiSuggestion.reasoning}</div>
-            </div>
-          )}
-          {aiSuggestion?.source && (
-            <div style={{ marginTop: 6, fontSize: 9, color: "#5A617888", fontFamily: "'JetBrains Mono', monospace" }}>
-              Source: {aiSuggestion.source === "azure" ? "VGC-AI Engine" : aiSuggestion.source === "azure-fallback" ? "VGC-AI Engine (parsed locally)" : "Local AI Engine"}
-            </div>
-          )}
-        </div>
-      )}
-      {aiAnalyzing && (
-        <div style={{ padding: "14px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 16, animation: "zdSpin 1s linear infinite", display: "inline-block" }}>🤖</span>
+      {/* ─── Wizard Step Indicator ─────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 20, padding: "0 8px" }}>
+        {wizardSteps.map((s, i) => (
+          <React.Fragment key={s.num}>
+            <div onClick={() => { if (s.num < wizardStep || (s.num === 2 && form.title.length >= 3)) setWizardStep(s.num); }}
+              style={{ display: "flex", alignItems: "center", gap: 8, cursor: s.num <= wizardStep ? "pointer" : "default", flex: 1 }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 13, fontWeight: 700, flexShrink: 0, transition: "all 0.2s",
+                background: wizardStep === s.num ? "linear-gradient(135deg, #6366F1, #06B6D4)" : wizardStep > s.num ? "#4CAF5022" : "#1E2130",
+                color: wizardStep === s.num ? "#fff" : wizardStep > s.num ? "#4CAF50" : "#5A6178",
+                border: `2px solid ${wizardStep === s.num ? "#6366F1" : wizardStep > s.num ? "#4CAF5044" : "#1E2130"}`
+              }}>{wizardStep > s.num ? "✓" : s.icon}</div>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#6366F1" }}>VGC-AI Engine Analyzing...</div>
-                <div style={{ fontSize: 10, color: "#5A6178" }}>Classifying category, priority & recommended assignee</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: wizardStep >= s.num ? "#E8ECF4" : "#5A6178", fontFamily: "'Space Grotesk', sans-serif" }}>{s.label}</div>
+                <div style={{ fontSize: 8, color: "#5A617888" }}>Step {s.num} of 3</div>
               </div>
             </div>
-          )}
-          {!aiSuggestion && !aiAnalyzing && form.title.length < 3 && (
-            <div style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px dashed #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 14 }}>🤖</span>
-              <span style={{ fontSize: 12, color: "#5A617899" }}>AI will analyze and suggest category, priority & assignee after you enter a title</span>
-            </div>
-          )}
+            {i < wizardSteps.length - 1 && <div style={{ flex: 0.4, height: 2, background: wizardStep > s.num ? "#4CAF5044" : "#1E2130", borderRadius: 1, margin: "0 4px" }} />}
+          </React.Fragment>
+        ))}
+      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FormField label="Priority">
-          <select style={inputStyle} value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
-            {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+      {/* ─── Step 1: Describe the Issue ─────────────────────── */}
+      {wizardStep === 1 && <>
+        {incidentTemplates.length > 0 && (
+          <FormField label="Quick Start — Use Template">
+            <select style={inputStyle} onChange={e => {
+              const tpl = incidentTemplates.find(t => t.id === e.target.value);
+              if (tpl) setForm(prev => ({ ...prev, title: tpl.title || prev.title, category: tpl.category || prev.category, priority: tpl.priority || prev.priority, description: tpl.description || prev.description, assignee: tpl.assignee || prev.assignee }));
+            }}>
+              <option value="">— Select a template —</option>
+              {incidentTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </FormField>
+        )}
+        <FormField label="What's the issue? *">
+          <input style={{ ...inputStyle, fontSize: 14, padding: "12px 14px" }} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g. Cannot connect to VPN from home" autoFocus />
+        </FormField>
+        <FormField label="Tell us more (optional but helps AI triage)">
+          <textarea style={{ ...inputStyle, minHeight: 100, resize: "vertical" }} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Describe what happened, when it started, and any error messages you see..." />
+        </FormField>
+        <FormField label="How urgent is this for you?">
+          <div style={{ display: "flex", gap: 8 }}>
+            {[{ v: "Sev-A", label: "🔴 Critical", desc: "Business down" }, { v: "Sev-B", label: "🟠 High", desc: "Major impact" }, { v: "Sev-C", label: "🟡 Medium", desc: "Some impact" }, { v: "Sev-D", label: "🟢 Low", desc: "Minor issue" }].map(p => (
+              <button key={p.v} onClick={() => setForm({ ...form, priority: p.v, urgency: p.v })} style={{
+                flex: 1, padding: "10px 8px", borderRadius: 8, cursor: "pointer", textAlign: "center", transition: "all 0.15s",
+                background: form.priority === p.v ? "#6366F118" : "#0A0C14",
+                border: `2px solid ${form.priority === p.v ? "#6366F1" : "#1E2130"}`,
+              }}>
+                <div style={{ fontSize: 14 }}>{p.label.split(" ")[0]}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: form.priority === p.v ? "#E8ECF4" : "#8B92A8", marginTop: 2 }}>{p.label.split(" ").slice(1).join(" ")}</div>
+                <div style={{ fontSize: 9, color: "#5A6178", marginTop: 1 }}>{p.desc}</div>
+              </button>
+            ))}
+          </div>
+        </FormField>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
+          <button style={{ ...btnStyle(), opacity: form.title.length < 3 ? 0.5 : 1 }} disabled={form.title.length < 3} onClick={goToStep2}>
+            Next: AI Analysis →
+          </button>
+        </div>
+      </>}
+
+      {/* ─── Step 2: AI Review & Suggestions ───────────────── */}
+      {wizardStep === 2 && <>
+        <div style={{ padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{form.title}</div>
+          {form.description && <div style={{ fontSize: 11, color: "#5A6178", marginTop: 4, lineHeight: 1.4 }}>{form.description.substring(0, 200)}{form.description.length > 200 ? "..." : ""}</div>}
+        </div>
+
+        {aiAnalyzing && (
+          <div style={{ padding: "20px", background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 20, animation: "zdSpin 1s linear infinite", display: "inline-block" }}>🤖</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#6366F1" }}>VGC-AI Engine Analyzing...</div>
+              <div style={{ fontSize: 11, color: "#5A6178" }}>Classifying category, priority & recommended assignee</div>
+            </div>
+          </div>
+        )}
+        {aiSuggestion && !aiAnalyzing && (
+          <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 8, border: "1px solid #6366F133", padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>🤖</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#6366F1", fontFamily: "'Space Grotesk', sans-serif" }}>AI Recommendations</span>
+                <Badge color={aiSuggestion.confidence >= 85 ? AI_CONFIDENCE_COLORS.high : aiSuggestion.confidence >= 70 ? AI_CONFIDENCE_COLORS.medium : AI_CONFIDENCE_COLORS.low}>
+                  {aiSuggestion.confidence}% confident
+                </Badge>
+              </div>
+              <button style={{ ...btnStyle("#6366F1"), fontSize: 11, padding: "5px 12px" }} onClick={applyAiSuggestions}>Apply All ✓</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                onClick={() => setForm(prev => ({ ...prev, category: aiSuggestion.suggestedCategory }))}>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Category</div>
+                <div style={{ color: "#64B5F6", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedCategory}</div>
+              </div>
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                onClick={() => setForm(prev => ({ ...prev, priority: aiSuggestion.suggestedPriority }))}>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Priority</div>
+                <PriorityDot priority={aiSuggestion.suggestedPriority} />
+              </div>
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer" }}
+                onClick={() => { if (aiSuggestion.suggestedAssignee) setForm(prev => ({ ...prev, assignee: aiSuggestion.suggestedAssignee })); }}>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 4 }}>Assignee</div>
+                <div style={{ color: "#CE93D8", fontSize: 13, fontWeight: 600 }}>{aiSuggestion.suggestedAssignee || "Manual"}</div>
+              </div>
+            </div>
+            {(aiSuggestion.kbSuggestions || []).length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", marginBottom: 6 }}>Suggested KB Articles</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {(aiSuggestion.kbSuggestions || []).map(kbId => {
+                    const art = kbArticles.find(a => a.id === kbId);
+                    return art ? (
+                      <span key={kbId} style={{ cursor: "pointer" }} onClick={() => { setDetailItem(art); setModal("kbDetail"); }}>
+                        <Badge color={{ bg: "#0D2137", text: "#64B5F6" }}>📖 {art.title}</Badge>
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+              </div>
+            )}
+            {aiSuggestion?.reasoning && (
+              <div style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #6366F122", marginTop: 8 }}>
+                <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>🧠 AI REASONING</div>
+                <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.4 }}>{aiSuggestion.reasoning}</div>
+              </div>
+            )}
+          </div>
+        )}
+        {!aiSuggestion && !aiAnalyzing && (
+          <div style={{ padding: "20px", background: "#0A0C14", borderRadius: 6, border: "1px dashed #6366F133", marginBottom: 16, textAlign: "center" }}>
+            <span style={{ fontSize: 24 }}>🤖</span>
+            <div style={{ fontSize: 12, color: "#5A6178", marginTop: 6 }}>AI analysis didn't return suggestions. You can set fields manually.</div>
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Category">
+            <select style={inputStyle} value={form.category} onChange={e => setForm({ ...form, category: e.target.value, subcategory: "" })}>
+              {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Priority">
+            <select style={inputStyle} value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+              {["Sev-A", "Sev-B", "Sev-C", "Sev-D"].map(p => <option key={p}>{p}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <FormField label="Assignee">
+          <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
+            <option value="">AI Auto-assign</option>
+            {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role} ({u.team})</option>)}
           </select>
         </FormField>
-        <FormField label="Urgency">
-          <select style={inputStyle} value={form.urgency} onChange={e => setForm({ ...form, urgency: e.target.value })}>
-            {URGENCY_LEVELS.map(u => <option key={u}>{u}</option>)}
-          </select>
-        </FormField>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FormField label="Impact">
-          <select style={inputStyle} value={form.impact} onChange={e => setForm({ ...form, impact: e.target.value })}>
-            {IMPACT_LEVELS.map(i => <option key={i}>{i}</option>)}
-          </select>
-        </FormField>
-        <FormField label="Contact Method">
-          <select style={inputStyle} value={form.contactMethod} onChange={e => setForm({ ...form, contactMethod: e.target.value })}>
-            {CONTACT_METHODS.map(c => <option key={c}>{c}</option>)}
-          </select>
-        </FormField>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FormField label="Category">
-          <select style={inputStyle} value={form.category} onChange={e => setForm({ ...form, category: e.target.value, subcategory: "" })}>
-            {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-          </select>
-        </FormField>
-        <FormField label="Subcategory">
-          <select style={inputStyle} value={form.subcategory} onChange={e => setForm({ ...form, subcategory: e.target.value })}>
-            <option value="">Select subcategory</option>
-            {(SUBCATEGORIES[form.category] || []).map(s => <option key={s}>{s}</option>)}
-          </select>
-        </FormField>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FormField label="Affected Service">
-          <select style={inputStyle} value={form.affectedService} onChange={e => setForm({ ...form, affectedService: e.target.value })}>
-            <option value="">Select service</option>
-            {SERVICES_LIST.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </FormField>
-        <FormField label="Location">
-          <select style={inputStyle} value={form.location} onChange={e => setForm({ ...form, location: e.target.value })}>
-            {LOCATIONS.map(l => <option key={l}>{l}</option>)}
-          </select>
-        </FormField>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FormField label="Affected Asset / PC Name">
-          <input style={inputStyle} value={form.affectedAsset} onChange={e => setForm({ ...form, affectedAsset: e.target.value })} placeholder="e.g. AST001 or VGC-MKT-PC05" />
-        </FormField>
-        <FormField label="Reporter Email">
-          <input style={inputStyle} type="email" value={form.reporterEmail} onChange={e => setForm({ ...form, reporterEmail: e.target.value })} placeholder="user@vgctechnology.com.sg" />
-        </FormField>
-      </div>
-      <FormField label="Assignee">
-        <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
-          <option value="">AI Auto-assign</option>
-          {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role} ({u.team})</option>)}
-        </select>
-      </FormField>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", marginBottom: 8 }}>
-        <input type="checkbox" checked={createInZendesk} onChange={e => setCreateInZendesk(e.target.checked)} style={{ accentColor: "#EC4899" }} />
-        <span style={{ fontSize: 12, color: "#E8ECF4" }}>🎫 Also create Zendesk ticket</span>
-        <span style={{ fontSize: 10, color: "#5A6178", marginLeft: "auto" }}>{createInZendesk ? "Will sync to Zendesk" : "ITSM only"}</span>
-      </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
-        <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setModal(null)}>Cancel</button>
-        <button style={{ ...btnStyle(), opacity: submitting ? 0.6 : 1 }} disabled={submitting} onClick={async () => {
-          if (!form.title || submitting) return;
-          setSubmitting(true);
-          const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
-          const reporterUser = USERS.find(u => u.name === currentUser.name) || currentUser;
-          const assigneeUser = form.assignee ? USERS.find(u => u.name === form.assignee) : null;
-          const now = new Date();
-          const newInc = {
-            id: genId("INC"), title: form.title, priority: form.priority,
-            status: "Open", category: form.category, subcategory: form.subcategory,
-            urgency: form.urgency, impact: form.impact,
-            assignee: form.assignee || (aiSuggestion?.suggestedAssignee) || "Unassigned",
-            assignmentGroup: assigneeUser?.team || "Service Desk",
-            reporter: reporterUser.name, reporterEmail: form.reporterEmail || reporterUser.email || "",
-            customerId: form.customerId || "", customer: selectedCustomer?.name || "", customerContact: form.customerContact || selectedCustomer?.contactPerson || "", customerPhone: selectedCustomer?.phone || "", customerAddress: selectedCustomer?.address || "",
-            reporterRole: reporterUser.rbacRole || "", contactMethod: form.contactMethod,
-            created: 0, createdAt: now.toISOString(), slaTarget: slaMap[form.priority], description: form.description,
-            affectedAsset: form.affectedAsset, affectedService: form.affectedService,
-            location: form.location, firstResponseTime: null,
-            resolutionNotes: "", closureCode: "", workaround: "",
-            aiTriaged: !!aiSuggestion, aiConfidence: aiSuggestion?.confidence || 0,
-            activityLog: [
-              { id: genId("AL"), type: "status", user: "System", time: now.toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Ticket created via ${form.contactMethod || "Portal"}` },
-              ...(aiSuggestion ? [{ id: genId("AL"), type: "status", user: "AI Engine", time: now.toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-triaged: ${form.priority}, Category: ${form.category}, Confidence: ${aiSuggestion.confidence}%` }] : [])
-            ]
-          };
-          setIncidents(prev => [newInc, ...prev]);
-          // Persist to DB (skip in demo mode to prevent demo data writing to production)
-          if (!isDemoModeRef.current) {
-            try {
-              await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
-            } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
-          }
-          // AI Auto-Triage: if no AI suggestion was applied during creation, trigger server-side auto-triage
-          if (!aiSuggestion) {
-            autoTriageTicket(newInc).catch(() => {});
-          }
-          // Push to Zendesk if enabled
-          if (createInZendesk) {
-            try {
-              const zdRes = await fetch("/api/zendesk/push-to-zendesk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ incidentId: newInc.id, title: newInc.title, description: newInc.description, priority: newInc.priority, status: newInc.status, customer: newInc.customer, category: newInc.category }) });
-              const zdData = await zdRes.json();
-              if (zdData.zdTicketId) {
-                newInc.zdTicketId = zdData.zdTicketId;
-                setIncidents(prev => prev.map(i => i.id === newInc.id ? { ...i, zdTicketId: zdData.zdTicketId } : i));
-                showToast(`Incident ${newInc.id} created + Zendesk #${zdData.zdTicketId}`, "success");
-              } else {
-                showToast(`Incident ${newInc.id} created (Zendesk sync pending)`, "info");
-              }
-            } catch (e) {
-              showToast(`Incident created, Zendesk sync failed: ${e.message}`, "error");
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 12 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setWizardStep(1)}>← Back</button>
+          <button style={btnStyle()} onClick={() => setWizardStep(3)}>Next: Additional Details →</button>
+        </div>
+      </>}
+
+      {/* ─── Step 3: Additional Details & Submit ───────────── */}
+      {wizardStep === 3 && <>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Urgency">
+            <select style={inputStyle} value={form.urgency} onChange={e => setForm({ ...form, urgency: e.target.value })}>
+              {URGENCY_LEVELS.map(u => <option key={u}>{u}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Impact">
+            <select style={inputStyle} value={form.impact} onChange={e => setForm({ ...form, impact: e.target.value })}>
+              {IMPACT_LEVELS.map(i => <option key={i}>{i}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Subcategory">
+            <select style={inputStyle} value={form.subcategory} onChange={e => setForm({ ...form, subcategory: e.target.value })}>
+              <option value="">Select subcategory</option>
+              {(SUBCATEGORIES[form.category] || []).map(s => <option key={s}>{s}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Contact Method">
+            <select style={inputStyle} value={form.contactMethod} onChange={e => setForm({ ...form, contactMethod: e.target.value })}>
+              {CONTACT_METHODS.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Affected Service">
+            <select style={inputStyle} value={form.affectedService} onChange={e => setForm({ ...form, affectedService: e.target.value })}>
+              <option value="">Select service</option>
+              {SERVICES_LIST.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Location">
+            <select style={inputStyle} value={form.location} onChange={e => setForm({ ...form, location: e.target.value })}>
+              {LOCATIONS.map(l => <option key={l}>{l}</option>)}
+            </select>
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Affected Asset / PC Name">
+            <input style={inputStyle} value={form.affectedAsset} onChange={e => setForm({ ...form, affectedAsset: e.target.value })} placeholder="e.g. AST001 or VGC-MKT-PC05" />
+          </FormField>
+          <FormField label="Reporter Email">
+            <input style={inputStyle} type="email" value={form.reporterEmail} onChange={e => setForm({ ...form, reporterEmail: e.target.value })} placeholder="user@vgctechnology.com.sg" />
+          </FormField>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FormField label="Customer / Company">
+            <select style={inputStyle} value={form.customerId} onChange={e => {
+              const cust = customers.find(c => c.id === e.target.value);
+              setForm({ ...form, customerId: e.target.value, customerContact: cust ? cust.contactPerson : "" });
+            }}>
+              <option value="">— Internal / Not a customer —</option>
+              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </FormField>
+          {selectedCustomer && <FormField label="Contact Person">
+            <input style={inputStyle} value={form.customerContact} onChange={e => setForm({ ...form, customerContact: e.target.value })} placeholder={selectedCustomer.contactPerson} />
+          </FormField>}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044", marginBottom: 8 }}>
+          <input type="checkbox" checked={createInZendesk} onChange={e => setCreateInZendesk(e.target.checked)} style={{ accentColor: "#EC4899" }} />
+          <span style={{ fontSize: 12, color: "#E8ECF4" }}>🎫 Also create Zendesk ticket</span>
+          <span style={{ fontSize: 10, color: "#5A6178", marginLeft: "auto" }}>{createInZendesk ? "Will sync to Zendesk" : "ITSM only"}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 8 }}>
+          <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => setWizardStep(2)}>← Back</button>
+          <button style={{ ...btnStyle(), opacity: submitting ? 0.6 : 1 }} disabled={submitting} onClick={async () => {
+            if (!form.title || submitting) return;
+            setSubmitting(true);
+            const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
+            const reporterUser = USERS.find(u => u.name === currentUser.name) || currentUser;
+            const assigneeUser = form.assignee ? USERS.find(u => u.name === form.assignee) : null;
+            const now = new Date();
+            const newInc = {
+              id: genId("INC"), title: form.title, priority: form.priority,
+              status: "Open", category: form.category, subcategory: form.subcategory,
+              urgency: form.urgency, impact: form.impact,
+              assignee: form.assignee || (aiSuggestion?.suggestedAssignee) || "Unassigned",
+              assignmentGroup: assigneeUser?.team || "Service Desk",
+              reporter: reporterUser.name, reporterEmail: form.reporterEmail || reporterUser.email || "",
+              customerId: form.customerId || "", customer: selectedCustomer?.name || "", customerContact: form.customerContact || selectedCustomer?.contactPerson || "", customerPhone: selectedCustomer?.phone || "", customerAddress: selectedCustomer?.address || "",
+              reporterRole: reporterUser.rbacRole || "", contactMethod: form.contactMethod,
+              created: 0, createdAt: now.toISOString(), slaTarget: slaMap[form.priority], description: form.description,
+              affectedAsset: form.affectedAsset, affectedService: form.affectedService,
+              location: form.location, firstResponseTime: null,
+              resolutionNotes: "", closureCode: "", workaround: "",
+              aiTriaged: !!aiSuggestion, aiConfidence: aiSuggestion?.confidence || 0,
+              activityLog: [
+                { id: genId("AL"), type: "status", user: "System", time: now.toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Ticket created via ${form.contactMethod || "Portal"}` },
+                ...(aiSuggestion ? [{ id: genId("AL"), type: "status", user: "AI Engine", time: now.toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: `Auto-triaged: ${form.priority}, Category: ${form.category}, Confidence: ${aiSuggestion.confidence}%` }] : [])
+              ]
+            };
+            setIncidents(prev => [newInc, ...prev]);
+            if (!isDemoModeRef.current) {
+              try {
+                await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
+              } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
             }
-          } else {
-            showToast(`Incident ${newInc.id} created successfully`, "success");
-          }
-          setSubmitting(false);
-          setModal(null);
-        }}>{submitting ? "⏳ Creating..." : "Create Incident"}</button>
-      </div>
+            if (!aiSuggestion) {
+              autoTriageTicket(newInc).catch(() => {});
+            }
+            if (createInZendesk) {
+              try {
+                const zdRes = await fetch("/api/zendesk/push-to-zendesk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ incidentId: newInc.id, title: newInc.title, description: newInc.description, priority: newInc.priority, status: newInc.status, customer: newInc.customer, category: newInc.category }) });
+                const zdData = await zdRes.json();
+                if (zdData.zdTicketId) {
+                  newInc.zdTicketId = zdData.zdTicketId;
+                  setIncidents(prev => prev.map(i => i.id === newInc.id ? { ...i, zdTicketId: zdData.zdTicketId } : i));
+                  showToast(`Incident ${newInc.id} created + Zendesk #${zdData.zdTicketId}`, "success");
+                } else {
+                  showToast(`Incident ${newInc.id} created (Zendesk sync pending)`, "info");
+                }
+              } catch (e) {
+                showToast(`Incident created, Zendesk sync failed: ${e.message}`, "error");
+              }
+            } else {
+              showToast(`Incident ${newInc.id} created successfully`, "success");
+            }
+            setSubmitting(false);
+            setModal(null);
+          }}>{submitting ? "⏳ Creating..." : "🚀 Create Incident"}</button>
+        </div>
+      </>}
     </Modal>
   );
 };
@@ -349,14 +517,29 @@ const NewIncidentModal = () => {
 // ─── Detail Modals ────────────────────────────────────────────────────
 const IncidentDetailModal = () => {
   const inc = detailItem;
-  if (!inc) return null;
-  const reporterUser = USERS.find(u => u.name === inc.reporter);
+  // v3.16: Hooks MUST be called unconditionally before any early return.
+  // Prior code returned null before useState calls → React error #310.
   const [detailTab, setDetailTab] = useState("details");
   const [replyMode, setReplyMode] = useState(null); // null | "external" | "internal"
   const [replyBody, setReplyBody] = useState("");
-  const [replySubject, setReplySubject] = useState(`RE: ${inc.id} — ${inc.title}`);
+  const [replySubject, setReplySubject] = useState(inc ? `RE: ${inc.id} — ${inc.title}` : "");
   const [emailAttachments, setEmailAttachments] = useState([]);
+  const [aiDraftPanel, setAiDraftPanel] = useState(false);
+  const [aiDraftTone, setAiDraftTone] = useState("professional");
+  const [aiDraftLoading, setAiDraftLoading] = useState(false);
+  const [aiDraftResult, setAiDraftResult] = useState("");
   const fileInputRef = useRef(null);
+  // ─── Live SLA Countdown Tick ───
+  const [slaTick, setSlaTick] = useState(0);
+  useEffect(() => {
+    if (!inc) return;
+    if (["Resolved","Closed","Pending","On Hold"].includes(inc.status)) return;
+    const iv = setInterval(() => setSlaTick(t => t + 1), 60000);
+    return () => clearInterval(iv);
+  }, [inc?.status, inc]);
+
+  if (!inc) return null;
+  const reporterUser = USERS.find(u => u.name === inc.reporter);
   const activities = inc.activityLog || [];
 
   const addActivity = (type, detail, extra = {}) => {
@@ -590,7 +773,7 @@ const IncidentDetailModal = () => {
         )}
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
-          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
+          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolution", icon: "🤖" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
             <button key={t.id} onClick={() => setDetailTab(t.id)}
               style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
               <span>{t.icon}</span> {t.label}
@@ -822,6 +1005,7 @@ const IncidentDetailModal = () => {
               <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
                 <button style={btnStyle("#3B82F6")} onClick={() => { setReplyMode("external"); setReplySubject(`RE: ${inc.id} — ${inc.title}`); }}>📧 Reply to Reporter</button>
                 <button style={btnStyle("#6366F1")} onClick={() => setReplyMode("internal")}>📝 Add Internal Note</button>
+                <button style={{ ...btnStyle("#8B5CF6"), display: "flex", alignItems: "center", gap: 4 }} onClick={() => { setReplyMode("external"); setReplySubject(`RE: ${inc.id} — ${inc.title}`); setAiDraftPanel(true); }}>✨ AI Compose</button>
               </div>
 
               {/* Compose Area */}
@@ -864,6 +1048,53 @@ const IncidentDetailModal = () => {
                           <button onClick={() => setEmailAttachments(prev => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 10, padding: 0, marginLeft: 2 }}>✕</button>
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {/* AI Email Draft Panel */}
+                  {aiDraftPanel && replyMode === "external" && (
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid #8B5CF644", background: "#8B5CF608" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 12 }}>✨</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#8B5CF6", fontFamily: "'JetBrains Mono', monospace" }}>AI EMAIL COMPOSER</span>
+                        </div>
+                        <button onClick={() => setAiDraftPanel(false)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 12 }}>✕</button>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                        {["professional", "empathetic", "technical", "escalation", "resolution"].map(tone => (
+                          <button key={tone} onClick={() => setAiDraftTone(tone)}
+                            style={{ padding: "3px 10px", borderRadius: 12, border: `1px solid ${aiDraftTone === tone ? "#8B5CF6" : "#2A2E3E"}`, background: aiDraftTone === tone ? "#8B5CF622" : "#0A0C14", color: aiDraftTone === tone ? "#8B5CF6" : "#5A6178", fontSize: 10, cursor: "pointer", textTransform: "capitalize", fontWeight: aiDraftTone === tone ? 600 : 400 }}>
+                            {tone}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button disabled={aiDraftLoading} onClick={async () => {
+                          setAiDraftLoading(true); setAiDraftResult("");
+                          try {
+                            const r = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ message: `Draft a ${aiDraftTone} email reply for IT support ticket:\nID: ${inc.id}\nTitle: ${inc.title}\nCategory: ${inc.category}\nPriority: ${inc.priority}\nStatus: ${inc.status}\nDescription: ${(inc.description || "").substring(0, 500)}\nReporter: ${inc.reporter}\n\nWrite a ${aiDraftTone} email response. Be concise, helpful, and include next steps. Do not include subject line.` })
+                            });
+                            const d = await r.json(); setAiDraftResult(d.reply || d.message || "Unable to generate draft.");
+                          } catch { setAiDraftResult("AI service unavailable."); }
+                          setAiDraftLoading(false);
+                        }} style={{ ...btnStyle("#8B5CF6"), padding: "5px 14px", fontSize: 10, opacity: aiDraftLoading ? 0.6 : 1 }}>
+                          {aiDraftLoading ? "⏳ Generating..." : "🪄 Generate Draft"}
+                        </button>
+                        {aiDraftResult && (
+                          <button onClick={() => {
+                            const editor = document.getElementById("reply-editor");
+                            if (editor) { editor.innerHTML = aiDraftResult.replace(/\n/g, "<br>"); setReplyBody(aiDraftResult.replace(/\n/g, "<br>")); }
+                            setAiDraftPanel(false);
+                          }} style={{ ...btnStyle("#4CAF50"), padding: "5px 14px", fontSize: 10 }}>✅ Use This Draft</button>
+                        )}
+                      </div>
+                      {aiDraftResult && (
+                        <div style={{ marginTop: 8, padding: 10, background: "#0A0C14", borderRadius: 6, border: "1px solid #1E2130", maxHeight: 160, overflow: "auto" }}>
+                          <div style={{ fontSize: 9, color: "#8B5CF6", fontWeight: 600, marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>PREVIEW — {aiDraftTone.toUpperCase()} TONE</div>
+                          <div style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{aiDraftResult}</div>
+                        </div>
+                      )}
                     </div>
                   )}
                   <div id="reply-editor" contentEditable
@@ -1006,6 +1237,9 @@ const IncidentDetailModal = () => {
               </div>
             );
           })()}
+
+          {/* ─── AI Resolution Suggestions Tab ─── */}
+          {detailTab === "aiResolve" && <AiResolveTab inc={inc} addActivity={addActivity} showToast={showToast} />}
 
           {/* ─── Major Incident Management Tab ─── */}
           {detailTab === "majorIncident" && (
@@ -1406,6 +1640,28 @@ const IncidentDetailModal = () => {
             setDetailItem(updated);
             addActivity("status", `Linked Problem ${newPrb.id} created`);
           }}>Create Problem</button>}
+          {/* ═══ One-Click Escalation ═══ */}
+          {!["Resolved", "Closed"].includes(inc.status) && inc.priority !== "Sev-A" && (
+            <button style={{ ...btnStyle("#FF4444"), fontSize: 11, display: "flex", alignItems: "center", gap: 4, animation: "slaBlink 1.2s ease-in-out infinite" }} onClick={() => {
+              const prevPriority = inc.priority;
+              const escalatedPriority = prevPriority === "Sev-B" ? "Sev-A" : prevPriority === "Sev-C" ? "Sev-B" : "Sev-B";
+              const escalatedSla = { "Sev-A": 4, "Sev-B": 8 }[escalatedPriority] || 8;
+              const updated = {
+                ...inc, priority: escalatedPriority, urgency: escalatedPriority === "Sev-A" ? "Critical" : "High",
+                slaTarget: Math.min(inc.slaTarget, escalatedSla), escalated: true, escalatedAt: new Date().toISOString(),
+                escalatedBy: currentUser.name, escalationReason: `One-click escalation by ${currentUser.name}`,
+                status: inc.status === "New" ? "Open" : inc.status,
+                activityLog: [...(inc.activityLog || []), {
+                  id: genId("AL"), type: "escalation", user: currentUser.name,
+                  time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""),
+                  detail: `🚨 Escalated: ${prevPriority} → ${escalatedPriority} (SLA tightened to ${escalatedSla}h)`
+                }]
+              };
+              setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+              setDetailItem(updated);
+              showToast(`🚨 ${inc.id} escalated to ${escalatedPriority}`, "warning");
+            }}>🚨 Escalate</button>
+          )}
           {/* Escalate */}
           {!["Closed", "Resolved"].includes(inc.status) && <button style={{ ...btnStyle("#333"), color: "#FFB347" }} onClick={() => {
             const newPri = inc.priority === "Sev-B" ? "Sev-A" : inc.priority === "Sev-C" ? "Sev-B" : inc.priority === "Sev-D" ? "Sev-C" : inc.priority;

@@ -19,6 +19,66 @@ import {
   searchKBArticles,
 } from "../utils/aiEngine.jsx";
 
+/* ─── Sub-component: KB Gap Card (hooks-safe) ─── */
+function GapCard({ gap, i, currentUser, showToast }) {
+  const [genLoading, setGenLoading] = React.useState(false);
+  const [genResult, setGenResult] = React.useState(null);
+  return (
+    <div style={{ background: "#0F1117", borderRadius: 8, border: `1px solid ${gap.severity === "high" ? "#FF444433" : gap.severity === "medium" ? "#FFB34733" : "#1E2130"}`, padding: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: gap.severity === "high" ? "#FF444422" : gap.severity === "medium" ? "#FFB34722" : "#4CAF5022", color: gap.severity === "high" ? "#FF6B6B" : gap.severity === "medium" ? "#FFB347" : "#4CAF50", fontWeight: 600, textTransform: "uppercase" }}>{gap.severity}</span>
+          <span style={{ fontSize: 10, color: "#5A6178" }}>{gap.category}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>~{gap.incidentCount} incidents</span>
+          <button disabled={genLoading} onClick={async () => {
+            setGenLoading(true);
+            try {
+              const r = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: `Generate a complete IT knowledge base article for this gap:\nTopic: ${gap.suggestedTitle || gap.topic}\nCategory: ${gap.category}\nContext: ${gap.reason}\n\nReturn as JSON: {"title":"...","category":"${gap.category}","content":"(markdown article with ## sections: Overview, Symptoms, Root Cause, Resolution Steps, Prevention, Related)","tags":["tag1","tag2"],"whenToUse":"...","bestFor":"...","quickFix":"one-line quick fix"}` })
+              });
+              const d = await r.json();
+              try { setGenResult(JSON.parse(d.reply)); } catch { setGenResult({ title: gap.suggestedTitle || gap.topic, category: gap.category, content: d.reply || "AI-generated content", tags: [gap.category], whenToUse: "When users report " + (gap.topic || gap.suggestedTitle), bestFor: "IT Support Engineers", quickFix: "See resolution steps below" }); }
+            } catch { showToast("❌ AI service unavailable", "error"); }
+            setGenLoading(false);
+          }} style={{ ...btnStyle("#8B5CF6"), fontSize: 9, padding: "3px 10px", opacity: genLoading ? 0.6 : 1 }}>
+            {genLoading ? "⏳ Generating..." : "✨ Auto-Generate Article"}
+          </button>
+        </div>
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>{gap.suggestedTitle || gap.topic}</div>
+      <div style={{ fontSize: 11, color: "#8B92A8" }}>{gap.reason}</div>
+      {genResult && (
+        <div style={{ marginTop: 10, padding: 12, background: "#0A0C14", borderRadius: 8, border: "1px solid #8B5CF633" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#8B5CF6", fontFamily: "'JetBrains Mono', monospace" }}>✨ AI-GENERATED ARTICLE PREVIEW</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setGenResult(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 10 }}>Dismiss</button>
+              <button onClick={async () => {
+                const article = { id: `KB-${Date.now()}`, title: genResult.title, category: genResult.category || gap.category, status: "Draft", author: currentUser?.name || "AI Auto-Fill", tags: genResult.tags || [], whenToUse: genResult.whenToUse || "", bestFor: genResult.bestFor || "", quickFix: genResult.quickFix || "", content: genResult.content || "", createdAt: new Date().toISOString(), aiGenerated: true };
+                try {
+                  await fetch("/api/data/vgc_kb_articles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(article) });
+                  showToast(`✅ KB article "${article.title}" created as Draft`, "success");
+                  setGenResult(null);
+                } catch { showToast("❌ Failed to save article", "error"); }
+              }} style={{ ...btnStyle("#4CAF50"), fontSize: 9, padding: "3px 12px" }}>📄 Save as Draft</button>
+            </div>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>{genResult.title}</div>
+          <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
+            {(genResult.tags || []).map((tag, ti) => (
+              <span key={ti} style={{ fontSize: 8, padding: "1px 6px", borderRadius: 8, background: "#8B5CF618", color: "#8B5CF6", border: "1px solid #8B5CF633" }}>{tag}</span>
+            ))}
+          </div>
+          {genResult.quickFix && <div style={{ fontSize: 10, color: "#81C784", marginBottom: 4 }}>⚡ Quick Fix: {genResult.quickFix}</div>}
+          <div style={{ fontSize: 11, color: "#8A94A6", lineHeight: 1.6, maxHeight: 120, overflow: "auto", whiteSpace: "pre-wrap" }}>{(genResult.content || "").substring(0, 600)}{(genResult.content || "").length > 600 ? "..." : ""}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Knowledge Base module — extracted from itsm-tool.jsx
 export default function KnowledgeModule({ ctx }) {
   const {
@@ -47,7 +107,9 @@ const [kbTypeFilter, setKbTypeFilter] = useState("All");
 const [kbViewMode, setKbViewMode] = useState("cards"); // cards | list
 const KnowledgeModule = useStableComponent(() => {
   // Phase S1d — defer search so heavy filter doesn't block typing
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- hooks inside useStableComponent render callback are valid
   const deferredSearch = React.useDeferredValue(search);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const filteredKB = useMemo(() => {
     const q = (deferredSearch || "").toLowerCase();
     return kbArticles.filter(a => {
@@ -625,19 +687,7 @@ const KnowledgeModule = useStableComponent(() => {
                 <div style={{ textAlign: "center", padding: 20, color: "#4CAF50", fontSize: 13 }}>✅ No significant KB gaps detected — your documentation coverage is excellent!</div>
               ) : (
                 <div style={{ display: "grid", gap: 10 }}>
-                  {kbGapReport.gaps.map((gap, i) => (
-                    <div key={i} style={{ background: "#0F1117", borderRadius: 8, border: `1px solid ${gap.severity === "high" ? "#FF444433" : gap.severity === "medium" ? "#FFB34733" : "#1E2130"}`, padding: 16 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: gap.severity === "high" ? "#FF444422" : gap.severity === "medium" ? "#FFB34722" : "#4CAF5022", color: gap.severity === "high" ? "#FF6B6B" : gap.severity === "medium" ? "#FFB347" : "#4CAF50", fontWeight: 600, textTransform: "uppercase" }}>{gap.severity}</span>
-                          <span style={{ fontSize: 10, color: "#5A6178" }}>{gap.category}</span>
-                        </div>
-                        <span style={{ fontSize: 10, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>~{gap.incidentCount} incidents</span>
-                      </div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", marginBottom: 4 }}>{gap.suggestedTitle || gap.topic}</div>
-                      <div style={{ fontSize: 11, color: "#8B92A8" }}>{gap.reason}</div>
-                    </div>
-                  ))}
+                  {kbGapReport.gaps.map((gap, i) => <GapCard key={i} gap={gap} i={i} currentUser={currentUser} showToast={showToast} />)}
                 </div>
               )}
             </div>

@@ -1,5 +1,6 @@
 // ─── Microsoft Graph API Service ──────────────────────────────────────────
 // Client-side Graph calls using MSAL access tokens (PKCE flow, no secret)
+/* global FileReader */
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 

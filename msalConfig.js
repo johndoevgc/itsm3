@@ -3,17 +3,6 @@ import { PublicClientApplication, LogLevel } from "@azure/msal-browser";
 // ─── MSAL Configuration ──────────────────────────────────────────────────
 // Uses Authorization Code Flow with PKCE (no client secret needed in browser)
 
-// Map of known origins to their registered SPA redirect URIs
-const REGISTERED_REDIRECT_URIS = [
-  "http://localhost:8080",
-  "http://localhost:4173",
-  "http://localhost:5173",
-  "https://vgc-itsm1-app.azurewebsites.net",
-];
-// Add production URI dynamically — will be set after Entra ID app registration
-if (window.__ITSM_CONFIG__?.redirectUris) {
-  REGISTERED_REDIRECT_URIS.push(...window.__ITSM_CONFIG__.redirectUris);
-}
 const redirectUri = window.location.origin;
 
 // Entra ID configuration — set via build-time or runtime injection

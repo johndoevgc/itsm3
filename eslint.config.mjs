@@ -21,7 +21,7 @@ export default [
   // ─── Server-side JS (Node) ────────────────────────────────────────────
   {
     files: ["**/*.js", "**/*.mjs"],
-    ignores: ["tests/**", "msalConfig.js"],
+    ignores: ["tests/**", "msalConfig.js", "src/**/*.js"],
     ...js.configs.recommended,
     languageOptions: {
       ecmaVersion: 2022,
@@ -33,7 +33,7 @@ export default [
     },
     rules: {
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-undef": "warn",        // server.js monolith has cross-scope refs; tighten after Phase 4
+      "no-undef": "warn",        // route files share closure scope with server.js; needs refactor before promoting
       "no-console": "off",
       "eqeqeq": ["warn", "always"],
       "no-constant-condition": "warn",
@@ -44,6 +44,27 @@ export default [
       "no-misleading-character-class": "warn",
       "no-prototype-builtins": "warn",
       "no-useless-escape": "warn",
+    },
+  },
+
+  // ─── Frontend utility JS (browser context, used by JSX modules) ───────
+  {
+    files: ["src/**/*.js"],
+    ignores: ["src/server/**"],
+    ...js.configs.recommended,
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...globals.browser,
+        ...globals.es2021,
+      },
+    },
+    rules: {
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-undef": "error",
+      "no-console": "off",
+      "no-empty": "warn",
     },
   },
 
@@ -165,7 +186,9 @@ export default [
       "react/jsx-uses-vars": "error",
       "react/jsx-no-undef": "error",
       "react/no-direct-mutation-state": "error",
-      "react-hooks/rules-of-hooks": "warn",   // monolith has non-standard patterns; tighten after Phase 3 split
+      // v3.16: promoted from "warn" to "error" after sweep proved 0 violations.
+      // This rule prevents React error #310 ("Rendered more hooks than during the previous render").
+      "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
     },
   },

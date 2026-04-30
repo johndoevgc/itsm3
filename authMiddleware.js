@@ -189,11 +189,21 @@ function checkPermission(role, collection, method) {
 }
 
 // ─── Rate Limiting ──────────────────────────────────────────────────────
+// In-memory per-worker counter. The Node cluster runs N workers and HTTP
+// connections are distributed round-robin, so a single worker only sees
+// ~1/N of the traffic for any given IP. We compensate by dividing the
+// documented limit by the worker count, so the aggregate across the cluster
+// stays within the intended budget. This is still per-worker (not shared
+// state); a hot-spot IP that always hashes to the same worker would hit the
+// stricter limit. Move to Azure Cache for Redis for a true distributed
+// counter when traffic warrants it.
 const rateLimitStore = new Map(); // IP -> { count, resetAt }
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 300; // 300 requests per minute per IP
-const RATE_LIMIT_MAX_WRITE = 60; // 60 write requests per minute per IP
-const RATE_LIMIT_MAX_AI = 30; // 30 AI requests per minute per IP
+const _workerCount = Math.max(1, parseInt(process.env.WEB_CONCURRENCY || "1", 10) || 1);
+const _share = (n) => Math.max(1, Math.ceil(n / _workerCount));
+const RATE_LIMIT_MAX = _share(300);       // 300 req/min per IP cluster-wide
+const RATE_LIMIT_MAX_WRITE = _share(60);  // 60 writes/min per IP cluster-wide
+const RATE_LIMIT_MAX_AI = _share(30);     // 30 AI calls/min per IP cluster-wide
 
 function checkRateLimit(ip, isWrite, isAI) {
   const now = Date.now();
@@ -241,7 +251,9 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
   // Rate limiting
   const clientIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
   const isWrite = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
-  const isAI = pathname.startsWith("/api/ai/") || pathname.startsWith("/api/ai-");
+  // AI action management (approve/reject/execute/purge) uses normal write limits, not the strict AI inference limit
+  const isAiActionMgmt = pathname.startsWith("/api/ai/actions");
+  const isAI = !isAiActionMgmt && (pathname.startsWith("/api/ai/") || pathname.startsWith("/api/ai-"));
   const rateResult = checkRateLimit(clientIP, isWrite, isAI);
   if (!rateResult.allowed) {
     res.writeHead(429, {
@@ -257,8 +269,14 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
   // Extract Bearer token
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    // No token — allow read-only access for now (graceful migration)
-    // In production hardening, change this to return 401
+    // v3.14 H1: deny anonymous writes (POST/PUT/DELETE) to /api/* — frontend
+    // attaches MSAL Bearer tokens via patched window.fetch in main.jsx.
+    // Reads remain allowed for graceful degradation during MSAL bootstrap.
+    if (isWrite) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Authentication required for write operations" }));
+      return { authenticated: false, blocked: true };
+    }
     return { authenticated: false, user: null, role: "Read Only", skipped: false };
   }
 

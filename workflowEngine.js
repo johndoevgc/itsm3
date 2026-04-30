@@ -121,6 +121,18 @@ class WorkflowEngine {
         }
       }
 
+      // ─── Phase 10.1: Run scheduled tasks ──────────────────────────────
+      await this.runScheduledTasks();
+
+      // ─── Phase 10.2: Multi-tier escalation chain ─────────────────────
+      await this._runEscalationChain();
+
+      // ─── Phase 10.3: Skill-based auto-assignment ─────────────────────
+      await this._autoAssignBySkill();
+
+      // ─── Phase 10.4: Change approval pipeline ────────────────────────
+      await this._processChangeApprovals();
+
       // Clean up cycle-scoped data
       this._cycleIncidents = null;
     } catch (err) {
@@ -289,9 +301,11 @@ class WorkflowEngine {
           if (inc.priority !== "Sev-A") continue;
           if (inc._escalatedByWF) continue; // already escalated
 
-          const created = inc.createdAt || inc.created_at || inc.created;
+          const created = inc.createdAt || inc.created_at;
           if (!created) continue;
-          const elapsed = now - new Date(created).getTime();
+          const createdTime = new Date(created).getTime();
+          if (isNaN(createdTime)) continue;
+          const elapsed = now - createdTime;
           if (elapsed < THRESHOLD) continue;
           if (inc.firstResponseAt) continue; // has response
 
@@ -509,6 +523,9 @@ class WorkflowEngine {
       lastCycleTimeMs: this._cycleTimeMs,
       ...this.stats,
       logSize: this.executionLog.length,
+      escalationChainTiers: this._escalationChain ? this._escalationChain.length : 0,
+      skillMapCategories: this._skillMap ? Object.keys(this._skillMap).length : 0,
+      scheduledTasks: this.getScheduledTaskStats(),
     };
   }
 
@@ -673,6 +690,303 @@ class WorkflowEngine {
       this.stats.errors++;
       this._log("error", "DAILY_SUMMARY", `Failed to send daily summary: ${err.message}`);
       return { error: err.message };
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Phase 10.1 — Scheduled Task Runner (cron-like recurring tasks)
+  // ════════════════════════════════════════════════════════════════════════
+  registerScheduledTask(taskId, { name, intervalMs, handler, enabled = true }) {
+    if (!this._scheduledTasks) this._scheduledTasks = new Map();
+    this._scheduledTasks.set(taskId, {
+      id: taskId, name, intervalMs, handler, enabled,
+      lastRun: null, nextRun: Date.now() + intervalMs, runCount: 0, errors: 0,
+    });
+    this._log("action", "SCHEDULER", `Registered task: ${name} (every ${Math.round(intervalMs / 60000)}min)`);
+  }
+
+  async runScheduledTasks() {
+    if (!this._scheduledTasks || this._scheduledTasks.size === 0) return;
+    const now = Date.now();
+    for (const [taskId, task] of this._scheduledTasks) {
+      if (!task.enabled || now < task.nextRun) continue;
+      try {
+        await task.handler(this);
+        task.lastRun = new Date().toISOString();
+        task.nextRun = now + task.intervalMs;
+        task.runCount++;
+        this._log("action", "SCHEDULER", `Executed: ${task.name} (run #${task.runCount})`);
+      } catch (err) {
+        task.errors++;
+        task.nextRun = now + task.intervalMs; // still advance to avoid infinite retries
+        this._log("error", "SCHEDULER", `Task ${task.name} failed: ${err.message}`);
+      }
+    }
+  }
+
+  getScheduledTaskStats() {
+    if (!this._scheduledTasks) return [];
+    return Array.from(this._scheduledTasks.values()).map(t => ({
+      id: t.id, name: t.name, enabled: t.enabled,
+      intervalMin: Math.round(t.intervalMs / 60000),
+      lastRun: t.lastRun, nextRun: new Date(t.nextRun).toISOString(),
+      runCount: t.runCount, errors: t.errors,
+    }));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Phase 10.2 — Multi-tier Escalation Chain
+  // ════════════════════════════════════════════════════════════════════════
+  setEscalationChain(chain) {
+    // chain = [{ level: 1, thresholdMin: 15, notifyRoles: ["engineer"], channels: ["inapp"] },
+    //          { level: 2, thresholdMin: 30, notifyRoles: ["team_lead"], channels: ["inapp","email"] },
+    //          { level: 3, thresholdMin: 60, notifyRoles: ["manager"], channels: ["inapp","email","sms"] }]
+    this._escalationChain = chain.sort((a, b) => a.level - b.level);
+    this._log("action", "ESCALATION_CHAIN", `Configured ${chain.length}-tier escalation chain`);
+  }
+
+  async _runEscalationChain() {
+    if (!this._escalationChain || this._escalationChain.length === 0) return;
+    const incidents = this._cycleIncidents || [];
+    const now = Date.now();
+
+    for (const inc of incidents) {
+      try {
+        const status = (inc.status || "").toLowerCase();
+        if (["closed", "resolved"].includes(status)) continue;
+        if (inc.priority !== "Sev-A" && inc.priority !== "Sev-B") continue;
+
+        const created = new Date(inc.createdAt || inc.created_at || inc.created || 0).getTime();
+        if (!created) continue;
+        const elapsedMin = (now - created) / 60000;
+        const currentLevel = inc._escalationLevel || 0;
+
+        // Find next escalation tier that should trigger
+        for (const tier of this._escalationChain) {
+          if (tier.level <= currentLevel) continue;
+          const threshold = inc.priority === "Sev-A" ? tier.thresholdMin : tier.thresholdMin * 2;
+          if (elapsedMin < threshold) break; // not ready for this tier yet
+          if (inc.firstResponseAt && tier.level <= 1) continue; // has response, skip L1
+
+          // Escalate to this tier
+          inc._escalationLevel = tier.level;
+          inc.escalationLevel = tier.level;
+          inc.lastModified = new Date().toISOString();
+          await this.db.upsert("incidents", inc.id, JSON.stringify(inc));
+
+          const escEntry = {
+            id: `ESC-CHAIN-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            incidentId: inc.id, level: tier.level,
+            reason: `No resolution after ${Math.round(elapsedMin)} min (${inc.priority} threshold: ${threshold}min)`,
+            notifyRoles: tier.notifyRoles, channels: tier.channels,
+            triggeredBy: "EscalationChain", timestamp: new Date().toISOString(),
+          };
+          await this.db.upsert("escalation_log", escEntry.id, JSON.stringify(escEntry));
+
+          this.stats.autoEscalated++;
+          this._log("action", "ESCALATION_CHAIN", `${inc.id} → Level ${tier.level} (${Math.round(elapsedMin)}min elapsed, notifying: ${tier.notifyRoles.join(",")})`);
+
+          if (this.wsServer) this.wsServer.broadcast("escalations", { action: "chain_escalate", ...escEntry });
+
+          if (this.notifyEngine) {
+            await this.notifyEngine.send({
+              channels: tier.channels || ["inapp"],
+              title: `Escalation L${tier.level}: ${inc.title || inc.id}`,
+              body: `${inc.priority} incident ${inc.id} escalated to Level ${tier.level} — no resolution after ${Math.round(elapsedMin)} minutes.`,
+              severity: tier.level >= 3 ? "critical" : "warning",
+              type: "escalation_chain", incidentId: inc.id,
+              targetRoles: tier.notifyRoles,
+            }).catch(() => {});
+          }
+
+          if (tier.channels?.includes("email") && this.graphSendMail) {
+            try {
+              await this.graphSendMail({
+                to: ["hlaing@vgctechnology.com"],
+                subject: `[ESCALATION L${tier.level}] ${inc.priority} — ${inc.title || inc.id}`,
+                body: `<div style="font-family:Arial;padding:16px;">
+                  <h2 style="color:#FF4444;">⚠️ Escalation Level ${tier.level}</h2>
+                  <p><strong>Incident:</strong> ${inc.id}</p>
+                  <p><strong>Priority:</strong> ${inc.priority}</p>
+                  <p><strong>Title:</strong> ${(inc.title || "").substring(0, 200)}</p>
+                  <p><strong>Elapsed:</strong> ${Math.round(elapsedMin)} minutes</p>
+                  <p><strong>Assigned to:</strong> ${inc.assignee || "Unassigned"}</p>
+                  <p style="color:#666;font-size:12px;">Automated escalation by VGC ITSM Workflow Engine</p>
+                </div>`,
+                isCustomerEmail: false,
+                from: process.env.MAIL_FROM_ALERTS || process.env.MAIL_FROM || "itsupport@vgctechnology.com",
+              });
+            } catch (mailErr) {
+              this._log("error", "ESCALATION_CHAIN", `Email notification failed: ${mailErr.message}`);
+            }
+          }
+          break; // only one level per cycle
+        }
+      } catch (err) {
+        this._log("error", "ESCALATION_CHAIN", `Incident ${inc.id}: ${err.message}`);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Phase 10.3 — Skill-based Auto-Assignment
+  // ════════════════════════════════════════════════════════════════════════
+  setSkillMap(skillMap) {
+    // skillMap = { "Network": ["John Doe", "Jane Smith"], "Security": ["Alice"], ... }
+    this._skillMap = skillMap;
+    this._log("action", "SKILL_ASSIGN", `Configured skill map for ${Object.keys(skillMap).length} categories`);
+  }
+
+  async _autoAssignBySkill() {
+    if (!this._skillMap || Object.keys(this._skillMap).length === 0) return;
+    const incidents = this._cycleIncidents || [];
+
+    // Build workload counts
+    const workload = {};
+    for (const inc of incidents) {
+      if (inc.assignee && inc.assignee !== "Unassigned") {
+        workload[inc.assignee] = (workload[inc.assignee] || 0) + 1;
+      }
+    }
+
+    for (const inc of incidents) {
+      try {
+        if (inc.assignee && inc.assignee !== "Unassigned") continue; // already assigned
+        if (inc._skillAssignAttempted) continue; // already tried
+
+        const cat = inc.category || "";
+        const candidates = this._skillMap[cat];
+        if (!candidates || candidates.length === 0) continue;
+
+        // Pick candidate with lowest workload
+        let bestCandidate = null;
+        let bestLoad = Infinity;
+        for (const name of candidates) {
+          const load = workload[name] || 0;
+          if (load < bestLoad) { bestLoad = load; bestCandidate = name; }
+        }
+
+        if (!bestCandidate) continue;
+
+        inc.assignee = bestCandidate;
+        inc.assignedBy = "SkillEngine";
+        inc._skillAssignAttempted = true;
+        inc.lastModified = new Date().toISOString();
+        if (!inc.activityLog) inc.activityLog = [];
+        inc.activityLog.push({
+          id: `AL-SKILL-${Date.now()}`,
+          type: "auto_assign",
+          user: "Workflow Engine (Skill-Based)",
+          time: new Date().toISOString(),
+          detail: `Auto-assigned to ${bestCandidate} (category: ${cat}, workload: ${bestLoad} tickets)`,
+        });
+        workload[bestCandidate] = (workload[bestCandidate] || 0) + 1;
+
+        await this.db.upsert("incidents", inc.id, JSON.stringify(inc));
+        this._log("action", "SKILL_ASSIGN", `${inc.id} → ${bestCandidate} (${cat}, load: ${bestLoad})`);
+
+        if (this.wsServer) {
+          this.wsServer.broadcast("incidents", { action: "skill_assign", id: inc.id, assignee: bestCandidate, category: cat });
+        }
+      } catch (err) {
+        this._log("error", "SKILL_ASSIGN", `${inc.id}: ${err.message}`);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Phase 10.4 — Change Approval Pipeline (multi-stage)
+  // ════════════════════════════════════════════════════════════════════════
+  async _processChangeApprovals() {
+    try {
+      const rows = await this.db.getAll("changes");
+      const changes = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(c => c && !c._deleted);
+
+      for (const change of changes) {
+        try {
+          if (change.approvalStatus === "Approved" || change.approvalStatus === "Rejected") continue;
+          if (change.status === "Closed" || change.status === "Cancelled") continue;
+
+          const type = (change.type || change.changeType || "").toLowerCase();
+          const risk = (change.riskLevel || change.risk || "").toLowerCase();
+
+          // Stage 1: Auto-approve standard + low-risk changes
+          if (type === "standard" && (risk === "low" || risk === "none" || !risk)) {
+            if (change.approvalStatus !== "Approved") {
+              change.approvalStatus = "Approved";
+              change.approvalStage = "auto";
+              change.approvedBy = "Workflow Engine (Auto-Approve)";
+              change.approvedAt = new Date().toISOString();
+              change.lastModified = new Date().toISOString();
+              if (!change.approvalHistory) change.approvalHistory = [];
+              change.approvalHistory.push({
+                stage: "auto", action: "approved", by: "WorkflowEngine",
+                reason: "Standard change, low risk — auto-approved per policy",
+                timestamp: new Date().toISOString(),
+              });
+              await this.db.upsert("changes", change.id, JSON.stringify(change));
+              this._log("action", "CHANGE_APPROVAL", `Auto-approved ${change.id} (${type}/${risk})`);
+              if (this.wsServer) this.wsServer.broadcast("changes", { action: "auto_approve", id: change.id });
+            }
+            continue;
+          }
+
+          // Stage 2: Normal changes — require manager approval (create approval request if not exists)
+          if ((type === "normal" || type === "standard") && !change._approvalRequested) {
+            change._approvalRequested = true;
+            change.approvalStatus = "Pending Approval";
+            change.approvalStage = "manager";
+            change.lastModified = new Date().toISOString();
+            if (!change.approvalHistory) change.approvalHistory = [];
+            change.approvalHistory.push({
+              stage: "manager", action: "requested", by: "WorkflowEngine",
+              reason: `${type}/${risk || "medium"} change requires manager approval`,
+              timestamp: new Date().toISOString(),
+            });
+            await this.db.upsert("changes", change.id, JSON.stringify(change));
+            this._log("action", "CHANGE_APPROVAL", `Approval requested for ${change.id} (${type}/${risk || "medium"})`);
+
+            if (this.notifyEngine) {
+              await this.notifyEngine.send({
+                channels: ["inapp", "email"],
+                title: `Change Approval Required: ${change.id}`,
+                body: `Change "${change.title || change.id}" (${type}/${risk || "medium"}) requires manager approval.`,
+                severity: "info", type: "change_approval", changeId: change.id,
+              }).catch(() => {});
+            }
+            continue;
+          }
+
+          // Stage 3: Emergency changes — flag for CAB review
+          if (type === "emergency" && !change._cabReviewRequested) {
+            change._cabReviewRequested = true;
+            change.approvalStatus = "CAB Review";
+            change.approvalStage = "cab";
+            change.lastModified = new Date().toISOString();
+            if (!change.approvalHistory) change.approvalHistory = [];
+            change.approvalHistory.push({
+              stage: "cab", action: "escalated", by: "WorkflowEngine",
+              reason: "Emergency change requires CAB review",
+              timestamp: new Date().toISOString(),
+            });
+            await this.db.upsert("changes", change.id, JSON.stringify(change));
+            this._log("action", "CHANGE_APPROVAL", `CAB review requested for emergency ${change.id}`);
+
+            if (this.notifyEngine) {
+              await this.notifyEngine.send({
+                channels: ["inapp", "email"],
+                title: `🚨 Emergency Change — CAB Review: ${change.id}`,
+                body: `Emergency change "${change.title || change.id}" requires immediate CAB review.`,
+                severity: "critical", type: "cab_review", changeId: change.id,
+              }).catch(() => {});
+            }
+          }
+        } catch (err) {
+          this._log("error", "CHANGE_APPROVAL", `${change.id}: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      this._log("error", "CHANGE_APPROVAL", `Pipeline scan failed: ${err.message}`);
     }
   }
 }

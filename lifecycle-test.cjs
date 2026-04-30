@@ -5,7 +5,7 @@ const https = require("https");
 const BASE = "https://vgc-itsm1-app.azurewebsites.net";
 const TEST_ID = "INC-TEST-VPN-001";
 // Local admin auth: uses the SHA-256 hash from LOCAL_ADMIN_PASSWORD_HASH env var
-const AUTH_TOKEN = "local-hash:0493aa48e5f4856762afe7203c0edcd844d7aff683d9a810dc25de7c2c4627b5";
+const AUTH_TOKEN = process.env.TEST_AUTH_TOKEN || "";
 let pass = 0, fail = 0, totalSteps = 0;
 const cleanup = []; // track IDs to delete at end
 

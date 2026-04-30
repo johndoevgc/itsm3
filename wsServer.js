@@ -10,7 +10,7 @@ const WS_MAGIC = "258EAFA5-E914-47DA-95CA-5AB4286F35CC";
 class WebSocketServer {
   constructor() {
     this.clients = new Map(); // id -> { socket, subscriptions, user, lastPing }
-    this.channels = new Set(["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "system"]);
+    this.channels = new Set(["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "ai_cards", "system"]);
     // Heartbeat: every 30s, remove dead connections
     this.heartbeatTimer = setInterval(() => this._heartbeat(), 30000);
   }
@@ -224,6 +224,17 @@ class WebSocketServer {
   // Broadcast to all connected clients (system-wide)
   broadcastAll(data) {
     return this.broadcast("system", data);
+  }
+
+  // ─── Proactive AI Card Push — send interactive cards to chat panels ───
+  broadcastCards(cardPayload, targetEmail) {
+    // cardPayload: { text, cards, suggestions, toast, toastType }
+    const data = { collection: "ai_cards", data: cardPayload };
+    if (targetEmail) {
+      this.sendToUser(targetEmail, "ai_cards", cardPayload);
+    } else {
+      this.broadcast("ai_cards", cardPayload);
+    }
   }
 
   // Send to a specific user by email

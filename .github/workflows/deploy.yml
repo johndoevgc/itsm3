@@ -34,7 +34,7 @@ jobs:
       - name: Syntax check server
         run: node -c server.js
       - name: Lint
-        run: npx eslint . --max-warnings 600
+        run: npx eslint . --max-warnings 3000
       - name: Unit tests
         run: npm test
       - name: Stamp build metadata

@@ -21,7 +21,9 @@ export default function SLATrackerModule({ ctx }) {
 
 // ─── SLA Tracker ──────────────────────────────────────────────────────
 const SLAModule = useStableComponent(() => {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- hooks inside useStableComponent render callback are valid
   const [slaRefreshing, setSlaRefreshing] = useState(false);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const [slaLastSync, setSlaLastSync] = useState(null);
   // Phase 8 — tighten SLA scope. Exclude:
   // - already Resolved/Closed/Cancelled

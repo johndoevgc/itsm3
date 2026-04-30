@@ -67,6 +67,10 @@ export const DataTable = React.memo(function DataTable({ columns, data, onRowCli
   const total = (data || []).length;
   const useVirtual = total > virtualizeThreshold;
 
+  // ─── Hooks must be called unconditionally (before any early return) ──
+  const [limit, setLimit] = React.useState(initialLimit);
+  React.useEffect(() => { setLimit(initialLimit); }, [data, initialLimit]);
+
   // ─── Virtualized renderer (large lists) ────────────────────────────
   const parentRef = React.useRef(null);
   const rowVirtualizer = useVirtualizer({
@@ -145,8 +149,6 @@ export const DataTable = React.memo(function DataTable({ columns, data, onRowCli
   }
 
   // ─── Original table renderer (small lists, unchanged behaviour) ────
-  const [limit, setLimit] = React.useState(initialLimit);
-  React.useEffect(() => { setLimit(initialLimit); }, [data, initialLimit]);
   const rows = total > limit ? data.slice(0, limit) : data;
   return (
   <div style={{ overflowX: "auto", borderRadius: "10px", border: "1px solid #27272A" }}>
@@ -470,4 +472,4 @@ export const SearchBar = React.memo(function SearchBar({ value, onChange, placeh
     </div>
   );
 });
-
+

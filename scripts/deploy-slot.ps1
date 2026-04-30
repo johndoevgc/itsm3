@@ -133,11 +133,30 @@ $backendFiles = @(
   "workflowEngine.js","slaEngine.js","notificationEngine.js","analyticsEngine.js",
   "authMiddleware.js","cacheLayer.js","graphService.js","wsServer.js","msalConfig.js",
   "featureFlags.js","shadowMode.js","shadowWorkflow.js","piiRedact.js",
-  "incidentIndex.js"
+  "incidentIndex.js","cluster.js"
 ) | Where-Object { Test-Path $_ }
 foreach ($bf in $backendFiles) {
   Info "Uploading $bf"
   Invoke-WebRequest -Method PUT -Uri "$vfsBase/$bf" -Headers $h -InFile $bf | Out-Null
+}
+
+# Upload routes/ directory (ai.js, core.js, zendesk.js, etc.)
+$routesDir = "routes"
+if (Test-Path $routesDir) {
+  # Ensure routes/ folder exists on remote via VFS
+  try { Invoke-WebRequest -Method PUT -Uri "$vfsBase/routes/" -Headers $h | Out-Null } catch {}
+  $routeFiles = Get-ChildItem $routesDir -Filter "*.js" -ErrorAction SilentlyContinue
+  foreach ($rf in $routeFiles) {
+    Info "Uploading routes/$($rf.Name)"
+    Invoke-WebRequest -Method PUT -Uri "$vfsBase/routes/$($rf.Name)" -Headers $h -InFile $rf.FullName | Out-Null
+  }
+  Info "Uploaded $($routeFiles.Count) route files"
+}
+
+# Upload config/data files
+@("profiles.json","VERSION.json","kb-enterprise-articles.json") | Where-Object { Test-Path $_ } | ForEach-Object {
+  Info "Uploading $_"
+  Invoke-WebRequest -Method PUT -Uri "$vfsBase/$_" -Headers $h -InFile $_ | Out-Null
 }
 
 # ─── RESTART + HEALTH ─────────────────────────────────────────────────────
