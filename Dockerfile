@@ -11,10 +11,11 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Install build tools for native modules (better-sqlite3), then clean up
+# Install build tools for native modules (better-sqlite3), build, then clean up in one layer
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev && npm cache clean --force && apk del python3 make g++
+RUN npm ci --omit=dev && npm cache clean --force && apk del python3 make g++ \
+    && rm -rf /tmp/* /root/.npm /root/.cache
 
 # Copy server files
 COPY server.js authMiddleware.js cacheLayer.js graphService.js msalConfig.js \
@@ -35,9 +36,11 @@ COPY --from=builder /app/dist ./dist
 COPY VERSION.json kb-enterprise-articles.json ./
 
 # Run as non-root user
-RUN addgroup -S app && adduser -S app -G app
+RUN addgroup -S app && adduser -S app -G app \
+    && chown -R app:app /app
 USER app
 
+# Drop all capabilities
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:8080/healthz || exit 1

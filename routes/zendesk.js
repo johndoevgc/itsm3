@@ -886,7 +886,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           });
         } catch (err) {
           console.error("[ZD Full Import]", err.message);
-          return json(res, 500, { error: err.message, stats: ctx.zdSyncStats });
+          return json(res, 500, { error: "Sync failed", stats: ctx.zdSyncStats });
         } finally {
           ctx.zdSyncInProgress = false;
         }
@@ -1212,7 +1212,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           return json(res, 200, { success: true, stats: syncResult });
         } catch (err) {
           console.error("[ZD Incremental Sync]", err.message);
-          return json(res, 500, { error: err.message, stats: syncResult });
+          return json(res, 500, { error: "Sync failed", stats: syncResult });
         } finally {
           ctx.zdSyncInProgress = false;
         }
@@ -1301,7 +1301,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           });
         } catch (err) {
           console.error("[Email Orphan Cleanup]", err);
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1349,7 +1349,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           return json(res, 200, { success: true, purged, breakdown: { sevC: toPurge.filter(i => i.priority === "Sev-C").length, sevD: toPurge.filter(i => i.priority === "Sev-D").length } });
         } catch (err) {
           console.error("[ZD Purge]", err.message);
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1500,7 +1500,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           });
         } catch (err) {
           console.error("[ZD Reconcile]", err.message);
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1669,7 +1669,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           return json(res, 200, { received: true, eventType, ticketId });
         } catch (err) {
           console.error("[ZD Webhook]", err.message);
-          return json(res, 200, { received: true, error: err.message }); // 200 so Zendesk doesn't retry
+          return json(res, 200, { received: true, error: "Webhook processing error" }); // 200 so Zendesk doesn't retry
         }
       }
 
@@ -1693,7 +1693,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
             counts: { zdTickets: ticketCount, zdUsers: userCount, zdOrgs: orgCount, zdComments: commentCount, itsmIncidents: incidentCount },
           });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1770,7 +1770,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           return json(res, 200, { success: true, cleaned, updated, alreadyMatched, errors, totalZdLinked: zdLinked.length });
         } catch (err) {
           console.error("[ZD SyncAll]", err.message);
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1874,7 +1874,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           }
           return json(res, 200, { success: true, synced, created, total: orgRows.length });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1891,7 +1891,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           if (status) tickets = tickets.filter(t => t.status === status);
           return json(res, 200, { tickets: tickets.slice(0, limit), total: tickets.length });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1901,7 +1901,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           const users = rows.map(r => JSON.parse(r.data));
           return json(res, 200, { users, total: users.length });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1911,7 +1911,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           const orgs = rows.map(r => JSON.parse(r.data));
           return json(res, 200, { orgs, total: orgs.length });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1922,7 +1922,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           const comments = rows.map(r => JSON.parse(r.data)).filter(c => String(c.ticketId) === ticketId);
           return json(res, 200, { comments, total: comments.length });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
@@ -1975,14 +1975,14 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           console.log(`[ZD AI Training] Trained from ${trained} resolved tickets`);
           return json(res, 200, { success: true, trained, totalResolved: resolved.length });
         } catch (err) {
-          return json(res, 500, { error: err.message });
+          return json(res, 500, { error: "Internal server error" });
         }
       }
 
       return json(res, 404, { error: "Zendesk endpoint not found" });
     } catch (err) {
       console.error("[Zendesk Proxy]", err.message);
-      return json(res, 502, { error: err.message });
+      return json(res, 502, { error: "Internal server error" });
     }
     return true;
   };

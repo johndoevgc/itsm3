@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { btnStyle, inputStyle } from "../constants/theme.js";
 import { Modal, FormField, SearchBar } from "../components/SharedComponents.jsx";
+import { sanitizeHTML } from "../utils/slaHelpers.js";
 
 export default function ReportingModule({ assets, changes, csatAiAnalysis, currentUser, customers, incidents, problems, requests, serviceReports, setActiveModule, setServiceReports, showToast, softDelete }) {
   const [reportTab, setReportTab] = useState("generate");

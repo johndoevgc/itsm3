@@ -119,7 +119,7 @@ Info "Uploading index.html"
 Invoke-WebRequest -Method PUT -Uri "$vfsBase/index.html" -Headers $h -InFile "deploy/index.html" | Out-Null
 
 # Upload assets (JS + CSS)
-$assets = Get-ChildItem "deploy/assets" -Include "*.js","*.css" -ErrorAction SilentlyContinue
+$assets = Get-ChildItem "deploy/assets/*" -Include "*.js","*.css" -ErrorAction SilentlyContinue
 foreach ($f in $assets) {
   Info "Uploading assets/$($f.Name)"
   Invoke-WebRequest -Method PUT -Uri "$vfsBase/assets/$($f.Name)" -Headers $h -InFile $f.FullName | Out-Null

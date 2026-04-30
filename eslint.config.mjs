@@ -171,7 +171,8 @@ export default [
     rules: {
       ...js.configs.recommended.rules,
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-undef": "warn",
+      // v3.20: promoted from "warn" to "error" — was the root cause of users/aiEngine ReferenceError crashes
+      "no-undef": "error",
       "no-console": "off",
       "eqeqeq": ["warn", "always"],
       "no-constant-condition": "warn",

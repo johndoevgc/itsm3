@@ -1,4 +1,4 @@
-import React, { Component, createElement } from "react";
+import React, { Component } from "react";
 import { createRoot } from "react-dom/client";
 import { MsalProvider } from "@azure/msal-react";
 import { msalInstance } from "./msalConfig.js";

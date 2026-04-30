@@ -54,10 +54,7 @@ import { createActionHandler } from "./src/utils/chatActionEngine.js";
 import { createChatMemory, addToMemory, buildMemoryContext, clearMemory } from "./src/utils/chatMemory.js";
 import { injectChatAnimations } from "./src/components/chat/ChatUxStyles.jsx";
 import {
-  AI_CONFIDENCE_COLORS, AI_KB_MAP, searchKBArticles,
-  AI_CATEGORY_KEYWORDS, AI_PRIORITY_RULES, AI_ASSIGNEE_SKILLS,
-  aiAnalyzeIncident, aiAnalyzeChange, aiPredictSLA,
-  AI_TOPIC_RESPONSES, matchAiTopic,
+  matchAiTopic,
   renderAiRichText, buildAiResponse,
 } from "./src/utils/aiEngine.jsx";
 
@@ -4344,8 +4341,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
-        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading }} />)}
-        {ticketsSubTab === "zendesk" && (<ZendeskModule assets={assets} changes={changes} currentUser={currentUser} customers={customers} incidents={incidents} requests={requests} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} users={users} />)}
+        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users: managedUsers, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading }} />)}
+        {ticketsSubTab === "zendesk" && (<ZendeskModule assets={assets} changes={changes} currentUser={currentUser} customers={customers} incidents={incidents} requests={requests} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} users={managedUsers} />)}
         {ticketsSubTab === "operations" && (<OperationsModule />)}
       </div>
     );
@@ -4455,7 +4452,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         kbAiLearningProgress, setKbAiLearningProgress,
         kbAutoGenRunning, kbAutoGenProgress,
         kbGapReport, setKbGapReport,
-        aiEngine, generateGuide, generateSpDoc, mdToHtml, exportToWord,
+        generateGuide, generateSpDoc, mdToHtml, exportToWord,
       }} />);
       case "assets": return (<AssetsModule />);
       case "customers": return (<CustomersModule ctx={{
@@ -5473,10 +5470,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           problems, setProblems, changes, setChanges, requests, setRequests,
           assets, setAssets, kbArticles, setKbArticles,
           serviceCatalog, setServiceCatalog,
-          customers, users, vendors, search,
+          customers, users: managedUsers, vendors, search,
           detailItem, setDetailItem, modal, setModal,
           setActiveModule, slaPolicy,
-          isEntraProductionUser, aiEngine, softDelete,
+          isEntraProductionUser, softDelete,
         }} />
       </Suspense>
 

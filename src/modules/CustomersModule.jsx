@@ -5,6 +5,7 @@ import {
 import {
   RBAC_PERMISSIONS,
 } from "../constants/rbac.js";
+import { sanitizeHTML } from "../utils/slaHelpers.js";
 import {
   Badge, Modal, FormField, SearchBar,
 } from "../components/SharedComponents.jsx";
