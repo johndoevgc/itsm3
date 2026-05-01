@@ -18,11 +18,18 @@ function AiResolveTab({ inc, addActivity, showToast }) {
     try {
       const resp = await fetch("/api/ai/resolve-error", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error: `${inc.title}. ${inc.description || ""}`, context: `Incident ${inc.id}, category: ${inc.category}, priority: ${inc.priority}, status: ${inc.status}` })
+        body: JSON.stringify({
+          errorType: "Incident Resolution",
+          errorCode: inc?.id || "INCIDENT",
+          errorMessage: `${inc?.title || "Incident"}. ${inc?.description || ""}`.slice(0, 4000),
+          errorDetails: `Category: ${inc?.category || "N/A"}; Priority: ${inc?.priority || "N/A"}; Status: ${inc?.status || "N/A"}`,
+          context: `Incident ${inc?.id || "N/A"}, category ${inc?.category || "N/A"}, priority ${inc?.priority || "N/A"}, status ${inc?.status || "N/A"}`,
+        })
       });
       const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error || `AI suggestions failed (${resp.status})`);
       setAiSuggestions(data);
-    } catch { setAiSuggestions({ error: "Failed to get AI suggestions" }); }
+    } catch (err) { setAiSuggestions({ error: err?.message || "Failed to get AI suggestions" }); }
     setAiSugLoading(false);
   };
   return (
@@ -141,14 +148,14 @@ export default function ModalsModule({ ctx }) {
     incidentTemplates = [],
     autoTriageTicket = null,
     surveyTemplates = [],
-    setSurveyDrafts = null,
+    setSurveyDrafts = () => {},
     azureOpenAI = null,
-    generateKBFromTicket = null,
+    generateKBFromTicket = () => {},
     smtpConfig = null,
     customFields = [],
-    setShowAiPanel = null,
-    handleAiChat = null,
-    submitCsatResponse = null,
+    setShowAiPanel = () => {},
+    handleAiChat = () => {},
+    submitCsatResponse = () => {},
   } = ctx;
 
 const NewIncidentModal = () => {
@@ -183,10 +190,10 @@ const NewIncidentModal = () => {
     if (form.title.length < 3 && form.description.length < 3) return;
     setAiAnalyzing(true);
     try {
-      const aiResult = await callAzureOpenAI(
+      const aiResult = callAzureOpenAI ? await callAzureOpenAI(
         `You are an expert IT support AI for VGC Technology Pte Ltd. Analyze the incident and return ONLY valid JSON with these fields:\n- suggestedCategory: one of Network, Hardware, Software, Security, Email, Access/Identity, Cloud, Printing, End User Computing, Service Request, General\n- suggestedPriority: one of Sev-A, Sev-B, Sev-C, Sev-D\n- suggestedAssignee: best agent name or empty string\n- confidence: 0-100\n- reasoning: brief explanation\nRespond ONLY with valid JSON, no markdown.`,
         `Title: ${form.title}\nDescription: ${form.description}`
-      );
+      ) : null;
       if (aiResult) {
         try {
           const parsed = JSON.parse(aiResult.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
@@ -496,7 +503,7 @@ const NewIncidentModal = () => {
               await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) });
             } catch (e) { console.warn("[DB] Failed to persist incident:", e.message); }
             if (!aiSuggestion) {
-              autoTriageTicket(newInc).catch(() => {});
+              autoTriageTicket?.(newInc)?.catch?.(() => {});
             }
             if (createInZendesk) {
               try {
@@ -611,12 +618,12 @@ const IncidentDetailModal = () => {
           `— VGC Technology ITSM`
         ].join("\n");
         const draft = { id: genId("SURV"), ticketId: inc.id, templateName: tpl.name, preview, status: "Pending Approval", createdAt: new Date().toISOString() };
-        setSurveyDrafts(prev => [...prev, draft]);
+        setSurveyDrafts?.(prev => [...prev, draft]);
       }
 
       // AI KB Auto-Generation — trigger on Resolved
-      if (newStatus === "Resolved" && azureOpenAI.enabled) {
-        generateKBFromTicket(updated);
+      if (newStatus === "Resolved" && azureOpenAI?.enabled) {
+        generateKBFromTicket?.(updated);
       }
     }
   };
@@ -632,7 +639,7 @@ const IncidentDetailModal = () => {
       ...(isInternal ? {} : {
         to: inc.reporterEmail || "", from: currentUser.email,
         subject: replySubject,
-        body: replyBody + (smtpConfig.signature ? `<br/><hr style="border:none;border-top:1px solid #333;margin:16px 0"/>${smtpConfig.signature}` : ""),
+        body: replyBody + (smtpConfig?.signature ? `<br/><hr style="border:none;border-top:1px solid #333;margin:16px 0"/>${smtpConfig.signature}` : ""),
         attachments: emailAttachments.map(a => ({ name: a.name, size: a.size, type: a.type }))
       }),
       ...(isInternal ? { body: replyBody } : {})
@@ -1036,7 +1043,7 @@ const IncidentDetailModal = () => {
                       <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", minWidth: 32 }}>TO:</span>
                       <span style={{ fontSize: 12, color: "#64B5F6" }}>{inc.reporterEmail || "—"}</span>
                       <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginLeft: 12, minWidth: 32 }}>FROM:</span>
-                      <span style={{ fontSize: 12, color: "#81C784" }}>{smtpConfig.fromEmail}</span>
+                      <span style={{ fontSize: 12, color: "#81C784" }}>{smtpConfig?.fromEmail || "—"}</span>
                     </div>
                   )}
                   {replyMode === "external" && (
@@ -1113,7 +1120,7 @@ const IncidentDetailModal = () => {
                     suppressContentEditableWarning />
                   <div style={{ padding: "10px 14px", borderTop: "1px solid #1E213044", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 10, color: "#5A617888" }}>
-                      {replyMode === "external" ? `Via ${smtpConfig.host}:${smtpConfig.port} (${smtpConfig.encryption})` : "Internal note — visible to agents only"}
+                      {replyMode === "external" ? `Via ${smtpConfig?.host || "—"}:${smtpConfig?.port || "—"} (${smtpConfig?.encryption || "—"})` : "Internal note — visible to agents only"}
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={() => { setReplyMode(null); setReplyBody(""); }} style={{ ...btnStyle("#333"), color: "#A0AEC0", padding: "6px 14px", fontSize: 11 }}>Cancel</button>
@@ -1520,7 +1527,7 @@ const IncidentDetailModal = () => {
                   {[
                     { icon: "🔍", title: "Problem Management", desc: "Recurring incidents trigger root cause analysis. Known Errors link back to prevent future occurrences.", color: "#CE93D8", flow: "Incident → Problem → Known Error → Fix" },
                     { icon: "🔄", title: "Change Management", desc: "Fixes requiring infrastructure changes create RFC with risk assessment, approvals, and rollback plan.", color: "#FFB347", flow: "Problem → RFC → Approve → Implement → Review" },
-                    { icon: "📊", title: "SLA & Reporting", desc: "Real-time SLA tracking with auto-escalation. Monthly service reports generated for customer review.", color: "#64B5F6", flow: "Track → Alert → Escalate → Report" },
+                    { icon: "📊", title: "SLA & Reporting", desc: "Real-time SLA tracking with auto-escalation and controlled report generation.", color: "#64B5F6", flow: "Track → Alert → Escalate → Report" },
                     { icon: "🤖", title: "AI Auto-Triage", desc: "NLP classification assigns category, priority, and routing. Confidence score determines manual review threshold.", color: "#EC4899", flow: "Ingest → Classify → Score → Route" },
                     { icon: "📧", title: "Communications", desc: "Bi-directional email with templates. Internal notes for agent collaboration. Full audit trail.", color: "#3B82F6", flow: "Receive → Template → Send → Log" },
                     { icon: "📋", title: "Customer Survey", desc: "Auto-generated satisfaction survey on resolution. Templates adapt based on severity and interaction count.", color: "#81C784", flow: "Resolve → Generate → Send → Analyse" },
@@ -1601,7 +1608,7 @@ const IncidentDetailModal = () => {
           {/* Open/In Progress/Pending → Resolved */}
           {["Open", "In Progress", "Pending"].includes(inc.status) && <button style={btnStyle("#4CAF50")} onClick={() => changeStatus("Resolved")}>✓ Resolve</button>}
           {/* AI Resolution Summary — available on Resolved/Closed */}
-          {["Resolved", "Closed"].includes(inc.status) && azureOpenAI.enabled && <button style={{ ...btnStyle("#06B6D4"), fontSize: 11 }} onClick={async () => {
+          {["Resolved", "Closed"].includes(inc.status) && azureOpenAI?.enabled && <button style={{ ...btnStyle("#06B6D4"), fontSize: 11 }} onClick={async () => {
             showToast("⏳ Generating AI resolution summary...", "info");
             try {
               const resp = await fetch("/api/ai/generate-resolution-summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticketId: inc.id, requestedBy: currentUser?.name || "Engineer" }) });

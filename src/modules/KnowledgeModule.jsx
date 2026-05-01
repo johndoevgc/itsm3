@@ -19,6 +19,29 @@ import {
   searchKBArticles,
 } from "../utils/aiEngine.jsx";
 
+const displayText = (value, fallback = "") => {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (["string", "number", "boolean"].includes(typeof value)) return String(value);
+  if (Array.isArray(value)) return value.map(item => displayText(item)).filter(Boolean).join(", ") || fallback;
+  if (typeof value === "object") return value.name || value.displayName || value.email || value.id || fallback;
+  return fallback;
+};
+
+const tagList = (tags) => {
+  if (Array.isArray(tags)) return tags.map(tag => displayText(tag)).filter(Boolean);
+  if (typeof tags === "string") return tags.split(",").map(tag => tag.trim()).filter(Boolean);
+  return [];
+};
+
+const dateText = (value) => {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString("en-SG") : "—";
+};
+
+const metricNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+
+const percentText = (value) => Number.isFinite(Number(value)) ? Math.round(Number(value)) : 0;
+
 /* ─── Sub-component: KB Gap Card (hooks-safe) ─── */
 function GapCard({ gap, i, currentUser, showToast }) {
   const [genLoading, setGenLoading] = React.useState(false);
@@ -100,15 +123,15 @@ export default function KnowledgeModule({ ctx }) {
     kbGapReport, setKbGapReport,
     aiEngine, generateGuide, generateSpDoc, mdToHtml, exportToWord,
     kbEntries = [],
-    fetchKbEntries = null,
+    fetchKbEntries = () => {},
     kbLearningLoading = false,
-    runKbLearning = null,
-    handleKbBulkUpload = null,
-    processKbBulkUpload = null,
-    fetchKbVersionHistory = null,
-    autoGenerateEssentialDocs = null,
-    deleteKbEntry = null,
-    setSearch = null,
+    runKbLearning = () => {},
+    handleKbBulkUpload = () => {},
+    processKbBulkUpload = () => {},
+    fetchKbVersionHistory = () => {},
+    autoGenerateEssentialDocs = () => {},
+    deleteKbEntry = () => {},
+    setSearch = () => {},
   } = ctx;
 
 const [kbCategoryFilter, setKbCategoryFilter] = useState("All");
@@ -122,13 +145,15 @@ const KnowledgeModule = useStableComponent(() => {
   const filteredKB = useMemo(() => {
     const q = (deferredSearch || "").toLowerCase();
     return kbArticles.filter(a => {
-      const matchSearch = !q || (a.title || "").toLowerCase().includes(q) || (a.category || "").toLowerCase().includes(q) || (a.tags || []).some(t => t.toLowerCase().includes(q)) || (a.whenToUse || "").toLowerCase().includes(q);
-      const matchCat = kbCategoryFilter === "All" || a.category === kbCategoryFilter;
-      const matchType = kbTypeFilter === "All" || a.bestFor === kbTypeFilter;
+      const category = displayText(a.category);
+      const bestFor = displayText(a.bestFor);
+      const matchSearch = !q || displayText(a.title).toLowerCase().includes(q) || category.toLowerCase().includes(q) || tagList(a.tags).some(t => t.toLowerCase().includes(q)) || displayText(a.whenToUse).toLowerCase().includes(q);
+      const matchCat = kbCategoryFilter === "All" || category === kbCategoryFilter;
+      const matchType = kbTypeFilter === "All" || bestFor === kbTypeFilter;
       return matchSearch && matchCat && matchType;
     });
   }, [kbArticles, deferredSearch, kbCategoryFilter, kbTypeFilter]);
-  const uniqueCategories = ["All", ...new Set(kbArticles.map(a => a.category))];
+  const uniqueCategories = ["All", ...new Set(kbArticles.map(a => displayText(a.category)).filter(Boolean))];
   const catMeta = (cat) => KB_CATEGORIES.find(c => c.id === cat) || { icon: "📄", color: "#64B5F6" };
 
   return (
@@ -528,11 +553,11 @@ const KnowledgeModule = useStableComponent(() => {
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{kbDocPreview.source === "sharepoint" ? "📂" : kbDocPreview.fileName ? "📎" : "🤖"} {kbDocPreview.title}</div>
                 <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2, display: "flex", gap: 10 }}>
-                  <span>📁 {kbDocPreview.category}</span>
+                  <span>📁 {displayText(kbDocPreview.category, "General")}</span>
                   <span>📝 {(kbDocPreview.content || "").length.toLocaleString()} chars</span>
-                  <span>🕐 {new Date(kbDocPreview.createdAt).toLocaleDateString("en-SG")}</span>
+                  <span>🕐 {dateText(kbDocPreview.createdAt)}</span>
                   {kbDocPreview.version && <span>📌 v{kbDocPreview.version}</span>}
-                  <span>👤 {kbDocPreview.trainedBy || kbDocPreview.updatedBy}</span>
+                  <span>👤 {displayText(kbDocPreview.trainedBy || kbDocPreview.updatedBy, "Unknown")}</span>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
@@ -550,9 +575,9 @@ const KnowledgeModule = useStableComponent(() => {
                 {kbVersionHistory.map(v => (
                   <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 10, color: "#5A6178" }}>
                     <span style={{ color: "#FFB347", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>v{v.version}</span>
-                    <span>{new Date(v.updatedAt).toLocaleDateString("en-SG")}</span>
-                    <span>by {v.updatedBy}</span>
-                    <span style={{ color: "#8B92A8" }}>{v.changeNote}</span>
+                    <span>{dateText(v.updatedAt)}</span>
+                    <span>by {displayText(v.updatedBy, "Unknown")}</span>
+                    <span style={{ color: "#8B92A8" }}>{displayText(v.changeNote, "—")}</span>
                   </div>
                 ))}
               </div>
@@ -620,11 +645,11 @@ const KnowledgeModule = useStableComponent(() => {
                       {doc.version && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#FFB34718", color: "#FFB347" }}>v{doc.version}</span>}
                     </div>
                     <div style={{ fontSize: 10, color: "#5A6178", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      <span>📁 {doc.category}</span>
+                      <span>📁 {displayText(doc.category, "General")}</span>
                       <span>📝 {(doc.content || "").length.toLocaleString()} chars</span>
-                      <span>🕐 {new Date(doc.createdAt).toLocaleDateString("en-SG")}</span>
-                      <span>👤 {doc.trainedBy || doc.updatedBy}</span>
-                      {doc.fileName && <span>📎 {doc.fileName}</span>}
+                      <span>🕐 {dateText(doc.createdAt)}</span>
+                      <span>👤 {displayText(doc.trainedBy || doc.updatedBy, "Unknown")}</span>
+                      {doc.fileName && <span>📎 {displayText(doc.fileName)}</span>}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 4 }}>
@@ -633,9 +658,9 @@ const KnowledgeModule = useStableComponent(() => {
                     <button onClick={e => { e.stopPropagation(); deleteKbEntry(doc.id); }} style={{ ...btnStyle("#FF6B6B"), fontSize: 9, padding: "3px 8px" }} title="Delete">🗑</button>
                   </div>
                 </div>
-                {(doc.tags || []).length > 0 && (
+                {tagList(doc.tags).length > 0 && (
                   <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
-                    {doc.tags.slice(0, 8).map((tag, i) => (
+                    {tagList(doc.tags).slice(0, 8).map((tag, i) => (
                       <span key={i} style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#1E213044", color: "#5A6178" }}>#{tag}</span>
                     ))}
                   </div>
@@ -738,7 +763,7 @@ const KnowledgeModule = useStableComponent(() => {
     {/* Category Quick Filters */}
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
       {KB_CATEGORIES.map(cat => {
-        const count = kbArticles.filter(a => a.category === cat.id).length;
+        const count = kbArticles.filter(a => displayText(a.category) === cat.id).length;
         if (count === 0) return null;
         return (
           <button key={cat.id} onClick={() => setKbCategoryFilter(kbCategoryFilter === cat.id ? "All" : cat.id)} style={{
@@ -762,7 +787,10 @@ const KnowledgeModule = useStableComponent(() => {
     {/* Knowledge Cards Grid */}
     <div style={{ display: "grid", gap: 14, gridTemplateColumns: kbViewMode === "cards" ? "repeat(auto-fill, minmax(380px, 1fr))" : "1fr" }}>
       {filteredKB.map(art => {
-        const cm = catMeta(art.category);
+        const articleCategory = displayText(art.category, "General");
+        const articleBestFor = displayText(art.bestFor);
+        const articleTags = tagList(art.tags);
+        const cm = catMeta(articleCategory);
         const spArticleUrl = art.spSlug ? SHAREPOINT_KB_CONFIG.articleUrl(art.spSlug) : SHAREPOINT_KB_CONFIG.baseUrl;
         const spDocUrl = art.spDocPath ? SHAREPOINT_KB_CONFIG.docUrl(art.spDocPath) : null;
 
@@ -780,17 +808,17 @@ const KnowledgeModule = useStableComponent(() => {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ color: cm.color, fontSize: 10, fontFamily: "'JetBrains Mono', monospace", background: `${cm.color}11`, padding: "2px 6px", borderRadius: 4, border: `1px solid ${cm.color}22` }}>{art.id}</span>
-                <Badge color={{ bg: `${cm.color}18`, text: cm.color }}>{cm.icon} {art.category}</Badge>
-                {art.bestFor && <Badge color={{ bg: art.bestFor === "Incident" ? "#FF6B6B18" : art.bestFor === "Change" ? "#FFB34718" : "#81C78418", text: art.bestFor === "Incident" ? "#FF6B6B" : art.bestFor === "Change" ? "#FFB347" : "#81C784" }}>{art.bestFor}</Badge>}
+                <Badge color={{ bg: `${cm.color}18`, text: cm.color }}>{cm.icon} {articleCategory}</Badge>
+                {articleBestFor && <Badge color={{ bg: articleBestFor === "Incident" ? "#FF6B6B18" : articleBestFor === "Change" ? "#FFB34718" : "#81C78418", text: articleBestFor === "Incident" ? "#FF6B6B" : articleBestFor === "Change" ? "#FFB347" : "#81C784" }}>{articleBestFor}</Badge>}
                 {art.source === "ai-incident-learning" && <Badge color={{ bg: "#7C3AED18", text: "#C084FC" }}>🧠 AI Learned</Badge>}
                 {art.aiGenerated && !art.source && <Badge color={{ bg: "#06B6D418", text: "#22D3EE" }}>🤖 AI Generated</Badge>}
-                {art.sourceTicketId && <Badge color={{ bg: "#FFB34718", text: "#FFB347" }}>📎 {art.sourceTicketId}</Badge>}
+                {art.sourceTicketId && <Badge color={{ bg: "#FFB34718", text: "#FFB347" }}>📎 {displayText(art.sourceTicketId)}</Badge>}
               </div>
-              <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{art.updated}</div>
+              <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>{displayText(art.updated, "—")}</div>
             </div>
-            <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 700, marginBottom: 6, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.3 }}>{art.title}</div>
-            <div style={{ color: "#5A6178", fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>{art.content}</div>
-            {art.whenToUse && <div style={{ fontSize: 11, color: "#A0AEC0", background: "#0A0C14", padding: "6px 10px", borderRadius: 6, marginBottom: 8, lineHeight: 1.4 }}>💡 <strong style={{ color: "#C4CAD6" }}>When to use:</strong> {art.whenToUse}</div>}
+            <div style={{ color: "#E8ECF4", fontSize: 14, fontWeight: 700, marginBottom: 6, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.3 }}>{displayText(art.title, "Untitled article")}</div>
+            <div style={{ color: "#5A6178", fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>{displayText(art.content)}</div>
+            {art.whenToUse && <div style={{ fontSize: 11, color: "#A0AEC0", background: "#0A0C14", padding: "6px 10px", borderRadius: 6, marginBottom: 8, lineHeight: 1.4 }}>💡 <strong style={{ color: "#C4CAD6" }}>When to use:</strong> {displayText(art.whenToUse)}</div>}
           </div>
 
           {/* Quick Fix Section */}
@@ -810,9 +838,9 @@ const KnowledgeModule = useStableComponent(() => {
           {/* Card Footer */}
           <div style={{ padding: "10px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
             <div style={{ display: "flex", gap: 14, fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
-              <span>👁 {art.views}</span>
-              <span>👍 {art.helpful}%</span>
-              {art.author && <span>✍️ {art.author}</span>}
+              <span>👁 {metricNumber(art.views)}</span>
+              <span>👍 {percentText(art.helpful)}%</span>
+              {art.author && <span>✍️ {displayText(art.author, "Unknown")}</span>}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               {Array.isArray(art.relatedArticles) && art.relatedArticles.length > 0 && (
@@ -831,9 +859,9 @@ const KnowledgeModule = useStableComponent(() => {
           </div>
 
           {/* Tags */}
-          {Array.isArray(art.tags) && art.tags.length > 0 && (
+          {articleTags.length > 0 && (
             <div style={{ padding: "0 18px 10px", display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {art.tags.slice(0, 6).map((tag, ti) => (
+              {articleTags.slice(0, 6).map((tag, ti) => (
                 <span key={ti} onClick={e => { e.stopPropagation(); setSearch(tag); }} style={{
                   fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#1E213044",
                   color: "#5A6178", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
@@ -844,7 +872,7 @@ const KnowledgeModule = useStableComponent(() => {
                   #{tag}
                 </span>
               ))}
-              {art.tags.length > 6 && <span style={{ fontSize: 9, color: "#5A6178" }}>+{art.tags.length - 6}</span>}
+              {articleTags.length > 6 && <span style={{ fontSize: 9, color: "#5A6178" }}>+{articleTags.length - 6}</span>}
             </div>
           )}
         </div>
@@ -864,9 +892,9 @@ const KnowledgeModule = useStableComponent(() => {
     <div style={{ marginTop: 20, padding: "14px 18px", background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
       <div style={{ display: "flex", gap: 20, fontSize: 11, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap" }}>
         <span>📊 Total: {kbArticles.length} articles</span>
-        <span>👁 {kbArticles.reduce((s, a) => s + a.views, 0).toLocaleString()} total views</span>
-        <span>👍 {kbArticles.length > 0 ? Math.round(kbArticles.reduce((s, a) => s + a.helpful, 0) / kbArticles.length) : 0}% avg helpful</span>
-        <span>✍️ {new Set(kbArticles.map(a => a.author).filter(Boolean)).size} contributors</span>
+        <span>👁 {kbArticles.reduce((s, a) => s + metricNumber(a.views), 0).toLocaleString()} total views</span>
+        <span>👍 {kbArticles.length > 0 ? percentText(kbArticles.reduce((s, a) => s + metricNumber(a.helpful), 0) / kbArticles.length) : 0}% avg helpful</span>
+        <span>✍️ {new Set(kbArticles.map(a => displayText(a.author)).filter(Boolean)).size} contributors</span>
         <span>🤖 {kbEntries.filter(e => e.source === "ai-generated" || e.source === "sharepoint" || e.fileName).length} AI-generated docs</span>
         <span>📤 {kbEntries.filter(e => e.fileName).length} uploaded</span>
       </div>

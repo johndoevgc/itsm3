@@ -22,7 +22,7 @@ export default function CustomersModule({ ctx }) {
     showAddCustomer, setShowAddCustomer,
     customerForm, setCustomerForm,
     editingCustomerId, setEditingCustomerId,
-    softDelete = null,
+    softDelete = () => {},
     isLocalDemoUser = false,
   } = ctx;
   const [customerViewMode, setCustomerViewMode] = useState("list");
@@ -212,7 +212,7 @@ return (
       <Modal title={editingCustomerId ? "Edit Customer" : "Add New Customer"} onClose={() => { setShowAddCustomer(false); resetForm(); setEditingCustomerId(null); }} width={560}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
           <FormField label="Company Name *">
-            <input value={customerForm.name} onChange={e => setCustomerForm(f => ({ ...f, name: e.target.value }))} style={inputStyle} placeholder="ABC Enterprise Pte Ltd" />
+            <input value={customerForm.name} onChange={e => setCustomerForm(f => ({ ...f, name: e.target.value }))} style={inputStyle} placeholder="Company legal name" />
           </FormField>
           <FormField label="Category *">
             <select value={customerForm.category} onChange={e => setCustomerForm(f => ({ ...f, category: e.target.value }))} style={inputStyle}>
@@ -221,10 +221,10 @@ return (
             </select>
           </FormField>
           <FormField label="Contact Person *">
-            <input value={customerForm.contactPerson} onChange={e => setCustomerForm(f => ({ ...f, contactPerson: e.target.value }))} style={inputStyle} placeholder="Ms Carol" />
+            <input value={customerForm.contactPerson} onChange={e => setCustomerForm(f => ({ ...f, contactPerson: e.target.value }))} style={inputStyle} placeholder="Primary contact" />
           </FormField>
           <FormField label="Email *">
-            <input value={customerForm.email} onChange={e => setCustomerForm(f => ({ ...f, email: e.target.value }))} type="email" style={inputStyle} placeholder="contact@company.com" />
+            <input value={customerForm.email} onChange={e => setCustomerForm(f => ({ ...f, email: e.target.value }))} type="email" style={inputStyle} placeholder="business email" />
           </FormField>
           <FormField label="Phone">
             <input value={customerForm.phone} onChange={e => setCustomerForm(f => ({ ...f, phone: e.target.value }))} style={inputStyle} placeholder="+65 9xxx xxxx" />
@@ -237,7 +237,7 @@ return (
           </FormField>
         </div>
         <FormField label="Address">
-          <input value={customerForm.address} onChange={e => setCustomerForm(f => ({ ...f, address: e.target.value }))} style={inputStyle} placeholder="201 Pioneer Street, Singapore 49800" />
+          <input value={customerForm.address} onChange={e => setCustomerForm(f => ({ ...f, address: e.target.value }))} style={inputStyle} placeholder="Registered business address" />
         </FormField>
         {customerForm.category === "CSP" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>

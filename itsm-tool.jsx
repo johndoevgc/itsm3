@@ -45,7 +45,6 @@ const AnalyticsModuleWrapper = lazy(() => import("./src/modules/AnalyticsModule.
 const EngineerReviewHub = lazy(() => import("./src/modules/EngineerReviewHub.jsx"));
 const VendorPortalModule = lazy(() => import("./src/modules/VendorPortalModule.jsx"));
 // ─── Eagerly-loaded (rendered before/around the lazy <Suspense>) ─────
-import AIChatWidget from "./src/components/AIChatWidget.jsx";
 import LoginPage from "./src/modules/LoginPage.jsx";
 import { markdownToHtml, exportToWord } from "./src/utils/docHelpers.js";
 import CardRenderer from "./src/components/chat/CardRenderer.jsx";
@@ -88,18 +87,32 @@ export default function ITSMApp() {
   const [aiTrainingTab, setAiTrainingTab] = useState("documents");
   const [aiAutoTraining, setAiAutoTraining] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_auto_training") || "false"); } catch { return false; } });
   const [aiFeedback, setAiFeedback] = useState(() => { try { return JSON.parse(localStorage.getItem("vgc_ai_feedback") || "[]"); } catch { return []; } });
-  const DATA_VERSION = "v2.8";
-  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers","vgc_assets","vgc_kb","vgc_services"];
+  const DATA_VERSION = "v2.9";
+  const PRODUCTION_COLLECTIONS = ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_customers","vgc_service_reports","vgc_assets","vgc_kb","vgc_services"];
+  const CUSTOMER_BOUND_COLLECTIONS = new Set(["vgc_customers", "vgc_service_reports"]);
   // Universal filter: remove any E2E/test/seed records by ID pattern
   const _isTestRecord = (id) => /^(INC-D|INC-[A-Z]{4,}|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)/.test(id);
   const _cleanTestRecords = (arr) => Array.isArray(arr) ? arr.filter(r => !_isTestRecord(r.id)) : arr;
   const _ls = (key, fallback) => {
     try {
+      if (key === "vgc_current_user") {
+        const sessionUser = sessionStorage.getItem(key);
+        localStorage.removeItem(key);
+        return sessionUser ? JSON.parse(sessionUser) : fallback;
+      }
       // Entra users: start empty, hydrate from DB
-      const savedUser = localStorage.getItem("vgc_current_user");
+      const savedUser = sessionStorage.getItem("vgc_current_user");
+      if (CUSTOMER_BOUND_COLLECTIONS.has(key) && !savedUser) {
+        localStorage.removeItem(key);
+        return [];
+      }
       if (savedUser) {
         try {
           const u = JSON.parse(savedUser);
+          if (CUSTOMER_BOUND_COLLECTIONS.has(key) && u.authType !== "entra") {
+            localStorage.removeItem(key);
+            return [];
+          }
           if (u.authType === "entra" && PRODUCTION_COLLECTIONS.includes(key)) {
             const s = localStorage.getItem(key);
             if (s) {
@@ -112,9 +125,9 @@ export default function ITSMApp() {
       }
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
-        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services","vgc_zd_ai_queue","vgc_zd_tickets","vgc_zd_stats","vgc_zd_auto_log","vgc_zd_auto_stats","vgc_customers"].forEach(k => localStorage.removeItem(k));
+        ["vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_kb","vgc_services","vgc_zd_ai_queue","vgc_zd_tickets","vgc_zd_stats","vgc_zd_auto_log","vgc_zd_auto_stats","vgc_customers","vgc_service_reports"].forEach(k => localStorage.removeItem(k));
         localStorage.setItem("vgc_data_version", DATA_VERSION);
-        return fallback;
+        return CUSTOMER_BOUND_COLLECTIONS.has(key) ? [] : fallback;
       }
       const s = localStorage.getItem(key);
       if (s && PRODUCTION_COLLECTIONS.includes(key)) {
@@ -123,6 +136,24 @@ export default function ITSMApp() {
       }
       return s ? JSON.parse(s) : fallback;
     } catch { return fallback; }
+  };
+
+  const DEFAULT_ZD_AUTO_STATS = { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0, safeSolved: 0, safeSolveBlocked: 0 };
+  const safeStatNumber = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const normalizeZdAutoStats = (stats) => {
+    const source = stats && typeof stats === "object" ? stats : {};
+    return {
+      totalTriaged: safeStatNumber(source.totalTriaged ?? source.processed),
+      autoSent: safeStatNumber(source.autoSent ?? source.success),
+      humanReview: safeStatNumber(source.humanReview),
+      incidentsCreated: safeStatNumber(source.incidentsCreated),
+      avgConfidence: safeStatNumber(source.avgConfidence),
+      safeSolved: safeStatNumber(source.safeSolved),
+      safeSolveBlocked: safeStatNumber(source.safeSolveBlocked),
+    };
   };
 
   // ─── Microsoft Entra ID SSO & Graph API ─────────────────────────────
@@ -223,7 +254,6 @@ export default function ITSMApp() {
   const [showAvatarCustomizer, setShowAvatarCustomizer] = useState(false);
   const [errorAdvisory, setErrorAdvisory] = useState(null); // AI Error Advisory overlay
   const [disasterAlert, setDisasterAlert] = useState(null); // Weather disaster alert toast
-  const disasterAlertDismissedRef = useRef((() => { try { return localStorage.getItem("vgc_disaster_dismissed") === "true"; } catch { return false; } })()); // permanent dismiss
 
   // ─── Knowledge Portal: AI Guide Generator & SharePoint Doc State ──────
   const [guideGenerating, setGuideGenerating] = useState(false);
@@ -273,7 +303,7 @@ export default function ITSMApp() {
       emailFallback: true,
       dashboardAlertDismissible: false, // Sev-A alerts cannot be dismissed
       rateLimitMinutes: 10,  // Min gap between auto-calls for same incident
-      vipCustomers: ["ABC Enterprise Pte Ltd"],
+      vipCustomers: [],
       ispAlertDuration: 10,  // seconds for ISP outage alerts
     } };
   });
@@ -587,7 +617,7 @@ export default function ITSMApp() {
   const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(() => _ls("vgc_zd_require_human_approval", false));
   const [zdAutoLog, setZdAutoLog] = useState(() => _ls("vgc_zd_auto_log", []));
   const [zdTriagedIds, setZdTriagedIds] = useState(() => { try { const v = JSON.parse(localStorage.getItem("vgc_zd_triaged_ids")); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); } });
-  const [zdAutoStats, setZdAutoStats] = useState(() => _ls("vgc_zd_auto_stats", { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 }));
+  const [zdAutoStats, setZdAutoStats] = useState(() => normalizeZdAutoStats(_ls("vgc_zd_auto_stats", DEFAULT_ZD_AUTO_STATS)));
   const [zdAgents, setZdAgents] = useState([]);
   const [zdGroups, setZdGroups] = useState([]);
   const [zdTab, setZdTab] = useState("automation"); // automation | tickets | queue | history | settings | analytics
@@ -749,6 +779,52 @@ export default function ITSMApp() {
   const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
   const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
+  const portalSessionIdRef = useRef(null);
+  const portalSessionStaleRef = useRef(false);
+
+  const createPortalSessionId = useCallback(() => {
+    try {
+      const existing = sessionStorage.getItem("vgc_portal_session_id");
+      if (existing) { portalSessionIdRef.current = existing; return existing; }
+      const nextId = crypto?.randomUUID ? crypto.randomUUID() : `ps-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem("vgc_portal_session_id", nextId);
+      portalSessionIdRef.current = nextId;
+      return nextId;
+    } catch {
+      const fallback = `ps-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      portalSessionIdRef.current = fallback;
+      return fallback;
+    }
+  }, []);
+
+  const clearPortalSessionId = useCallback(() => {
+    portalSessionIdRef.current = null;
+    try { sessionStorage.removeItem("vgc_portal_session_id"); } catch (e) {}
+  }, []);
+
+  const startPortalSessionNow = useCallback(async (sessionId) => {
+    const activeSessionId = sessionId || createPortalSessionId();
+    try {
+      if (window.__vgcWaitForApiAuth) {
+        const authReady = await window.__vgcWaitForApiAuth(15000);
+        if (!authReady) return { ok: false, status: 401 };
+      }
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch("/api/auth/session/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: activeSessionId }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, data, sessionId: activeSessionId };
+        if (attempt === 2) return { ok: false, status: response.status, data, sessionId: activeSessionId };
+        await new Promise(resolve => setTimeout(resolve, 500 + attempt * 750));
+      }
+    } catch (e) {
+      return { ok: false, error: e.message, sessionId: activeSessionId };
+    }
+    return { ok: false, sessionId: activeSessionId };
+  }, [createPortalSessionId]);
 
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");
@@ -804,7 +880,7 @@ export default function ITSMApp() {
       setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
       setZdAiQueue([]);
       setZdAutoLog([]);
-      setZdAutoStats({ totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0 });
+      setZdAutoStats(DEFAULT_ZD_AUTO_STATS);
       // Clear any cached demo data from localStorage
       ["vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats",
        "vgc_incidents","vgc_problems","vgc_changes","vgc_requests","vgc_assets","vgc_customers"].forEach(k => localStorage.removeItem(k));
@@ -832,11 +908,119 @@ export default function ITSMApp() {
             } catch (e) { /* per-collection error isolated */ }
           }));
           // Also clean seed data from the DB itself
-          fetch("/api/db-clean-seed", { method: "POST" }).then(r => r.json()).catch(() => {});
+          if (!window.__vgcWaitForApiAuth || await window.__vgcWaitForApiAuth(8000)) {
+            fetch("/api/db-clean-seed", { method: "POST" }).then(r => r.json()).catch(() => {});
+          }
         } catch (e) { console.warn("[DATA ISOLATION] DB re-hydration failed:", e.message); }
       })();
     }
+    if (isLocalDemoUser) {
+      ["vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats","vgc_customers","vgc_service_reports"].forEach(k => localStorage.removeItem(k));
+      setCustomers([]);
+      setServiceReports([]);
+      setZdTickets([]);
+      setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
+      setZdAiQueue([]);
+    }
   }, [currentUser, isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    window.__vgcGetPortalSessionId = () => portalSessionIdRef.current || sessionStorage.getItem("vgc_portal_session_id") || "";
+    return () => { if (window.__vgcGetPortalSessionId) delete window.__vgcGetPortalSessionId; };
+  }, []);
+
+  const clearAppSessionState = useCallback(() => {
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+    setCustomers([]);
+    setServiceReports([]);
+    setZdTickets([]);
+    setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
+    setZdAiQueue([]);
+    clearPortalSessionId();
+    try {
+      sessionStorage.removeItem("vgc_current_user");
+      localStorage.removeItem("vgc_current_user");
+      ["vgc_customers","vgc_service_reports","vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
+    } catch (e) {}
+  }, [clearPortalSessionId]);
+
+  const endPortalSession = useCallback(async () => {
+    const sessionId = portalSessionIdRef.current || sessionStorage.getItem("vgc_portal_session_id");
+    if (!sessionId || !isEntraProductionUser) { clearPortalSessionId(); return; }
+    try {
+      await fetch("/api/auth/session/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+    } catch (e) {}
+    clearPortalSessionId();
+  }, [clearPortalSessionId, isEntraProductionUser]);
+
+  useEffect(() => {
+    if (!isEntraProductionUser || !currentUser?.email) return;
+    portalSessionStaleRef.current = false;
+    let stopped = false;
+    let heartbeatTimer = null;
+    const email = currentUser.email.toLowerCase();
+    const sessionId = createPortalSessionId();
+    const staleSignOut = (detail) => {
+      if (portalSessionStaleRef.current) return;
+      portalSessionStaleRef.current = true;
+      showToast("This ITSM session was signed out because another active session was opened for your Entra user.", "warning");
+      setErrorAdvisory({
+        type: "Session Control",
+        code: detail?.code || "STALE_SESSION",
+        message: "Another ITSM session is active for this Entra user.",
+        timestamp: new Date().toISOString(),
+        details: "The previous app session was cleared to prevent concurrent access to production ITSM data.",
+        stack: "",
+      });
+      clearAppSessionState();
+    };
+    const heartbeat = async () => {
+      try {
+        const response = await fetch("/api/auth/session/heartbeat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+        if (response.status === 409) return staleSignOut(await response.json().catch(() => ({})));
+        if (!response.ok) return;
+        const data = await response.json().catch(() => ({}));
+        if (data && data.active === false) staleSignOut(data);
+      } catch (e) {}
+    };
+    const start = async () => {
+      try {
+        const result = await startPortalSessionNow(sessionId);
+        if (!result.ok) return;
+        localStorage.setItem("vgc_active_session_marker", JSON.stringify({ email, sessionId, ts: Date.now() }));
+        if (!stopped) {
+          await heartbeat();
+          heartbeatTimer = setInterval(heartbeat, 30000);
+        }
+      } catch (e) {}
+    };
+    const onStorage = (event) => {
+      if (event.key !== "vgc_active_session_marker" || !event.newValue) return;
+      try {
+        const marker = JSON.parse(event.newValue);
+        if (marker.email === email && marker.sessionId && marker.sessionId !== sessionId) staleSignOut({ code: "STALE_SESSION" });
+      } catch (e) {}
+    };
+    const onServerStale = (event) => staleSignOut(event.detail || { code: "STALE_SESSION" });
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("vgc:portal-session-stale", onServerStale);
+    start();
+    return () => {
+      stopped = true;
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("vgc:portal-session-stale", onServerStale);
+    };
+  }, [clearAppSessionState, createPortalSessionId, currentUser?.email, isEntraProductionUser, startPortalSessionNow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── DEMO MODE REMOVED ─── Production data only, loaded from DB
 
@@ -1052,17 +1236,18 @@ export default function ITSMApp() {
           return baseRole || "L1 Support Engineer";
         };
 
+        let nextCurrentUser;
         if (matched) {
-          setCurrentUser({
+          nextCurrentUser = {
             ...matched,
             rbacRole: determineRole(matched.rbacRole),
             authType: "entra",
             entraEmail: email,
             ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, entraObjectId: entraProfile.entraObjectId } : {}),
-          });
+          };
         } else if (fallbackUser) {
           const role = determineRole(fallbackUser.rbacRole);
-          setCurrentUser({
+          nextCurrentUser = {
             ...fallbackUser,
             id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
             name: acct.name || fallbackUser.name,
@@ -1072,10 +1257,10 @@ export default function ITSMApp() {
             authType: "entra",
             entraEmail: email,
             ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, role: entraProfile.role, entraObjectId: entraProfile.entraObjectId } : {}),
-          });
+          };
         } else {
           const role = determineRole(null);
-          setCurrentUser({
+          nextCurrentUser = {
             id: "SSO-" + (acct.localAccountId || "").substring(0, 8),
             name: acct.name || acct.username,
             role: entraProfile?.role || "IT Staff",
@@ -1092,8 +1277,11 @@ export default function ITSMApp() {
             authType: "entra",
             entraEmail: email,
             ...(entraProfile ? { department: entraProfile.department, location: entraProfile.location, phone: entraProfile.phone, role: entraProfile.role, entraObjectId: entraProfile.entraObjectId } : {}),
-          });
+          };
         }
+
+        await startPortalSessionNow();
+        setCurrentUser(nextCurrentUser);
 
         // Auto-add to managedUsers if first-time login (enables GUI role editing & DB persistence)
         setManagedUsers(prev => {
@@ -1124,7 +1312,7 @@ export default function ITSMApp() {
         setIsLoggedIn(true);
       })();
     }
-  }, [isMsalAuthenticated, accounts, currentUser]);
+  }, [isMsalAuthenticated, accounts, currentUser, startPortalSessionNow]);
 
   // ─── Prevent Browser Back Button (keep session alive until sign-out) ──
   useEffect(() => {
@@ -1137,30 +1325,39 @@ export default function ITSMApp() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, [isLoggedIn]);
 
-  // ─── Weather Disaster Alert System (one-time per session) ─────────────
+  // ─── Live Weather Advisory Alert (trusted official sources only) ──────
   useEffect(() => {
-    if (!isLoggedIn || disasterAlertDismissedRef.current) return;
-    // Simulated regional disaster monitoring — cycles through ASEAN/Singapore threat scenarios
-    const disasterScenarios = [
-      { type: "Thunderstorm", icon: "⛈️", severity: "High", region: "Singapore & Johor Bahru", summary: "Severe thunderstorm warning issued by MSS (Meteorological Service Singapore). Heavy rainfall of 70-100mm/hr expected with lightning activity, gusty winds up to 80km/h, and potential flash flooding in low-lying areas.", aiAdvice: "Stay indoors and away from windows. Avoid open areas and tall structures. Unplug sensitive electronics. If driving, pull over safely. Monitor NEA weather updates. Keep emergency supplies ready.", color: "#FF6B6B", sources: "MSS weather.gov.sg · NEA nea.gov.sg · WMO severe weather bulletin" },
-      { type: "Typhoon", icon: "🌀", severity: "Critical", region: "South China Sea — Approaching Philippines", summary: "Super Typhoon GAEMI (Cat-4) tracking westward across South China Sea. Outer rain bands may affect Singapore within 48-72 hours. Sustained winds of 210km/h near eye wall. Storm surge warning for coastal areas.", aiAdvice: "Monitor JTWC and MSS updates closely. Secure outdoor objects. Stock up on essential supplies and water. Charge all devices. Avoid coastal areas. Prepare evacuation route if in flood-prone zone. Business continuity: ensure VPN and remote access are operational.", color: "#FF4444", sources: "JTWC metoc.navy.mil · PAGASA bagong.pagasa.dost.gov.ph · MSS weather.gov.sg" },
-      { type: "Tsunami", icon: "🌊", severity: "Critical", region: "Indian Ocean — Post Sumatra Earthquake", summary: "Tsunami advisory issued following M7.8 earthquake off western Sumatra coast. Initial wave arrival estimated in 3-4 hours for Singapore Strait. Coastal monitoring stations activated. Harbor and port operations on standby.", aiAdvice: "Move to higher ground immediately if near coast. Follow PUB and SCDF advisories. Avoid beaches, harbors, and low-lying coastal areas. Do NOT return until all-clear is given. Keep emergency radio tuned to CNA938. Ensure family safety check-in.", color: "#FF0000", sources: "PTWC tsunami.gov · BMKG bmkg.go.id · USGS earthquake.usgs.gov · MSS weather.gov.sg" },
-      { type: "Volcanic Ash", icon: "🌋", severity: "Moderate", region: "Mount Sinabung, North Sumatra", summary: "Mount Sinabung erupted with ash column reaching 7km altitude. Prevailing winds may carry volcanic ash across Malacca Strait toward Singapore within 24-48 hours. Air quality impact possible — PSI and PM2.5 levels being monitored.", aiAdvice: "Monitor NEA air quality index. Prepare N95 masks if haze develops. Reduce outdoor activity if PSI exceeds 100. Close windows and use air purifiers indoors. Airlines may adjust flight routes — check departure boards if traveling. Keep eyes and respiratory protection ready.", color: "#FF8C42", sources: "PVMBG vsi.esdm.go.id · VAAC darwin.bom.gov.au · NEA nea.gov.sg" },
-      { type: "Heatwave", icon: "🔥", severity: "High", region: "Southeast Asia — Extreme Heat", summary: "Prolonged heatwave advisory: Singapore temperatures expected to hit 37-39°C over the next 5 days, highest in recorded history. Heat index may exceed 45°C with humidity. Urban heat island effect amplifying risk in CBD and industrial zones.", aiAdvice: "Stay hydrated — drink water regularly even if not thirsty. Avoid outdoor work between 11am-3pm. Watch for heat exhaustion symptoms: dizziness, nausea, rapid heartbeat. Ensure server rooms and data centers have adequate cooling. Check on elderly colleagues. Use sunblock SPF50+ if outdoors.", color: "#F59E0B", sources: "MSS weather.gov.sg · NEA nea.gov.sg · WMO public.wmo.int" },
-      { type: "Flash Flood", icon: "🌧️", severity: "High", region: "Central & Eastern Singapore", summary: "PUB flash flood warning activated for Orchard Road, Bukit Timah, and Geylang areas. Drainage capacity exceeded after 120mm rainfall in 2 hours. Water level rising in Stamford Canal and Rochor Canal. Road closures in effect.", aiAdvice: "Avoid flooded roads — do not attempt to drive through standing water. Relocate vehicles from basement parking if in affected zones. Work from home if possible. Monitor PUB flood alerts and MyENV app. If trapped, call SCDF 995. Protect IT equipment in ground-floor server rooms.", color: "#42A5F5", sources: "PUB pub.gov.sg · MSS weather.gov.sg · NEA myenv.nea.gov.sg · SCDF scdf.gov.sg" },
-    ];
-    // Pick a scenario based on the day of year (rotates daily for demo purposes)
-    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
-    const scenario = disasterScenarios[dayOfYear % disasterScenarios.length];
-    // Show alert after a short delay
+    if (!isLoggedIn) return;
+    let cancelled = false;
     let autoDismissTimer;
-    const timer = setTimeout(() => {
-      setDisasterAlert(scenario);
-      // Auto-dismiss after 10 seconds and permanently mark as shown
-      autoDismissTimer = setTimeout(() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch (e) {} }, 10000);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/weather/disaster-alert");
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.active || !data.alert) return;
+        const alert = data.alert;
+        const alertId = alert.id || `${alert.type || "weather"}:${alert.updatedAt || alert.checkedAt || Date.now()}`;
+        const dismissKey = `vgc_disaster_dismissed:${alertId}`;
+        const sessionKey = `vgc_disaster_seen:${alertId}`;
+        try {
+          if (localStorage.getItem(dismissKey) === "true" || sessionStorage.getItem(sessionKey) === "true") return;
+          sessionStorage.setItem(sessionKey, "true");
+        } catch (e) {}
+        if (cancelled) return;
+        setDisasterAlert({ ...alert, id: alertId });
+        autoDismissTimer = setTimeout(() => setDisasterAlert(null), 10000);
+      } catch (e) {
+        // No popup on source errors. Accuracy beats noisy fallback alerts.
+      }
     }, 4000);
-    return () => { clearTimeout(timer); clearTimeout(autoDismissTimer); };
+    return () => { cancelled = true; clearTimeout(timer); clearTimeout(autoDismissTimer); };
   }, [isLoggedIn]);
+
+  const dismissDisasterAlert = useCallback(() => {
+    const alertId = disasterAlert?.id;
+    setDisasterAlert(null);
+    try { if (alertId) localStorage.setItem(`vgc_disaster_dismissed:${alertId}`, "true"); } catch (e) {}
+  }, [disasterAlert]);
 
   // ─── High-Severity Incident Auto-Escalation Engine ────────────────────
   // Generates correlation IDs for all escalation actions
@@ -2589,10 +2786,7 @@ export default function ITSMApp() {
   const [customerForm, setCustomerForm] = useState({ name: "", category: "Ad-Hoc", contactPerson: "", email: "", phone: "", address: "", status: "Active", contractStart: "", contractEnd: "", services: [], notes: "" });
   const [customerViewMode, setCustomerViewMode] = useState("table");
   // ─── Service Reports State ──────────────────────────────────────────────
-  const [serviceReports, setServiceReports] = useState(() => _ls("vgc_service_reports", [
-    { id: "SR001", customerId: "CUS002", title: "Monthly Service Report — March 2026", reportDate: "2026-03-31", periodFrom: "2026-03-01", periodTo: "2026-03-31", engineer: "Marcus Chen", summary: "All 50 Microsoft 365 licenses operational. Resolved 3 incidents (2x password reset, 1x Outlook sync issue). SLA compliance: 100%.", incidents: [], status: "Sent", sentAt: "2026-03-31 17:00", createdBy: "Marcus Chen", createdAt: "2026-03-31" },
-    { id: "SR002", customerId: "CUS003", title: "Monthly Service Report — March 2026", reportDate: "2026-03-31", periodFrom: "2026-03-01", periodTo: "2026-03-31", engineer: "Sofia Rodriguez", summary: "120 M365 E3 licenses healthy. Azure VM uptime: 99.97%. Patched 2 critical vulnerabilities on FortiGate firewall.", incidents: [], status: "Draft", sentAt: "", createdBy: "Sofia Rodriguez", createdAt: "2026-03-30" },
-  ]));
+  const [serviceReports, setServiceReports] = useState(() => _ls("vgc_service_reports", []));
   const [showAddReport, setShowAddReport] = useState(false);
   const [editingReportId, setEditingReportId] = useState(null);
   const [reportForm, setReportForm] = useState({ customerId: "", title: "", reportDate: new Date().toISOString().slice(0,10), periodFrom: "", periodTo: "", engineer: "", summary: "", incidents: [], status: "Draft" });
@@ -2621,18 +2815,7 @@ export default function ITSMApp() {
       { entity: "Chat Transcripts", retention: 30, action: "Delete", enabled: false },
     ],
     consentManagement: true, dsarWorkflow: true, dataClassification: true,
-    auditLog: [
-      { timestamp: "2026-03-26 11:05", action: "Incident Resolved", user: "Marcus Chen", detail: "INC0007 (PC Blue Screen — ABC Enterprise) resolved. Closure: Hardware Replacement. SLA met (1h45m / 4h)." },
-      { timestamp: "2026-03-26 10:30", action: "On-Site Support Dispatched", user: "Marcus Chen", detail: "Engineer dispatched to ABC Enterprise Pte Ltd, 201 Pioneer Street, SG 49800 for INC0007 hardware repair" },
-      { timestamp: "2026-03-26 09:25", action: "First Response Sent", user: "Marcus Chen", detail: "INC0007 — First response email sent to Ms Carol (carol@abcenterprise.com.sg) within 9 minutes" },
-      { timestamp: "2026-03-26 09:15", action: "Incident Created", user: "System", detail: "INC0007 created via Phone — PC Blue Screen (BSOD) reported by Ms Carol, ABC Enterprise Pte Ltd" },
-      { timestamp: "2026-03-26 09:15", action: "AI Auto-Triage", user: "AI Engine", detail: "INC0007 auto-classified: Sev-B HIGH, Category: Hardware > Laptop/Desktop, Confidence: 93%" },
-      { timestamp: "2026-03-26 09:10", action: "Customer Data Entry", user: "Marcus Chen", detail: "New customer added: ABC Enterprise Pte Ltd, 201 Pioneer Street, Singapore 49800. Contact: Ms Carol (+65 9089 900)" },
-      { timestamp: "2026-03-25 14:32", action: "DSAR Request Processed", user: "System", detail: "User U005 data export completed" },
-      { timestamp: "2026-03-24 09:15", action: "Retention Policy Executed", user: "System", detail: "42 records anonymized (Incidents > 365 days)" },
-      { timestamp: "2026-03-23 16:45", action: "Consent Updated", user: "Priya Sharma", detail: "Marketing communications opt-out" },
-      { timestamp: "2026-03-22 11:00", action: "Data Classification Scan", user: "AI Engine", detail: "Scanned 1,247 records — 3 PII flags raised" },
-    ]
+    auditLog: []
   });
   const INFRA_DEFAULTS = {
     database: { type: "Azure MySQL Flexible Server", region: "Southeast Asia (Singapore)", server: "vgc-itsm1-mysql.mysql.database.azure.com", database: "itsmdb", tier: "Burstable", sku: "Standard_B1ms", version: "8.0.21", storage: "20 GB", ha: "Disabled", backupRetention: "7 days", status: "Ready" },
@@ -2754,33 +2937,48 @@ export default function ITSMApp() {
   const _dbSyncTimers = useRef({});
   const _dbSync = useCallback((collection, data) => {
     if (!data || !Array.isArray(data)) return;
+    if (!isEntraProductionUser) return;
     // Trailing debounce per collection — coalesces bursts (bulk imports, undo/redo, rapid edits)
     if (_dbSyncTimers.current[collection]) clearTimeout(_dbSyncTimers.current[collection]);
-    _dbSyncTimers.current[collection] = setTimeout(() => {
+    _dbSyncTimers.current[collection] = setTimeout(async () => {
+      if (isLocalDemoUser) return;
+      if (isEntraProductionUser && window.__vgcWaitForApiAuth) {
+        const authReady = await window.__vgcWaitForApiAuth(8000);
+        if (!authReady) return;
+      }
       fetch(`${DB_API}/${collection}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       }).catch(() => {}); // silent fail — localStorage is primary fallback
     }, 800);
-  }, []);
+  }, [isLocalDemoUser, isEntraProductionUser]);
 
   // Sync a single record to the SQLite backend
   // HARD RULE: Demo users must NEVER write to the shared production DB
   const _dbSyncOne = useCallback((collection, record) => {
     if (!record || !record.id) return;
-    fetch(`${DB_API}/${collection}/${encodeURIComponent(record.id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(record),
-    }).catch(() => {});
-  }, []);
+    (async () => {
+      if (!isEntraProductionUser) return;
+      if (isLocalDemoUser) return;
+      if (isEntraProductionUser && window.__vgcWaitForApiAuth) {
+        const authReady = await window.__vgcWaitForApiAuth(8000);
+        if (!authReady) return;
+      }
+      fetch(`${DB_API}/${collection}/${encodeURIComponent(record.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(record),
+      }).catch(() => {});
+    })();
+  }, [isLocalDemoUser, isEntraProductionUser]);
 
   const dbInitRef = useRef(false);
 
   // ─── Initial DB hydration: load from backend on first load if localStorage is empty ───
   useEffect(() => {
     if (dbInitRef.current) return;
+    if (!isEntraProductionUser) return;
     dbInitRef.current = true;
     // HARD RULE: Always load from production DB
     if (isDemoMode) return;
@@ -2892,7 +3090,7 @@ export default function ITSMApp() {
         }
       }
     }).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dual-write: localStorage + DB — for Entra users, block seed data from contaminating DB
   const _seedPattern = /^(INC-D\d|INC000|PRB000|CHG000|REQ000|DCUS-|DEMO-)\d*$/;
@@ -2920,7 +3118,13 @@ export default function ITSMApp() {
   useEffect(() => { _save("vgc_contracts", contracts); _dbSync("contracts", contracts); }, [contracts]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_automation_rules", automationRules); _dbSync("automation_rules", automationRules); }, [automationRules]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_avatar", avatarConfig); }, [avatarConfig]);
-  useEffect(() => { _save("vgc_current_user", currentUser); }, [currentUser]);
+  useEffect(() => {
+    try {
+      localStorage.removeItem("vgc_current_user");
+      if (currentUser) sessionStorage.setItem("vgc_current_user", JSON.stringify(currentUser));
+      else sessionStorage.removeItem("vgc_current_user");
+    } catch (e) {}
+  }, [currentUser]);
   useEffect(() => { _save("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_rbac_audit", rbacAuditLog); }, [rbacAuditLog]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2932,15 +3136,13 @@ export default function ITSMApp() {
   // ─── Global Auto-Sync: Zendesk ↔ ITSM (every 60s) ─────────────────
   // HARD RULE: Demo user must NEVER trigger production API calls
   useEffect(() => {
-    if (isLocalDemoUser) {
-      return; // No sync for demo user — only seed data
-    }
+    if (!isEntraProductionUser) return;
     const doSync = async () => {
       try {
         setGlobalSyncActive(true);
         // 1) Refresh Zendesk stats
         const statsR = await fetch("/api/zendesk/stats");
-        if (statsR.ok) { const d = await statsR.json(); setZdStats(d); setZdConnected(true); }
+        if (statsR.ok) { const d = await statsR.json(); setZdStats({ open: Number(d?.open) || 0, pending: Number(d?.pending) || 0, hold: Number(d?.hold) || 0, solved: Number(d?.solved) || 0 }); setZdConnected(true); }
         // 2) Fetch Zendesk user
         const meR = await fetch("/api/zendesk/me");
         if (meR.ok) { const d = await meR.json(); if (d?.user) { setZdUser(d.user); setZdConnected(true); } }
@@ -2964,7 +3166,7 @@ export default function ITSMApp() {
     doSync(); // immediate on mount
     globalSyncRef.current = setInterval(() => { if (!tabVisibleRef.current) return; doSync(); }, 60000); // every 60s
     return () => { if (globalSyncRef.current) clearInterval(globalSyncRef.current); };
-  }, [isLocalDemoUser]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Phase T6: WebSocket real-time push ───────────────────────────────
   // Backend already broadcasts on every DB write/update/delete via wsServer.
@@ -2976,7 +3178,7 @@ export default function ITSMApp() {
   // continue to work.
   const [wsBridgeConnected, setWsBridgeConnected] = React.useState(false);
   React.useEffect(() => {
-    if (isLocalDemoUser) return; // demo mode = no backend
+    if (!isEntraProductionUser) return;
     let ws = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
@@ -3065,7 +3267,7 @@ export default function ITSMApp() {
       for (const t of refreshTimers.values()) clearTimeout(t);
       try { ws && ws.close(); } catch {}
     };
-  }, [isLocalDemoUser]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // SVG Icon Components — Enterprise Cybersecurity Grade
   const NavIcon = ({ type, isActive }) => {
@@ -3097,7 +3299,7 @@ export default function ITSMApp() {
   const NAV = [
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
     { section: "CORE" },
-    { id: "tickets", label: "Tickets", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length + zdStats.open + zdStats.pending + problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed") || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
+    { id: "tickets", label: "Tickets", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length + (zdStats?.open || 0) + (zdStats?.pending || 0) + problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed") || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
     { id: "catalog", label: "Service Catalog", accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "knowledge", label: "Knowledge Portal", accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #0089D618)" },
     { id: "assets", label: "Assets / CMDB", accent: "#06B6D4", gradient: "linear-gradient(135deg, #06B6D408, #06B6D418)" },
@@ -3715,7 +3917,7 @@ ${requestSummary || "(none)"}
 KB ARTICLES: ${kbSummary || "(none)"}
 
 ZENDESK TICKETING:
-- Zendesk Open: ${zdStats.open} | Pending: ${zdStats.pending} | On Hold: ${zdStats.hold} | Solved: ${zdStats.solved}
+- Zendesk Open: ${zdStats?.open || 0} | Pending: ${zdStats?.pending || 0} | On Hold: ${zdStats?.hold || 0} | Solved: ${zdStats?.solved || 0}
 - Total Zendesk Tickets in ITSM: ${zdTickets.length}
 - Zendesk-Linked ITSM Incidents: ${incidents.filter(i => i.zdTicketId).length}
 ${zdTickets.length > 0 ? "ZENDESK TICKETS:\n" + zdTickets.slice(0, 20).map(t => `ZD#${t.id}: "${t.subject || t.title || 'N/A'}" | Status: ${t.status || 'N/A'} | Priority: ${t.priority || 'N/A'} | Requester: ${t.requester?.name || t.requester_name || t.requester || 'N/A'} | Created: ${t.created_at || t.createdAt || 'N/A'}${t.assignee?.name || t.assignee_name ? ` | Assigned: ${t.assignee?.name || t.assignee_name}` : ''}${t.tags?.length ? ` | Tags: ${t.tags.join(",")}` : ''}`).join("\n") : ""}
@@ -4052,8 +4254,18 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     if (isLocalDemoUser) return; // Data Isolation: no production API calls in demo mode
     try {
       const r = await fetch("/api/zendesk/stats");
-      if (r.ok) { const data = await r.json(); setZdStats(data); }
-    } catch (e) {}
+      if (r.ok) {
+        const data = await r.json();
+        setZdStats({
+          open: Number(data?.open) || 0,
+          pending: Number(data?.pending) || 0,
+          hold: Number(data?.hold) || 0,
+          solved: Number(data?.solved) || 0,
+        });
+      }
+    } catch (e) {
+      setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
+    }
   };
 
   const zdFetchComments = async (ticketId) => {
@@ -4120,7 +4332,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       };
 
       setZdTriagedIds(prev => new Set(prev).add(ticketId));
-      setZdAutoStats(prev => ({ ...prev, totalTriaged: prev.totalTriaged + 1, avgConfidence: Math.round(((prev.avgConfidence * prev.totalTriaged) + (triage.confidence || 75)) / (prev.totalTriaged + 1)) }));
+      setZdAutoStats(prev => {
+        const stats = normalizeZdAutoStats(prev);
+        const nextTotal = stats.totalTriaged + 1;
+        return { ...stats, totalTriaged: nextTotal, avgConfidence: Math.round(((stats.avgConfidence * stats.totalTriaged) + (triage.confidence || 75)) / nextTotal) };
+      });
 
       // ═══ CONFIGURABLE: Require Human Approval toggle ═══
       // When zdRequireHumanApproval=true → ALL responses go to engineer review queue (no auto-send)
@@ -4136,7 +4352,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             const autoResult = await autoR.json();
             queueItem.status = "sent";
             queueItem.reviewedBy = "AI Auto-Approved";
-            setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
+            setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, autoSent: stats.autoSent + 1 }; });
             const emailNote = autoResult.email?.sent ? ` ✉️ Email sent to ${autoResult.email.to}` : "";
             addAutoLog({ type: "auto_send", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} AI auto-sent (${triage.confidence}% confidence, ${triage.category})${emailNote}` });
             // Set Zendesk ticket to "pending" so it auto-closes if no reply within 48h
@@ -4147,17 +4363,17 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           } else {
             // Auto-send failed — fall back to engineer review
             queueItem.status = "pending_approval";
-            setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+            setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, humanReview: stats.humanReview + 1 }; });
             addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, message: `#${ticketId} auto-send failed — queued for engineer review` });
           }
         } catch {
           queueItem.status = "pending_approval";
-          setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+          setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, humanReview: stats.humanReview + 1 }; });
           addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, message: `#${ticketId} auto-send error — queued for engineer review` });
         }
       } else {
         // ENGINEER REVIEW: Low confidence or sensitive — needs engineer approval (the 10%)
-        setZdAutoStats(prev => ({ ...prev, humanReview: prev.humanReview + 1 }));
+        setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, humanReview: stats.humanReview + 1 }; });
         addAutoLog({ type: "human_review", ticketId, subject: ticket?.subject, confidence: triage.confidence, category: triage.category, message: `#${ticketId} queued for engineer review (${triage.confidence}% confidence) — ${(triage.confidence || 0) < 85 ? "low confidence" : "sensitive/complex issue"}` });
       }
 
@@ -4183,7 +4399,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               // New incident created
               queueItem.itsmIncidentId = incData.incident.id;
               setIncidents(prev => [incData.incident, ...prev]);
-              setZdAutoStats(prev => ({ ...prev, incidentsCreated: prev.incidentsCreated + 1 }));
+              setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, incidentsCreated: stats.incidentsCreated + 1 }; });
               addAutoLog({ type: "incident_created", ticketId, subject: ticket?.subject, incidentId: incData.incident.id, priority: _slaPri, customer: requester?.name || "", message: `ITSM ${incData.incident.id} auto-created from #${ticketId} — ${_slaPri} (${requester?.name || "unknown requester"})` });
             } else if (incData.skipped && incData.incident) {
               // Already existed — just link, don't duplicate
@@ -4204,6 +4420,76 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     } catch (e) {
       addAutoLog({ type: "error", ticketId, message: `Triage failed for #${ticketId}: ${e.message}` });
       return null;
+    }
+  };
+
+  const zdAiSolveTicket = async (ticketId, options = {}) => {
+    const dryRun = options.dryRun !== false;
+    setZdAiProcessing(true);
+    try {
+      const r = await fetch("/api/zendesk/ai-solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticketId,
+          dryRun,
+          confirmSafety: options.confirmSafety === true,
+          sendCustomerEmail: options.sendCustomerEmail === true,
+          requestedBy: currentUser?.email || currentUser?.name || "AI Front",
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || "AI Safe Solve failed");
+
+      const ticket = data.ticket || {};
+      const decision = data.decision || {};
+      const status = data.applied ? "safe_solved" : decision.eligible ? "safe_solve_ready" : "safe_solve_blocked";
+      const existing = zdAiQueue.find(q => String(q.ticketId) === String(ticketId));
+      const queueItem = {
+        ...(existing || {}),
+        id: existing?.id || `ZDSAFE-${Date.now()}-${ticketId}`,
+        ticketId,
+        ticketSubject: existing?.ticketSubject || ticket.subject || `Ticket #${ticketId}`,
+        status,
+        confidence: decision.confidence ?? existing?.confidence ?? 0,
+        category: decision.category || existing?.category || "General",
+        suggestedPriority: decision.priority || existing?.suggestedPriority || ticket.priority || "normal",
+        suggestedAssignee: decision.suggestedAssignee || existing?.suggestedAssignee || "AI Safe Solve",
+        slaPriority: decision.slaPriority || existing?.slaPriority || "Sev-C",
+        slaDeadline: decision.slaDecision?.deadline || existing?.slaDeadline || ticket.created_at,
+        slaTargetHours: decision.slaDecision?.targetHours || existing?.slaTargetHours || 9,
+        draftResponse: decision.customerResponse || existing?.draftResponse || "",
+        internalNote: decision.internalNote || existing?.internalNote || "AI Safe Solve decision returned from server.",
+        requesterName: existing?.requesterName || data.requester?.name || "Zendesk requester",
+        requesterEmail: existing?.requesterEmail || data.requester?.email || "",
+        autoSendable: decision.autoSendable === true,
+        safeSolve: data,
+        reviewedBy: data.applied ? "AI Safe Solve" : existing?.reviewedBy || null,
+        reviewedAt: data.applied ? new Date().toISOString() : existing?.reviewedAt,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+      };
+      setZdAiQueue(prev => [queueItem, ...prev.filter(q => String(q.ticketId) !== String(ticketId))]);
+
+      if (data.applied) {
+        setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, safeSolved: stats.safeSolved + 1 }; });
+        addAutoLog({ type: "auto_send", ticketId, subject: ticket.subject, confidence: decision.confidence, message: `#${ticketId} AI Safe Solve applied (${decision.confidence || 0}% confidence) — no public Zendesk comment; email target ${decision.safeCustomerContact?.customerEmailTarget || "johndoe@vgcsg.com"}` });
+        showToast(`AI Safe Solve applied for #${ticketId}`, "success");
+        zdFetchTickets(); zdFetchStats();
+      } else if (decision.eligible) {
+        addAutoLog({ type: "info", ticketId, subject: ticket.subject, confidence: decision.confidence, message: `#${ticketId} AI Safe Check passed — ready to solve safely (${decision.confidence || 0}%)` });
+        showToast(`AI Safe Check passed for #${ticketId}`, "success");
+      } else {
+        setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, safeSolveBlocked: stats.safeSolveBlocked + 1 }; });
+        addAutoLog({ type: "human_review", ticketId, subject: ticket.subject, confidence: decision.confidence, message: `#${ticketId} AI Safe Solve blocked: ${(decision.blockedReasons || []).join(", ") || "review required"}` });
+        showToast(`AI Safe Solve sent #${ticketId} to review`, "warning");
+      }
+      return data;
+    } catch (e) {
+      addAutoLog({ type: "error", ticketId, message: `AI Safe Solve failed for #${ticketId}: ${e.message}` });
+      showToast(`AI Safe Solve failed: ${e.message}`, "error");
+      return null;
+    } finally {
+      setZdAiProcessing(false);
     }
   };
 
@@ -4261,9 +4547,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   // ── Persist AI queue, triaged IDs, stats, and logs to localStorage ──
   React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch (e) {} }, [zdAiQueue]);
   React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch (e) {} }, [zdTriagedIds]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(zdAutoStats)); } catch (e) {} }, [zdAutoStats]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(normalizeZdAutoStats(zdAutoStats))); } catch (e) {} }, [zdAutoStats]);
   React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch (e) {} }, [zdAutoLog]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch (e) {} }, [zdStats]);
+  React.useEffect(() => { try { if (zdStats && typeof zdStats === "object") localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch (e) {} }, [zdStats]);
   React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch (e) {} }, [zdTickets]);
 
   // Auto-polling for new tickets (every 120s when automation is on)
@@ -4335,14 +4621,32 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             🚨 Incidents <span style={{ background: "#FF6B6B22", color: "#FF6B6B", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length}</span>
           </button>
           <button onClick={() => setTicketsSubTab("zendesk")} style={tabStyle("zendesk")}>
-            🎫 Zendesk AI <span style={{ background: "#EC489922", color: "#EC4899", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{zdStats.open + zdStats.pending}</span>
+            🎫 Zendesk AI <span style={{ background: "#EC489922", color: "#EC4899", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{(zdStats?.open || 0) + (zdStats?.pending || 0)}</span>
           </button>
           <button onClick={() => setTicketsSubTab("operations")} style={tabStyle("operations")}>
             ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
-        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users: managedUsers, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading }} />)}
-        {ticketsSubTab === "zendesk" && (<ZendeskModule assets={assets} changes={changes} currentUser={currentUser} customers={customers} incidents={incidents} requests={requests} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} users={managedUsers} />)}
+        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users: managedUsers, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading, zdStats, globalSyncActive, globalLastSync }} />)}
+        {ticketsSubTab === "zendesk" && (<ZendeskModule
+          assets={assets} changes={changes} currentUser={currentUser} customers={customers} incidents={incidents} requests={requests}
+          setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} users={managedUsers}
+          setIncidents={setIncidents} setCustomers={setCustomers} azureOpenAI={azureOpenAI} isLocalDemoUser={isLocalDemoUser}
+          zdState={{
+            zdTab, zdTickets, zdStats, zdConnected, zdLoading, zdError, zdFilter, zdSelectedTicket, zdPage, zdRenderLimit,
+            zdExpandedSections, zdComments, zdTriagedIds, zdAiQueue, zdAutoMode, zdAutoStats, zdAiProcessing,
+            zdSyncInProgress, zdSyncProgress, zdSyncStatus, zdImportProgress, zdUser, zdAutoLog,
+            zdRealTimeEnabled, zdRequireHumanApproval, zdEditingDraft, zdEditedText, zdExpandedRule,
+          }}
+          zdActions={{
+            setZdTab, setZdTickets, setZdStats, setZdConnected, setZdLoading, setZdError, setZdFilter, setZdSelectedTicket,
+            setZdPage, setZdRenderLimit, setZdExpandedSections, setZdComments, setZdTriagedIds, setZdAiQueue,
+            setZdAutoMode, setZdAutoStats, setZdAiProcessing, setZdSyncInProgress, setZdSyncProgress, setZdSyncStatus,
+            setZdImportProgress, setZdUser, setZdAutoLog, setZdRealTimeEnabled, setZdRequireHumanApproval,
+            setZdEditingDraft, setZdEditedText, setZdExpandedRule, addAutoLog,
+            zdConnect, zdFetchTickets, zdFetchStats, zdAutoTriageBatch, zdAiTriageSingle, zdAiSolveTicket, zdSelectTicket, zdToggleSection,
+          }}
+        />)}
         {ticketsSubTab === "operations" && (<OperationsModule />)}
       </div>
     );
@@ -4379,6 +4683,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   // ─── Self-Service Portal (extracted to src/modules/SelfServicePortal.jsx) ──
 
 
+  const safeZdAutoStats = normalizeZdAutoStats(zdAutoStats);
+
   const dashboardCtx = {
     currentUser, showToast, _save, incidents, problems, changes, requests,
     assets, kbArticles, serviceCatalog, customers, users: managedUsers, vendors, search,
@@ -4403,7 +4709,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     isDemoMode, prodTestMode, runtimeConfig,
     aiPipelineStats,
     setVendors, softDelete,
-    zdConnected, wsBridgeConnected, zdAutoStats, zdAiQueue, setZdTab,
+    zdConnected, wsBridgeConnected, zdAutoStats: safeZdAutoStats, zdAiQueue, setZdTab,
     showAiPanel, setShowAiPanel,
     fetchCsatScores, csatLoading, csatScores,
     fetchAiActions, setIncidents, pdpaConfig,
@@ -4487,6 +4793,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         aiEditText, setAiEditText,
         detectAiActionCards, handleCardAction,
         incidents, requests, problems, changes, azureOpenAI,
+        setActiveModule, zdAiQueue, zdAutoStats, zdStats,
       }} />);
       case "analytics":
       case "reports":
@@ -4534,7 +4841,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         aiPipelineStats, modal, setModal, recycleBin, setRecycleBin,
         wfAnimStep, setWfAnimStep, wfAnimPlaying, setWfAnimPlaying,
         historicalCloseCutoff, setHistoricalCloseCutoff,
-        setVendors, setSearch,
+        setVendors, setSearch, zdStats, zdConnected, zdAiQueue, zdAutoMode,
       }} />);
       case "productivity": return (<ProductivityDashboard changes={changes} incidents={incidents} smartTasks={smartTasks} setSmartTasks={setSmartTasks} _save={_save} productivityView={productivityView} setProductivityView={setProductivityView} />);
       default: return (<DashboardModule ctx={dashboardCtx} />);
@@ -4666,19 +4973,19 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         @keyframes flowDot { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 20px; opacity: 0; } }
         @keyframes flowDotDown { 0% { top: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { top: 16px; opacity: 0; } }
         @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 10px #FFD70044, 0 0 22px #D4AF3722, inset 0 0 0 1px #FFD70022; } 50% { box-shadow: 0 0 18px #FFD70077, 0 0 36px #D4AF3744, 0 0 56px #B8860B22, inset 0 0 0 1px #FFD70044; } }
-        @keyframes logoPulseRing { 0% { transform: scale(1); opacity: 0.55; } 70% { transform: scale(1.22); opacity: 0; } 100% { transform: scale(1.22); opacity: 0; } }
-        @keyframes logoSheen { 0% { transform: translateX(-120%) skewX(-20deg); opacity: 0; } 30% { opacity: 0.85; } 60% { opacity: 0.85; } 100% { transform: translateX(220%) skewX(-20deg); opacity: 0; } }
+        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 8px #FFD70033, 0 0 18px #D4AF371A, inset 0 0 0 1px #FFD70022; filter: brightness(1); } 50% { box-shadow: 0 0 16px #FFD70066, 0 0 30px #D4AF3733, 0 0 44px #B8860B1A, inset 0 0 0 1px #FFD70044; filter: brightness(1.08); } }
+        @keyframes logoPulseRing { 0% { transform: scale(0.98); opacity: 0; } 18% { opacity: 0.42; } 72% { transform: scale(1.18); opacity: 0; } 100% { transform: scale(1.18); opacity: 0; } }
+        @keyframes logoSheen { 0% { transform: translateX(-130%) skewX(-20deg); opacity: 0; } 38% { opacity: 0; } 52% { opacity: 0.55; } 70% { opacity: 0.25; } 100% { transform: translateX(230%) skewX(-20deg); opacity: 0; } }
         @keyframes logoTextShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
         @keyframes orbitDot { 0% { transform: rotate(0deg) translateX(28px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(28px) rotate(-360deg); } }
-        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 10px #FFD70055, 0 0 18px #D4AF3722; filter: brightness(1); } 50% { transform: scale(1.06) translateY(-1.5px); text-shadow: 0 0 16px #FFD70099, 0 0 32px #D4AF3755, 0 0 48px #FFD70022; filter: brightness(1.18); } }
+        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 8px #FFD70044, 0 0 16px #D4AF371A; filter: brightness(1); } 50% { transform: scale(1.035) translateY(-1px); text-shadow: 0 0 14px #FFD70088, 0 0 26px #D4AF3744, 0 0 36px #FFD7001A; filter: brightness(1.12); } }
         @keyframes goldShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
         @keyframes nudgeSlideIn { 0% { transform: translateY(8px) scale(0.95); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
         @keyframes nudgePulse { 0%, 100% { box-shadow: 0 2px 12px #6366F122; } 50% { box-shadow: 0 4px 20px #6366F144, 0 0 30px #06B6D422; } }
-        @keyframes aiFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
-        @keyframes aiBreathe { 0%, 100% { transform: scale(1); box-shadow: 0 8px 24px #6366F144; } 50% { transform: scale(1.04); box-shadow: 0 12px 32px #6366F166, 0 0 50px #06B6D422; } }
-        @keyframes aiBounce { 0%, 100% { transform: translateY(0) scale(1); } 25% { transform: translateY(-6px) scale(1.02); } 50% { transform: translateY(-2px) scale(1); } 75% { transform: translateY(-4px) scale(1.01); } }
-        @keyframes aiSmartPulse { 0% { box-shadow: 0 0 10px #6366F133, 0 0 20px transparent; } 33% { box-shadow: 0 0 14px #06B6D444, 0 0 28px #6366F122; } 66% { box-shadow: 0 0 10px #EC489933, 0 0 24px #06B6D422; } 100% { box-shadow: 0 0 10px #6366F133, 0 0 20px transparent; } }
+        @keyframes aiFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+        @keyframes aiBreathe { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.025); filter: brightness(1.08); } }
+        @keyframes aiBounce { 0%, 100% { transform: translateY(0) scale(1); } 45% { transform: translateY(-3px) scale(1.01); } 70% { transform: translateY(-1px) scale(1); } }
+        @keyframes aiSmartPulse { 0%, 100% { box-shadow: 0 8px 24px var(--ai-glow-soft, #6366F144), 0 0 36px var(--ai-glow-faint, #6366F122); filter: brightness(1); } 33% { box-shadow: 0 9px 26px #06B6D444, 0 0 40px #6366F122; filter: brightness(1.05); } 66% { box-shadow: 0 9px 26px #EC489933, 0 0 38px #06B6D422; filter: brightness(1.04); } }
         @keyframes aiNeonBorder { 0%, 100% { border-color: #6366F188; box-shadow: 0 0 8px #6366F144, inset 0 0 8px #6366F111; } 25% { border-color: #06B6D488; box-shadow: 0 0 8px #06B6D444, inset 0 0 8px #06B6D411; } 50% { border-color: #EC489988; box-shadow: 0 0 8px #EC489944, inset 0 0 8px #EC489911; } 75% { border-color: #81C78488; box-shadow: 0 0 8px #81C78444, inset 0 0 8px #81C78411; } }
         @keyframes aiSparkle { 0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); } 50% { opacity: 1; transform: scale(1) rotate(180deg); } }
         @keyframes aiThinkingRing { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -4734,12 +5041,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         @keyframes escalationBannerGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.1); } 50% { box-shadow: 0 4px 40px rgba(255,68,68,0.3), 0 0 60px rgba(255,68,68,0.08); } }
         @keyframes escalationIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.85; } }
         @keyframes escalationTextBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        .vgc-logo-box { position: relative; overflow: hidden; animation: logoGlow 3.6s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.35s ease; will-change: transform, box-shadow; }
-        .vgc-logo-box::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.55), transparent); animation: logoSheen 5s ease-in-out 1.5s infinite; pointer-events: none; mix-blend-mode: screen; }
+        .vgc-logo-box { position: relative; overflow: hidden; animation: logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.35s ease; will-change: transform, box-shadow; }
+        .vgc-logo-box::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.45), transparent); animation: logoSheen 8s ease-in-out 1.2s infinite; pointer-events: none; mix-blend-mode: screen; }
         .vgc-logo-box:hover { transform: scale(1.06) rotate(-1.5deg); box-shadow: 0 0 22px #FFD70088, 0 0 44px #D4AF3744; }
-        .vgc-logo-text { background: linear-gradient(90deg, #FFD700, #FFF8DC, #D4AF37, #B8860B, #FFD700); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 5s linear infinite; letter-spacing: -0.5px; }
-        .vgc-logo-collapsed { position: relative; overflow: hidden; animation: logoGlow 3.6s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1); will-change: transform; }
-        .vgc-logo-collapsed::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.5), transparent); animation: logoSheen 5s ease-in-out 1.5s infinite; pointer-events: none; mix-blend-mode: screen; }
+        .vgc-logo-text { background: linear-gradient(90deg, #FFD700, #FFF8DC, #D4AF37, #B8860B, #FFD700); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 9s linear infinite; letter-spacing: 0; }
+        .vgc-logo-collapsed { position: relative; overflow: hidden; animation: logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1); will-change: transform; }
+        .vgc-logo-collapsed::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.42), transparent); animation: logoSheen 8s ease-in-out 1.2s infinite; pointer-events: none; mix-blend-mode: screen; }
         .vgc-logo-collapsed:hover { transform: scale(1.10); }
         select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
         option { background: #09090B; color: #FAFAFA; }
@@ -4827,7 +5134,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 width: 62, height: 62, borderRadius: 16, position: "relative",
                 background: "linear-gradient(135deg, #D4AF37, #FFD700, #B8860B, #F59E0B, #D4AF37)",
                 backgroundSize: "300% 300%",
-                animation: "logoGradient 4s ease infinite, logoGlow 3s ease-in-out infinite",
+                animation: "logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 cursor: "pointer", flexShrink: 0
               }}>
@@ -4847,7 +5154,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                     fontSize: 26, fontWeight: 900, fontFamily: "'Space Grotesk', sans-serif",
                     background: "linear-gradient(135deg, #FFD700, #D4AF37, #FFF8DC, #FFD700, #B8860B)",
                     backgroundSize: "300% 300%",
-                    animation: "goldVBounce 4s ease-in-out infinite, goldShimmer 3s linear infinite",
+                    animation: "goldVBounce 7s ease-in-out infinite, goldShimmer 10s linear infinite",
                     WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
                     backgroundClip: "text", letterSpacing: "-0.5px",
                     display: "inline-block"
@@ -4857,14 +5164,14 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 <div style={{
                   position: "absolute", width: 5, height: 5, borderRadius: "50%",
                   background: "#FFD700", boxShadow: "0 0 8px #FFD700, 0 0 16px #D4AF3744",
-                  animation: "orbitDot 6s linear infinite",
+                  animation: "orbitDot 16s linear infinite",
                   top: "calc(50% - 2.5px)", left: "calc(50% - 2.5px)"
                 }} />
                 {/* Pulse ring */}
                 <div style={{
                   position: "absolute", inset: -4, borderRadius: 20,
                   border: "1.5px solid #FFD70033",
-                  animation: "logoPulseRing 3s ease-in-out infinite"
+                  animation: "logoPulseRing 8s ease-in-out infinite"
                 }} />
               </div>
               <div>
@@ -4889,7 +5196,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               width: 42, height: 42, borderRadius: 12, margin: "0 auto",
               background: "linear-gradient(135deg, #D4AF37, #FFD700, #B8860B, #F59E0B, #D4AF37)",
               backgroundSize: "300% 300%",
-              animation: "logoGradient 4s ease infinite, logoGlow 3s ease-in-out infinite",
+              animation: "logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite",
               display: "flex", alignItems: "center", justifyContent: "center",
               cursor: "pointer", position: "relative"
             }}>
@@ -4901,7 +5208,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   fontSize: 18, fontWeight: 900, fontFamily: "'Space Grotesk', sans-serif",
                   background: "linear-gradient(135deg, #FFD700, #D4AF37, #FFF8DC, #FFD700, #B8860B)",
                   backgroundSize: "300% 300%",
-                  animation: "goldVBounce 4s ease-in-out infinite, goldShimmer 3s linear infinite",
+                  animation: "goldVBounce 7s ease-in-out infinite, goldShimmer 10s linear infinite",
                   WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
                   backgroundClip: "text", display: "inline-block"
                 }}>V</span>
@@ -4909,7 +5216,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
               <div style={{
                 position: "absolute", width: 4, height: 4, borderRadius: "50%",
                 background: "#FFD700", boxShadow: "0 0 6px #FFD700, 0 0 12px #D4AF3744",
-                animation: "orbitDot 6s linear infinite",
+                animation: "orbitDot 16s linear infinite",
                 top: "calc(50% - 2px)", left: "calc(50% - 2px)"
               }} />
               {/* Data mode dot indicator on collapsed sidebar */}
@@ -5018,6 +5325,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             </div>
             {/* Sign Out */}
             <button aria-label="Sign out" onClick={() => {
+              endPortalSession();
               setIsLoggedIn(false); setCurrentUser(null); _save("vgc_current_user", null);
               setMsalUser(null); setMsalPhoto(null); setProfilePhoto(null); setGraphEmails(null); setGraphCalendar(null);
               setGraphChats(null); setGraphTeams(null); setGraphPresence(null); setGraphUnread(0);
@@ -6535,7 +6843,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           cursor: "pointer",
           background: avatarConfig.borderStyle === "gradient" ? "linear-gradient(135deg, #6366F1, #06B6D4, #EC4899)" : avatarConfig.borderStyle === "merlion" ? "linear-gradient(135deg, #D4AF37, #B8860B, #FFD700)" : `linear-gradient(135deg, ${avatarConfig.glowColor}, ${avatarConfig.glowColor}88)`,
           backgroundSize: "200% 200%",
-          animation: `logoGradient 3s ease infinite, ${avatarConfig.animation === "float" ? "aiFloat 3s ease-in-out infinite" : avatarConfig.animation === "pulse" ? "aiSmartPulse 4s ease-in-out infinite" : avatarConfig.animation === "breathe" ? "aiBreathe 4s ease-in-out infinite" : "aiBounce 2s ease-in-out infinite"}`,
+          animation: `logoGradient 12s ease-in-out infinite, ${avatarConfig.animation === "float" ? "aiFloat 7s ease-in-out infinite" : avatarConfig.animation === "pulse" ? "aiSmartPulse 8s ease-in-out infinite" : avatarConfig.animation === "breathe" ? "aiBreathe 8s ease-in-out infinite" : "aiBounce 7s ease-in-out infinite"}`,
           display: "flex", alignItems: "center", justifyContent: "center",
           boxShadow: `0 8px 24px ${avatarConfig.glowColor}44, 0 0 40px ${avatarConfig.glowColor}22`,
           position: "relative", padding: 3, overflow: "visible"
@@ -6857,10 +7165,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 </span>
               </div>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>
-                🚨 {disasterAlert.type} Warning — {disasterAlert.region}
+                {disasterAlert.headline || `Official ${disasterAlert.type} Advisory — ${disasterAlert.region}`}
               </div>
             </div>
-            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch (e) {} }} style={{
+            <button onClick={dismissDisasterAlert} style={{
               background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
               cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: 14, flexShrink: 0,
@@ -6888,23 +7196,35 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </div>
           {/* Trusted Sources */}
           <div style={{ padding: "0 16px 8px" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.25)", fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
-              📡 Verified sources: {disasterAlert.sources}
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.35)", fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
+              Official references: {Array.isArray(disasterAlert.sources) ? disasterAlert.sources.map((source, index) => (
+                <React.Fragment key={source.url || source.title || index}>
+                  {index > 0 ? " · " : ""}
+                  <a href={source.url} target="_blank" rel="noreferrer" style={{ color: disasterAlert.color, textDecoration: "none" }}>
+                    {source.title || source.url}
+                  </a>
+                </React.Fragment>
+              )) : disasterAlert.sources}
             </div>
+            {(disasterAlert.updatedAt || disasterAlert.validPeriod) && (
+              <div style={{ fontSize: 8, color: "rgba(255,255,255,0.28)", fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5, marginTop: 4 }}>
+                Source updated: {disasterAlert.updatedAt || "official feed"}{disasterAlert.validPeriod ? ` · Valid: ${disasterAlert.validPeriod}` : ""}
+              </div>
+            )}
           </div>
           {/* Footer */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px 12px" }}>
             <span style={{ fontSize: 8, color: "rgba(255,255,255,0.2)", fontFamily: "'JetBrains Mono', monospace" }}>
-              Auto-dismiss in 10s · One-time alert
+              Auto-dismiss in 10s · Official live-source alert only
             </span>
-            <button onClick={() => { setDisasterAlert(null); try { localStorage.setItem("vgc_disaster_dismissed", "true"); } catch (e) {} }} style={{
+            <button onClick={dismissDisasterAlert} style={{
               background: `${disasterAlert.color}22`, border: `1px solid ${disasterAlert.color}44`,
               borderRadius: 8, padding: "5px 14px", fontSize: 10, fontWeight: 600,
               color: disasterAlert.color, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif",
               transition: "all 0.2s"
             }} onMouseEnter={e => { e.target.style.background = `${disasterAlert.color}44`; e.target.style.color = "#fff"; }}
                onMouseLeave={e => { e.target.style.background = `${disasterAlert.color}22`; e.target.style.color = disasterAlert.color; }}>
-              Dismiss Permanently
+              Dismiss This Alert
             </button>
           </div>
         </div>
@@ -7239,8 +7559,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         );
       })()}
 
-      {/* ─── Floating AI Chat Widget (always visible) ──────────────── */}
-      <AIChatWidget currentUser={currentUser} incidents={incidents} kbArticles={kbArticles} />
     </div>
   );
 }

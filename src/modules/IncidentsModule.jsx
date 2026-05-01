@@ -59,7 +59,7 @@ export default function IncidentsModule({ ctx }) {
     historicalCloseRunning, runBulkCloseTickets,
     runAiAutoFollowUp, aiFollowUpLoading,
     runCleanupQueue, cleanupLoading,
-    zdStats = null,
+    zdStats = { open: 0, pending: 0, hold: 0, solved: 0 },
     globalSyncActive = false,
     globalLastSync = null,
   } = ctx;
@@ -221,8 +221,8 @@ const IncidentsModule = useStableComponent(() => {
             {i < 4 && <span style={{ color: "#1E2130", margin: "0 4px" }}>|</span>}
           </div>
         ))}
-        {zdStats.open + zdStats.pending > 0 && <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Zendesk Live: {zdStats.open} open · {zdStats.pending} pending</span>
+        {(zdStats?.open || 0) + (zdStats?.pending || 0) > 0 && <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace" }}>Zendesk Live: {zdStats?.open || 0} open · {zdStats?.pending || 0} pending</span>
           {globalSyncActive && <span style={{ fontSize: 8, color: "#06B6D4", animation: "pulse 1s infinite" }}>⟳</span>}
           {globalLastSync && <span style={{ fontSize: 8, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>Synced {globalLastSync.toLocaleTimeString("en-SG", { hour12: false })}</span>}
         </div>}

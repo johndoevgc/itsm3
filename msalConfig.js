@@ -25,8 +25,8 @@ const msalConfig = {
     navigateToLoginRequestUrl: false,
   },
   cache: {
-    cacheLocation: "localStorage",
-    storeAuthStateInCookie: true, // for IE11/Edge compatibility
+    cacheLocation: "sessionStorage",
+    storeAuthStateInCookie: false,
   },
   system: {
     loggerOptions: {
@@ -48,6 +48,10 @@ export const graphScopes = {
   tasks: ["Tasks.Read"],
 };
 
+export const apiScopes = {
+  access: [`api://${ENTRA_CLIENT_ID}/access_as_user`],
+};
+
 // All scopes needed for the app (requested at login)
 export const allLoginScopes = [
   "openid", "profile", "email",
@@ -58,6 +62,7 @@ export const allLoginScopes = [
   "Presence.Read.All",
   "People.Read",
   "Tasks.Read",
+  ...apiScopes.access,
 ];
 
 export const msalInstance = new PublicClientApplication(msalConfig);

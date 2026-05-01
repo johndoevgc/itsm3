@@ -53,6 +53,16 @@ const DEFAULTS = {
   // engineers must edit in ZD directly. Flip on per-tenant when bidirectional
   // sync is wanted.
   zd_push_back:        { enabled: false, scope: "prod" },
+
+  // AI Autopilot rollout: server-side scheduler that runs the safe Week 1-4
+  // operating model. Customer-facing actions still require human approval.
+  ai_autopilot:        { enabled: true, scope: "all",
+                         payload: { rolloutWeek: 4, intervalMin: 15, maxTicketsPerRun: 5, kbEveryHours: 6, briefingHourSGT: 8 } },
+
+  // Zendesk AI Safe Solve: guarded AI resolution for routine Zendesk tickets.
+  // The backend owns eligibility, SLA, audit, and customer-contact safety.
+  zendesk_ai_safe_solve: { enabled: true, scope: "all",
+                           payload: { confidenceThreshold: 90, solveThreshold: 95, atRiskMinutes: 60 } },
 };
 
 let _db = null;

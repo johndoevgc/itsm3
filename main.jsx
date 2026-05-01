@@ -1,7 +1,7 @@
 import React, { Component } from "react";
 import { createRoot } from "react-dom/client";
 import { MsalProvider } from "@azure/msal-react";
-import { msalInstance } from "./msalConfig.js";
+import { apiScopes, msalInstance } from "./msalConfig.js";
 import { I18nProvider } from "./src/i18n/i18nProvider.jsx";
 import ITSMApp from "./itsm-tool.jsx";
 
@@ -10,11 +10,30 @@ import ITSMApp from "./itsm-tool.jsx";
 // server can identify the caller and apply RBAC. Frontend code keeps using
 // plain `fetch(...)` — this wrapper is invisible to it.
 //
-// Scope: we reuse `User.Read` (already requested at login) because the server
-// also accepts Microsoft Graph audience tokens (see authMiddleware.js validateToken).
-// This avoids needing to expose a custom API scope on the app registration.
+// Scope: request the app's delegated API scope so the backend receives an
+// app-audience access token (`api://<client-id>`) instead of a Graph token.
 const _origFetch = window.fetch.bind(window);
 let _tokenPromise = null;
+const _mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function _apiRequestInfo(input, init) {
+  const rawUrl = typeof input === "string" ? input : (input && input.url) || "";
+  const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+  try {
+    const parsed = new URL(rawUrl, window.location.origin);
+    return { isApi: parsed.origin === window.location.origin && parsed.pathname.startsWith("/api/"), pathname: parsed.pathname, method };
+  } catch {
+    return { isApi: false, pathname: "", method };
+  }
+}
+
+function _localAuthResponse(status, message) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 async function _getApiToken() {
   try {
     const accounts = msalInstance.getAllAccounts();
@@ -23,7 +42,7 @@ async function _getApiToken() {
     // doesn't trigger N parallel token acquisitions.
     if (!_tokenPromise) {
       _tokenPromise = msalInstance.acquireTokenSilent({
-        scopes: ["User.Read"],
+        scopes: apiScopes.access,
         account: accounts[0],
       }).then(r => r && r.accessToken).catch(() => null)
         .finally(() => { setTimeout(() => { _tokenPromise = null; }, 5000); });
@@ -31,18 +50,55 @@ async function _getApiToken() {
     return await _tokenPromise;
   } catch { return null; }
 }
+
+async function _waitForApiToken(timeoutMs = 8000) {
+  const start = Date.now();
+  let token = await _getApiToken();
+  while (!token && Date.now() - start < timeoutMs) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    token = await _getApiToken();
+  }
+  return token;
+}
+
+window.__vgcWaitForApiAuth = async function waitForApiAuth(timeoutMs = 8000) {
+  return !!(await _waitForApiToken(timeoutMs));
+};
+
+function _currentPortalSessionId() {
+  try {
+    if (typeof window.__vgcGetPortalSessionId === "function") return window.__vgcGetPortalSessionId();
+    return sessionStorage.getItem("vgc_portal_session_id") || "";
+  } catch { return ""; }
+}
+
+function _notifyStalePortalSession(response) {
+  if (!response || response.status !== 409) return;
+  response.clone().json().then(data => {
+    if (data && data.code === "STALE_SESSION") {
+      window.dispatchEvent(new CustomEvent("vgc:portal-session-stale", { detail: data }));
+    }
+  }).catch(() => {});
+}
+
 window.fetch = async function patchedFetch(input, init) {
   try {
-    const url = typeof input === "string" ? input : (input && input.url) || "";
-    // Only intercept same-origin /api/* requests
-    const isApi = url.startsWith("/api/") || url.startsWith(window.location.origin + "/api/");
+    const { isApi, pathname, method } = _apiRequestInfo(input, init);
     if (!isApi) return _origFetch(input, init);
-    const token = await _getApiToken();
-    if (!token) return _origFetch(input, init);
+    const requiresToken = _mutatingMethods.has(method) || pathname === "/api/db/users";
+    const token = requiresToken ? await _waitForApiToken(8000) : await _getApiToken();
+    if (!token) {
+      if (requiresToken) return _localAuthResponse(401, "Authentication token is not ready. Please sign in again.");
+      return _origFetch(input, init);
+    }
     const headers = new Headers((init && init.headers) || (input && input.headers) || {});
     if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+    const portalSessionId = _currentPortalSessionId();
+    if (portalSessionId && !headers.has("X-ITSM-Session-ID")) headers.set("X-ITSM-Session-ID", portalSessionId);
     const newInit = { ...(init || {}), headers };
-    return _origFetch(input, newInit);
+    const response = await _origFetch(input, newInit);
+    _notifyStalePortalSession(response);
+    return response;
   } catch {
     return _origFetch(input, init);
   }

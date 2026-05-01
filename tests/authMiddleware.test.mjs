@@ -9,6 +9,7 @@ const {
   COLLECTION_TO_MODULE,
   checkRateLimit,
   isPublicRoute,
+  isReadOnlyPostRoute,
 } = require("../authMiddleware.js");
 
 // ─── decodeJWT ──────────────────────────────────────────────────────────
@@ -229,5 +230,17 @@ describe("isPublicRoute", () => {
   it("identifies normal API routes as non-public", () => {
     expect(isPublicRoute("/api/incidents")).toBe(false);
     expect(isPublicRoute("/api/admin/users")).toBe(false);
+  });
+});
+
+// ─── isReadOnlyPostRoute ────────────────────────────────────────────────
+describe("isReadOnlyPostRoute", () => {
+  it("treats AI error resolver as read-only POST", () => {
+    expect(isReadOnlyPostRoute("/api/ai/resolve-error", "POST")).toBe(true);
+  });
+
+  it("does not treat mutating AI endpoints as read-only POST", () => {
+    expect(isReadOnlyPostRoute("/api/ai/auto-resolve", "POST")).toBe(false);
+    expect(isReadOnlyPostRoute("/api/ai/resolve-error", "GET")).toBe(false);
   });
 });

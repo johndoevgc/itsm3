@@ -10,9 +10,9 @@ import {
 export default function ServiceStatusModule({ ctx }) {
   const {
     currentUser, incidents, changes,
-    setDetailItem = null,
-    setModal = null,
-    setDetailTab = null,
+    setDetailItem = () => {},
+    setModal = () => {},
+    setDetailTab = () => {},
   } = ctx;
   const SERVICES_LIST = [
     { name: "Email & Collaboration", icon: "📧", group: "Communication" },

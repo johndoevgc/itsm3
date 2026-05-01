@@ -272,7 +272,7 @@ export default function CyberNewsModule({ users, vendors, azureOpenAI }) {
               <div style={{ marginTop: isFeatured ? 10 : 6, padding: isFeatured ? "10px 12px" : "6px 8px", background: "#6366F108", borderRadius: 6, border: "1px solid #6366F122" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                   <span style={{ fontSize: 9, color: "#6366F1", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>🧠 AI THREAT ANALYSIS</span>
-                  {azureOpenAI.enabled && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />}
+                  {azureOpenAI?.enabled && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#81C784", boxShadow: "0 0 6px #81C78444" }} />}
                   {progress.total > 0 && progress.done > 0 && <span style={{ marginLeft: "auto", fontSize: 9, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{progress.done}/{progress.total} steps done</span>}
                 </div>
                 <div style={{ fontSize: isFeatured ? 12 : 10, color: "#A0AEC0", lineHeight: 1.6 }}>{threat.aiSummary}</div>

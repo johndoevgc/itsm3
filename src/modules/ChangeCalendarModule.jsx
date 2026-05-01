@@ -13,8 +13,8 @@ export default function ChangeCalendarModule({ ctx }) {
     calendarMonth, setCalendarMonth, calendarYear, setCalendarYear,
     showCalendarForm, setShowCalendarForm, calendarData, fetchCalendarData,
     calendarSelectedDay, setCalendarSelectedDay,
-    createFreezeWindow = null,
-    deleteFreezeWindow = null,
+    createFreezeWindow = () => {},
+    deleteFreezeWindow = () => {},
   } = ctx;
   const [freezeForm, setFreezeForm] = useState({ name: "", start: "", end: "", reason: "" });
   const [calendarLoading, setCalendarLoading] = useState(false);

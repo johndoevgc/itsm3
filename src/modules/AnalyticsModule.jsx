@@ -9,6 +9,16 @@ import ReportingModule from "./ReportingModule.jsx";
 import CyberNewsModule from "./CyberNewsModule.jsx";
 import ArchitectureDiagram from "./ArchitectureDiagram.jsx";
 
+const safeStatNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const confidenceColor = (value) => {
+  const confidence = safeStatNumber(value);
+  return confidence >= 80 ? "#81C784" : confidence >= 60 ? "#FFB347" : "#FF6B6B";
+};
+
 export default function AnalyticsModuleWrapper({ ctx }) {
   const {
     analyticsSubTab, setAnalyticsSubTab,
@@ -171,11 +181,11 @@ export default function AnalyticsModuleWrapper({ ctx }) {
 
               {/* Key Metrics Cards */}
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
-                <StatCard label="Total AI Triages" value={aiLearningMetrics.totalTriages} icon="⚡" accent="#6366F1" />
-                <StatCard label="Auto-Apply Rate" value={`${aiLearningMetrics.autoApplyRate}%`} icon="🤖" accent="#81C784" />
-                <StatCard label="Avg Confidence" value={`${aiLearningMetrics.avgConfidence}%`} icon="🎯" accent="#06B6D4" />
+                <StatCard label="Total AI Triages" value={safeStatNumber(aiLearningMetrics.totalTriages)} icon="⚡" accent="#6366F1" />
+                <StatCard label="Auto-Apply Rate" value={`${safeStatNumber(aiLearningMetrics.autoApplyRate)}%`} icon="🤖" accent="#81C784" />
+                <StatCard label="Avg Confidence" value={`${safeStatNumber(aiLearningMetrics.avgConfidence)}%`} icon="🎯" accent="#06B6D4" />
                 <StatCard label="Feedback Accuracy" value={`${aiLearningMetrics.feedbackStats?.accuracyRate || 0}%`} icon="✅" accent="#EC4899" />
-                <StatCard label="Pending Actions" value={aiLearningMetrics.pendingActions} icon="⏳" accent="#FFB347" />
+                <StatCard label="Pending Actions" value={safeStatNumber(aiLearningMetrics.pendingActions)} icon="⏳" accent="#FFB347" />
               </div>
 
               {/* Confidence Distribution */}
@@ -202,12 +212,12 @@ export default function AnalyticsModuleWrapper({ ctx }) {
               <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
                 <h3 style={{ margin: "0 0 12px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>📊 Category Performance</h3>
                 <div style={{ display: "grid", gap: 6 }}>
-                  {Object.entries(aiLearningMetrics.categoryBreakdown || {}).sort((a, b) => b[1].total - a[1].total).map(([cat, stats]) => (
+                  {Object.entries(aiLearningMetrics.categoryBreakdown || {}).sort((a, b) => safeStatNumber(b[1].total) - safeStatNumber(a[1].total)).map(([cat, stats]) => (
                     <div key={cat} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213033" }}>
                       <span style={{ fontSize: 13, color: "#E8ECF4", flex: 1, fontWeight: 600 }}>{cat}</span>
-                      <span style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{stats.total} triages</span>
-                      <span style={{ fontSize: 11, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{stats.autoApplied} auto</span>
-                      <span style={{ fontSize: 11, color: stats.avgConfidence >= 80 ? "#81C784" : stats.avgConfidence >= 60 ? "#FFB347" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{stats.avgConfidence}% conf</span>
+                      <span style={{ fontSize: 11, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{safeStatNumber(stats.total)} triages</span>
+                      <span style={{ fontSize: 11, color: "#81C784", fontFamily: "'JetBrains Mono', monospace" }}>{safeStatNumber(stats.autoApplied)} auto</span>
+                      <span style={{ fontSize: 11, color: confidenceColor(stats.avgConfidence), fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{safeStatNumber(stats.avgConfidence)}% conf</span>
                     </div>
                   ))}
                   {Object.keys(aiLearningMetrics.categoryBreakdown || {}).length === 0 && (
@@ -240,9 +250,9 @@ export default function AnalyticsModuleWrapper({ ctx }) {
                     {aiLearningTrends.slice(-12).map((t, idx) => (
                       <div key={idx} style={{ display: "grid", gridTemplateColumns: "100px repeat(4, 1fr)", gap: 8, padding: "8px 12px", background: idx % 2 === 0 ? "#0A0C14" : "transparent", borderRadius: 4, fontSize: 11, color: "#C4CAD6", fontFamily: "'JetBrains Mono', monospace" }}>
                         <span style={{ color: "#64B5F6" }}>{t.period}</span>
-                        <span>{t.triages}</span>
-                        <span style={{ color: "#81C784" }}>{t.autoApplyRate}%</span>
-                        <span style={{ color: t.avgConfidence >= 80 ? "#81C784" : t.avgConfidence >= 60 ? "#FFB347" : "#FF6B6B" }}>{t.avgConfidence}%</span>
+                        <span>{safeStatNumber(t.triages)}</span>
+                        <span style={{ color: "#81C784" }}>{safeStatNumber(t.autoApplyRate)}%</span>
+                        <span style={{ color: confidenceColor(t.avgConfidence) }}>{safeStatNumber(t.avgConfidence)}%</span>
                         <span>{t.feedbackCorrect > 0 || t.feedbackIncorrect > 0 ? `✅${t.feedbackCorrect} ❌${t.feedbackIncorrect}` : "—"}</span>
                       </div>
                     ))}

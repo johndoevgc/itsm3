@@ -18,13 +18,13 @@ export default function SLATrackerModule({ ctx }) {
   const {
     incidents, slaPolicy, currentUser, showToast, search, setSearch,
     isLocalDemoUser = false,
-    setIncidents = null,
-    setActiveModule = null,
+    setIncidents = () => {},
+    setActiveModule = () => {},
     requests = [],
     changes = [],
     problems = [],
     zdConnected = false,
-    runSlaPrediction = null,
+    runSlaPrediction = () => {},
     slaPredictions = [],
   } = ctx;
 

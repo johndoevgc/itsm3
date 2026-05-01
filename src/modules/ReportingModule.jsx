@@ -676,7 +676,7 @@ export default function ReportingModule({  assets, changes, csatAiAnalysis, curr
                   </div>
                 )}
                 <FormField label="Report Title *">
-                  <input value={reportForm.title} onChange={e => setReportForm(f => ({ ...f, title: e.target.value }))} style={inputStyle} placeholder="Monthly Service Report — March 2026" />
+                  <input value={reportForm.title} onChange={e => setReportForm(f => ({ ...f, title: e.target.value }))} style={inputStyle} placeholder="Service report title" />
                 </FormField>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 16px" }}>
                   <FormField label="Report Date">

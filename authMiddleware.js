@@ -234,6 +234,7 @@ const PUBLIC_ROUTES = new Set([
   "/api/auth/local",
   "/api/csat/submit",
   "/api/status/public",
+  "/api/weather/disaster-alert",
 ]);
 const PUBLIC_PREFIXES = [
   "/api/zendesk/webhook", // Zendesk sends webhooks without our auth
@@ -242,9 +243,20 @@ const PUBLIC_PREFIXES = [
   "/api/ingest/email",    // Inbound email webhook
 ];
 
+// POST endpoints that do not mutate server state. They still pass through
+// normal AI rate limiting, but should not be blocked as write operations when
+// MSAL is still bootstrapping or the user is in demo mode.
+const READ_ONLY_POST_ROUTES = new Set([
+  "/api/ai/resolve-error",
+]);
+
 function isPublicRoute(pathname) {
   if (PUBLIC_ROUTES.has(pathname)) return true;
   return PUBLIC_PREFIXES.some(p => pathname.startsWith(p));
+}
+
+function isReadOnlyPostRoute(pathname, method) {
+  return method === "POST" && READ_ONLY_POST_ROUTES.has(pathname);
 }
 
 // ─── Main Auth Middleware ───────────────────────────────────────────────
@@ -255,9 +267,26 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
     return { authenticated: false, user: null, role: "anonymous", skipped: true };
   }
 
+  const schedulerToken = process.env.INTERNAL_SCHEDULER_TOKEN;
+  const providedSchedulerToken = req.headers["x-internal-scheduler-token"];
+  if (schedulerToken && providedSchedulerToken) {
+    try {
+      const expected = Buffer.from(String(schedulerToken));
+      const provided = Buffer.from(String(providedSchedulerToken));
+      if (expected.length === provided.length && crypto.timingSafeEqual(expected, provided)) {
+        return {
+          authenticated: true,
+          user: { email: "system@internal", name: "Internal Scheduler", id: "SYSTEM-SCHEDULER" },
+          role: "System",
+        };
+      }
+    } catch {}
+  }
+
   // Rate limiting
   const clientIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
-  const isWrite = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
+  const isWriteMethod = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
+  const isWrite = isWriteMethod && !isReadOnlyPostRoute(pathname, req.method);
   // AI action management (approve/reject/execute/purge) uses normal write limits, not the strict AI inference limit
   const isAiActionMgmt = pathname.startsWith("/api/ai/actions");
   const isAI = !isAiActionMgmt && (pathname.startsWith("/api/ai/") || pathname.startsWith("/api/ai-"));
@@ -335,6 +364,7 @@ module.exports = {
   resolveRole,
   checkRateLimit,
   isPublicRoute,
+  isReadOnlyPostRoute,
   decodeJWT,
   RBAC_PERMISSIONS,
   COLLECTION_TO_MODULE,

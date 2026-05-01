@@ -170,7 +170,7 @@ class WorkflowEngine {
           // Fire auto-resolve via internal HTTP
           const payload = JSON.stringify({ requestedBy: "WorkflowEngine Auto-Resolve", maxItems: 1, incidentId: inc.id });
           const port = process.env.PORT || 8080;
-          const req = http.request({ hostname: "127.0.0.1", port, path: "/api/ai/auto-resolve", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } }, (res) => {
+          const req = http.request({ hostname: "127.0.0.1", port, path: "/api/ai/auto-resolve", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (res) => {
             let d = ""; res.on("data", c => d += c);
             res.on("end", () => { console.log(`[WorkflowEngine] Auto-resolve for ${inc.id}: ${d.substring(0, 200)}`); });
           });

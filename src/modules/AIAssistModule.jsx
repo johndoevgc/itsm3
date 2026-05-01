@@ -23,18 +23,19 @@ export default function AIAssistModule({ ctx }) {
     handleFileUpload, aiEditingIdx, setAiEditingIdx,
     aiEditText, setAiEditText,
     detectAiActionCards, handleCardAction,
-    incidents, requests, problems, changes, azureOpenAI,
-    setActiveModule = null,
-    aiConfig = null,
-    runSlaPrediction = null,
-    generateBriefing = null,
+    incidents = [], requests = [], problems = [], changes = [], azureOpenAI = {},
+    zdAiQueue = [], zdAutoStats = {}, zdStats = {},
+    setActiveModule,
+    aiConfig = { automationLevel: 0, humanLoopPct: 0 },
+    runSlaPrediction,
+    generateBriefing,
     aiBriefings = [],
-    runPatternDetection = null,
+    runPatternDetection,
     aiPatterns = [],
-    setShowAiActionsPanel = null,
+    setShowAiActionsPanel,
     aiActions = [],
-    createProblemFromPattern = null,
-    setShowAiPanel = null,
+    createProblemFromPattern,
+    setShowAiPanel,
   } = ctx;
   const currentBriefing = aiBriefings?.[0] || null;
 
@@ -45,18 +46,24 @@ const AIAssistModule = useStableComponent(() => {
   const aiHandled = Math.round(totalTickets * 0.8);
   const humanLoop = Math.round(totalTickets * 0.1);
   const manualOnly = totalTickets - aiHandled - humanLoop;
+  const aiConnected = !!azureOpenAI?.enabled;
+  const aiTotalCalls = Number(azureOpenAI?.totalCalls) || 0;
+  const zdSafeSolved = Number(zdAutoStats?.safeSolved) || 0;
+  const zdSafeBlocked = Number(zdAutoStats?.safeSolveBlocked) || 0;
+  const zdSafeReady = zdAiQueue.filter(q => q.status === "safe_solve_ready").length;
+  const zdOpenWork = (Number(zdStats?.open) || 0) + (Number(zdStats?.pending) || 0);
 
   return (
     <div>
       {/* VGC AI Engine Connection Banner */}
       <div style={{
-        background: azureOpenAI.enabled ? "linear-gradient(135deg, #0F111788, #111422)" : "#0F1117",
-        borderRadius: 10, border: `1px solid ${azureOpenAI.enabled ? "#6366F133" : "#1E2130"}`,
+        background: aiConnected ? "linear-gradient(135deg, #0F111788, #111422)" : "#0F1117",
+        borderRadius: 10, border: `1px solid ${aiConnected ? "#6366F133" : "#1E2130"}`,
         padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between",
-        animation: azureOpenAI.enabled ? "aiPulseGlow 4s ease-in-out infinite" : "none",
+        animation: aiConnected ? "aiPulseGlow 4s ease-in-out infinite" : "none",
         position: "relative", overflow: "hidden"
       }}>
-        {azureOpenAI.enabled && (
+        {aiConnected && (
           <div style={{
             position: "absolute", top: 0, left: 0, right: 0, height: 2,
             background: "linear-gradient(90deg, transparent, #6366F1, #06B6D4, #EC4899, transparent)",
@@ -66,7 +73,7 @@ const AIAssistModule = useStableComponent(() => {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{
             width: 36, height: 36, borderRadius: 10,
-            background: azureOpenAI.enabled ? "linear-gradient(135deg, #6366F1, #06B6D4)" : "#1E2130",
+            background: aiConnected ? "linear-gradient(135deg, #6366F1, #06B6D4)" : "#1E2130",
             display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
           }}>🤖</div>
           <div>
@@ -74,24 +81,24 @@ const AIAssistModule = useStableComponent(() => {
               VGC AI Engine
               <span style={{
                 fontSize: 9, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
-                background: azureOpenAI.enabled ? "#81C78422" : "#FF444422",
-                color: azureOpenAI.enabled ? "#81C784" : "#FF444488",
-                animation: azureOpenAI.enabled ? "pulse 2s ease-in-out infinite" : "none"
-              }}>{azureOpenAI.enabled ? "CONNECTED" : "OFFLINE"}</span>
-              {azureOpenAI.totalCalls > 0 && (
+                background: aiConnected ? "#81C78422" : "#FF444422",
+                color: aiConnected ? "#81C784" : "#FF444488",
+                animation: aiConnected ? "pulse 2s ease-in-out infinite" : "none"
+              }}>{aiConnected ? "CONNECTED" : "OFFLINE"}</span>
+              {aiTotalCalls > 0 && (
                 <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, background: "#06B6D411", color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>
-                  {azureOpenAI.totalCalls} API calls
+                  {aiTotalCalls} API calls
                 </span>
               )}
             </div>
             <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
-              {azureOpenAI.enabled
-                ? `Powered by Azure Open AI · Last active: ${azureOpenAI.lastTested || "Ready"}`
+              {azureOpenAI?.enabled
+                ? `Powered by Azure Open AI · Last active: ${azureOpenAI?.lastTested || "Ready"}`
                 : "VGC AI Engine is currently disabled"}
             </div>
           </div>
         </div>
-        <button onClick={() => setActiveModule("admin")} style={{
+        <button onClick={() => setActiveModule?.("admin")} style={{
           padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133",
           background: "#6366F118", color: "#6366F1", cursor: "pointer",
           fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace"
@@ -99,21 +106,28 @@ const AIAssistModule = useStableComponent(() => {
       </div>
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
-        <StatCard label="AI Automation Rate" value={`${aiConfig.automationLevel}%`} icon="🤖" accent="#6366F1" />
-        <StatCard label="Human-in-Loop" value={`${aiConfig.humanLoopPct}%`} icon="👤" accent="#06B6D4" />
+        <StatCard label="AI Automation Rate" value={`${aiConfig?.automationLevel ?? 0}%`} icon="🤖" accent="#6366F1" />
+        <StatCard label="Human-in-Loop" value={`${aiConfig?.humanLoopPct ?? 0}%`} icon="👤" accent="#06B6D4" />
         <StatCard label="AI Triaged Incidents" value={aiTriaged} icon="⚡" accent="#EC4899" />
         <StatCard label="Avg Confidence" value="92%" icon="🎯" accent="#81C784" />
         <StatCard label="Time Saved (hrs)" value="142" icon="⏰" accent="#FFB347" />
+        <StatCard label="ZD Safe Solved" value={zdSafeSolved} icon="🛟" accent="#4CAF50" />
+        <StatCard label="Safe Review Blocks" value={zdSafeBlocked} icon="🛡️" accent="#FF6B6B" />
       </div>
 
       {/* AI Quick Actions Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
         <button onClick={runSlaPrediction} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #EC489933", background: "#EC489911", color: "#EC4899", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
           <div style={{ fontSize: 18, marginBottom: 6 }}>🔮</div>
           <div>Predict SLA Breaches</div>
           <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>Analyze {incidents.filter(i => !["Resolved","Closed"].includes(i.status)).length} open tickets</div>
         </button>
-        <button onClick={() => generateBriefing("daily", [])} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #06B6D433", background: "#06B6D411", color: "#06B6D4", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+        <button onClick={() => setActiveModule?.("tickets")} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #4CAF5033", background: "#4CAF5011", color: "#4CAF50", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+          <div style={{ fontSize: 18, marginBottom: 6 }}>🛟</div>
+          <div>AI Safe Solve</div>
+          <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{zdSafeReady} ready · {zdOpenWork} active Zendesk tickets</div>
+        </button>
+        <button onClick={() => generateBriefing?.("daily", [])} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #06B6D433", background: "#06B6D411", color: "#06B6D4", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
           <div style={{ fontSize: 18, marginBottom: 6 }}>📋</div>
           <div>Generate Daily Briefing</div>
           <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{aiBriefings.length} briefings generated</div>
@@ -123,7 +137,7 @@ const AIAssistModule = useStableComponent(() => {
           <div>Detect Patterns</div>
           <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{aiPatterns.length} patterns found</div>
         </button>
-        <button onClick={() => setShowAiActionsPanel(true)} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
+        <button onClick={() => setShowAiActionsPanel?.(true)} style={{ padding: "14px 16px", borderRadius: 8, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif", textAlign: "left", transition: "all 0.2s" }}>
           <div style={{ fontSize: 18, marginBottom: 6 }}>🛡️</div>
           <div>AI Actions Queue</div>
           <div style={{ fontSize: 9, color: "#8B92A8", marginTop: 4 }}>{aiActions.filter(a => a.status === "pending_approval").length} pending approval</div>
@@ -163,7 +177,7 @@ const AIAssistModule = useStableComponent(() => {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: pat.confidence >= 90 ? "#81C784" : pat.confidence >= 70 ? "#FFB347" : "#FF6B6B", fontFamily: "'JetBrains Mono', monospace" }}>{pat.confidence}%</span>
-                  <button onClick={() => createProblemFromPattern(pat.id)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", cursor: "pointer", fontSize: 9, fontWeight: 600 }}>Create Problem</button>
+                  <button onClick={() => createProblemFromPattern?.(pat.id)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #6366F133", background: "#6366F111", color: "#6366F1", cursor: "pointer", fontSize: 9, fontWeight: 600 }}>Create Problem</button>
                 </div>
               </div>
             ))}
@@ -192,7 +206,7 @@ const AIAssistModule = useStableComponent(() => {
             </span>
           ))}
         </div>
-        <button onClick={() => setShowAiPanel(true)} style={{
+        <button onClick={() => setShowAiPanel?.(true)} style={{
           padding: "10px 28px", borderRadius: 8, border: "none",
           background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff",
           fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif",

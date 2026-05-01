@@ -582,7 +582,7 @@ export default function ProductivityDashboard({  changes, incidents, smartTasks,
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {[
               { type: "📞 Incoming", from: "VGC Networks Pte Ltd", time: "09:45 AM", duration: "5 min", missed: false },
-              { type: "📱 Outgoing", from: "ABC Enterprise — Ms Carol", time: "09:15 AM", duration: "12 min", missed: false },
+              { type: "📱 Outgoing", from: "Customer contact", time: "09:15 AM", duration: "12 min", missed: false },
               { type: "❌ Missed", from: "Unknown +65 8XXX XXXX", time: "08:30 AM", duration: "—", missed: true },
             ].map((c, i) => (
               <div key={i} style={{ padding: "8px 12px", borderRadius: 6, background: c.missed ? "#FF6B6B06" : "#ffffff04", border: "1px solid " + (c.missed ? "#FF6B6B22" : "#1E2130"), display: "flex", gap: 8, alignItems: "center" }}>

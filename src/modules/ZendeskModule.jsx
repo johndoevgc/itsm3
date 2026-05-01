@@ -2,47 +2,145 @@ import React, { useState } from "react";
 import { Modal } from "../components/SharedComponents.jsx";
 import { genId } from "../utils/slaHelpers.js";
 
-export default function ZendeskModule({  assets, changes, currentUser, customers, incidents, requests, setActiveModule, setDetailItem, setModal, showToast, users,
-  setIncidents, setCustomers, azureOpenAI, isLocalDemoUser
- }) {
-  const [zdTab, setZdTab] = useState("tickets");
-  const [zdTickets, setZdTickets] = useState([]);
-  const [zdStats, setZdStats] = useState(null);
-  const [zdConnected, setZdConnected] = useState(false);
-  const [zdLoading, setZdLoading] = useState(false);
-  const [zdError, setZdError] = useState(null);
-  const [zdFilter, setZdFilter] = useState({ status: "All", priority: "All", type: "All" });
-  const [zdSelectedTicket, setZdSelectedTicket] = useState(null);
-  const [zdDetailItem, setZdDetailItem] = useState(null);
-  const [zdPage, setZdPage] = useState(1);
-  const [zdRenderLimit, setZdRenderLimit] = useState(20);
-  const [zdExpandedSections, setZdExpandedSections] = useState({});
-  const [zdComments, setZdComments] = useState([]);
-  const [zdTriagedIds, setZdTriagedIds] = useState([]);
-  const [zdAiQueue, setZdAiQueue] = useState([]);
-  const [zdAutoMode, setZdAutoMode] = useState(false);
-  const [zdAutoStats, setZdAutoStats] = useState({ processed: 0, success: 0, failed: 0 });
-  const [zdAiProcessing, setZdAiProcessing] = useState(false);
-  const [zdSyncInProgress, setZdSyncInProgress] = useState(false);
-  const [zdSyncProgress, setZdSyncProgress] = useState(null);
-  const [zdSyncStatus, setZdSyncStatus] = useState(null);
-  const [zdImportProgress, setZdImportProgress] = useState(null);
-  const [zdUser, setZdUser] = useState(null);
-  const [zdAutoLog, setZdAutoLog] = useState([]);
-  const [zdRealTimeEnabled, setZdRealTimeEnabled] = useState(false);
-  const [zdRequireHumanApproval, setZdRequireHumanApproval] = useState(true);
-  const [zdEditingDraft, setZdEditingDraft] = useState(null);
-  const [zdEditedText, setZdEditedText] = useState("");
-  const [zdExpandedRule, setZdExpandedRule] = useState(null);
+const EMPTY_ZD_STATS = { open: 0, pending: 0, hold: 0, solved: 0 };
+const DEFAULT_ZD_AUTO_STATS = { totalTriaged: 0, autoSent: 0, humanReview: 0, incidentsCreated: 0, avgConfidence: 0, safeSolved: 0, safeSolveBlocked: 0 };
 
-  const addAutoLog = (msg) => setZdAutoLog(prev => [...prev, { time: new Date().toISOString(), msg }]);
-  const zdFetchTickets = async () => { setZdLoading(true); try { const r = await fetch("/api/zendesk/tickets"); const d = await r.json(); setZdTickets(d.tickets || []); } catch(e) { setZdError(e.message); } finally { setZdLoading(false); } };
-  const zdFetchStats = async () => { try { const r = await fetch("/api/zendesk/stats"); const d = await r.json(); setZdStats(d); } catch(e) { console.error(e); } };
-  const zdConnect = async () => { setZdLoading(true); try { const r = await fetch("/api/zendesk/connect", { method: "POST" }); if (r.ok) { setZdConnected(true); await zdFetchTickets(); await zdFetchStats(); } } catch(e) { setZdError(e.message); } finally { setZdLoading(false); } };
-  const zdAutoTriageBatch = async () => { setZdAiProcessing(true); try { for (const t of zdAiQueue) { await new Promise(r => setTimeout(r, 200)); } setZdAiQueue([]); } catch(e) { console.error(e); } finally { setZdAiProcessing(false); } };
-  const zdAiTriageSingle = async (ticket) => { setZdAiProcessing(true); try { const r = await fetch("/api/zendesk/ai-triage", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ticket }) }); return await r.json(); } catch(e) { console.error(e); return null; } finally { setZdAiProcessing(false); } };
-  const zdSelectTicket = (t) => setZdSelectedTicket(t);
-  const zdToggleSection = (key) => setZdExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
+const safeStatNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const normalizeZdAutoStats = (stats) => {
+  const source = stats && typeof stats === "object" ? stats : {};
+  return {
+    totalTriaged: safeStatNumber(source.totalTriaged ?? source.processed),
+    autoSent: safeStatNumber(source.autoSent ?? source.success),
+    humanReview: safeStatNumber(source.humanReview),
+    incidentsCreated: safeStatNumber(source.incidentsCreated),
+    avgConfidence: safeStatNumber(source.avgConfidence),
+    safeSolved: safeStatNumber(source.safeSolved),
+    safeSolveBlocked: safeStatNumber(source.safeSolveBlocked),
+  };
+};
+
+export default function ZendeskModule({  assets, changes, currentUser, customers, incidents, requests, setActiveModule, setDetailItem, setModal, showToast, users,
+  setIncidents, setCustomers, azureOpenAI, isLocalDemoUser, zdState = {}, zdActions = {}
+ }) {
+  const [localZdTab, setLocalZdTab] = useState("tickets");
+  const [localZdTickets, setLocalZdTickets] = useState([]);
+  const [localZdStats, setLocalZdStats] = useState(EMPTY_ZD_STATS);
+  const [localZdConnected, setLocalZdConnected] = useState(false);
+  const [localZdLoading, setLocalZdLoading] = useState(false);
+  const [localZdError, setLocalZdError] = useState(null);
+  const [localZdFilter, setLocalZdFilter] = useState("open");
+  const [localZdSelectedTicket, setLocalZdSelectedTicket] = useState(null);
+  const [zdDetailItem, setZdDetailItem] = useState(null);
+  const [localZdPage, setLocalZdPage] = useState(1);
+  const [localZdRenderLimit, setLocalZdRenderLimit] = useState(20);
+  const [localZdExpandedSections, setLocalZdExpandedSections] = useState({});
+  const [localZdComments, setLocalZdComments] = useState([]);
+  const [localZdTriagedIds, setLocalZdTriagedIds] = useState(() => new Set());
+  const [localZdAiQueue, setLocalZdAiQueue] = useState([]);
+  const [localZdAutoMode, setLocalZdAutoMode] = useState(false);
+  const [localZdAutoStats, setLocalZdAutoStats] = useState(DEFAULT_ZD_AUTO_STATS);
+  const [localZdAiProcessing, setLocalZdAiProcessing] = useState(false);
+  const [localZdSyncInProgress, setLocalZdSyncInProgress] = useState(false);
+  const [localZdSyncProgress, setLocalZdSyncProgress] = useState(null);
+  const [localZdSyncStatus, setLocalZdSyncStatus] = useState(null);
+  const [localZdImportProgress, setLocalZdImportProgress] = useState(null);
+  const [localZdUser, setLocalZdUser] = useState(null);
+  const [localZdAutoLog, setLocalZdAutoLog] = useState([]);
+  const [localZdRealTimeEnabled, setLocalZdRealTimeEnabled] = useState(false);
+  const [localZdRequireHumanApproval, setLocalZdRequireHumanApproval] = useState(true);
+  const [localZdEditingDraft, setLocalZdEditingDraft] = useState(null);
+  const [localZdEditedText, setLocalZdEditedText] = useState("");
+  const [localZdExpandedRule, setLocalZdExpandedRule] = useState(null);
+
+  const zdTab = zdState.zdTab ?? localZdTab;
+  const setZdTab = zdActions.setZdTab || setLocalZdTab;
+  const zdTickets = zdState.zdTickets ?? localZdTickets;
+  const setZdTickets = zdActions.setZdTickets || setLocalZdTickets;
+  const zdStats = zdState.zdStats ?? localZdStats;
+  const setZdStats = zdActions.setZdStats || setLocalZdStats;
+  const zdConnected = zdState.zdConnected ?? localZdConnected;
+  const setZdConnected = zdActions.setZdConnected || setLocalZdConnected;
+  const zdLoading = zdState.zdLoading ?? localZdLoading;
+  const setZdLoading = zdActions.setZdLoading || setLocalZdLoading;
+  const zdError = zdState.zdError ?? localZdError;
+  const setZdError = zdActions.setZdError || setLocalZdError;
+  const zdFilter = zdState.zdFilter ?? localZdFilter;
+  const setZdFilter = zdActions.setZdFilter || setLocalZdFilter;
+  const zdSelectedTicket = zdState.zdSelectedTicket ?? localZdSelectedTicket;
+  const setZdSelectedTicket = zdActions.setZdSelectedTicket || setLocalZdSelectedTicket;
+  const zdPage = zdState.zdPage ?? localZdPage;
+  const setZdPage = zdActions.setZdPage || setLocalZdPage;
+  const zdRenderLimit = zdState.zdRenderLimit ?? localZdRenderLimit;
+  const setZdRenderLimit = zdActions.setZdRenderLimit || setLocalZdRenderLimit;
+  const zdExpandedSections = zdState.zdExpandedSections ?? localZdExpandedSections;
+  const setZdExpandedSections = zdActions.setZdExpandedSections || setLocalZdExpandedSections;
+  const zdComments = zdState.zdComments ?? localZdComments;
+  const setZdComments = zdActions.setZdComments || setLocalZdComments;
+  const zdTriagedIds = zdState.zdTriagedIds ?? localZdTriagedIds;
+  const setZdTriagedIds = zdActions.setZdTriagedIds || setLocalZdTriagedIds;
+  const zdAiQueue = zdState.zdAiQueue ?? localZdAiQueue;
+  const setZdAiQueue = zdActions.setZdAiQueue || setLocalZdAiQueue;
+  const zdAutoMode = zdState.zdAutoMode ?? localZdAutoMode;
+  const setZdAutoMode = zdActions.setZdAutoMode || setLocalZdAutoMode;
+  const zdAutoStats = zdState.zdAutoStats ?? localZdAutoStats;
+  const setZdAutoStats = zdActions.setZdAutoStats || setLocalZdAutoStats;
+  const zdAiProcessing = zdState.zdAiProcessing ?? localZdAiProcessing;
+  const setZdAiProcessing = zdActions.setZdAiProcessing || setLocalZdAiProcessing;
+  const zdSyncInProgress = zdState.zdSyncInProgress ?? localZdSyncInProgress;
+  const setZdSyncInProgress = zdActions.setZdSyncInProgress || setLocalZdSyncInProgress;
+  const zdSyncProgress = zdState.zdSyncProgress ?? localZdSyncProgress;
+  const setZdSyncProgress = zdActions.setZdSyncProgress || setLocalZdSyncProgress;
+  const zdSyncStatus = zdState.zdSyncStatus ?? localZdSyncStatus;
+  const setZdSyncStatus = zdActions.setZdSyncStatus || setLocalZdSyncStatus;
+  const zdImportProgress = zdState.zdImportProgress ?? localZdImportProgress;
+  const setZdImportProgress = zdActions.setZdImportProgress || setLocalZdImportProgress;
+  const zdUser = zdState.zdUser ?? localZdUser;
+  const setZdUser = zdActions.setZdUser || setLocalZdUser;
+  const zdAutoLog = zdState.zdAutoLog ?? localZdAutoLog;
+  const setZdAutoLog = zdActions.setZdAutoLog || setLocalZdAutoLog;
+  const zdRealTimeEnabled = zdState.zdRealTimeEnabled ?? localZdRealTimeEnabled;
+  const setZdRealTimeEnabled = zdActions.setZdRealTimeEnabled || setLocalZdRealTimeEnabled;
+  const zdRequireHumanApproval = zdState.zdRequireHumanApproval ?? localZdRequireHumanApproval;
+  const setZdRequireHumanApproval = zdActions.setZdRequireHumanApproval || setLocalZdRequireHumanApproval;
+  const zdEditingDraft = zdState.zdEditingDraft ?? localZdEditingDraft;
+  const setZdEditingDraft = zdActions.setZdEditingDraft || setLocalZdEditingDraft;
+  const zdEditedText = zdState.zdEditedText ?? localZdEditedText;
+  const setZdEditedText = zdActions.setZdEditedText || setLocalZdEditedText;
+  const zdExpandedRule = zdState.zdExpandedRule ?? localZdExpandedRule;
+  const setZdExpandedRule = zdActions.setZdExpandedRule || setLocalZdExpandedRule;
+
+  const normalizeZdStats = (stats) => ({
+    open: Number(stats?.open) || 0,
+    pending: Number(stats?.pending) || 0,
+    hold: Number(stats?.hold) || 0,
+    solved: Number(stats?.solved) || 0,
+  });
+
+  const localAddAutoLog = (entry) => {
+    const safeEntry = typeof entry === "string" ? { type: "info", message: entry } : (entry || {});
+    setZdAutoLog(prev => [{ ...safeEntry, id: safeEntry.id || `LOG-${Date.now()}`, timestamp: safeEntry.timestamp || new Date().toISOString() }, ...prev].slice(0, 200));
+  };
+  const addAutoLog = zdActions.addAutoLog || localAddAutoLog;
+  const localZdFetchTickets = async (status, page) => { setZdLoading(true); try { const qs = new URLSearchParams(); if (status) qs.set("status", status); if (page) qs.set("page", page); const r = await fetch(`/api/zendesk/tickets${qs.toString() ? `?${qs.toString()}` : ""}`); const d = await r.json(); if (!r.ok) throw new Error(d.error || "Failed to fetch Zendesk tickets"); setZdTickets(d.tickets || d.results || []); if (page) setZdPage(page); } catch(e) { setZdError(e.message); } finally { setZdLoading(false); } };
+  const zdFetchTickets = zdActions.zdFetchTickets || localZdFetchTickets;
+  const localZdFetchStats = async () => { try { const r = await fetch("/api/zendesk/stats"); const d = await r.json(); if (!r.ok) throw new Error(d.error || "Failed to fetch Zendesk stats"); setZdStats(normalizeZdStats(d)); } catch(e) { setZdStats(EMPTY_ZD_STATS); console.error(e); } };
+  const zdFetchStats = zdActions.zdFetchStats || localZdFetchStats;
+  const localZdConnect = async () => { setZdLoading(true); setZdError(null); try { const r = await fetch("/api/zendesk/me"); const d = await r.json(); if (!r.ok) throw new Error(d.error || "Connection failed"); setZdUser(d.user || null); setZdConnected(true); await localZdFetchTickets(zdFilter, zdPage); await localZdFetchStats(); } catch(e) { setZdError(e.message); setZdConnected(false); } finally { setZdLoading(false); } };
+  const zdConnect = zdActions.zdConnect || localZdConnect;
+  const localZdAutoTriageBatch = async () => { setZdAiProcessing(true); try { for (const t of zdAiQueue) { await new Promise(r => setTimeout(r, 200)); } setZdAiQueue([]); } catch(e) { console.error(e); } finally { setZdAiProcessing(false); } };
+  const zdAutoTriageBatch = zdActions.zdAutoTriageBatch || localZdAutoTriageBatch;
+  const localZdAiTriageSingle = async (ticket) => { const ticketId = typeof ticket === "object" ? ticket.id : ticket; setZdAiProcessing(true); try { const r = await fetch("/api/zendesk/auto-triage", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ticketId }) }); return await r.json(); } catch(e) { console.error(e); return null; } finally { setZdAiProcessing(false); } };
+  const zdAiTriageSingle = zdActions.zdAiTriageSingle || localZdAiTriageSingle;
+  const localZdAiSolveTicket = async (ticket, options = {}) => { const ticketId = typeof ticket === "object" ? ticket.id : ticket; setZdAiProcessing(true); try { const r = await fetch("/api/zendesk/ai-solve", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ticketId, dryRun: options.dryRun !== false, confirmSafety: options.confirmSafety === true, sendCustomerEmail: options.sendCustomerEmail === true }) }); const data = await r.json(); addAutoLog({ type: data?.applied ? "auto_send" : data?.decision?.eligible ? "info" : "human_review", ticketId, message: data?.applied ? `#${ticketId} AI Safe Solve applied` : data?.decision?.eligible ? `#${ticketId} AI Safe Check passed` : `#${ticketId} AI Safe Solve blocked` }); return data; } catch(e) { addAutoLog({ type: "error", ticketId, message: `AI Safe Solve failed: ${e.message}` }); return null; } finally { setZdAiProcessing(false); } };
+  const zdAiSolveTicket = zdActions.zdAiSolveTicket || localZdAiSolveTicket;
+  const localZdSelectTicket = (t) => setZdSelectedTicket(t);
+  const zdSelectTicket = zdActions.zdSelectTicket || localZdSelectTicket;
+  const localZdToggleSection = (qId, section) => setZdExpandedSections(prev => ({ ...prev, [`${qId}:${section}`]: !prev[`${qId}:${section}`] }));
+  const zdToggleSection = zdActions.zdToggleSection || localZdToggleSection;
 
   // ── Human Approve & Send ──
   const zdApproveAndSend = async (queueItem) => {
@@ -55,7 +153,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
       if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || "Failed to send"); }
       const result = await r.json();
       setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", reviewedBy: currentUser?.name || "Admin" } : q));
-      setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
+      setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, autoSent: stats.autoSent + 1 }; });
       const emailNote = result.email?.sent ? ` ✉️ Email sent to ${result.email.to}` : result.email?.error ? ` ⚠️ Email failed: ${result.email.error}` : "";
       addAutoLog({ type: "human_approved", ticketId: queueItem.ticketId, subject: queueItem.ticketSubject, message: `#${queueItem.ticketId} approved & sent by ${currentUser?.name || "Admin"}${emailNote}` });
       zdFetchTickets(); zdFetchStats();
@@ -75,7 +173,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
       if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || "Failed to send"); }
       const result = await r.json();
       setZdAiQueue(prev => prev.map(q => q.id === queueItem.id ? { ...q, status: "sent", draftResponse: zdEditedText, reviewedBy: `${currentUser?.name || "Admin"} (edited)` } : q));
-      setZdAutoStats(prev => ({ ...prev, autoSent: prev.autoSent + 1 }));
+      setZdAutoStats(prev => { const stats = normalizeZdAutoStats(prev); return { ...stats, autoSent: stats.autoSent + 1 }; });
       setZdEditingDraft(null); setZdEditedText("");
       const emailNote = result.email?.sent ? ` ✉️ Email sent to ${result.email.to}` : result.email?.error ? ` ⚠️ Email failed: ${result.email.error}` : "";
       addAutoLog({ type: "human_edited", ticketId: queueItem.ticketId, message: `#${queueItem.ticketId} edited & sent by ${currentUser?.name || "Admin"}${emailNote}` });
@@ -320,7 +418,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
   const priorityColor = (p) => ({ urgent: "#FF6B6B", high: "#FFB347", normal: "#64B5F6", low: "#81C784" }[p] || "#5A6178");
   const slaPriorityColor = (p) => ({ "Sev-A": "#FF6B6B", "Sev-B": "#FFB347", "Sev-C": "#64B5F6", "Sev-D": "#81C784" }[p] || "#5A6178");
   const statusIcon = (s) => ({ new: "🆕", open: "📂", pending: "⏳", hold: "⏸️", solved: "✅", closed: "🔒" }[s] || "📋");
-  const pendingQueue = zdAiQueue.filter(q => q.status === "pending_approval").sort((a, b) => {
+  const pendingQueue = zdAiQueue.filter(q => ["pending_approval", "safe_solve_ready", "safe_solve_blocked"].includes(q.status)).sort((a, b) => {
     // Critical priority always first
     if (a.suggestedPriority === "urgent" && b.suggestedPriority !== "urgent") return -1;
     if (b.suggestedPriority === "urgent" && a.suggestedPriority !== "urgent") return 1;
@@ -329,8 +427,9 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
     const bDeadline = b.slaDeadline ? new Date(b.slaDeadline).getTime() : Infinity;
     return aDeadline - bDeadline;
   });
-  const approvedSentQueue = zdAiQueue.filter(q => q.status === "sent");
+  const approvedSentQueue = zdAiQueue.filter(q => q.status === "sent" || q.status === "safe_solved");
   const rejectedQueue = zdAiQueue.filter(q => q.status === "rejected");
+  const safeZdAutoStats = normalizeZdAutoStats(zdAutoStats);
 
   const cardStyle = { background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", overflow: "hidden" };
   const sectionLabel = (icon, text, count) => (
@@ -368,7 +467,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
               </span>
             </div>
             <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>
-              {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? `AI triage every 2min · ${zdRequireHumanApproval ? "🛡️ Human approval required" : "⚡ Auto-send ON"}` : "Manual triage mode"} · AI Calls: ${azureOpenAI.totalCalls || 0} · ${zdRealTimeEnabled ? "Real-time sync ON" : "Sync OFF"}` : zdError || "Not connected"}
+              {zdConnected ? `${zdUser?.name || "—"} · vgctech.zendesk.com · ${zdAutoMode ? `AI triage every 2min · ${zdRequireHumanApproval ? "🛡️ Human approval required" : "⚡ Auto-send ON"}` : "Manual triage mode"} · AI Calls: ${azureOpenAI?.totalCalls || 0} · ${zdRealTimeEnabled ? "Real-time sync ON" : "Sync OFF"}` : zdError || "Not connected"}
             </div>
           </div>
         </div>
@@ -391,7 +490,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
               <span style={{ fontSize: 9, fontWeight: 600, color: zdRequireHumanApproval ? "#FF6347" : "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>🛡️ APPROVAL</span>
             </div>
           )}
-          {zdConnected && azureOpenAI.enabled && (
+          {zdConnected && azureOpenAI?.enabled && (
             <button onClick={zdAutoTriageBatch} disabled={zdAiProcessing}
               style={{ padding: "7px 16px", borderRadius: 8, border: "1px solid #6366F133", background: zdAiProcessing ? "#6366F111" : "#6366F118", color: "#6366F1", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
               {zdAiProcessing ? "⟳ Processing..." : "⚡ Triage Now"}
@@ -411,15 +510,17 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
       {/* ── Automation Metrics Dashboard ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 20 }}>
         {[
-          { label: "Open", value: zdStats.open, accent: "#64B5F6", icon: "📂", tab: "tickets" },
-          { label: "Pending", value: zdStats.pending, accent: "#FFB347", icon: "⏳", tab: "tickets" },
-          { label: "On Hold", value: zdStats.hold, accent: "#FF6B6B", icon: "⏸️", tab: "tickets" },
-          { label: "Solved", value: zdStats.solved, accent: "#81C784", icon: "✅", tab: "tickets" },
-          { label: "AI Triaged", value: zdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖", tab: "automation" },
-          { label: "Approved & Sent", value: zdAutoStats.autoSent, accent: "#06B6D4", icon: "✅", tab: "history" },
+          { label: "Open", value: zdStats?.open ?? 0, accent: "#64B5F6", icon: "📂", tab: "tickets" },
+          { label: "Pending", value: zdStats?.pending ?? 0, accent: "#FFB347", icon: "⏳", tab: "tickets" },
+          { label: "On Hold", value: zdStats?.hold ?? 0, accent: "#FF6B6B", icon: "⏸️", tab: "tickets" },
+          { label: "Solved", value: zdStats?.solved ?? 0, accent: "#81C784", icon: "✅", tab: "tickets" },
+          { label: "AI Triaged", value: safeZdAutoStats.totalTriaged, accent: "#EC4899", icon: "🤖", tab: "automation" },
+          { label: "Approved & Sent", value: safeZdAutoStats.autoSent, accent: "#06B6D4", icon: "✅", tab: "history" },
           { label: "Pending Review", value: pendingQueue.length, accent: "#FFB347", icon: "👤", tab: "queue" },
-          { label: "ITSM Created", value: zdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫", tab: "history" },
-          { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊", tab: "automation" },
+          { label: "ITSM Created", value: safeZdAutoStats.incidentsCreated, accent: "#6366F1", icon: "🎫", tab: "history" },
+          { label: "Safe Solved", value: safeZdAutoStats.safeSolved, accent: "#4CAF50", icon: "🛟", tab: "history" },
+          { label: "Safe Blocks", value: safeZdAutoStats.safeSolveBlocked, accent: "#FF6B6B", icon: "🛡️", tab: "queue" },
+          { label: "Avg Confidence", value: `${safeZdAutoStats.avgConfidence}%`, accent: "#81C784", icon: "📊", tab: "automation" },
         ].map((s, i) => (
           <div key={i} onClick={() => { if (s.tab === "tickets") { setZdFilter(s.label.toLowerCase() === "on hold" ? "hold" : s.label.toLowerCase() === "solved" ? "solved" : s.label.toLowerCase() === "pending" ? "pending" : "open"); zdFetchTickets(s.label.toLowerCase() === "on hold" ? "hold" : s.label.toLowerCase() === "solved" ? "solved" : s.label.toLowerCase() === "pending" ? "pending" : "open", 1); } setZdTab(s.tab); }}
             style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.accent}33`, cursor: "pointer", transition: "all 0.2s" }}
@@ -432,8 +533,8 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
       </div>
 
       {/* ── AI 90% / Human 10% Work Split Indicator ── */}
-      {zdAutoStats.totalTriaged > 0 && (() => {
-        const aiPct = zdAutoStats.totalTriaged > 0 ? Math.round((zdAutoStats.autoSent / zdAutoStats.totalTriaged) * 100) : 0;
+      {safeZdAutoStats.totalTriaged > 0 && (() => {
+        const aiPct = safeZdAutoStats.totalTriaged > 0 ? Math.round((safeZdAutoStats.autoSent / safeZdAutoStats.totalTriaged) * 100) : 0;
         const humanPct = 100 - aiPct;
         return (
         <div style={{ ...cardStyle, padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 20 }}>
@@ -444,8 +545,8 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
               <div style={{ width: `${Math.max(humanPct, 5)}%`, background: "linear-gradient(90deg, #FFB347, #FFCC80)", borderRadius: "0 6px 6px 0", transition: "width 0.5s" }} />
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-              <span onClick={() => setZdTab("automation")} style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>AI: Triage · Categorize · Draft · Auto-Send ({zdAutoStats.autoSent} auto-sent)</span>
-              <span onClick={() => setZdTab("queue")} style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>Engineer: Review low-confidence ({zdAutoStats.humanReview} reviewed)</span>
+              <span onClick={() => setZdTab("automation")} style={{ fontSize: 9, color: "#818CF8", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>AI: Triage · Categorize · Draft · Auto-Send ({safeZdAutoStats.autoSent} auto-sent)</span>
+              <span onClick={() => setZdTab("queue")} style={{ fontSize: 9, color: "#FFB347", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>Engineer: Review low-confidence ({safeZdAutoStats.humanReview} reviewed)</span>
             </div>
           </div>
           <div onClick={() => setZdTab("analytics")} style={{ textAlign: "center", minWidth: 60, cursor: "pointer", transition: "transform 0.15s" }}
@@ -463,7 +564,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
         {[
           { id: "automation", label: "🤖 Automation", count: null },
           { id: "queue", label: "📝 AI Draft Queue", count: pendingQueue.length },
-          { id: "tickets", label: "📋 All Tickets", count: zdStats.open + zdStats.pending },
+          { id: "tickets", label: "📋 All Tickets", count: (zdStats?.open ?? 0) + (zdStats?.pending ?? 0) },
           { id: "analytics", label: "📊 Analytics", count: null },
           { id: "sync", label: "🔄 Sync & Migration", count: zdSyncStatus?.counts?.zdTickets || null },
           { id: "history", label: "📜 AI History", count: approvedSentQueue.length },
@@ -486,7 +587,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
               {[
                 { label: "Ingest", desc: "Zendesk tickets pulled every 2min", icon: "📥", color: "#64B5F6", active: zdConnected, tab: "tickets" },
-                { label: "AI Triage", desc: "Auto-categorize, draft & route (90%)", icon: "🧠", color: "#EC4899", active: azureOpenAI.enabled, tab: "history" },
+                { label: "AI Triage", desc: "Auto-categorize, draft & route (90%)", icon: "🧠", color: "#EC4899", active: azureOpenAI?.enabled, tab: "history" },
                 { label: "Auto-Send / Review", desc: "≥85% auto-sends, <85% engineer review", icon: "⚡", color: "#81C784", active: zdAutoMode, tab: "queue" },
               ].map((step, i) => (
                 <div key={i} onClick={() => setZdTab(step.tab)} style={{ padding: "12px 10px", borderRadius: 8, background: step.active ? `${step.color}08` : "#12141E", border: `1px solid ${step.active ? step.color + "33" : "#1E213033"}`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
@@ -840,8 +941,34 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                     )}
                   </div>
 
+                  {q.safeSolve?.decision && (() => {
+                    const safe = q.safeSolve.decision;
+                    return (
+                      <div style={{ background: safe.eligible ? "#4CAF5008" : "#FFB34708", border: `1px solid ${safe.eligible ? "#4CAF5033" : "#FFB34733"}`, borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 9, color: safe.eligible ? "#4CAF50" : "#FFB347", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{safe.eligible ? "AI SAFE SOLVE READY" : "AI SAFE SOLVE BLOCKED"}</span>
+                          <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{safe.confidence || 0}% · {safe.slaPriority} · {safe.slaDecision?.state || "unknown"}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                          <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "#06B6D411", color: "#06B6D4", fontWeight: 600 }}>No public Zendesk comment</span>
+                          <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "#81C78411", color: "#81C784", fontWeight: 600 }}>Email target: {safe.safeCustomerContact?.customerEmailTarget || "johndoe@vgcsg.com"}</span>
+                          <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "#6366F111", color: "#818CF8", fontWeight: 600 }}>Next: {safe.targetStatus}</span>
+                        </div>
+                        {!safe.eligible && (safe.blockedReasons || []).length > 0 && (
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                            {safe.blockedReasons.map(reason => <span key={reason} style={{ fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "#FF6B6B12", color: "#FF6B6B" }}>{reason.replace(/_/g, " ")}</span>)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Action Buttons */}
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <button onClick={() => zdAiSolveTicket(q.ticketId, { dryRun: true })} disabled={zdAiProcessing}
+                      style={{ padding: "7px 18px", borderRadius: 6, border: "1px solid #06B6D433", background: "#06B6D411", color: "#06B6D4", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 600 }}>AI Safe Check</button>
+                    <button onClick={() => { if (q.safeSolve?.decision?.eligible || confirm(`Run AI Safe Solve for #${q.ticketId}? The server will block unsafe cases and will not post a public Zendesk comment.`)) zdAiSolveTicket(q.ticketId, { dryRun: false, confirmSafety: true, sendCustomerEmail: true }); }} disabled={zdAiProcessing}
+                      style={{ padding: "7px 18px", borderRadius: 6, border: "1px solid #4CAF5033", background: "#4CAF5011", color: "#4CAF50", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 700 }}>AI Solve Safely</button>
                     <button onClick={() => { setZdAiQueue(prev => prev.map(item => item.id === q.id ? { ...item, status: "rejected", reviewedBy: currentUser?.name } : item)); addAutoLog({ type: "error", ticketId: q.ticketId, subject: q.ticketSubject, message: `#${q.ticketId} AI draft rejected by ${currentUser?.name || "Admin"} — response will not be sent` }); }}
                       style={{ padding: "7px 18px", borderRadius: 6, border: "1px solid #FF6B6B33", background: "#FF6B6B11", color: "#FF6B6B", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>✕ Reject</button>
                     {zdEditingDraft === q.id ? (
@@ -909,13 +1036,21 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                             <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>#{ticket.id}</span>
                             {ticket.priority && <span style={{ width: 6, height: 6, borderRadius: "50%", background: priorityColor(ticket.priority), flexShrink: 0 }} />}
-                            {aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: aiItem.status === "pending_approval" ? "#FFB34722" : aiItem.status === "sent" ? "#81C78422" : "#FF6B6B22", color: aiItem.status === "pending_approval" ? "#FFB347" : aiItem.status === "sent" ? "#81C784" : "#FF6B6B", fontWeight: 600 }}>{aiItem.status === "pending_approval" ? "⚠️ AWAITING APPROVAL" : aiItem.status === "sent" ? "✅ APPROVED & SENT" : "❌"}</span>}
+                            {aiItem && (() => {
+                              const cfg = aiItem.status === "pending_approval" ? ["#FFB34722", "#FFB347", "⚠️ AWAITING APPROVAL"]
+                                : aiItem.status === "sent" ? ["#81C78422", "#81C784", "✅ APPROVED & SENT"]
+                                : aiItem.status === "safe_solved" ? ["#4CAF5022", "#4CAF50", "✅ AI SAFE SOLVED"]
+                                : aiItem.status === "safe_solve_ready" ? ["#06B6D422", "#06B6D4", "🛟 SAFE READY"]
+                                : aiItem.status === "safe_solve_blocked" ? ["#FFB34722", "#FFB347", "🛡️ SAFE BLOCKED"]
+                                : ["#FF6B6B22", "#FF6B6B", "❌"];
+                              return <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: cfg[0], color: cfg[1], fontWeight: 600 }}>{cfg[2]}</span>;
+                            })()}
                             {triaged && !aiItem && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>✅ TRIAGED</span>}
                           </div>
                           <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ticket.subject || "No subject"}</div>
                           <div style={{ fontSize: 10, color: "#5A617899", marginTop: 3 }}>{new Date(ticket.created_at).toLocaleDateString("en-SG")} · {ticket.status}</div>
                         </div>
-                        {azureOpenAI.enabled && !triaged && (ticket.status === "open" || ticket.status === "new") && (
+                        {azureOpenAI?.enabled && !triaged && (ticket.status === "open" || ticket.status === "new") && (
                           <button onClick={e => { e.stopPropagation(); zdAiTriageSingle(ticket.id); }}
                             style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #EC489933", background: "#EC489911", color: "#EC4899", cursor: "pointer", fontSize: 9, fontWeight: 600, flexShrink: 0 }}>
                             🤖 Triage
@@ -958,11 +1093,23 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                     </div>
                     <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600 }}>{zdSelectedTicket.subject || "No subject"}</div>
                   </div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {azureOpenAI.enabled && (zdSelectedTicket.status === "open" || zdSelectedTicket.status === "new") && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {azureOpenAI?.enabled && (zdSelectedTicket.status === "open" || zdSelectedTicket.status === "new") && (
                       <button onClick={() => zdAiTriageSingle(zdSelectedTicket.id)} disabled={zdAiProcessing}
                         style={{ padding: "5px 12px", borderRadius: 5, border: "1px solid #EC489933", background: "#EC489918", color: "#EC4899", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
                         {zdAiProcessing ? "⟳ Analyzing..." : "🤖 AI Triage"}
+                      </button>
+                    )}
+                    {azureOpenAI?.enabled && ["open", "new", "pending"].includes(zdSelectedTicket.status) && (
+                      <button onClick={() => zdAiSolveTicket(zdSelectedTicket.id, { dryRun: true })} disabled={zdAiProcessing}
+                        style={{ padding: "5px 12px", borderRadius: 5, border: "1px solid #06B6D433", background: "#06B6D411", color: "#06B6D4", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 600 }}>
+                        AI Safe Check
+                      </button>
+                    )}
+                    {azureOpenAI?.enabled && ["open", "new", "pending"].includes(zdSelectedTicket.status) && (
+                      <button onClick={() => { if (confirm(`Apply AI Safe Solve for #${zdSelectedTicket.id}? Unsafe cases are blocked by the server and no public Zendesk comment is posted.`)) zdAiSolveTicket(zdSelectedTicket.id, { dryRun: false, confirmSafety: true, sendCustomerEmail: true }); }} disabled={zdAiProcessing}
+                        style={{ padding: "5px 12px", borderRadius: 5, border: "1px solid #4CAF5033", background: "#4CAF5011", color: "#4CAF50", cursor: zdAiProcessing ? "wait" : "pointer", fontSize: 10, fontWeight: 700 }}>
+                        AI Solve Safely
                       </button>
                     )}
                     <button onClick={() => setZdSelectedTicket(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 16 }}>✕</button>
@@ -990,9 +1137,20 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                           <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: priorityColor(ai.suggestedPriority) + "22", color: priorityColor(ai.suggestedPriority), fontWeight: 600 }}>{ai.suggestedPriority}</span>
                           <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600 }}>🎯 {ai.confidence}%</span>
                           <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#06B6D422", color: "#06B6D4", fontWeight: 600 }}>→ {ai.suggestedAssignee}</span>
-                          <span onClick={() => setZdTab(ai.status === "sent" || ai.status === "rejected" ? "history" : "queue")} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: ai.status === "sent" ? "#81C78422" : ai.status === "rejected" ? "#FF6B6B22" : "#FFB34722", color: ai.status === "sent" ? "#81C784" : ai.status === "rejected" ? "#FF6B6B" : "#FFB347", fontWeight: 600, cursor: "pointer" }}>{ai.status === "sent" ? "✅ Approved & Sent" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Awaiting Approval →"}</span>
+                          {(() => {
+                            const safeSolved = ai.status === "safe_solved";
+                            const safeReady = ai.status === "safe_solve_ready";
+                            const safeBlocked = ai.status === "safe_solve_blocked";
+                            const bg = safeSolved ? "#4CAF5022" : safeReady ? "#06B6D422" : safeBlocked ? "#FFB34722" : ai.status === "sent" ? "#81C78422" : ai.status === "rejected" ? "#FF6B6B22" : "#FFB34722";
+                            const color = safeSolved ? "#4CAF50" : safeReady ? "#06B6D4" : safeBlocked ? "#FFB347" : ai.status === "sent" ? "#81C784" : ai.status === "rejected" ? "#FF6B6B" : "#FFB347";
+                            const label = safeSolved ? "✅ AI Safe Solved" : safeReady ? "🛟 Safe Solve Ready →" : safeBlocked ? "🛡️ Safe Solve Blocked →" : ai.status === "sent" ? "✅ Approved & Sent" : ai.status === "rejected" ? "❌ Rejected" : "⏳ Awaiting Approval →";
+                            return <span onClick={() => setZdTab(ai.status === "sent" || ai.status === "rejected" || safeSolved ? "history" : "queue")} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: bg, color, fontWeight: 600, cursor: "pointer" }}>{label}</span>;
+                          })()}
                         </div>
                         <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 6, lineHeight: 1.4 }}>{ai.internalNote}</div>
+                        {ai.safeSolve?.decision && (
+                          <div style={{ fontSize: 9, color: "#06B6D4", marginTop: 6, lineHeight: 1.4 }}>Safe Solve: no public Zendesk comment · email target {ai.safeSolve.decision.safeCustomerContact?.customerEmailTarget || "johndoe@vgcsg.com"}</div>
+                        )}
                       </div>
                     );
                   })()}
@@ -1120,11 +1278,11 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
             {/* Summary Stats */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
               {[
-                { label: "Total Processed", value: zdAutoStats.totalTriaged, color: "#6366F1", icon: "🤖", tab: "history" },
-                { label: "Approved & Sent", value: zdAutoStats.autoSent, color: "#81C784", icon: "✅", tab: "history" },
+                { label: "Total Processed", value: safeZdAutoStats.totalTriaged, color: "#6366F1", icon: "🤖", tab: "history" },
+                { label: "Approved & Sent", value: safeZdAutoStats.autoSent, color: "#81C784", icon: "✅", tab: "history" },
                 { label: "Pending Review", value: pendingQueue.length, color: "#FFB347", icon: "👤", tab: "queue" },
-                { label: "ITSM Incidents", value: zdAutoStats.incidentsCreated, color: "#EC4899", icon: "🎫", tab: "_incidents" },
-                { label: "Avg Confidence", value: `${zdAutoStats.avgConfidence}%`, color: "#06B6D4", icon: "🎯", tab: "history" },
+                { label: "ITSM Incidents", value: safeZdAutoStats.incidentsCreated, color: "#EC4899", icon: "🎫", tab: "_incidents" },
+                { label: "Avg Confidence", value: `${safeZdAutoStats.avgConfidence}%`, color: "#06B6D4", icon: "🎯", tab: "history" },
               ].map((s, i) => (
                 <div key={i} onClick={() => s.tab === "_incidents" ? setActiveModule("incidents") : setZdTab(s.tab)} style={{ padding: "16px", background: "#0F1117", borderRadius: 10, border: `1px solid ${s.color}33`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}
                   onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 4px 12px ${s.color}22`; }}
@@ -1458,10 +1616,10 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
             {sectionLabel("📊", "Current Ticket Statistics")}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
               {[
-                { label: "Open", value: zdStats.open, color: "#FF6B6B", filter: "open" },
-                { label: "Pending", value: zdStats.pending, color: "#FFB347", filter: "pending" },
-                { label: "Hold", value: zdStats.hold, color: "#64B5F6", filter: "hold" },
-                { label: "Solved", value: zdStats.solved, color: "#81C784", filter: "solved" },
+                { label: "Open", value: zdStats?.open ?? 0, color: "#FF6B6B", filter: "open" },
+                { label: "Pending", value: zdStats?.pending ?? 0, color: "#FFB347", filter: "pending" },
+                { label: "Hold", value: zdStats?.hold ?? 0, color: "#64B5F6", filter: "hold" },
+                { label: "Solved", value: zdStats?.solved ?? 0, color: "#81C784", filter: "solved" },
               ].map((s, i) => (
                 <div key={i} onClick={() => { setZdFilter(s.filter); zdFetchTickets(s.filter, 1); setZdTab("tickets"); }}
                   style={{ padding: "12px 14px", background: "#0F1117", borderRadius: 8, border: `1px solid ${s.color}33`, textAlign: "center", cursor: "pointer", transition: "all 0.2s" }}

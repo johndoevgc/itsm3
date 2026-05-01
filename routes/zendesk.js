@@ -5,9 +5,185 @@
 const https = require("https");
 const crypto = require("crypto");
 
+const DEFAULT_CUSTOMER_REDIRECT_TARGET = "johndoe@vgcsg.com";
+const SAFE_SOLVE_RISK_KEYWORDS = [
+  "security", "phishing", "malware", "ransomware", "breach", "data loss", "data leak",
+  "outage", "down", "offline", "production", "all users", "company wide", "company-wide",
+  "vip", "executive", "ceo", "cfo", "director", "legal", "contract", "invoice",
+  "complaint", "angry", "escalat", "urgent", "critical",
+];
+const SAFE_SOLVE_REVIEW_CATEGORIES = new Set(["security"]);
+
+function safeSolveNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function stripHtml(value) {
+  return String(value || "").replace(/<[^>]*>/g, " ");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normalizeSafeSolveSlaPriority(value, fallbackPriority) {
+  const raw = String(value || fallbackPriority || "").toLowerCase().replace(/[\s_-]/g, "");
+  if (["seva", "sev1", "p1", "critical", "urgent"].includes(raw)) return "Sev-A";
+  if (["sevb", "sev2", "p2", "high"].includes(raw)) return "Sev-B";
+  if (["sevd", "sev4", "p4", "low"].includes(raw)) return "Sev-D";
+  return "Sev-C";
+}
+
+function computeSafeSolveSla(ticket, slaTargetHours, options = {}) {
+  const targetHours = safeSolveNumber(slaTargetHours, 9);
+  const createdAt = ticket?.created_at || ticket?.createdAt || new Date().toISOString();
+  const createdMs = new Date(createdAt).getTime();
+  const deadlineMs = Number.isFinite(createdMs) ? createdMs + targetHours * 3600000 : Date.now() + targetHours * 3600000;
+  const minutesRemaining = Math.round((deadlineMs - Date.now()) / 60000);
+  const atRiskMinutes = safeSolveNumber(options.atRiskMinutes, 60);
+  return {
+    targetHours,
+    deadline: new Date(deadlineMs).toISOString(),
+    minutesRemaining,
+    state: minutesRemaining <= 0 ? "breached" : minutesRemaining <= atRiskMinutes ? "at_risk" : "on_track",
+  };
+}
+
+function collectSafeSolveRiskFlags({ triage = {}, ticket = {}, requester = {}, recentComments = [] }) {
+  const haystack = [
+    triage.category, triage.itsm_category, triage.internal_note, triage.reasoning,
+    ticket.subject, ticket.description, requester.name, requester.email,
+    ...(ticket.tags || []),
+    ...recentComments.map(c => c.body || c.plain_body || c.htmlBody || ""),
+  ].map(stripHtml).join(" ").toLowerCase();
+  const flags = [];
+  for (const word of SAFE_SOLVE_RISK_KEYWORDS) {
+    if (haystack.includes(word)) flags.push(word.replace(/\s+/g, "_"));
+  }
+  const category = String(triage.category || triage.itsm_category || "").toLowerCase();
+  if (SAFE_SOLVE_REVIEW_CATEGORIES.has(category)) flags.push(`${category}_category`);
+  return [...new Set(flags)].slice(0, 12);
+}
+
+function buildZendeskSafeSolveDecision(input = {}) {
+  const {
+    triage = {}, ticket = {}, requester = {}, recentComments = [], options = {},
+    customerRedirectTarget = DEFAULT_CUSTOMER_REDIRECT_TARGET, emailRedirectMode = true,
+  } = input;
+  const confidenceThreshold = safeSolveNumber(options.confidenceThreshold, 90);
+  const solveThreshold = safeSolveNumber(options.solveThreshold, 95);
+  const confidence = safeSolveNumber(triage.confidence, 0);
+  const autoSendable = triage.auto_sendable === true || triage.autoSendable === true;
+  const routine = triage.routine === true || autoSendable;
+  const slaPriority = normalizeSafeSolveSlaPriority(triage.sla_priority, triage.priority || ticket.priority);
+  const sla = computeSafeSolveSla(ticket, options.slaTargetHours || input.slaTargetHours, options);
+  const riskFlags = collectSafeSolveRiskFlags({ triage, ticket, requester, recentComments });
+  const sentiment = String(triage.sentiment || "neutral").toLowerCase();
+  const sentimentScore = safeSolveNumber(triage.sentimentScore, 5);
+  const resolution = String(triage.resolution || triage.draft_response || triage.customer_response || "").trim();
+  const blockedReasons = [];
+
+  if (confidence < confidenceThreshold) blockedReasons.push("confidence_below_threshold");
+  if (!autoSendable) blockedReasons.push("not_marked_auto_sendable");
+  if (!routine) blockedReasons.push("not_routine_issue");
+  if (slaPriority === "Sev-A" || slaPriority === "Sev-B") blockedReasons.push("major_priority_requires_review");
+  if (sla.state === "breached") blockedReasons.push("sla_already_breached");
+  if (sentiment === "frustrated" || sentimentScore <= 3) blockedReasons.push("frustrated_customer_requires_review");
+  if (riskFlags.length > 0) blockedReasons.push("sensitive_or_high_risk_keywords");
+  if (resolution.length < 40) blockedReasons.push("missing_concrete_resolution");
+
+  const eligible = blockedReasons.length === 0;
+  const targetStatus = confidence >= solveThreshold ? "solved" : "pending";
+  const customerEmailTarget = customerRedirectTarget || DEFAULT_CUSTOMER_REDIRECT_TARGET;
+  const customerResponse = String(triage.customer_response || triage.draft_response || triage.resolution || "").trim();
+  const customerEmailPlanned = options.sendCustomerEmail === true && customerResponse.length > 0;
+  const decision = eligible ? (targetStatus === "solved" ? "safe_solve" : "safe_pending") : "needs_review";
+
+  return {
+    eligible,
+    decision,
+    blockedReasons,
+    riskFlags,
+    confidence,
+    threshold: confidenceThreshold,
+    autoSendable,
+    routine,
+    category: triage.category || triage.itsm_category || "General",
+    priority: triage.priority || ticket.priority || "normal",
+    slaPriority,
+    slaDecision: { ...sla, priority: slaPriority },
+    targetStatus,
+    resolution,
+    internalNote: triage.internal_note || triage.reasoning || "AI safe solve analysis completed.",
+    customerResponse,
+    customerEmailPlanned,
+    safeCustomerContact: {
+      publicZendeskComment: false,
+      customerEmailTarget,
+      emailRedirectMode: emailRedirectMode !== false,
+      originalRequester: requester?.email || null,
+    },
+    plannedActions: eligible ? [
+      "add_internal_zendesk_note",
+      `set_zendesk_status_${targetStatus}`,
+      "write_ai_safe_solve_audit",
+      customerEmailPlanned ? `send_customer_email_to_${customerEmailTarget}` : "no_customer_email",
+    ] : ["queue_for_engineer_review", "preserve_customer_silence"],
+  };
+}
+
+function buildZendeskSafeSolveApplyPayload(decision, meta = {}) {
+  const now = meta.now || new Date().toISOString();
+  const requestedBy = meta.requestedBy || "AI Safe Solve";
+  const note = [
+    `[AI Safe Solve - ${requestedBy}]`,
+    `Decision: ${decision.decision}`,
+    `Confidence: ${decision.confidence}% (threshold ${decision.threshold}%)`,
+    `SLA: ${decision.slaPriority} / ${decision.slaDecision.state} (${decision.slaDecision.minutesRemaining}m remaining)`,
+    `Customer contact: no public Zendesk comment; email target ${decision.safeCustomerContact.customerEmailTarget}`,
+    "",
+    "Resolution:",
+    decision.resolution || "No resolution text supplied.",
+    "",
+    "Internal analysis:",
+    decision.internalNote || "No additional analysis.",
+    "",
+    `Applied at: ${now}`,
+  ].join("\n");
+  const ticket = {
+    comment: { body: note, public: false },
+    status: decision.targetStatus,
+  };
+  if (["low", "normal", "high", "urgent"].includes(String(decision.priority || "").toLowerCase())) {
+    ticket.priority = String(decision.priority).toLowerCase();
+  }
+  return { ticket };
+}
+
+function buildSafeSolveEmailBody({ decision, ticket, requester, requestedBy }) {
+  return `<div style="font-family:Arial,sans-serif;max-width:640px;">
+    <h3 style="color:#1a1a2e;">AI Safe Solve Preview: ${escapeHtml(ticket?.subject || "Zendesk Ticket")}</h3>
+    <div style="background:#f8f9fa;padding:16px;border-radius:8px;border-left:4px solid #4CAF50;margin:12px 0;">
+      ${escapeHtml(decision.customerResponse || decision.resolution || "AI resolved this routine ticket.").replace(/\n/g, "<br/>")}
+    </div>
+    <p style="color:#666;font-size:12px;line-height:1.5;">
+      Ticket Reference: #${escapeHtml(ticket?.id || "")}<br/>
+      Original requester: ${escapeHtml(requester?.email || "unknown")}<br/>
+      Safe Solve applied by: ${escapeHtml(requestedBy || "AI Safe Solve")}<br/>
+      This message was routed to the configured customer safety mailbox.
+    </p>
+  </div>`;
+}
+
 module.exports = function createZendeskRoutes(ctx) {
   return async function handleZendeskRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, callAI, extractAIText, cacheLayer, wsServer, incidentIndex, normalizeCategory, graphSendMail, featureFlags, isHighSeverity, getAIModel, getSlaMap, getSlaDescription, cachedGetAll, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, MAIL_FROM, _zdPushDedup, PROD_TEST_MODE, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET } = ctx;
+    const { db, json, readBody, parseBody, callAI, extractAIText, cacheLayer, wsServer, incidentIndex, normalizeCategory, graphSendMail, featureFlags, isHighSeverity, getAIModel, getSlaMap, getSlaDescription, cachedGetAll, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, MAIL_FROM, CUSTOMER_REDIRECT_TARGET, EMAIL_REDIRECT_MODE, _zdPushDedup, PROD_TEST_MODE, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET } = ctx;
 
   if (!pathname.startsWith("/api/zendesk")) return false;
 
@@ -16,12 +192,13 @@ module.exports = function createZendeskRoutes(ctx) {
   // All other Zendesk routes require authentication + role-based access.
   const isWebhook = pathname === "/api/zendesk/webhook";
   if (!isWebhook) {
-    const role = authResult?.role || auth?.role || "anonymous";
-    if (role === "anonymous") {
+    if (!authResult?.authenticated) {
       return json(res, 401, { error: "Authentication required" });
     }
+    const role = authResult?.role || auth?.role || "anonymous";
     // Write operations: POST/PUT/DELETE — require manage-level incident access
     const WRITE_ROLES = new Set([
+      "System",
       "VGC Dev Admin", "Tenant Admin", "Administrator",
       "Service Desk Lead", "L1 Support Engineer", "L2 Support Engineer",
       "Network Engineer",
@@ -458,6 +635,155 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
         await db.upsert("incidents", newInc.id, JSON.stringify(newInc));
         console.log(`[ZD Create-Incident] Created ITSM ${newInc.id} from Zendesk #${ticketId} (${_slaPri})`);
         return json(res, 201, { success: true, incident: newInc });
+      }
+
+      // POST /api/zendesk/ai-solve — guarded AI solve flow with no public customer comment
+      if (pathname === "/api/zendesk/ai-solve" && req.method === "POST") {
+        const flagCtx = { userEmail: authResult?.user?.email || authResult?.user?.upn || auth?.email };
+        if (featureFlags?.isEnabled && !featureFlags.isEnabled("zendesk_ai_safe_solve", flagCtx)) {
+          return json(res, 403, { error: "Zendesk AI Safe Solve is disabled" });
+        }
+        if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+          return json(res, 503, { error: "Azure OpenAI not configured" });
+        }
+
+        const body = await parseBody(req, 100000).catch(() => ({}));
+        const { ticketId } = body;
+        if (!ticketId || !isValidTicketId(ticketId)) return json(res, 400, { error: "Valid numeric ticketId required" });
+        const dryRun = body.dryRun !== false;
+        const requestedBy = body.requestedBy || authResult?.user?.email || authResult?.user?.name || "AI Safe Solve";
+        if (!dryRun && body.confirmSafety !== true) {
+          return json(res, 400, { error: "confirmSafety=true required to apply AI Safe Solve" });
+        }
+
+        const ticketResult = await zdRequest("GET", `/tickets/${ticketId}.json`);
+        const ticket = ticketResult.ticket || {};
+        const commentsResult = await zdRequest("GET", `/tickets/${ticketId}/comments.json`).catch(() => ({ comments: [] }));
+        const recentComments = (commentsResult.comments || []).slice(-5).map(c => ({
+          body: (c.body || c.plain_body || "").substring(0, 1200),
+          author: c.author_id,
+          createdAt: c.created_at,
+          isPublic: c.public !== false,
+        }));
+        let requester = null;
+        if (ticket.requester_id) {
+          try {
+            const requesterResult = await zdRequest("GET", `/users/${ticket.requester_id}.json`);
+            requester = requesterResult.user || null;
+          } catch {}
+        }
+
+        const flagPayload = featureFlags?.payload ? featureFlags.payload("zendesk_ai_safe_solve") || {} : {};
+        const userPrompt = `Ticket #${ticketId}\nSubject: ${ticket.subject || "No subject"}\nStatus: ${ticket.status}\nPriority: ${ticket.priority || "not set"}\nRequester: ${requester?.name || "unknown"} <${requester?.email || "unknown"}>\nCreated: ${ticket.created_at}\nDescription:\n${(ticket.description || "").substring(0, 2200)}\n\nRecent comments:\n${recentComments.map(c => `- ${stripHtml(c.body).substring(0, 700)}`).join("\n") || "(none)"}`;
+        const systemPrompt = `You are the VGC ITSM AI Safe Solve policy engine. Decide whether this Zendesk ticket can be solved safely without disturbing the real customer.
+Return ONLY valid JSON with: category, priority (low|normal|high|urgent), sla_priority (Sev-A|Sev-B|Sev-C|Sev-D), confidence (0-100), auto_sendable (boolean), routine (boolean), sentiment (frustrated|neutral|satisfied), sentimentScore (1-10), resolution, customer_response, internal_note, risk_flags array.
+Allow auto_sendable only for routine IT support issues with a concrete, low-risk resolution. Set auto_sendable false for security, data loss, outage, VIP/executive, legal/billing, angry/frustrated customer, major priority, unclear root cause, or missing information.`;
+        const aiPayload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1400 };
+        const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({
+            hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+            method: "POST", headers: { "Content-Type": "application/json", "api-key": AZURE_OPENAI_KEY },
+          }, (aiRes) => {
+            let data = "";
+            aiRes.on("data", c => data += c);
+            aiRes.on("end", () => {
+              if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+              else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+            });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(aiPayload));
+          aiReq.end();
+        });
+
+        const aiText = extractAIText(aiResult);
+        let triage;
+        try {
+          triage = JSON.parse(aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+        } catch {
+          triage = { confidence: 0, auto_sendable: false, routine: false, resolution: "", customer_response: "", internal_note: "AI response could not be parsed; routed to engineer review.", risk_flags: ["parse_failure"] };
+        }
+
+        const decision = buildZendeskSafeSolveDecision({
+          triage, ticket, requester, recentComments,
+          customerRedirectTarget: CUSTOMER_REDIRECT_TARGET || DEFAULT_CUSTOMER_REDIRECT_TARGET,
+          emailRedirectMode: EMAIL_REDIRECT_MODE,
+          slaTargetHours: flagPayload.slaTargetHours,
+          options: {
+            confidenceThreshold: body.confidenceThreshold || flagPayload.confidenceThreshold,
+            solveThreshold: body.solveThreshold || flagPayload.solveThreshold,
+            atRiskMinutes: body.atRiskMinutes || flagPayload.atRiskMinutes,
+            sendCustomerEmail: body.sendCustomerEmail === true,
+          },
+        });
+        const auditId = `ZDSAFE-${ticketId}-${Date.now()}`;
+        const baseResponse = {
+          success: decision.eligible,
+          dryRun,
+          applied: false,
+          auditId,
+          ticket: { id: ticket.id, subject: ticket.subject, status: ticket.status, priority: ticket.priority, created_at: ticket.created_at },
+          requester: requester ? { id: requester.id, name: requester.name, email: requester.email } : null,
+          triage,
+          decision,
+        };
+
+        if (dryRun || !decision.eligible) {
+          try {
+            await db.upsert("zd_ai_safe_solve", auditId, JSON.stringify({ id: auditId, ticketId, dryRun: true, eligible: decision.eligible, decision, requestedBy, createdAt: new Date().toISOString() }));
+          } catch {}
+          return json(res, 200, baseResponse);
+        }
+
+        const appliedActions = [];
+        const applyPayload = buildZendeskSafeSolveApplyPayload(decision, { requestedBy });
+        const updateResult = await zdRequest("PUT", `/tickets/${ticketId}.json`, applyPayload);
+        appliedActions.push("internal_zendesk_note_added", `zendesk_status_${decision.targetStatus}`);
+
+        let emailResult = null;
+        if (decision.customerEmailPlanned && graphSendMail) {
+          try {
+            await graphSendMail({
+              to: decision.safeCustomerContact.customerEmailTarget,
+              subject: `AI Safe Solve: ${ticket.subject || `Ticket #${ticketId}`} [#${ticketId}]`,
+              body: buildSafeSolveEmailBody({ decision, ticket, requester, requestedBy }),
+              isCustomerEmail: true,
+            });
+            emailResult = { sent: true, to: decision.safeCustomerContact.customerEmailTarget };
+            appliedActions.push("customer_email_routed_to_safe_target");
+          } catch (emailErr) {
+            emailResult = { sent: false, error: emailErr.message, to: decision.safeCustomerContact.customerEmailTarget };
+          }
+        }
+
+        let linkedIncident = null;
+        try {
+          const existingRow = await db.getOne("incidents", `INC-ZD${ticketId}`);
+          if (existingRow) {
+            const inc = typeof existingRow.data === "string" ? JSON.parse(existingRow.data) : existingRow.data;
+            inc.status = decision.targetStatus === "solved" ? "Resolved" : "Pending";
+            inc.resolution = decision.resolution || inc.resolution;
+            inc.resolvedAt = decision.targetStatus === "solved" ? new Date().toISOString() : inc.resolvedAt;
+            inc.aiSafeSolved = decision.targetStatus === "solved";
+            inc.skipZendeskSync = true;
+            inc.updatedAt = new Date().toISOString();
+            inc.activityLog = [...(inc.activityLog || []), { id: `AL-ZDSAFE-${Date.now()}`, type: "ai_solve", user: "AI Safe Solve", time: inc.updatedAt, detail: `AI Safe Solve applied to Zendesk #${ticketId}: ${decision.decision}, ${decision.confidence}% confidence. No public customer comment.` }];
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
+            linkedIncident = { id: inc.id, status: inc.status };
+            appliedActions.push("linked_itsm_incident_updated");
+          }
+        } catch (incErr) {
+          appliedActions.push(`linked_incident_update_failed:${incErr.message}`);
+        }
+
+        const auditRecord = { id: auditId, ticketId, requestedBy, dryRun: false, eligible: true, decision, appliedActions, emailResult, linkedIncident, createdAt: new Date().toISOString() };
+        await db.upsert("zd_ai_safe_solve", auditId, JSON.stringify(auditRecord));
+        try { await db.audit("zd_ai_safe_solve", auditId, "apply", JSON.stringify({ ticketId, decision: decision.decision, confidence: decision.confidence, targetStatus: decision.targetStatus, publicComment: false }), requestedBy); } catch {}
+        try { wsServer && wsServer.broadcast && wsServer.broadcast("zendesk/ai-safe-solve", { ticketId, decision: decision.decision, targetStatus: decision.targetStatus, auditId }); } catch {}
+
+        return json(res, 200, { ...baseResponse, success: true, applied: true, appliedActions, updateResult, email: emailResult, linkedIncident });
       }
 
       // POST /api/zendesk/auto-respond — send AI response to ticket (REQUIRES human approval)
@@ -1026,7 +1352,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
                     try {
                       const triagePayload = JSON.stringify({ ticket: newInc, requestedBy: "Zendesk Incremental Sync Auto-Triage" });
-                      const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) } }, (triageRes) => {
+                      const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (triageRes) => {
                         let d = ""; triageRes.on("data", c => d += c);
                         triageRes.on("end", () => { console.log(`[ZD Incremental] AI auto-triage for ${newInc.id}: ${d.substring(0, 200)}`); });
                       });
@@ -1633,7 +1959,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
                   if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
                     try {
                       const triagePayload = JSON.stringify({ ticket: newInc, requestedBy: "Zendesk Webhook Auto-Triage" });
-                      const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) } }, (triageRes) => {
+                      const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (triageRes) => {
                         let d = ""; triageRes.on("data", c => d += c);
                         triageRes.on("end", () => { console.log(`[ZD Webhook] AI auto-triage for ${newInc.id}: ${d.substring(0, 200)}`); });
                       });
@@ -1986,4 +2312,10 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
     }
     return true;
   };
+};
+
+module.exports._internals = {
+  buildZendeskSafeSolveDecision,
+  buildZendeskSafeSolveApplyPayload,
+  collectSafeSolveRiskFlags,
 };

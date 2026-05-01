@@ -6,6 +6,130 @@ const https = require("https");
 const crypto = require("crypto");
 const { validate } = require("../src/server/validation");
 
+function parseStoredRecord(row) {
+  if (!row) return null;
+  const data = row.data !== undefined ? row.data : row;
+  if (!data) return null;
+  if (typeof data === "string") {
+    try { return JSON.parse(data); } catch { return null; }
+  }
+  return typeof data === "object" ? data : null;
+}
+
+function normalizePortalEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function portalSessionRecordId(email) {
+  return "active:" + crypto.createHash("sha256").update(normalizePortalEmail(email)).digest("hex").slice(0, 40);
+}
+
+function isValidPortalSessionId(sessionId) {
+  return typeof sessionId === "string" && /^[A-Za-z0-9._:-]{16,128}$/.test(sessionId);
+}
+
+const TRUSTED_WEATHER_SOURCES = [
+  { title: "data.gov.sg 2-hour Weather Forecast", url: "https://api.data.gov.sg/v1/environment/2-hour-weather-forecast" },
+  { title: "data.gov.sg 24-hour Weather Forecast", url: "https://api.data.gov.sg/v1/environment/24-hour-weather-forecast" },
+  { title: "Meteorological Service Singapore Heavy Rain Warnings", url: "https://www.weather.gov.sg/warning-heavy-rain/" },
+];
+
+function fetchJson(url, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { "User-Agent": "VGC-ITSM/1.0 official-weather-check" } }, (resp) => {
+      let raw = "";
+      resp.on("data", chunk => { raw += chunk; });
+      resp.on("end", () => {
+        if (resp.statusCode < 200 || resp.statusCode >= 300) return reject(new Error(`HTTP ${resp.statusCode}`));
+        try { resolve(JSON.parse(raw)); } catch (err) { reject(err); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("timeout")); });
+  });
+}
+
+function isSevereOfficialForecast(value) {
+  const text = String(value || "").toLowerCase();
+  if (!text) return false;
+  return /heavy\s+(rain|showers|thundery)|thundery\s+showers\s+with\s+gusty\s+winds|squall|strong\s+winds|flood/.test(text);
+}
+
+function summarizeForecastAreas(items) {
+  const seen = new Map();
+  for (const item of items) {
+    const forecast = String(item.forecast || "").trim();
+    if (!forecast || !isSevereOfficialForecast(forecast)) continue;
+    const areas = seen.get(forecast) || [];
+    if (item.area) areas.push(item.area);
+    seen.set(forecast, areas);
+  }
+  return [...seen.entries()].map(([forecast, areas]) => ({ forecast, areas: [...new Set(areas)].slice(0, 12) }));
+}
+
+function formatValidPeriod(period = {}) {
+  const start = period.start ? new Date(period.start) : null;
+  const end = period.end ? new Date(period.end) : null;
+  const opts = { timeZone: "Asia/Singapore", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false };
+  if (start && !Number.isNaN(start.getTime()) && end && !Number.isNaN(end.getTime())) {
+    return `${start.toLocaleString("en-SG", opts)} to ${end.toLocaleString("en-SG", opts)} SGT`;
+  }
+  return "current official forecast window";
+}
+
+function buildTrustedWeatherAlert({ twoHour, twentyFour, checkedAt = new Date().toISOString() } = {}) {
+  const latestTwoHour = twoHour?.items?.[0] || null;
+  const latestTwentyFour = twentyFour?.items?.[0] || null;
+  const severeAreaGroups = summarizeForecastAreas(latestTwoHour?.forecasts || []);
+  const severeRegional = [];
+
+  for (const period of latestTwentyFour?.periods || []) {
+    for (const [region, forecast] of Object.entries(period.regions || {})) {
+      if (isSevereOfficialForecast(forecast)) severeRegional.push({ region, forecast, period: period.time });
+    }
+  }
+
+  const generalForecast = latestTwentyFour?.general?.forecast || "";
+  const generalSevere = isSevereOfficialForecast(generalForecast);
+
+  if (severeAreaGroups.length === 0 && severeRegional.length === 0 && !generalSevere) {
+    return {
+      active: false,
+      checkedAt,
+      message: "No severe official Singapore weather advisory detected from trusted live sources.",
+      sources: TRUSTED_WEATHER_SOURCES,
+    };
+  }
+
+  const primary = severeAreaGroups[0] || severeRegional[0] || { forecast: generalForecast, areas: ["Singapore"] };
+  const forecast = primary.forecast;
+  const areas = primary.areas?.length ? primary.areas.join(", ") : (primary.region ? `${primary.region} Singapore` : "Singapore");
+  const validPeriod = severeAreaGroups[0]
+    ? formatValidPeriod(latestTwoHour?.valid_period)
+    : formatValidPeriod(primary.period || latestTwentyFour?.valid_period);
+  const updatedAt = latestTwoHour?.update_timestamp || latestTwentyFour?.update_timestamp || checkedAt;
+  const alertId = `official-weather-${Buffer.from(`${forecast}:${areas}:${updatedAt}`).toString("base64url").slice(0, 24)}`;
+
+  return {
+    active: true,
+    alert: {
+      id: alertId,
+      type: forecast.toLowerCase().includes("wind") || forecast.toLowerCase().includes("squall") ? "Severe Weather" : "Heavy Rain",
+      icon: "⛈️",
+      severity: "High",
+      region: areas,
+      headline: `Official Weather Advisory — ${forecast} — ${areas}`,
+      summary: `Official live forecast reports ${forecast} for ${areas}. Valid period: ${validPeriod}. Last updated by source: ${updatedAt}.`,
+      aiAdvice: "Use this as an operational advisory only. Check the linked official sources before taking customer-facing action. Avoid flooded roads, monitor PUB/NEA/MSS updates, and protect ground-floor or exposed IT equipment if heavy rain develops.",
+      color: "#42A5F5",
+      checkedAt,
+      updatedAt,
+      validPeriod,
+      sources: TRUSTED_WEATHER_SOURCES,
+    },
+  };
+}
+
 module.exports = function createCoreRoutes(ctx) {
   return async function handleCoreRoutes(req, res, pathname, auth, authResult, urlObj) {
     const { db, json, readBody, parseBody, sendText, callAI, extractAIText, cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex, buildEmailTemplate, normalizeCategory, graphSendMail, featureFlags, VALID_COLLECTIONS, AI_THRESHOLDS, AI_MODELS, getAIModel, scheduleCsatSurvey, isHighSeverity, safeRecipient, queueOrSendCustomerEmail, redactForAI, logAICall, piiRedact, generateKBDraft, notifyTeamsMajorIncident, processInboundEmails, cachedGetAll, cachedGetOne, APP_VERSION, shadowMode, graphAppCall, graphAppCallBinary, getOrgName, purgeStatus, PORTAL_URL, ORG_SHORT_NAME, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, SOLARWINDS_API_KEY, SOLARWINDS_API_HOST, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL, LOCAL_USERS, EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, MAIL_FROM, INTERNAL_DOMAINS, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, senderFor, FEATURE_PDPA, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD, AI_AUTONOMY_LEVEL, AI_MONTHLY_BUDGET_USD, zdLastSyncTime, zdAutoSyncInterval, checkPermission, PROD_TEST_MODE, APP_DISPLAY_NAME } = ctx;
@@ -21,6 +145,25 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/sla/engine" && req.method === "GET") {
     return json(res, 200, slaEngine ? slaEngine.getStats() : { error: "SLA engine not initialized" });
   }
+
+  if (pathname === "/api/weather/disaster-alert" && req.method === "GET") {
+    const checkedAt = new Date().toISOString();
+    const [twoHourResult, twentyFourResult] = await Promise.allSettled([
+      fetchJson(TRUSTED_WEATHER_SOURCES[0].url),
+      fetchJson(TRUSTED_WEATHER_SOURCES[1].url),
+    ]);
+    const twoHour = twoHourResult.status === "fulfilled" ? twoHourResult.value : null;
+    const twentyFour = twentyFourResult.status === "fulfilled" ? twentyFourResult.value : null;
+    const result = buildTrustedWeatherAlert({ twoHour, twentyFour, checkedAt });
+    return json(res, 200, {
+      ...result,
+      sourceStatus: {
+        twoHour: twoHourResult.status === "fulfilled" ? "ok" : `unavailable: ${twoHourResult.reason?.message || "unknown"}`,
+        twentyFour: twentyFourResult.status === "fulfilled" ? "ok" : `unavailable: ${twentyFourResult.reason?.message || "unknown"}`,
+      },
+    });
+  }
+
   if (pathname === "/api/sla/run" && req.method === "POST") {
     if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") {
       return json(res, 403, { error: "Admin only" });
@@ -79,6 +222,79 @@ module.exports = function createCoreRoutes(ctx) {
         averageCompliance: avgCompliance,
         trend: filtered,
       });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── Portal Session Control: one active ITSM app session per Entra user ───
+  if (pathname === "/api/auth/session/start" && req.method === "POST") {
+    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Entra authentication required" });
+    try {
+      const body = await readBody(req);
+      const sessionId = String(body.sessionId || "").trim();
+      if (!isValidPortalSessionId(sessionId)) return json(res, 400, { error: "Valid sessionId required" });
+      const email = normalizePortalEmail(authResult.user.email);
+      const recordId = portalSessionRecordId(email);
+      const existing = parseStoredRecord(await db.getOne("portal_sessions", recordId));
+      const now = new Date().toISOString();
+      const previousSessionId = existing?.activeSessionId || null;
+      const record = {
+        id: recordId,
+        email,
+        name: authResult.user.name || email,
+        userId: authResult.user.id || "",
+        activeSessionId: sessionId,
+        previousSessionId: previousSessionId && previousSessionId !== sessionId ? previousSessionId : null,
+        status: "active",
+        startedAt: now,
+        lastSeenAt: now,
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 300),
+        ipHash: crypto.createHash("sha256").update(String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown")).digest("hex").slice(0, 32),
+      };
+      await db.upsert("portal_sessions", recordId, JSON.stringify(record));
+      await db.audit("portal_sessions", recordId, "session_start", JSON.stringify({ replaced: !!record.previousSessionId }), email);
+      if (cacheLayer) cacheLayer.invalidatePrefix("portal_sessions");
+      if (wsServer) wsServer.broadcast("portal_sessions", { action: "session_start", email, recordId });
+      return json(res, 200, { ok: true, active: true, sessionId, previousSessionReplaced: !!record.previousSessionId, heartbeatSeconds: 30 });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  if (pathname === "/api/auth/session/heartbeat" && req.method === "POST") {
+    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Entra authentication required" });
+    try {
+      const body = await readBody(req);
+      const sessionId = String(body.sessionId || "").trim();
+      if (!isValidPortalSessionId(sessionId)) return json(res, 400, { error: "Valid sessionId required" });
+      const email = normalizePortalEmail(authResult.user.email);
+      const recordId = portalSessionRecordId(email);
+      const record = parseStoredRecord(await db.getOne("portal_sessions", recordId));
+      if (!record || record.activeSessionId !== sessionId) {
+        return json(res, 409, { error: "Another ITSM session is active for this Entra user.", code: "STALE_SESSION", active: false });
+      }
+      record.lastSeenAt = new Date().toISOString();
+      record.status = "active";
+      await db.upsert("portal_sessions", recordId, JSON.stringify(record));
+      if (cacheLayer) cacheLayer.invalidatePrefix("portal_sessions");
+      return json(res, 200, { ok: true, active: true, sessionId, lastSeenAt: record.lastSeenAt });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  if (pathname === "/api/auth/session/end" && req.method === "POST") {
+    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Entra authentication required" });
+    try {
+      const body = await readBody(req);
+      const sessionId = String(body.sessionId || "").trim();
+      const email = normalizePortalEmail(authResult.user.email);
+      const recordId = portalSessionRecordId(email);
+      const record = parseStoredRecord(await db.getOne("portal_sessions", recordId));
+      if (record && record.activeSessionId === sessionId) {
+        record.activeSessionId = null;
+        record.status = "signed_out";
+        record.endedAt = new Date().toISOString();
+        await db.upsert("portal_sessions", recordId, JSON.stringify(record));
+        await db.audit("portal_sessions", recordId, "session_end", JSON.stringify({}), email);
+        if (cacheLayer) cacheLayer.invalidatePrefix("portal_sessions");
+      }
+      return json(res, 200, { ok: true });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
@@ -2022,7 +2238,7 @@ module.exports = function createCoreRoutes(ctx) {
       zdLastSyncTime,
       mailFrom: MAIL_FROM,
       prodTestMode: PROD_TEST_MODE,
-      prodTestEmail: PROD_TEST_MODE ? PROD_TEST_EMAIL : null,
+      prodTestEmail: PROD_TEST_MODE ? EMAIL_REDIRECT_TARGET : null,
       emailRedirectMode: EMAIL_REDIRECT_MODE,
       emailRedirectTarget: EMAIL_REDIRECT_MODE ? EMAIL_REDIRECT_TARGET : null,
       timestamp: new Date().toISOString(),
@@ -2484,7 +2700,14 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
       const maxItems = Math.min(body.maxItems || 10, 20);
       const targetIncidentId = body.incidentId || null;
 
-      const incidentRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
+      let incidentRows;
+      try {
+        incidentRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
+      } catch (openErr) {
+        if (!/gen_status/i.test(openErr.message || "")) throw openErr;
+        console.warn("[AI Auto-Resolve] Falling back to full incident scan because gen_status is unavailable");
+        incidentRows = await db.getAll("incidents");
+      }
       const now = new Date();
       const cutoff = new Date(now.getTime() - idleHours * 60 * 60 * 1000);
 
@@ -2620,7 +2843,7 @@ Respond ONLY with valid JSON:
             suggestion.status = "pending_approval";
             suggestion.sevABlocked = true;
             suggestion.classificationReasoning = `[BLOCKED FROM AUTO-RESOLVE: ${inc.priority}] ` + classificationReasoning;
-            await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+            await db.upsert("ai_resolve_queue", suggestion.id, JSON.stringify(suggestion));
             try { await db.audit("ai_resolve_queue", suggestion.id, "sev_a_auto_resolve_blocked", JSON.stringify({ incidentId: inc.id, priority: inc.priority, confidence: suggestion.confidence }), "system"); } catch {}
             suggestions.push(suggestion);
             console.warn(`[AI Auto-Resolve] BLOCKED auto-resolve for ${inc.id} (${inc.priority}) — Major Incident Process requires human approval`);
@@ -2632,7 +2855,7 @@ Respond ONLY with valid JSON:
             suggestion.status = "auto_dismissed";
             suggestion.dismissedAt = new Date().toISOString();
             suggestion.dismissReason = isNoise ? "noise_informational" : "routine_high_confidence";
-            await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+            await db.upsert("ai_resolve_queue", suggestion.id, JSON.stringify(suggestion));
 
             // Apply resolution to incident (close it silently)
             try {
@@ -2657,7 +2880,7 @@ Respond ONLY with valid JSON:
           }
 
           // ── Customer-impacting or low-confidence: queue for engineer approval ──
-          await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+          await db.upsert("ai_resolve_queue", suggestion.id, JSON.stringify(suggestion));
           suggestions.push(suggestion);
 
           // ─── Auto-approve & apply resolution in PROD_TEST_MODE (only for customer-impacting with high confidence) ───
@@ -2679,7 +2902,7 @@ Respond ONLY with valid JSON:
                 liveInc.activityLog.push({ id: `AL-AIR-${Date.now()}`, type: "ai_resolve", user: "AI Auto-Resolve", time: new Date().toISOString(), detail: `AI auto-resolved (${suggestion.confidence}% confidence, ${relevance}): ${(suggestion.resolution || "").substring(0, 200)}` });
                 await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
               }
-              await db.upsert("ai_resolve_queue", suggestion.id, suggestion);
+              await db.upsert("ai_resolve_queue", suggestion.id, JSON.stringify(suggestion));
               console.log(`[AI Pipeline] Auto-resolved ${inc.id} (${suggestion.confidence}%, ${relevance})`);
 
               // Send engineer review email ONLY for customer-impacting incidents
@@ -2788,7 +3011,7 @@ Respond ONLY with valid JSON:
         if (rejectionReason) suggestion.rejectionReason = rejectionReason;
       }
 
-      await db.upsert("ai_resolve_queue", suggestionId, suggestion);
+      await db.upsert("ai_resolve_queue", suggestionId, JSON.stringify(suggestion));
       if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
 
       // ─── Send email notifications on approve/reject ──────────────────
@@ -2916,7 +3139,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
             item.dismissedAt = new Date().toISOString();
             item.dismissedBy = requestedBy;
             item.dismissReason = item.relevance === "noise_informational" ? "noise_informational" : "routine_high_confidence";
-            await db.upsert("ai_resolve_queue", item.id, item);
+            await db.upsert("ai_resolve_queue", item.id, JSON.stringify(item));
 
             // Also close the incident silently
             try {
@@ -2938,7 +3161,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
             dismissed++;
           } else {
             // Update classification but keep in queue
-            await db.upsert("ai_resolve_queue", item.id, item);
+            await db.upsert("ai_resolve_queue", item.id, JSON.stringify(item));
             kept++;
           }
         } catch (err) {
@@ -3010,7 +3233,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
           item.informedBy = _informedBy;
           item.racLockedAt = new Date().toISOString();
           item.bulkApproved = true;
-          await db.upsert("ai_resolve_queue", item.id, item);
+          await db.upsert("ai_resolve_queue", item.id, JSON.stringify(item));
 
           // Send customer email via gating pipeline
           const _recipient = safeRecipient(item);
@@ -6380,4 +6603,9 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
 
     return false;
   };
+};
+
+module.exports._internals = {
+  buildTrustedWeatherAlert,
+  isSevereOfficialForecast,
 };

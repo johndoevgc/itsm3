@@ -6,7 +6,7 @@ const https = require("https");
 
 module.exports = function createAIRoutes(ctx) {
   return async function handleAIRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
+    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, PORT, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
   if (pathname === "/api/ai/knowledge" && req.method === "GET") {
     try {
       const items = await db.getAll("ai_knowledge");
@@ -529,7 +529,8 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
     }
     try {
       const body = await parseBody(req);
-      const { errorType, errorCode, errorMessage, errorDetails, errorStack, context } = body || {};
+      const { errorType, errorCode, errorDetails, errorStack, context } = body || {};
+      const errorMessage = String(body?.errorMessage || body?.error || "").trim().slice(0, 4000);
       if (!errorMessage) return json(res, 400, { error: "errorMessage is required" });
 
       // Check internal KB for similar past errors
@@ -1471,7 +1472,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       return json(res, 503, { error: "Azure OpenAI not configured" });
     }
     try {
-      const body = await parseBody(req, 50000);
+      const body = await parseBody(req, 200000);
       const { ticket, requestedBy } = body;
       if (!ticket || !requestedBy) return json(res, 400, { error: "ticket and requestedBy required" });
 
@@ -1484,7 +1485,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
               hostname: "127.0.0.1", port: ctx.PORT || process.env.PORT || 8080,
               path: `/api/zendesk/sync-ticket/${ticket.zdTicketId}`,
               method: "POST",
-              headers: { "Content-Type": "application/json", "Content-Length": 0, "x-internal-sync": "1" },
+              headers: { "Content-Type": "application/json", "Content-Length": 0, "x-internal-sync": "1", "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN },
             }, (rr) => { rr.on("data", () => {}); rr.on("end", resolve); });
             r.on("error", () => resolve());
             r.setTimeout(2000, () => { try { r.destroy(); } catch {} resolve(); });
@@ -1631,34 +1632,79 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       const payload = {
         model: getAIModel("primary"),
         input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
-        max_output_tokens: 1000,
-        temperature: 0.1
+        max_output_tokens: 1000
       };
 
-      const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({
-          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
-          method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY },
-        }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => {
-            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
-            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
-          });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
+      const fallbackTriage = (reason) => {
+        const text = `${ticket.title || ""} ${ticket.description || ""}`.toLowerCase();
+        let category = normalizeCategory(ticket.category || "General");
+        if (/vpn|network|wifi|internet|connectivity|dns|firewall/.test(text)) category = "Network";
+        else if (/password|login|sign[- ]?in|mfa|account|access/.test(text)) category = "Access Management";
+        else if (/email|outlook|mailbox|exchange/.test(text)) category = "Email";
+        else if (/virus|malware|phish|security|ransomware|breach/.test(text)) category = "Security";
+        else if (/printer|print|scan/.test(text)) category = "Printing";
+        else if (/laptop|desktop|hardware|device|monitor/.test(text)) category = "Hardware";
+        else if (/application|app|software|sap|crash|error/.test(text)) category = "Software";
 
-      const text = extractAIText(aiResult);
+        let priority = ticket.priority || "Sev-C";
+        if (/ransomware|breach|critical|company[- ]?wide|all users|outage|down for everyone/.test(text)) priority = "Sev-A";
+        else if (/vip|urgent|major|many users|department|cannot work/.test(text)) priority = "Sev-B";
+        else if (/password reset|how to|question|fyi|informational|meeting invite|daily report/.test(text)) priority = "Sev-D";
+
+        const assignmentGroup = category === "Network" ? "Network Team"
+          : category === "Security" ? "Security Team"
+          : category === "Cloud Services" ? "Cloud Team"
+          : category === "Hardware" || category === "Printing" ? "Desktop Support"
+          : category === "Software" ? "Application Support"
+          : "Service Desk";
+
+        return {
+          category,
+          subcategory: "",
+          priority,
+          assignee: "Unassigned",
+          assignmentGroup,
+          confidence: 60,
+          reasoning: `Rule-based triage fallback after AI triage was unavailable: ${reason}`,
+          suggestedSlaTarget: getSlaMap()[priority] || 9,
+          tags: ["ai_triage_fallback", String(category).toLowerCase().replace(/\s+/g, "_")],
+          sentiment: /angry|frustrated|urgent|asap/.test(text) ? "frustrated" : "neutral",
+          sentimentScore: /angry|frustrated|urgent|asap/.test(text) ? 3 : 5,
+          possibleDuplicateOf: null,
+          duplicateSimilarity: 0,
+          kbCoverage: "unknown",
+          suggestedKbTopic: null,
+          degraded: true,
+          fallbackReason: reason,
+        };
+      };
+
+      let aiResult = null;
       let triage;
       try {
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({
+            hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+            method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY },
+          }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => {
+              if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+              else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+            });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+
+        const text = extractAIText(aiResult);
         triage = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
-      } catch {
-        return json(res, 502, { error: "AI returned invalid triage JSON", raw: text.substring(0, 500) });
+      } catch (aiErr) {
+        console.warn("[AI Triage] Rule fallback:", aiErr.message);
+        triage = fallbackTriage(aiErr.message);
       }
 
       const now = new Date().toISOString();
@@ -1723,7 +1769,8 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           id: auditId, type: "auto_triage", incidentId: ticket.id,
           input: { title: ticket.title, description: (ticket.description || "").slice(0, 200) },
           output: { category: triage.category, priority: triage.priority, assignee: triage.assignee, confidence },
-          model: aiResult.model, autoApplied: autoApply, autonomyLevel: AI_AUTONOMY_LEVEL,
+          model: aiResult?.model || getAIModel("primary"), autoApplied: autoApply, autonomyLevel: AI_AUTONOMY_LEVEL,
+          degraded: !!triage.degraded, fallbackReason: triage.fallbackReason || null,
           timestamp: now
         }));
       } catch (e) { console.warn("[AI Audit] triage log failed:", e.message); }
@@ -1768,7 +1815,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           if (PROD_TEST_MODE || confidence >= 85) {
             try {
               const wfPayload = JSON.stringify({ requestedBy: "AI Post-Triage Pipeline", maxItems: 1, incidentId: inc.id });
-              const wfReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/workflow-assist", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(wfPayload) } }, (wfRes) => {
+              const wfReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/workflow-assist", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(wfPayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (wfRes) => {
                 let d = ""; wfRes.on("data", c => d += c);
                 wfRes.on("end", () => { console.log(`[AI Pipeline] Workflow assist for ${inc.id}: ${d.substring(0, 200)}`); });
               });
@@ -1782,7 +1829,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           // ─── SLA Guardian: auto-trigger SLA prediction after triage ───
           try {
             const slaPredPayload = JSON.stringify({ incidents: [inc], requestedBy: "AI SLA Guardian (post-triage)" });
-            const slaPredReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/sla-predict", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(slaPredPayload) } }, (slaPredRes) => {
+            const slaPredReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/sla-predict", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(slaPredPayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (slaPredRes) => {
               let d = ""; slaPredRes.on("data", c => d += c);
               slaPredRes.on("end", () => {
                 try {
@@ -1908,7 +1955,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
               const triagePayload = JSON.stringify({ ticket, requestedBy });
               const triageReq = http.request({
                 hostname: "localhost", port: PORT, path: "/api/ai/auto-triage-assign",
-                method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) },
+                method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN },
               }, (r) => {
                 let data = ""; r.on("data", c => data += c);
                 r.on("end", () => {
@@ -1960,7 +2007,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       return json(res, 503, { error: "Azure OpenAI not configured" });
     }
     try {
-      const body = await parseBody(req, 100000);
+      const body = await parseBody(req, 200000);
       const { ticketId, requestedBy } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
 
@@ -2539,7 +2586,7 @@ Respond with ONLY valid JSON (no markdown):
       return json(res, 503, { error: "Azure OpenAI not configured" });
     }
     try {
-      const body = await parseBody(req, 50000);
+      const body = await parseBody(req, 100000);
       const { requestedBy } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
 
@@ -2669,15 +2716,16 @@ Return JSON ONLY (no markdown): {
       return json(res, 503, { error: "Azure OpenAI not configured" });
     }
     try {
-      const body = await parseBody(req, 50000);
+      const body = await parseBody(req, 100000);
       const { requestedBy } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
+      const limit = Math.max(10, Math.min(100, Number(body.limit || 50)));
 
       const allIncRaw = await db.getAll("incidents");
       const allIncidents = allIncRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
 
-      // Recent incidents (last 30 days or last 100)
-      const recentIncidents = allIncidents.slice(-100);
+      // Recent incidents are already returned newest-first by the data layer.
+      const recentIncidents = allIncidents.slice(0, limit);
       const openStatuses = new Set(["New", "Open", "In Progress", "Pending"]);
       const openIncidents = recentIncidents.filter(i => openStatuses.has(i.status));
       const resolvedIncidents = recentIncidents.filter(i => i.status === "Resolved" || i.status === "Closed");
@@ -2693,7 +2741,7 @@ Return JSON ONLY (no markdown): {
         clusters[key].priorities[inc.priority] = (clusters[key].priorities[inc.priority] || 0) + 1;
       }
 
-      const incidentSummaries = recentIncidents.slice(-50).map(inc => {
+      const incidentSummaries = recentIncidents.slice(0, 40).map(inc => {
         return `ID:${inc.id} Title:"${(inc.title||"").substring(0,60)}" Cat:${inc.category||"?"} Priority:${inc.priority} Status:${inc.status} Group:${inc.assignmentGroup||"?"} Reporter:${inc.reporter||"?"} Created:${inc.createdAt||"?"}`;
       }).join("\n");
 
@@ -2723,24 +2771,49 @@ Return JSON ONLY (no markdown): {
   "riskScore": 0-100
 }`;
 
-      const payload = { model: getAIModel("primary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: `Analyze ${recentIncidents.length} recent incidents (${openIncidents.length} open, ${resolvedIncidents.length} resolved) across ${Object.keys(clusters).length} clusters. Find patterns and root causes.` }], max_output_tokens: 2500 };
-      const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
       let analysis;
       try {
+        const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: `Analyze ${recentIncidents.length} recent incidents (${openIncidents.length} open, ${resolvedIncidents.length} resolved) across ${Object.keys(clusters).length} clusters. Find patterns and root causes.` }], max_output_tokens: 1800 };
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(35000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+
+        const text = extractAIText(aiResult);
         analysis = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
-      } catch { analysis = { correlations: [], trends: [], summary: "Could not parse AI response", riskScore: 0 }; }
+      } catch (aiErr) {
+        console.warn("[Correlation] Rule fallback:", aiErr.message);
+        const recurring = Object.values(clusters)
+          .filter(c => c.count >= 3 || c.open >= 2)
+          .sort((a, b) => (b.open + b.count) - (a.open + a.count))
+          .slice(0, 5)
+          .map((c, idx) => ({
+            id: `COR-FB-${String(idx + 1).padStart(3, "0")}`,
+            title: `${c.category} recurrence in ${c.group}`,
+            type: "recurring",
+            severity: c.open >= 3 ? "high" : "medium",
+            affectedTickets: c.ids.slice(0, 8),
+            description: `${c.count} recent incidents detected in ${c.category}/${c.group}, ${c.open} still open.`,
+            rootCause: "Pattern requires engineer validation",
+            recommendation: "Review affected tickets together and create or update a known-error/KB entry if the cause is shared.",
+            confidence: Math.min(85, 50 + (c.open * 10) + c.count),
+          }));
+        analysis = {
+          correlations: recurring,
+          trends: Object.values(clusters).sort((a, b) => b.count - a.count).slice(0, 5).map(c => ({ category: c.category, direction: c.open > 0 ? "increasing" : "stable", count: c.count, insight: `${c.count} recent tickets in ${c.group}` })),
+          summary: `Rule-based fallback completed after AI analysis failed: ${aiErr.message}`,
+          riskScore: recurring.some(c => c.severity === "high") ? 70 : recurring.length ? 45 : 10,
+          degraded: true,
+          fallbackReason: aiErr.message,
+        };
+      }
 
       // Create AI actions for high-confidence correlations
       const dedupState = await getAiActionsDedupState();
@@ -3088,25 +3161,41 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
 
       const systemPrompt = `You are VGC Technology's ITSM briefing AI. Generate a concise, actionable ${shift || "daily"} briefing for the IT operations team. Format with clear sections. Be direct — highlight risks, blockers, and actions needed. Return JSON ONLY: { "executiveSummary": "2-3 sentence overview", "criticalItems": [{ "id": "ticket ID", "issue": "brief", "action": "needed action" }], "slaStatus": "overall SLA health description", "handoverNotes": "key things for next shift", "actionItems": ["action 1", "action 2"], "upcomingChanges": "scheduled changes summary", "aiInsights": "any AI-detected patterns or recommendations", "riskLevel": "low|medium|high|critical" }`;
 
-      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataSummary }], max_output_tokens: 2000 };
-      const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
       let briefing;
       try {
+        const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataSummary }], max_output_tokens: 1600 };
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(30000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+
+        const text = extractAIText(aiResult);
         briefing = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
-      } catch {
-        briefing = { executiveSummary: text.substring(0, 500), criticalItems: [], slaStatus: "Unknown", handoverNotes: "", actionItems: [], riskLevel: "medium" };
+      } catch (aiErr) {
+        console.warn("[AI Briefing] Rule fallback:", aiErr.message);
+        briefing = {
+          executiveSummary: `${openInc.length} incidents are open, including ${criticalOpen.length} critical/high items. ${totalSLABreaches} open incidents appear to be breaching SLA.`,
+          criticalItems: criticalOpen.slice(0, 8).map(i => ({ id: i.id, issue: i.title || "Critical incident", action: i.assignee ? `Confirm progress with ${i.assignee}` : "Assign owner immediately" })),
+          slaStatus: totalSLABreaches > 0 ? `${totalSLABreaches} open incidents are over target and need review.` : "No open SLA breaches detected in the briefing payload.",
+          handoverNotes: pendingActions > 0 ? `${pendingActions} AI action(s) are pending approval.` : "No pending AI approvals detected.",
+          actionItems: [
+            ...(criticalOpen.length ? ["Review critical/high open incidents and owner coverage."] : []),
+            ...(totalSLABreaches ? ["Prioritize SLA-breached tickets before lower-priority queue work."] : []),
+            ...(pendingActions ? ["Approve or reject pending AI action queue items."] : []),
+          ],
+          upcomingChanges: `${allChanges.filter(c => c.status === "Scheduled" || c.status === "Approved").length} scheduled or approved change(s).`,
+          aiInsights: `Generated by rule fallback after AI briefing failed: ${aiErr.message}`,
+          riskLevel: criticalOpen.length > 0 ? "high" : totalSLABreaches > 0 ? "medium" : "low",
+          degraded: true,
+          fallbackReason: aiErr.message,
+        };
       }
 
       const briefingId = `BRF-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
@@ -3194,25 +3283,61 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
 
       const userPrompt = `Historical Data (${allInc.length} incidents, ${allProblems.length} problems):\n\nBy Category:\n${categorySummary}\n\nRepeat Assets:\n${assetSummary || "None"}\n\nRepeat Customers:\n${customerSummary || "None"}\n\nExisting Problems:\n${problemSummary || "None"}\n\nDetect patterns and predict future incidents.`;
 
-      const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 2000 };
-      const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
       let patterns;
       try {
+        const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: 1600 };
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`)); });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(35000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+
+        const text = extractAIText(aiResult);
         patterns = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
         if (!Array.isArray(patterns)) patterns = [patterns];
-      } catch { patterns = []; }
+      } catch (aiErr) {
+        console.warn("[AI Pattern Detect] Rule fallback:", aiErr.message);
+        const fallbackPatterns = [];
+        Object.entries(byCategory).filter(([, incs]) => incs.length >= 3).slice(0, 4).forEach(([cat, incs], idx) => fallbackPatterns.push({
+          patternId: `PAT-FB-CAT-${idx + 1}`,
+          type: "recurring",
+          title: `${cat} recurrence`,
+          description: `${incs.length} recent incidents were grouped under ${cat}.`,
+          frequency: `${incs.length} recent tickets`,
+          affectedAssets: [],
+          affectedCustomers: [...new Set(incs.map(i => i.customer).filter(Boolean))].slice(0, 5),
+          confidence: Math.min(88, 55 + incs.length * 5),
+          suggestedPrevention: `Review common causes for ${cat} tickets and update runbooks or KB articles.`,
+          estimatedImpact: "Potential repeated analyst effort and slower resolution time.",
+          nextPredictedOccurrence: "Unknown",
+          relatedIncidents: incs.slice(0, 8).map(i => i.id).filter(Boolean),
+          degraded: true,
+          fallbackReason: aiErr.message,
+        }));
+        Object.entries(byAsset).filter(([, incs]) => incs.length >= 2).slice(0, 3).forEach(([asset, incs], idx) => fallbackPatterns.push({
+          patternId: `PAT-FB-ASSET-${idx + 1}`,
+          type: "asset_health",
+          title: `${asset} repeated incidents`,
+          description: `${asset} appears in ${incs.length} recent incidents.`,
+          frequency: `${incs.length} recent tickets`,
+          affectedAssets: [asset],
+          affectedCustomers: [...new Set(incs.map(i => i.customer).filter(Boolean))].slice(0, 5),
+          confidence: Math.min(90, 60 + incs.length * 8),
+          suggestedPrevention: `Check health, ownership, and known-error history for ${asset}.`,
+          estimatedImpact: "Repeated asset issues can consume support capacity and affect user productivity.",
+          nextPredictedOccurrence: "Unknown",
+          relatedIncidents: incs.slice(0, 8).map(i => i.id).filter(Boolean),
+          degraded: true,
+          fallbackReason: aiErr.message,
+        }));
+        patterns = fallbackPatterns.slice(0, 10);
+      }
 
       const now = new Date().toISOString();
       const actions = [];
@@ -3390,31 +3515,72 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
         max_output_tokens: 2000
       };
 
-      const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
-      const aiResult = await new Promise((resolve, reject) => {
-        const aiReq = https.request({
-          hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
-          method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY },
-        }, (aiRes) => {
-          let data = ""; aiRes.on("data", c => data += c);
-          aiRes.on("end", () => {
-            if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
-            else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
-          });
-        });
-        aiReq.on("error", reject);
-        aiReq.setTimeout(45000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
-        aiReq.write(JSON.stringify(payload));
-        aiReq.end();
-      });
-
-      const text = extractAIText(aiResult);
       let actions;
       try {
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({
+            hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+            method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY },
+          }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => {
+              if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data));
+              else reject(new Error(`AI ${aiRes.statusCode}: ${data.substring(0, 500)}`));
+            });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(35000, () => { aiReq.destroy(); reject(new Error("AI timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+
+        const text = extractAIText(aiResult);
         actions = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
         if (!Array.isArray(actions)) actions = [actions];
-      } catch {
-        actions = [];
+      } catch (aiErr) {
+        console.warn("[AI Actions Scan] Rule fallback:", aiErr.message);
+        const fallbackActions = [];
+        critical.slice(0, 10).forEach((inc, idx) => fallbackActions.push({
+          id: `AIA-FB-${Date.now().toString(36)}-${idx}`,
+          type: inc.assignee ? "escalation" : "assignment",
+          severity: inc.priority === "Sev-A" ? "critical" : "high",
+          title: inc.assignee ? `Escalate ${inc.id}` : `Assign ${inc.id}`,
+          description: `${inc.priority || "High priority"} incident requires immediate service desk review.`,
+          incidentId: inc.id,
+          suggestedAction: inc.assignee ? `Review and escalate ${inc.id} with ${inc.assignee}.` : `Assign an owner and begin triage for ${inc.id}.`,
+          internalNote: `Generated by rule fallback after AI action scan failed: ${aiErr.message}`,
+          confidence: 72,
+          autoExecutable: false,
+          reasoning: "Critical/high priority open incident found during Autopilot scan.",
+        }));
+        slaAtRisk.slice(0, 10).forEach((inc, idx) => fallbackActions.push({
+          id: `SLA-FB-${Date.now().toString(36)}-${idx}`,
+          type: "sla_warning",
+          severity: "high",
+          title: `SLA review ${inc.id}`,
+          description: `Incident appears to be close to its SLA target and needs proactive review.`,
+          incidentId: inc.id,
+          suggestedAction: `Check SLA status and update requester or assignee for ${inc.id}.`,
+          internalNote: `Generated by rule fallback after AI action scan failed: ${aiErr.message}`,
+          confidence: 65,
+          autoExecutable: false,
+          reasoning: "SLA at-risk item found during Autopilot scan.",
+        }));
+        pendingChanges.slice(0, 10).forEach((chg, idx) => fallbackActions.push({
+          id: `CHG-FB-${Date.now().toString(36)}-${idx}`,
+          type: "change_review",
+          severity: chg.risk === "High" ? "high" : "medium",
+          title: `Review change ${chg.id}`,
+          description: `Change ${chg.id} is ${chg.status} and needs CAB or implementation attention.`,
+          incidentId: chg.id,
+          suggestedAction: `Review approval and implementation readiness for ${chg.id}.`,
+          internalNote: `Generated by rule fallback after AI action scan failed: ${aiErr.message}`,
+          confidence: 66,
+          autoExecutable: false,
+          reasoning: "Pending change found during Autopilot scan.",
+        }));
+        actions = fallbackActions;
       }
 
       // Stamp each action with metadata and save to DB
@@ -3739,7 +3905,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
         const scanReq = require("http").request({
           hostname: "localhost", port: PORT,
           path: "/api/ai/actions/scan", method: "POST",
-          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(scanPayload) }
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(scanPayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN }
         }, (r) => {
           let data = ""; r.on("data", c => data += c);
           r.on("end", () => { try { resolve(JSON.parse(data)); } catch { resolve({ actions: [] }); } });
@@ -3763,7 +3929,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
               const eReq = require("http").request({
                 hostname: "localhost", port: PORT,
                 path: "/api/ai/actions/send-approval-email", method: "POST",
-                headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(emailPayload) }
+                headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(emailPayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN }
               }, (r) => {
                 let data = ""; r.on("data", c => data += c);
                 r.on("end", () => resolve(data));

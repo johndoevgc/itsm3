@@ -1,6 +1,7 @@
 import React from "react";
 import { USERS } from "../constants/rbac.js";
 import { APP_VERSION } from "../constants/version.js";
+import { allLoginScopes } from "../../msalConfig.js";
 
 export default function LoginPage({ localUsername, setLocalUsername, localPassword, setLocalPassword, localLoginError, setLocalLoginError, localLoginLoading, setLocalLoginLoading, setCurrentUser, setIsLoggedIn, setErrorAdvisory, msalInstance }) {
 const loginCards = [
@@ -92,7 +93,7 @@ const handleSSOLogin = async (fallbackUser) => {
     sessionStorage.setItem("itsm_sso_fallback", JSON.stringify(fallbackUser));
     // Use redirect (not popup) — avoids popup-blocker and white-page race conditions
     await msalInstance.loginRedirect({
-      scopes: ["openid", "profile", "email", "User.Read"],
+      scopes: allLoginScopes,
       prompt: "select_account",
     });
     // Page navigates away — code below never executes

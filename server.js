@@ -4,6 +4,7 @@ const path = require("path");
 const https = require("https");
 const crypto = require("crypto");
 const zlib = require("zlib");
+process.env.INTERNAL_SCHEDULER_TOKEN = process.env.INTERNAL_SCHEDULER_TOKEN || crypto.randomBytes(32).toString("hex");
 const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware");
 const { SlaEngine, computeSlaStatus, getBusinessHoursElapsed } = require("./slaEngine");
 const { WebSocketServer } = require("./wsServer");
@@ -986,11 +987,20 @@ async function initDatabase() {
       },
       getOpen: async (coll) => {
         // Phase 6 — use generated column for indexed status filter
-        const [rows] = await pool.execute(
-          `SELECT id, data FROM itsm_data WHERE collection = ? AND gen_status NOT IN ('Closed', 'closed', 'Resolved', 'resolved') ORDER BY updated_at DESC`,
-          [coll]
-        );
-        return rows;
+        try {
+          const [rows] = await pool.execute(
+            `SELECT id, data FROM itsm_data WHERE collection = ? AND gen_status NOT IN ('Closed', 'closed', 'Resolved', 'resolved') ORDER BY updated_at DESC`,
+            [coll]
+          );
+          return rows;
+        } catch (err) {
+          if (!/gen_status/i.test(err.message || "")) throw err;
+          const [rows] = await pool.execute(
+            `SELECT id, data FROM itsm_data WHERE collection = ? AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), '') NOT IN ('Closed', 'closed', 'Resolved', 'resolved') ORDER BY updated_at DESC`,
+            [coll]
+          );
+          return rows;
+        }
       },
       getOne: async (coll, id) => {
         const [rows] = await pool.execute("SELECT data FROM itsm_data WHERE collection = ? AND id = ?", [coll, id]);
@@ -1249,6 +1259,61 @@ function json(res, status, data) {
   if (etag) { finalHeaders["ETag"] = etag; finalHeaders["Cache-Control"] = "private, must-revalidate"; }
   res.writeHead(status, finalHeaders);
   res.end(body);
+}
+
+function parseStoredRecord(row) {
+  if (!row) return null;
+  const data = row.data !== undefined ? row.data : row;
+  if (!data) return null;
+  if (typeof data === "string") {
+    try { return JSON.parse(data); } catch { return null; }
+  }
+  return typeof data === "object" ? data : null;
+}
+
+function normalizePortalEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function portalSessionRecordId(email) {
+  return "active:" + crypto.createHash("sha256").update(normalizePortalEmail(email)).digest("hex").slice(0, 40);
+}
+
+function isPortalSessionBypass(pathname) {
+  if (!pathname.startsWith("/api/")) return true;
+  if (pathname.startsWith("/api/auth/session")) return true;
+  if (pathname === "/api/health" || pathname === "/api/auth/local" || pathname === "/api/client-error") return true;
+  if (pathname === "/api/db-stats" || pathname === "/api/entra/users" || pathname === "/api/entra/users/photos") return true;
+  if (pathname === "/api/db/users") return true;
+  return pathname.startsWith("/api/zendesk/webhook")
+    || pathname.startsWith("/api/self-service/")
+    || pathname.startsWith("/api/status/")
+    || pathname.startsWith("/api/ingest/email")
+    || pathname.startsWith("/api/csat/");
+}
+
+async function enforcePortalSession(req, res, pathname, authResult) {
+  if (isPortalSessionBypass(pathname)) return false;
+  const email = normalizePortalEmail(authResult?.user?.email);
+  if (!authResult?.authenticated || !email || authResult.user?.id === "SYSTEM-SCHEDULER") return false;
+  try {
+    const row = await db.getOne("portal_sessions", portalSessionRecordId(email));
+    const active = parseStoredRecord(row);
+    if (!active || !active.activeSessionId) return false;
+    const provided = String(req.headers["x-itsm-session-id"] || "");
+    if (provided && provided === active.activeSessionId) return false;
+    json(res, 409, {
+      error: "Another ITSM session is active for this Entra user.",
+      code: "STALE_SESSION",
+      active: false,
+      activeSince: active.startedAt || null,
+      lastSeenAt: active.lastSeenAt || null,
+    });
+    return true;
+  } catch (err) {
+    console.warn("[Portal Session] Enforcement skipped:", err.message);
+    return false;
+  }
 }
 
 // Phase T5 — compressed text response helper. Used by CSV/HTML/text exports.
@@ -1599,6 +1664,7 @@ const VALID_COLLECTIONS = new Set([
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
   "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
+  "ai_resolve_queue", "ai_workflow_queue", "ai_knowledge",
   "sla_tracking", "sla_config",
   "notifications",
   "workflow_executions",
@@ -2314,7 +2380,7 @@ async function processInboundEmails() {
         if (AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT) {
           try {
             const triagePayload = JSON.stringify({ ticket: incident, requestedBy: "Email-to-Ticket Auto-Triage" });
-            const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload) } }, (triageRes) => {
+            const triageReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/auto-triage-assign", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(triagePayload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (triageRes) => {
               let d = ""; triageRes.on("data", c => d += c);
               triageRes.on("end", () => { console.log(`[Email-to-Ticket] AI auto-triage for ${incId}: ${d.substring(0, 200)}`); });
             });
@@ -2383,7 +2449,7 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("Access-Control-Allow-Origin", origin);
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-ITSM-Session-ID");
     if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   }
   // Security headers
@@ -2409,6 +2475,8 @@ const server = http.createServer(async (req, res) => {
     if (authResult.blocked) return; // 429 already sent
   }
   const auth = { authenticated: authResult.authenticated, name: authResult.user, role: authResult.role };
+
+  if (await enforcePortalSession(req, res, pathname, authResult)) return;
 
 
   // ─── Phase 4: Route Delegation ───────────────────────────────────
@@ -2669,7 +2737,7 @@ async function start() {
     cachedGetAll, cachedGetOne,
     getOrgName, purgeStatus, checkPermission, decodeJWT,
     // Config & constants
-    VALID_COLLECTIONS, APP_VERSION, APP_DISPLAY_NAME,
+    VALID_COLLECTIONS, APP_VERSION, APP_DISPLAY_NAME, PORT,
     PORTAL_URL, ORG_NAME, ORG_SHORT_NAME,
     ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT,
     ALLOWED_TENANT_IDS, buildClientAssertion,
@@ -2931,7 +2999,7 @@ async function start() {
       try {
         console.log("[Daily Sync] Starting AI knowledge sync...");
         const https = require("https");
-        const syncReq = require("http").request({ hostname: "localhost", port: PORT, path: "/api/ai/knowledge/sync", method: "POST", headers: { "Content-Type": "application/json" } }, (r) => {
+        const syncReq = require("http").request({ hostname: "localhost", port: PORT, path: "/api/ai/knowledge/sync", method: "POST", headers: { "Content-Type": "application/json", "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (r) => {
           let data = ""; r.on("data", c => data += c);
           r.on("end", () => console.log("[Daily Sync] Result:", data.substring(0, 200)));
         });
@@ -2980,6 +3048,202 @@ async function start() {
     // duplicating writes (visible as paired "[Uptime] Running initial snapshot..." etc.).
     if (IS_SCHEDULER_WORKER) {
 
+    // ─── AI Autopilot: Week 1-4 guarded operating model ─────────────
+    let aiAutopilotRunning = false;
+    const autopilotPost = (apiPath, body = {}, timeoutMs = 60000) => new Promise((resolve) => {
+      try {
+        const payload = JSON.stringify(body || {});
+        const req = http.request({
+          hostname: "127.0.0.1", port: PORT, path: apiPath, method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+            "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN,
+          },
+        }, (resp) => {
+          let data = "";
+          resp.on("data", c => data += c);
+          resp.on("end", () => {
+            let parsed = null;
+            try { parsed = data ? JSON.parse(data) : null; } catch { parsed = { raw: data.substring(0, 500) }; }
+            resolve({ ok: resp.statusCode >= 200 && resp.statusCode < 300, statusCode: resp.statusCode, body: parsed });
+          });
+        });
+        req.on("error", e => resolve({ ok: false, error: e.message }));
+        req.setTimeout(timeoutMs, () => { req.destroy(); resolve({ ok: false, error: "timeout" }); });
+        req.write(payload);
+        req.end();
+      } catch (e) {
+        resolve({ ok: false, error: e.message });
+      }
+    });
+
+    const loadCollectionObjects = async (collection) => {
+      const rows = await db.getAll(collection);
+      return rows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
+      }).filter(Boolean);
+    };
+
+    const loadAutopilotState = async () => {
+      try {
+        const row = await db.getOne("tenant_settings", "ai_autopilot_state");
+        return row ? (typeof row.data === "string" ? JSON.parse(row.data) : row.data) : {};
+      } catch { return {}; }
+    };
+
+    const saveAutopilotState = async (state) => {
+      try { await db.upsert("tenant_settings", "ai_autopilot_state", JSON.stringify({ ...state, updatedAt: new Date().toISOString() })); }
+      catch (e) { console.warn("[AI Autopilot] State save failed:", e.message); }
+    };
+
+    const hoursSince = (iso) => {
+      if (!iso) return Infinity;
+      const t = new Date(iso).getTime();
+      return Number.isFinite(t) ? (Date.now() - t) / 3600000 : Infinity;
+    };
+
+    const slimIncident = (inc) => ({
+      id: inc.id, title: inc.title, status: inc.status, priority: inc.priority,
+      category: inc.category, assignmentGroup: inc.assignmentGroup, assignee: inc.assignee,
+      customer: inc.customer, reporter: inc.reporter || inc.requesterName,
+      created: inc.created, createdAt: inc.createdAt, updatedAt: inc.updatedAt,
+      slaTarget: inc.slaTarget, resolvedAt: inc.resolvedAt,
+      affectedAsset: inc.affectedAsset || inc.asset,
+      aiTriaged: inc.aiTriaged,
+    });
+    const slimChange = (chg) => ({
+      id: chg.id, title: chg.title, status: chg.status, risk: chg.risk || chg.riskLevel,
+      type: chg.type, scheduledStart: chg.scheduledStart || chg.start,
+      assignmentGroup: chg.assignmentGroup, assignee: chg.assignee,
+    });
+    const slimRequest = (reqItem) => ({
+      id: reqItem.id, title: reqItem.title, status: reqItem.status, priority: reqItem.priority,
+      category: reqItem.category, assignee: reqItem.assignee, createdAt: reqItem.createdAt,
+    });
+
+    const runAiAutopilot = async (reason = "scheduled") => {
+      if (aiAutopilotRunning) return;
+      const flagOn = featureFlags.isEnabled("ai_autopilot");
+      if (!flagOn) return;
+      aiAutopilotRunning = true;
+      const startedAt = new Date().toISOString();
+      const cfg = featureFlags.payload("ai_autopilot") || {};
+      const rolloutWeek = Math.max(1, Math.min(4, Number(process.env.AI_AUTOPILOT_WEEK || cfg.rolloutWeek || 4)));
+      const maxTicketsPerRun = Math.max(1, Math.min(20, Number(cfg.maxTicketsPerRun || 5)));
+      const requestedBy = "AI Autopilot";
+      const approverEmails = (process.env.AI_AUTOPILOT_APPROVERS || cfg.approverEmails || EMAIL_REDIRECT_TARGET || "")
+        .toString().split(",").map(s => s.trim()).filter(Boolean);
+      const result = { id: `AP-${Date.now().toString(36)}`, type: "ai_autopilot", reason, rolloutWeek, maxTicketsPerRun, status: "running", startedAt, steps: [] };
+      try {
+        try { await db.upsert("ai_audit_log", result.id, JSON.stringify(result)); if (cacheLayer) cacheLayer.invalidatePrefix("ai_audit_log"); } catch {}
+        if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
+          result.steps.push({ step: "ai_ready", skipped: true, reason: "Azure OpenAI not configured" });
+          return;
+        }
+
+        const [incidents, changes, problems, requests, kbArticles, aiActions] = await Promise.all([
+          loadCollectionObjects("incidents"),
+          loadCollectionObjects("changes"),
+          loadCollectionObjects("problems"),
+          loadCollectionObjects("requests"),
+          loadCollectionObjects("kb"),
+          loadCollectionObjects("ai_actions"),
+        ]);
+        const openIncidents = incidents.filter(i => i && !i._deleted && !["Resolved", "Closed"].includes(i.status));
+        const compactIncidents = incidents.slice(0, 200).map(slimIncident);
+        const compactChanges = changes.slice(0, 100).map(slimChange);
+        const compactRequests = requests.slice(0, 100).map(slimRequest);
+        const compactProblems = problems.slice(0, 50).map(p => ({ id: p.id, title: p.title, status: p.status, category: p.category, linkedIncidents: p.linkedIncidents }));
+        const state = await loadAutopilotState();
+
+        if (rolloutWeek >= 1) {
+          const toTriage = openIncidents.filter(i => !i.aiTriaged && i.id).slice(0, maxTicketsPerRun).map(i => i.id);
+          if (toTriage.length > 0) {
+            const triage = await autopilotPost("/api/ai/batch-triage", { ticketIds: toTriage, requestedBy }, 90000);
+            result.steps.push({ step: "week1_batch_triage", count: toTriage.length, ok: triage.ok, statusCode: triage.statusCode, summary: triage.body?.summary || null, error: triage.error || triage.body?.error || null });
+          } else {
+            result.steps.push({ step: "week1_batch_triage", skipped: true, reason: "no_untriaged_open_incidents" });
+          }
+        }
+
+        if (rolloutWeek >= 2) {
+          const monitor = await autopilotPost("/api/ai/actions/monitor", { incidents: compactIncidents, changes: compactChanges, requestedBy, approverEmails, appUrl: PORTAL_URL }, 90000);
+          result.steps.push({ step: "week2_action_monitor", ok: monitor.ok, statusCode: monitor.statusCode, totalActions: monitor.body?.totalActions || 0, emailsSent: monitor.body?.emailsSent || 0, error: monitor.error || monitor.body?.error || null });
+
+          const workload = await autopilotPost("/api/ai/workload-rebalance", { requestedBy }, 90000);
+          result.steps.push({ step: "week2_workload_rebalance", ok: workload.ok, statusCode: workload.statusCode, actions: workload.body?.count || 0, imbalanceScore: workload.body?.analysis?.imbalanceScore || 0, error: workload.error || workload.body?.error || null });
+
+          const autoResolve = await autopilotPost("/api/ai/auto-resolve", { requestedBy, idleHours: Number(cfg.autoResolveIdleHours || 24), maxItems: Number(cfg.autoResolveMaxItems || 5) }, 90000);
+          result.steps.push({ step: "week2_auto_resolve_queue", ok: autoResolve.ok, statusCode: autoResolve.statusCode, suggestions: autoResolve.body?.suggestions?.length || 0, message: autoResolve.body?.message || null, error: autoResolve.error || autoResolve.body?.error || null });
+        }
+
+        if (rolloutWeek >= 3) {
+          const correlation = await autopilotPost("/api/ai/correlate-incidents", { requestedBy, limit: 50 }, 90000);
+          result.steps.push({ step: "week3_root_cause_correlation", ok: correlation.ok, statusCode: correlation.statusCode, actions: correlation.body?.count || 0, riskScore: correlation.body?.analysis?.riskScore || 0, error: correlation.error || correlation.body?.error || null });
+
+          const patterns = await autopilotPost("/api/ai/pattern-detect", { incidents: compactIncidents, problems: compactProblems, changes: compactChanges, requestedBy }, 90000);
+          result.steps.push({ step: "week3_pattern_detection", ok: patterns.ok, statusCode: patterns.statusCode, patterns: patterns.body?.patterns?.length || patterns.body?.count || 0, error: patterns.error || patterns.body?.error || null });
+        }
+
+        if (rolloutWeek >= 4) {
+          const kbEveryHours = Number(cfg.kbEveryHours || 6);
+          if (hoursSince(state.lastKbGapAt) >= kbEveryHours) {
+            const kbGaps = await autopilotPost("/api/ai/kb-gaps", { requestedBy }, 90000);
+            result.steps.push({ step: "week4_kb_gap_analysis", ok: kbGaps.ok, statusCode: kbGaps.statusCode, gaps: kbGaps.body?.gaps?.length || kbGaps.body?.analysis?.gaps?.length || 0, error: kbGaps.error || kbGaps.body?.error || null });
+            state.lastKbGapAt = new Date().toISOString();
+          } else {
+            result.steps.push({ step: "week4_kb_gap_analysis", skipped: true, reason: `cadence_${kbEveryHours}h` });
+          }
+
+          const kbSourceIds = new Set(kbArticles.map(k => k.sourceTicketId || k.sourceIncident || k.sourceIncidentId).filter(Boolean));
+          const kbDraftIncidentIds = new Set(aiActions.filter(a => a.type === "kb_draft" && a.incidentId).map(a => a.incidentId));
+          const resolvedForKb = incidents.filter(i => i && i.id && ["Resolved", "Closed"].includes(i.status) && !kbSourceIds.has(i.id) && !kbDraftIncidentIds.has(i.id)).slice(0, 5);
+          let kbDrafts = 0;
+          for (const ticket of resolvedForKb) {
+            const draft = await autopilotPost("/api/ai/kb-auto-generate", { ticket, requestedBy }, 90000);
+            if (draft.ok && draft.body?.success) kbDrafts++;
+          }
+          result.steps.push({ step: "week4_kb_drafts", scanned: resolvedForKb.length, created: kbDrafts });
+
+          const nowSGT = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" }));
+          const todaySGT = nowSGT.toISOString().slice(0, 10);
+          const briefingHour = Number(cfg.briefingHourSGT || 8);
+          if (nowSGT.getHours() >= briefingHour && state.lastBriefingDate !== todaySGT) {
+            const briefing = await autopilotPost("/api/ai/daily-briefing", { incidents: compactIncidents, changes: compactChanges, requests: compactRequests, requestedBy, shift: "daily-autopilot", recipients: approverEmails }, 90000);
+            result.steps.push({ step: "week4_daily_briefing", ok: briefing.ok, statusCode: briefing.statusCode, briefingId: briefing.body?.briefingId || null, error: briefing.error || briefing.body?.error || null });
+            if (briefing.ok) state.lastBriefingDate = todaySGT;
+          } else {
+            result.steps.push({ step: "week4_daily_briefing", skipped: true, reason: state.lastBriefingDate === todaySGT ? "already_sent_today" : `before_${briefingHour}_sgt` });
+          }
+        }
+
+        state.lastRunAt = new Date().toISOString();
+        state.lastRolloutWeek = rolloutWeek;
+        await saveAutopilotState(state);
+        if (wsServer) wsServer.broadcast("ai_autopilot", { action: "run_complete", rolloutWeek, steps: result.steps, at: state.lastRunAt });
+      } catch (e) {
+        result.error = e.message;
+        console.warn("[AI Autopilot] Run failed:", e.message);
+      } finally {
+        result.status = "finished";
+        result.finishedAt = new Date().toISOString();
+        try { await db.upsert("ai_audit_log", result.id, JSON.stringify(result)); if (cacheLayer) cacheLayer.invalidatePrefix("ai_audit_log"); } catch {}
+        console.log(`[AI Autopilot] ${reason} complete: ${result.steps.map(s => `${s.step}:${s.ok === false ? "fail" : s.skipped ? "skip" : "ok"}`).join(", ")}`);
+        aiAutopilotRunning = false;
+      }
+    };
+
+    const autopilotCfg = featureFlags.payload("ai_autopilot") || {};
+    const AI_AUTOPILOT_INTERVAL = Math.max(5, Number(process.env.AI_AUTOPILOT_INTERVAL_MIN || autopilotCfg.intervalMin || AI_THRESHOLDS.monitorIntervalMin || 15)) * 60 * 1000;
+    const aiAutopilotTimer = setTimeout(() => {
+      runAiAutopilot("startup_delay");
+      const aiAutopilotInterval = setInterval(() => runAiAutopilot("scheduled"), AI_AUTOPILOT_INTERVAL);
+      _shutdownIntervals.push(aiAutopilotInterval);
+    }, 3 * 60 * 1000);
+    _shutdownTimeouts.push(aiAutopilotTimer);
+    console.log(`[AI Autopilot] Week 1-4 guarded scheduler enabled every ${Math.round(AI_AUTOPILOT_INTERVAL / 60000)} minutes (first run in 3 min)`);
+
     // ─── SLA Guardian: Proactive SLA prediction scan (every 15 min) ──
     const SLA_GUARDIAN_INTERVAL = 15 * 60 * 1000; // 15 minutes
     let slaGuardianRunning = false;
@@ -2992,8 +3256,8 @@ async function start() {
           .filter(i => i && !i._deleted && !["Resolved", "Closed"].includes(i.status));
         if (openIncidents.length === 0) { slaGuardianRunning = false; return; }
 
-        const payload = JSON.stringify({ incidents: openIncidents, requestedBy: "SLA Guardian Cron" });
-        const predReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/sla-predict", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } }, (predRes) => {
+        const payload = JSON.stringify({ incidents: openIncidents.slice(0, 100).map(slimIncident), requestedBy: "SLA Guardian Cron" });
+        const predReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/sla-predict", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (predRes) => {
           let d = ""; predRes.on("data", c => d += c);
           predRes.on("end", () => {
             try {
@@ -3058,7 +3322,7 @@ async function start() {
             try {
               console.log(`[ZD AutoSync] Starting scheduled incremental sync (cadence ${Math.round(delay/1000)}s)...`);
               const http = require("http");
-              const syncReq = http.request({ hostname: "localhost", port: PORT, path: "/api/zendesk/incremental-sync", method: "POST", headers: { "Content-Type": "application/json" } }, (r) => {
+              const syncReq = http.request({ hostname: "localhost", port: PORT, path: "/api/zendesk/incremental-sync", method: "POST", headers: { "Content-Type": "application/json", "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (r) => {
                 let data = ""; r.on("data", c => data += c);
                 r.on("end", () => console.log("[ZD AutoSync] Result:", data.substring(0, 300)));
               });

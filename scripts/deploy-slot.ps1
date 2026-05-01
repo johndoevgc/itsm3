@@ -66,11 +66,13 @@ if ($Swap) {
     Info "Rollback: swapping production -> staging (reverts the last swap)"
     az webapp deployment slot swap -g $ResourceGroup -n $AppName `
       --subscription $Subscription --slot production --target-slot staging | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Azure slot rollback swap command failed." }
     Ok "Rolled back. Verifying prod health..."
   } else {
     Info "Swapping staging -> production"
     az webapp deployment slot swap -g $ResourceGroup -n $AppName `
       --subscription $Subscription --slot staging --target-slot production | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Azure slot swap command failed." }
     Ok "Swap complete. Verifying prod health..."
   }
   $Slot = "production"; $publicHost = "$AppName.azurewebsites.net"; $baseUrl = "https://$publicHost"
@@ -79,6 +81,7 @@ if ($Swap) {
     Write-Host "[FAIL] Prod unhealthy after swap. Auto-reverting..." -ForegroundColor Red
     az webapp deployment slot swap -g $ResourceGroup -n $AppName `
       --subscription $Subscription --slot production --target-slot staging | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Prod failed health check and automatic rollback swap command failed." }
     Fail "Prod failed health check; auto-rolled back."
   }
   Ok "Prod health: $($h | ConvertTo-Json -Depth 3 -Compress)"
@@ -91,7 +94,8 @@ if ($Build) {
   npx vite build
   if ($LASTEXITCODE -ne 0) { Fail "vite build failed" }
   Info "Copying dist/* -> deploy/"
-  if (-not (Test-Path "deploy")) { New-Item -ItemType Directory deploy | Out-Null }
+  if (Test-Path "deploy") { Remove-Item "deploy" -Recurse -Force }
+  New-Item -ItemType Directory deploy | Out-Null
   Copy-Item "dist/*" "deploy/" -Recurse -Force
   Ok "Build complete."
 }
@@ -106,7 +110,7 @@ $h = Get-AuthHeaders
 # Clean stale dist + old asset bundles (memory-noted gotcha)
 Info "Cleaning stale /home/site/wwwroot/dist and old assets..."
 $cleanCmd = @{
-  command = 'bash -c "rm -rf /home/site/wwwroot/dist && rm -f /home/site/wwwroot/assets/index-*.js"'
+  command = 'bash -c "rm -rf /home/site/wwwroot/dist && if [ -d /home/site/wwwroot/assets ]; then find /home/site/wwwroot/assets -maxdepth 1 -type f \( -name ''*.js'' -o -name ''*.css'' -o -name ''*.map'' \) -delete; fi"'
   dir     = "/home/site/wwwroot"
 } | ConvertTo-Json
 try {
