@@ -126,15 +126,21 @@ async function init(db, { reloadSec = 30 } = {}) {
     _timer = setInterval(_reload, reloadSec * 1000);
     if (_timer.unref) _timer.unref();
   }
-  // Also ensure each default exists as a row (so admins can toggle from the UI)
+  // Also ensure each default exists as a row (so admins can toggle from the UI).
+  // Only seed when the row is genuinely missing — never overwrite an existing
+  // DB row, otherwise admin-toggled values get reverted on every restart.
+  const _seedRows = await _db.getAll("feature_flags").catch(() => []);
+  const _existingNames = new Set();
+  for (const r of _seedRows) {
+    try { const o = JSON.parse(r.data); if (o && o.id) _existingNames.add(o.id); } catch { /* ignore */ }
+  }
   for (const [name, def] of Object.entries(DEFAULTS)) {
-    if (!_cache.has(name) || _cache.get(name).enabled !== def.enabled) {
-      try {
-        await db.upsert("feature_flags", name, JSON.stringify({
-          id: name, ...def, payload: null, updatedAt: new Date().toISOString(),
-        }));
-      } catch { /* ignore */ }
-    }
+    if (_existingNames.has(name)) continue;
+    try {
+      await _db.upsert("feature_flags", name, JSON.stringify({
+        id: name, ...def, updatedAt: new Date().toISOString(),
+      }));
+    } catch { /* ignore */ }
   }
   await _reload();
   return module.exports;
