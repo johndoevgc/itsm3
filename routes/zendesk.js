@@ -272,6 +272,77 @@ module.exports = function createZendeskRoutes(ctx) {
       const VALID_ZD_PRIORITIES = new Set(["urgent", "high", "normal", "low"]);
       const isValidTicketId = (id) => /^\d{1,15}$/.test(String(id));
 
+      // ─── v3.23.0: Centralized Zendesk→ITSM sync helper ───────────────
+      // Single source-of-truth used by webhook, sync-ticket, incremental sync, stale-check.
+      // Tracks SLA pause for BOTH "Pending" and "On Hold" (Zendesk's two paused states),
+      // anchors slaStartAt/firstResponseAt/resolvedAt to ZD timestamps, and captures
+      // ZD metric_set business-hour values into inc.zdMetrics for accurate SLA reporting.
+      const ZD_STATUS_MAP = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
+      const ZD_PRIORITY_MAP = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
+      const ZD_PAUSE_STATES = new Set(["Pending", "On Hold"]);
+      function applyZendeskTicketSync(inc, t, ms, source) {
+        if (!inc || !t) return false;
+        const safeMs = ms || {};
+        const newStatus = ZD_STATUS_MAP[t.status];
+        const newPriority = ZD_PRIORITY_MAP[t.priority];
+        let changed = false;
+        // Status with SLA pause/resume tracking (Pending OR On Hold == paused)
+        if (newStatus && newStatus !== inc.status) {
+          inc.slaPauseHistory = inc.slaPauseHistory || [];
+          const wasPaused = ZD_PAUSE_STATES.has(inc.status);
+          const isPaused = ZD_PAUSE_STATES.has(newStatus);
+          const nowIso = new Date().toISOString();
+          if (isPaused && !wasPaused) {
+            inc.slaPauseHistory.push({ pausedAt: nowIso, reason: `Zendesk status → ${t.status} (${source})` });
+          } else if (!isPaused && wasPaused) {
+            const last = inc.slaPauseHistory[inc.slaPauseHistory.length - 1];
+            if (last && !last.resumedAt) last.resumedAt = nowIso;
+          }
+          inc.status = newStatus; changed = true;
+        }
+        if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; changed = true; }
+        // Anchor SLA timestamps to Zendesk source-of-truth
+        const fpc = t.first_public_comment_at || safeMs.first_public_comment_at || null;
+        const solved = t.solved_at || safeMs.solved_at || null;
+        if (t.created_at && inc.slaStartAt !== t.created_at) { inc.slaStartAt = t.created_at; changed = true; }
+        if (fpc && inc.firstResponseAt !== fpc) { inc.firstResponseAt = fpc; changed = true; }
+        if (solved && inc.resolvedAt !== solved) { inc.resolvedAt = solved; changed = true; }
+        // v3.23: capture Zendesk business-hour metrics for accurate SLA
+        const pickMin = (calBlock, bizBlock) => {
+          if (bizBlock != null) return bizBlock;
+          if (calBlock != null) return calBlock;
+          return null;
+        };
+        const replyBiz = safeMs.reply_time_in_minutes && safeMs.reply_time_in_minutes.business;
+        const replyCal = safeMs.reply_time_in_minutes && safeMs.reply_time_in_minutes.calendar;
+        const fullResBiz = safeMs.full_resolution_time_in_minutes && safeMs.full_resolution_time_in_minutes.business;
+        const fullResCal = safeMs.full_resolution_time_in_minutes && safeMs.full_resolution_time_in_minutes.calendar;
+        const agentWaitBiz = safeMs.agent_wait_time_in_minutes && safeMs.agent_wait_time_in_minutes.business;
+        const agentWaitCal = safeMs.agent_wait_time_in_minutes && safeMs.agent_wait_time_in_minutes.calendar;
+        const requesterWaitBiz = safeMs.requester_wait_time_in_minutes && safeMs.requester_wait_time_in_minutes.business;
+        const onHoldBiz = safeMs.on_hold_time_in_minutes && safeMs.on_hold_time_in_minutes.business;
+        const newMetrics = {
+          replyTimeBizMin: pickMin(replyCal, replyBiz),
+          fullResolutionBizMin: pickMin(fullResCal, fullResBiz),
+          agentWaitBizMin: pickMin(agentWaitCal, agentWaitBiz),
+          requesterWaitBizMin: requesterWaitBiz != null ? requesterWaitBiz : null,
+          onHoldBizMin: onHoldBiz != null ? onHoldBiz : null,
+          updatedAt: t.updated_at || null,
+          source,
+        };
+        const prev = inc.zdMetrics || {};
+        if (prev.replyTimeBizMin !== newMetrics.replyTimeBizMin
+            || prev.fullResolutionBizMin !== newMetrics.fullResolutionBizMin
+            || prev.agentWaitBizMin !== newMetrics.agentWaitBizMin
+            || prev.requesterWaitBizMin !== newMetrics.requesterWaitBizMin
+            || prev.onHoldBizMin !== newMetrics.onHoldBizMin) {
+          inc.zdMetrics = newMetrics;
+          changed = true;
+        }
+        if (changed) inc.zdLastSync = new Date().toISOString();
+        return changed;
+      }
+
       if (pathname === "/api/zendesk/me" && req.method === "GET") {
         const result = await zdRequest("GET", "/users/me.json");
         return json(res, 200, result);
@@ -322,19 +393,8 @@ module.exports = function createZendeskRoutes(ctx) {
           const linked = incidentIndex && incidentIndex.getByZdTicketId ? incidentIndex.getByZdTicketId(t.id) : null;
           if (linked) {
             const inc = linked;
-            const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-            const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-            const newStatus = statusMap[t.status];
-            const newPriority = priorityMap[t.priority];
-            if (newStatus && newStatus !== inc.status) { inc.status = newStatus; updated = true; }
-            if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; updated = true; }
-            const fpc = t.first_public_comment_at || ms.first_public_comment_at || null;
-            const solved = t.solved_at || ms.solved_at || null;
-            if (t.created_at && inc.slaStartAt !== t.created_at) { inc.slaStartAt = t.created_at; updated = true; }
-            if (fpc && inc.firstResponseAt !== fpc) { inc.firstResponseAt = fpc; updated = true; }
-            if (solved && inc.resolvedAt !== solved) { inc.resolvedAt = solved; updated = true; }
+            updated = applyZendeskTicketSync(inc, t, ms, "on_demand_sync");
             if (updated) {
-              inc.zdLastSync = new Date().toISOString();
               await db.upsert("incidents", inc.id, JSON.stringify(inc));
             }
             incId = inc.id;
@@ -1288,27 +1348,13 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                 if (_linked) {
                   hasLinkedIncident = true;
                   const inc = _linked.inc;
-                  const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-                  const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-                  let changed = false;
-                  const newStatus = statusMap[t.status];
-                  const newPriority = priorityMap[t.priority];
-                  if (newStatus && newStatus !== inc.status) { inc.status = newStatus; changed = true; }
-                  if (newPriority && newPriority !== inc.priority) { inc.priority = newPriority; changed = true; }
-                  // v3.13 Layer 1: anchor SLA timestamps to Zendesk source-of-truth
                   const _ms = t.metric_set || {};
-                  const _zdCreated = t.created_at;
-                  const _zdFpc = t.first_public_comment_at || _ms.first_public_comment_at || null;
-                  const _zdSolved = t.solved_at || _ms.solved_at || null;
-                  if (_zdCreated && inc.slaStartAt !== _zdCreated) { inc.slaStartAt = _zdCreated; changed = true; }
-                  if (_zdFpc && inc.firstResponseAt !== _zdFpc) { inc.firstResponseAt = _zdFpc; changed = true; }
-                  if (_zdSolved && inc.resolvedAt !== _zdSolved) { inc.resolvedAt = _zdSolved; changed = true; }
+                  const changed = applyZendeskTicketSync(inc, t, _ms, "incremental_sync");
                   if (changed) {
-                    inc.zdLastSync = new Date().toISOString();
                     inc.activityLog = [...(inc.activityLog || []), {
                       id: `AL-SYNC-${Date.now()}`, type: "sync", user: "Zendesk Sync",
                       time: new Date().toISOString(),
-                      detail: `Auto-synced from Zendesk #${t.id}: status=${newStatus || '-'}, priority=${newPriority || '-'}`,
+                      detail: `Auto-synced from Zendesk #${t.id}: status=${ZD_STATUS_MAP[t.status] || '-'}, priority=${ZD_PRIORITY_MAP[t.priority] || '-'}`,
                     }];
                     await db.upsert("incidents", inc.id, JSON.stringify(inc));
                   }
@@ -1401,8 +1447,6 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           // ─── Stale-check pass: catch ITSM incidents whose ZD tickets changed while sync was inactive ───
           try {
             const staleRows = await db.getAll("incidents");
-            const statusMap2 = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-            const priorityMap2 = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
             const staleNow = Date.now();
             const STALE_THRESHOLD = 60 * 60 * 1000; // 1 hour
             const staleCandidates = [];
@@ -1421,24 +1465,21 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
               for (let si = 0; si < staleIds.length; si += 100) {
                 try {
                   const batch = staleIds.slice(si, si + 100);
-                  const res2 = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}`);
-                  for (const t of (res2.tickets || [])) zdCache[t.id] = { status: t.status, priority: t.priority };
+                  const res2 = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}&include=metric_sets`);
+                  for (const t of (res2.tickets || [])) zdCache[t.id] = t;
                 } catch { /* ignore */ }
               }
               let staleFixed = 0;
               for (const inc of staleCandidates) {
                 const zd = zdCache[inc.zdTicketId];
                 if (!zd) continue;
-                const ns = statusMap2[zd.status], np = priorityMap2[zd.priority];
-                let ch = false;
-                if (ns && ns !== inc.status) { inc.status = ns; ch = true; }
-                if (np && np !== inc.priority) { inc.priority = np; ch = true; }
+                const ms = zd.metric_set || {};
+                const ch = applyZendeskTicketSync(inc, zd, ms, "stale_check");
                 if (ch) {
-                  inc.zdLastSync = new Date().toISOString();
                   inc.updatedAt = inc.zdLastSync;
                   if (["Resolved", "Closed"].includes(inc.status) && !inc.resolvedAt) inc.resolvedAt = inc.zdLastSync;
                   if (inc.status === "Closed" && !inc.closedAt) inc.closedAt = inc.zdLastSync;
-                  inc.activityLog = [...(inc.activityLog || []), { id: `AL-STALE-${Date.now()}`, type: "sync", user: "ZD Stale-Check", time: inc.zdLastSync, detail: `Stale-check: ZD #${inc.zdTicketId} → status=${ns || '-'}, priority=${np || '-'}` }];
+                  inc.activityLog = [...(inc.activityLog || []), { id: `AL-STALE-${Date.now()}`, type: "sync", user: "ZD Stale-Check", time: inc.zdLastSync, detail: `Stale-check: ZD #${inc.zdTicketId} → status=${ZD_STATUS_MAP[zd.status] || '-'}, priority=${ZD_PRIORITY_MAP[zd.priority] || '-'}` }];
                   await db.upsert("incidents", inc.id, JSON.stringify(inc));
                   staleFixed++;
                 }
@@ -1894,31 +1935,8 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
               const _whLinked = _whIncByZdId.get(String(t.id));
               if (_whLinked) {
                 const inc = _whLinked;
-                const priorityMap = { "urgent": "Sev-A", "high": "Sev-B", "normal": "Sev-C", "low": "Sev-D" };
-                const statusMap = { "new": "New", "open": "Open", "pending": "Pending", "hold": "On Hold", "solved": "Resolved", "closed": "Closed" };
-                let changed = false;
-                const _newStatus = statusMap[t.status];
-                const _newPriority = priorityMap[t.priority];
-                if (_newStatus && _newStatus !== inc.status) {
-                  // v3.14 Layer 5: SLA pause/resume on Pending↔active transitions
-                  inc.slaPauseHistory = inc.slaPauseHistory || [];
-                  if (_newStatus === "Pending" && inc.status !== "Pending") {
-                    inc.slaPauseHistory.push({ pausedAt: new Date().toISOString(), reason: `Zendesk status → pending (webhook)` });
-                  } else if (inc.status === "Pending" && _newStatus !== "Pending") {
-                    const last = inc.slaPauseHistory[inc.slaPauseHistory.length - 1];
-                    if (last && !last.resumedAt) last.resumedAt = new Date().toISOString();
-                  }
-                  inc.status = _newStatus; changed = true;
-                }
-                if (_newPriority && _newPriority !== inc.priority) { inc.priority = _newPriority; changed = true; }
-                // v3.14 Layer 1: anchor SLA timestamps from webhook payload
-                const _whFpc = t.first_public_comment_at || _whMs.first_public_comment_at || null;
-                const _whSolved = t.solved_at || _whMs.solved_at || null;
-                if (t.created_at && inc.slaStartAt !== t.created_at) { inc.slaStartAt = t.created_at; changed = true; }
-                if (_whFpc && inc.firstResponseAt !== _whFpc) { inc.firstResponseAt = _whFpc; changed = true; }
-                if (_whSolved && inc.resolvedAt !== _whSolved) { inc.resolvedAt = _whSolved; changed = true; }
+                const changed = applyZendeskTicketSync(inc, t, _whMs, "webhook");
                 if (changed) {
-                  inc.zdLastSync = new Date().toISOString();
                   inc.activityLog = [...(inc.activityLog || []), {
                     id: `AL-WH-${Date.now()}`, type: "sync", user: "Zendesk Webhook",
                     time: new Date().toISOString(),
