@@ -310,9 +310,71 @@ export function ChatAssistTab({ currentUser, showToast, ticketId, compact }) {
           {sending ? "…" : "Send"}
         </button>
       </div>
+      <AgentQuickActions
+        ticketId={ticketId}
+        disabled={!session || sending || session?.status === "handoff"}
+        onPick={(prompt) => {
+          setInput(prompt);
+          // Auto-focus so the engineer can edit before pressing send.
+          setTimeout(() => {
+            const ta = document.querySelector("textarea[placeholder='Ask the AI co-pilot…']");
+            ta?.focus();
+          }, 0);
+        }}
+      />
       <div style={{ fontSize: 10, color: "#5A6178", marginTop: 6 }}>
         Ctrl/Cmd+Enter to send. PII is redacted before the AI call.
       </div>
+    </div>
+  );
+}
+
+// ─── Agent quick-action chips (v3.29.0) ─────────────────────────────────
+// 10 templated prompts so engineers can drive the co-pilot with one click
+// instead of typing the same questions over and over. The prompt lands in
+// the textarea (not auto-sent) so the engineer can tweak it before send.
+const AGENT_QUICK_ACTIONS = [
+  { icon: "🔍", label: "Similar tickets",   prompt: "Find the 5 most similar past tickets to this one and summarize how they were resolved." },
+  { icon: "📚", label: "Suggest KB",        prompt: "Search the KB for relevant articles and list the top 3 with a one-line reason each." },
+  { icon: "✍️", label: "Draft reply",        prompt: "Draft a friendly, professional reply I can send to the customer with the next steps." },
+  { icon: "📋", label: "Generate KB",       prompt: "Based on this ticket's resolution so far, draft a new KB article with title, symptoms, root cause, and step-by-step fix." },
+  { icon: "🩺", label: "Diagnostic steps",  prompt: "Give me a numbered diagnostic checklist (5–7 steps) to isolate the root cause for this issue." },
+  { icon: "⬆️", label: "Escalate?",         prompt: "Should this ticket be escalated to L2/L3? Give a one-line recommendation with reasoning." },
+  { icon: "📊", label: "Summarize ticket",  prompt: "Summarize this ticket in 3 bullets: what's wrong, what's been tried, what's next." },
+  { icon: "⏱️", label: "SLA risk",           prompt: "Assess SLA breach risk for this ticket and suggest one action to reduce risk." },
+  { icon: "🔐", label: "Security review",   prompt: "Review this ticket for any security/compliance concerns (PII exposure, account compromise, data loss). Flag if any." },
+  { icon: "🎯", label: "Root cause guess",  prompt: "Give me your best 3 hypotheses for the root cause, ranked by likelihood, each with one diagnostic to confirm." },
+];
+
+function AgentQuickActions({ onPick, disabled }) {
+  return (
+    <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {AGENT_QUICK_ACTIONS.map(a => (
+        <button
+          key={a.label}
+          type="button"
+          disabled={disabled}
+          onClick={() => onPick(a.prompt)}
+          title={a.prompt}
+          style={{
+            background: "#0A0C14",
+            color: "#A8B0C4",
+            border: "1px solid #1E2130",
+            borderRadius: 14,
+            padding: "4px 10px",
+            fontSize: 10,
+            cursor: disabled ? "not-allowed" : "pointer",
+            opacity: disabled ? 0.4 : 1,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            fontFamily: "'Space Grotesk', sans-serif",
+          }}
+        >
+          <span>{a.icon}</span>
+          <span>{a.label}</span>
+        </button>
+      ))}
     </div>
   );
 }

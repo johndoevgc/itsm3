@@ -454,14 +454,58 @@ describe("VGC AI Assist intake state machine", () => {
     return { id: "s1", channel: "customer", messages: [], intake: defaultIntake() };
   }
 
-  it("emits greeting + category card on start-greeting", () => {
+  it("emits greeting + symptom + category cards on start-greeting", () => {
     const s = freshSession();
     const m = advanceIntake(s, { kind: "start-greeting" }, "Alice");
     expect(m).toBeTruthy();
     expect(m.text).toMatch(/Hi Alice/);
-    expect(m.cards[0].type).toBe("category-grid");
-    expect(m.cards[0].options.length).toBe(10);
+    // v3.29.0 — greeting now exposes 30 quick-symptom shortcuts AND the
+    // 10 broad categories below them.
+    expect(m.cards.length).toBe(2);
+    expect(m.cards[0].kind).toBe("pick-symptom");
+    expect(m.cards[0].options.length).toBeGreaterThanOrEqual(30);
+    expect(m.cards[1].kind).toBe("select-category");
+    expect(m.cards[1].options.length).toBe(10);
     expect(s.intake.stage).toBe("category");
+  });
+
+  it("pick-symptom (no self-help) auto-fills title/category and jumps to impact", () => {
+    const s = freshSession();
+    advanceIntake(s, { kind: "start-greeting" }, "Alice");
+    const m = advanceIntake(s, { kind: "pick-symptom", value: "cant-send-email" });
+    expect(s.intake.category).toBe("Email & Outlook");
+    expect(s.intake.fields.title).toBe("Cannot send email");
+    expect(s.intake.stage).toBe("field:impact");
+    expect(m.cards[0].kind).toBe("pick-impact");
+  });
+
+  it("pick-symptom WITH self-help offers the 30-sec fix card first", () => {
+    const s = freshSession();
+    advanceIntake(s, { kind: "start-greeting" }, "Alice");
+    const m = advanceIntake(s, { kind: "pick-symptom", value: "forgot-password" });
+    expect(s.intake.stage).toBe("self-help-offer");
+    expect(s.intake.pendingSelfHelp).toBe("password-reset");
+    expect(m.cards[0].kind).toBe("try-self-help");
+    expect(m.cards[0].options.map(o => o.value).sort()).toEqual(["didnt-work", "skip-fix", "worked"]);
+  });
+
+  it("try-self-help 'worked' resolves directly to CSAT (no ticket)", () => {
+    const s = freshSession();
+    s.intake.stage = "self-help-offer";
+    s.intake.pendingSelfHelp = "password-reset";
+    const m = advanceIntake(s, { kind: "try-self-help", value: "worked" });
+    expect(s.intake.stage).toBe("csat");
+    expect(s.intake.selfResolved).toBe(true);
+    expect(m.cards[0].type).toBe("csat");
+  });
+
+  it("try-self-help 'didnt-work' continues to impact card", () => {
+    const s = freshSession();
+    s.intake.stage = "self-help-offer";
+    s.intake.fields.title = "Need to reset my password";
+    const m = advanceIntake(s, { kind: "try-self-help", value: "didnt-work" });
+    expect(s.intake.stage).toBe("field:impact");
+    expect(m.cards[0].kind).toBe("pick-impact");
   });
 
   it("advances through category → first field on select-category", () => {
