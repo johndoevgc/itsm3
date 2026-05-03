@@ -1,7 +1,8 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { COLORS, PERM_COLORS, inputStyle, btnStyle } from "../constants/theme.js";
+import { lazyWithRetry } from "../utils/lazyWithRetry.js";
 
-const WorkflowDesignerModule = lazy(() => import("./WorkflowDesignerModule.jsx"));
+const WorkflowDesignerModule = lazyWithRetry(() => import("./WorkflowDesignerModule.jsx"));
 import { DEFAULT_SLA_POLICY } from "../constants/status.js";
 import { RBAC_ROLES, RBAC_PERMISSIONS } from "../constants/rbac.js";
 import { APP_VERSION } from "../constants/version.js";

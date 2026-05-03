@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback, Suspense } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
@@ -24,26 +24,28 @@ import {
   EmailAuditTab, FeatureFlagsTab, AIDecisionsTab, ComplianceTab,
 } from "./src/components/AdminTabs.jsx";
 import { useLocale, SUPPORTED_LOCALES } from "./src/i18n/i18nProvider.jsx";
+import { lazyWithRetry } from "./src/utils/lazyWithRetry.js";
 // ─── Lazy-loaded modules (code-split into separate chunks) ───────────
-const AdminSettingsModule = lazy(() => import("./src/modules/AdminSettingsModule.jsx"));
-const DashboardModule = lazy(() => import("./src/modules/DashboardModule.jsx"));
-const ModalsModule = lazy(() => import("./src/modules/ModalsModule.jsx"));
-const ZendeskModule = lazy(() => import("./src/modules/ZendeskModule.jsx"));
-const ReportingModule = lazy(() => import("./src/modules/ReportingModule.jsx"));
-const KnowledgeModule = lazy(() => import("./src/modules/KnowledgeModule.jsx"));
-const CyberNewsModule = lazy(() => import("./src/modules/CyberNewsModule.jsx"));
-const ProductivityDashboard = lazy(() => import("./src/modules/ProductivityDashboard.jsx"));
-const SelfServicePortal = lazy(() => import("./src/modules/SelfServicePortal.jsx"));
-const CustomersModule = lazy(() => import("./src/modules/CustomersModule.jsx"));
-const IncidentsModule = lazy(() => import("./src/modules/IncidentsModule.jsx"));
-const SLATrackerModule = lazy(() => import("./src/modules/SLATrackerModule.jsx"));
-const ServiceStatusModule = lazy(() => import("./src/modules/ServiceStatusModule.jsx"));
-const ArchitectureDiagram = lazy(() => import("./src/modules/ArchitectureDiagram.jsx"));
-const ChangeCalendarModule = lazy(() => import("./src/modules/ChangeCalendarModule.jsx"));
-const AIAssistModule = lazy(() => import("./src/modules/AIAssistModule.jsx"));
-const AnalyticsModuleWrapper = lazy(() => import("./src/modules/AnalyticsModule.jsx"));
-const EngineerReviewHub = lazy(() => import("./src/modules/EngineerReviewHub.jsx"));
-const VendorPortalModule = lazy(() => import("./src/modules/VendorPortalModule.jsx"));
+// Use lazyWithRetry so stale chunks after deploy auto-recover via reload.
+const AdminSettingsModule = lazyWithRetry(() => import("./src/modules/AdminSettingsModule.jsx"));
+const DashboardModule = lazyWithRetry(() => import("./src/modules/DashboardModule.jsx"));
+const ModalsModule = lazyWithRetry(() => import("./src/modules/ModalsModule.jsx"));
+const ZendeskModule = lazyWithRetry(() => import("./src/modules/ZendeskModule.jsx"));
+const ReportingModule = lazyWithRetry(() => import("./src/modules/ReportingModule.jsx"));
+const KnowledgeModule = lazyWithRetry(() => import("./src/modules/KnowledgeModule.jsx"));
+const CyberNewsModule = lazyWithRetry(() => import("./src/modules/CyberNewsModule.jsx"));
+const ProductivityDashboard = lazyWithRetry(() => import("./src/modules/ProductivityDashboard.jsx"));
+const SelfServicePortal = lazyWithRetry(() => import("./src/modules/SelfServicePortal.jsx"));
+const CustomersModule = lazyWithRetry(() => import("./src/modules/CustomersModule.jsx"));
+const IncidentsModule = lazyWithRetry(() => import("./src/modules/IncidentsModule.jsx"));
+const SLATrackerModule = lazyWithRetry(() => import("./src/modules/SLATrackerModule.jsx"));
+const ServiceStatusModule = lazyWithRetry(() => import("./src/modules/ServiceStatusModule.jsx"));
+const ArchitectureDiagram = lazyWithRetry(() => import("./src/modules/ArchitectureDiagram.jsx"));
+const ChangeCalendarModule = lazyWithRetry(() => import("./src/modules/ChangeCalendarModule.jsx"));
+const AIAssistModule = lazyWithRetry(() => import("./src/modules/AIAssistModule.jsx"));
+const AnalyticsModuleWrapper = lazyWithRetry(() => import("./src/modules/AnalyticsModule.jsx"));
+const EngineerReviewHub = lazyWithRetry(() => import("./src/modules/EngineerReviewHub.jsx"));
+const VendorPortalModule = lazyWithRetry(() => import("./src/modules/VendorPortalModule.jsx"));
 // ─── Eagerly-loaded (rendered before/around the lazy <Suspense>) ─────
 import LoginPage from "./src/modules/LoginPage.jsx";
 import { markdownToHtml, exportToWord } from "./src/utils/docHelpers.js";

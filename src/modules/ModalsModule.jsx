@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import {
   COLORS, PRIORITY_COLORS, STATUS_COLORS, PERM_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
@@ -8,10 +8,11 @@ import {
 import {
   RBAC_PERMISSIONS, USERS,
 } from "../constants/rbac.js";
+import { lazyWithRetry } from "../utils/lazyWithRetry.js";
 
 // Lazy-loaded co-pilot tab. Heavy enough (chat history, AI calls) to defer
 // until an agent actually opens the "AI Co-Pilot" tab inside an incident.
-const LazyChatAssistTab = lazy(() => import("../components/ChatAssistTab.jsx")
+const LazyChatAssistTab = lazyWithRetry(() => import("../components/ChatAssistTab.jsx")
   .then(m => ({ default: m.ChatAssistTab || m.default })));
 
 /* ─── Sub-component: AI Resolution Tab (hooks-safe) ─── */

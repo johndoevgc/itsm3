@@ -8,6 +8,130 @@ const http = require("http");
 module.exports = function createAIRoutes(ctx) {
   return async function handleAIRoutes(req, res, pathname, auth, authResult, urlObj) {
     const { db, json, readBody: _readBody, parseBody, sendText: _sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, PORT, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
+
+  // ─── GET /api/ai/sla-insights ────────────────────────────────────────────
+  // AI Front: scan the open-incident set, compute breach risk distribution,
+  // and ask the AI for prioritized actions to defend SLA. Cheap deterministic
+  // analytics first, then a single secondary-tier AI call. Cached 5 min.
+  if (pathname === "/api/ai/sla-insights" && req.method === "GET") {
+    try {
+      // Cache: 5-minute TTL keyed by snapshot of open-incident shape.
+      const cacheKey = "sla_insights_cache";
+      const cached = await db.getOne("ai_runtime", cacheKey);
+      if (cached) {
+        try {
+          const c = typeof cached.data === "string" ? JSON.parse(cached.data) : cached.data;
+          if (c && c.expiresAt && Date.now() < c.expiresAt) {
+            return json(res, 200, { ...c.payload, cached: true });
+          }
+        } catch { /* ignore stale cache */ }
+      }
+
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const open = incidents.filter(i => i && i.status && !["Resolved", "Closed", "Cancelled"].includes(i.status));
+
+      const policy = slaEngine && (slaEngine.currentPolicy || slaEngine.policy) || {};
+      const slaForPriority = (p) => {
+        const sev = policy.severities && (policy.severities[p] || policy.severities[`Sev-${p}`]);
+        if (sev && sev.worstResponse) return Number(sev.worstResponse);
+        return ({ Critical: 4, High: 8, Medium: 9, Low: 27 })[p] || 9;
+      };
+
+      const now = Date.now();
+      const risks = open.map(i => {
+        const created = new Date(i.createdAt || i.created || now).getTime();
+        const ageH = Math.max(0, (now - created) / 3600000);
+        const targetH = slaForPriority(i.priority || "Medium");
+        const pctUsed = targetH > 0 ? Math.round((ageH / targetH) * 100) : 0;
+        return {
+          id: i.id,
+          title: String(i.title || i.subject || "").slice(0, 120),
+          priority: i.priority || "Medium",
+          category: i.category || "Uncategorized",
+          assignee: i.assignedTo || "Unassigned",
+          ageHours: Math.round(ageH * 10) / 10,
+          targetHours: targetH,
+          pctUsed,
+          state: pctUsed >= 100 ? "breached" : pctUsed >= 75 ? "at_risk" : "on_track",
+        };
+      });
+
+      const breached = risks.filter(r => r.state === "breached");
+      const atRisk = risks.filter(r => r.state === "at_risk");
+      const onTrack = risks.filter(r => r.state === "on_track");
+      const total = risks.length || 1;
+      const compliancePct = Math.round(((total - breached.length) / total) * 100);
+
+      const groupBy = (arr, key) => {
+        const m = new Map();
+        for (const r of arr) m.set(r[key], (m.get(r[key]) || 0) + 1);
+        return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, count]) => ({ name, count }));
+      };
+
+      const summary = {
+        generatedAt: new Date().toISOString(),
+        openCount: risks.length,
+        breached: breached.length,
+        atRisk: atRisk.length,
+        onTrack: onTrack.length,
+        compliancePct,
+        topBreachCategories: groupBy(breached, "category"),
+        topAtRiskCategories: groupBy(atRisk, "category"),
+        topAtRiskAssignees: groupBy(atRisk, "assignee"),
+        worstOffenders: [...breached, ...atRisk]
+          .sort((a, b) => b.pctUsed - a.pctUsed)
+          .slice(0, 10),
+      };
+
+      // Build a focused AI prompt. Keep tokens tight.
+      let aiRecommendations = null;
+      let aiModel = null;
+      try {
+        const top = summary.worstOffenders.slice(0, 8).map(o =>
+          `- ${o.id} [${o.priority}|${o.category}|${o.assignee}] ${o.pctUsed}% used, ${o.ageHours}h/${o.targetHours}h: ${o.title}`
+        ).join("\n");
+        const sys = `You are an ITSM SLA defense analyst. Given an open-incident snapshot, produce 3-5 concrete, prioritized actions a service desk lead can take in the next 30 minutes to prevent breaches and recover compliance. Be specific, reference incident IDs and priorities, and avoid generic advice. Respond as compact JSON only:
+{"actions":[{"priority":"P1|P2|P3","title":"...","why":"...","incidentIds":["INC-..."]}],"summary":"one-sentence headline"}`;
+        const user = `Snapshot:
+- Open: ${summary.openCount}, Breached: ${summary.breached}, At-risk: ${summary.atRisk}, On-track: ${summary.onTrack}, Compliance: ${summary.compliancePct}%
+- Top breach categories: ${summary.topBreachCategories.map(c => `${c.name}(${c.count})`).join(", ") || "none"}
+- Top at-risk categories: ${summary.topAtRiskCategories.map(c => `${c.name}(${c.count})`).join(", ") || "none"}
+- Top at-risk assignees: ${summary.topAtRiskAssignees.map(c => `${c.name}(${c.count})`).join(", ") || "none"}
+Worst offenders:
+${top || "none"}`;
+        const aiRes = await callAI(sys, user, { tier: "secondary", maxTokens: 800, timeout: 25000 });
+        aiModel = aiRes && (aiRes.model || aiRes.modelId) || null;
+        const text = extractAIText(aiRes) || "";
+        const m = text.match(/\{[\s\S]*\}$/);
+        if (m) {
+          try {
+            const parsed = JSON.parse(m[0]);
+            if (parsed && Array.isArray(parsed.actions)) {
+              aiRecommendations = parsed;
+            }
+          } catch { /* fallthrough to raw */ }
+        }
+        if (!aiRecommendations) aiRecommendations = { actions: [], summary: text.slice(0, 400) };
+      } catch (aiErr) {
+        aiRecommendations = { actions: [], summary: `AI insights unavailable: ${aiErr.message}` };
+      }
+
+      const payload = { summary, aiRecommendations, aiModel };
+      try {
+        await db.upsert("ai_runtime", cacheKey, JSON.stringify({
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          payload,
+        }));
+      } catch { /* ignore cache write failure */ }
+
+      return json(res, 200, { ...payload, cached: false });
+    } catch (err) {
+      console.error("[AI SLA Insights]", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
   if (pathname === "/api/ai/knowledge" && req.method === "GET") {
     try {
       const items = await db.getAll("ai_knowledge");

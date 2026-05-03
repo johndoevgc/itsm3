@@ -4,6 +4,26 @@ import { MsalProvider } from "@azure/msal-react";
 import { apiScopes, msalInstance } from "./msalConfig.js";
 import { I18nProvider } from "./src/i18n/i18nProvider.jsx";
 import ITSMApp from "./itsm-tool.jsx";
+import { clearLazyReloadGuard } from "./src/utils/lazyWithRetry.js";
+
+// ─── Global stale-chunk recovery (post-deploy) ─────────────────────
+// Vite emits a `vite:preloadError` event when a dynamic import preload fails
+// (typically because index.html is stale and references a chunk hash that no
+// longer exists on the server). When that happens, force a hard reload to
+// fetch a fresh index.html. Guard against loops via sessionStorage.
+if (typeof window !== "undefined") {
+  window.addEventListener("vite:preloadError", (event) => {
+    try {
+      const flag = "__vitePreloadReload__";
+      if (sessionStorage.getItem(flag)) return;
+      sessionStorage.setItem(flag, String(Date.now()));
+      // eslint-disable-next-line no-console
+      console.warn("[vite:preloadError] Stale chunk; forcing reload", event?.payload);
+      event.preventDefault?.();
+      window.location.reload();
+    } catch { /* ignore */ }
+  });
+}
 
 // ─── H1: Global fetch interceptor ────────────────────────────────────────
 // Attach an MSAL bearer token to every same-origin /api/* request so the
@@ -109,6 +129,24 @@ class ErrorBoundary extends Component {
   static getDerivedStateFromError(error) { return { error }; }
   componentDidCatch(error, info) {
     console.error("React Error:", error, info);
+    // Stale dynamic-import chunk after deploy → auto-reload once instead of
+    // surfacing the cryptic "Failed to fetch dynamically imported module" UI.
+    try {
+      const msg = String(error && error.message || error || "");
+      const isChunk = /Failed to fetch dynamically imported module/i.test(msg)
+                   || /Loading chunk \S+ failed/i.test(msg)
+                   || /Importing a module script failed/i.test(msg);
+      if (isChunk) {
+        const flag = "__errBoundaryChunkReload__";
+        if (!sessionStorage.getItem(flag)) {
+          sessionStorage.setItem(flag, String(Date.now()));
+          // eslint-disable-next-line no-console
+          console.warn("[ErrorBoundary] Stale chunk; forcing reload");
+          setTimeout(() => window.location.reload(), 100);
+          return;
+        }
+      }
+    } catch { /* ignore */ }
     // v3.16: ship caught errors to /api/client-error so we can surface them
     // in the Audit dashboard and catch React #310-class regressions early.
     try {
@@ -154,6 +192,10 @@ function renderApp() {
       </MsalProvider>
     </ErrorBoundary>
   );
+  // Clear the lazy-chunk reload guard now that the app mounted successfully —
+  // any future stale chunk during this session will be allowed to trigger one
+  // more reload attempt rather than being suppressed.
+  setTimeout(() => { try { clearLazyReloadGuard(); sessionStorage.removeItem("__vitePreloadReload__"); } catch { /* ignore */ } }, 5000);
 }
 
 // Initialize MSAL, process any redirect response, then ALWAYS render the app.

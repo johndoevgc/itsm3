@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   COLORS, PRIORITY_COLORS, STATUS_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
@@ -33,6 +33,34 @@ const SLAModule = useStableComponent(() => {
   const [slaRefreshing, setSlaRefreshing] = useState(false);
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const [slaLastSync, setSlaLastSync] = useState(null);
+  // ─── AI Front: SLA insights panel ─────────────────────────────────────
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [aiInsights, setAiInsights] = useState(null);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [aiInsightsError, setAiInsightsError] = useState(null);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const fetchAiInsights = useCallback(async () => {
+    setAiInsightsLoading(true);
+    setAiInsightsError(null);
+    try {
+      const r = await fetch("/api/ai/sla-insights");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setAiInsights(data);
+    } catch (e) {
+      setAiInsightsError(e.message);
+    } finally {
+      setAiInsightsLoading(false);
+    }
+  }, []);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    fetchAiInsights();
+    const id = setInterval(fetchAiInsights, 5 * 60 * 1000); // refresh every 5 min
+    return () => clearInterval(id);
+  }, [fetchAiInsights]);
   // Phase 8 — tighten SLA scope. Exclude:
   // - already Resolved/Closed/Cancelled
   // - historicalClose / archived flags (defensive — should already be Closed)
@@ -124,6 +152,107 @@ const SLAModule = useStableComponent(() => {
           {excludedHistorical > 0 && <> · <span style={{ color: "#8B92A8" }}>{excludedHistorical}</span> historically closed</>}
         </div>
       )}
+
+      {/* ─── AI Front: SLA Defense Insights ───────────────────────────── */}
+      <div style={{ background: "linear-gradient(135deg, #6366F108, #06B6D408)", borderRadius: 10, border: "1px solid #6366F133", padding: 18, marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18 }}>🤖</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Front · SLA Defense</div>
+              <div style={{ fontSize: 10, color: "#8B92A8", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+                {aiInsights?.summary?.generatedAt ? `Generated ${new Date(aiInsights.summary.generatedAt).toLocaleTimeString("en-SG", { hour12: false, timeZone: "Asia/Singapore" })}` : "Live recommendations from incident snapshot"}
+                {aiInsights?.cached ? " · cached" : ""}
+                {aiInsights?.aiModel ? ` · ${aiInsights.aiModel}` : ""}
+              </div>
+            </div>
+          </div>
+          <button style={{ ...btnStyle("#6366F1"), fontSize: 11, padding: "6px 14px", opacity: aiInsightsLoading ? 0.6 : 1 }} onClick={fetchAiInsights} disabled={aiInsightsLoading}>
+            {aiInsightsLoading ? "⏳ Analyzing..." : "🔄 Re-analyze"}
+          </button>
+        </div>
+
+        {aiInsightsError && (
+          <div style={{ fontSize: 12, color: "#FF6B6B", padding: "8px 12px", background: "#FF6B6B15", borderRadius: 6, marginBottom: 12 }}>
+            AI Front unavailable: {aiInsightsError}
+          </div>
+        )}
+
+        {!aiInsightsError && aiInsights && (
+          <>
+            {aiInsights.aiRecommendations?.summary && (
+              <div style={{ fontSize: 13, color: "#E8ECF4", marginBottom: 14, lineHeight: 1.5, padding: "10px 14px", background: "#0F1117", borderRadius: 6, borderLeft: "3px solid #6366F1" }}>
+                <strong style={{ color: "#A78BFA" }}>Headline:</strong> {aiInsights.aiRecommendations.summary}
+              </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 14 }}>
+              <div style={{ padding: "10px 12px", background: "#0F1117", borderRadius: 6 }}>
+                <div style={{ fontSize: 10, color: "#8B92A8", textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>Compliance</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: aiInsights.summary.compliancePct >= 90 ? "#4CAF50" : aiInsights.summary.compliancePct >= 70 ? "#FFB347" : "#FF4444" }}>{aiInsights.summary.compliancePct}%</div>
+              </div>
+              <div style={{ padding: "10px 12px", background: "#0F1117", borderRadius: 6 }}>
+                <div style={{ fontSize: 10, color: "#8B92A8", textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>Breached</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#FF4444" }}>{aiInsights.summary.breached}</div>
+              </div>
+              <div style={{ padding: "10px 12px", background: "#0F1117", borderRadius: 6 }}>
+                <div style={{ fontSize: 10, color: "#8B92A8", textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>At Risk</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#FFB347" }}>{aiInsights.summary.atRisk}</div>
+              </div>
+              <div style={{ padding: "10px 12px", background: "#0F1117", borderRadius: 6 }}>
+                <div style={{ fontSize: 10, color: "#8B92A8", textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>On Track</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#4CAF50" }}>{aiInsights.summary.onTrack}</div>
+              </div>
+            </div>
+
+            {Array.isArray(aiInsights.aiRecommendations?.actions) && aiInsights.aiRecommendations.actions.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, color: "#A0AEC0", textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8 }}>Recommended Actions (next 30 min)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {aiInsights.aiRecommendations.actions.slice(0, 5).map((action, idx) => {
+                    const pcol = action.priority === "P1" ? "#FF4444" : action.priority === "P2" ? "#FFB347" : "#64B5F6";
+                    return (
+                      <div key={idx} style={{ display: "flex", gap: 12, padding: "10px 14px", background: "#0F1117", borderRadius: 6, borderLeft: `3px solid ${pcol}` }}>
+                        <div style={{ minWidth: 30, fontSize: 11, fontWeight: 700, color: pcol, fontFamily: "'JetBrains Mono', monospace" }}>{action.priority || "P3"}</div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, color: "#E8ECF4", fontWeight: 600, marginBottom: 3 }}>{action.title}</div>
+                          {action.why && <div style={{ fontSize: 11, color: "#A0AEC0", lineHeight: 1.4 }}>{action.why}</div>}
+                          {Array.isArray(action.incidentIds) && action.incidentIds.length > 0 && (
+                            <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4, fontFamily: "'JetBrains Mono', monospace" }}>
+                              Tickets: {action.incidentIds.slice(0, 6).join(", ")}{action.incidentIds.length > 6 ? ` +${action.incidentIds.length - 6}` : ""}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(aiInsights.summary?.worstOffenders) && aiInsights.summary.worstOffenders.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 11, color: "#A0AEC0", textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace", marginBottom: 8 }}>Worst Offenders (highest SLA pressure)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {aiInsights.summary.worstOffenders.slice(0, 5).map(o => (
+                    <div key={o.id} style={{ display: "flex", gap: 12, padding: "6px 10px", background: "#0B0D14", borderRadius: 4, fontSize: 11, fontFamily: "'JetBrains Mono', monospace", alignItems: "center" }}>
+                      <span style={{ color: "#A78BFA", fontWeight: 600, minWidth: 90 }}>{o.id}</span>
+                      <span style={{ minWidth: 70, color: o.priority === "Critical" ? "#FF4444" : o.priority === "High" ? "#FFB347" : "#64B5F6" }}>{o.priority}</span>
+                      <span style={{ minWidth: 60, color: o.state === "breached" ? "#FF4444" : "#FFB347", fontWeight: 700 }}>{o.pctUsed}%</span>
+                      <span style={{ flex: 1, color: "#C4CAD6", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.title}</span>
+                      <span style={{ color: "#8B92A8", minWidth: 60, textAlign: "right" }}>{o.ageHours}h/{o.targetHours}h</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {!aiInsightsError && !aiInsights && aiInsightsLoading && (
+          <div style={{ fontSize: 12, color: "#A0AEC0", textAlign: "center", padding: 20 }}>Analyzing open incidents...</div>
+        )}
+      </div>
 
       {/* Severity SLA Targets Overview */}
       <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
