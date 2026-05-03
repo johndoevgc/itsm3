@@ -403,6 +403,53 @@ function SlaCountdownWidget({ incidents, computeIncidentSla, setActiveModule }) 
   );
 }
 
+/* ─── v3.28.0: Reassign Suggestions Quick-View ─────────── */
+function ReassignSuggestionsWidget({ setActiveModule }) {
+  const [suggestions, setSuggestions] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/sla/reassign-suggestions", { credentials: "include" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        if (!cancelled) setSuggestions(Array.isArray(d?.suggestions) ? d.suggestions : []);
+      } catch {
+        if (!cancelled) setSuggestions([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading || !suggestions || suggestions.length === 0) return null;
+  const top = suggestions.slice(0, 3);
+  return (
+    <div role="region" aria-label="Reassign Suggestions" style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #6366F133", padding: 16, marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16 }}>🔄</span> Reassign Suggestions
+          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: "#6366F122", color: "#A5B4FC", fontWeight: 600 }}>{suggestions.length}</span>
+        </h3>
+        <button onClick={() => setActiveModule("sla")} aria-label="Open SLA module" style={{ padding: "5px 12px", borderRadius: 6, background: "#6366F118", border: "1px solid #6366F133", color: "#A5B4FC", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Review →</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8 }}>
+        {top.map(s => (
+          <div key={s.incidentId || s.id} onClick={() => setActiveModule("sla")} style={{ background: "#0A0C14", borderRadius: 8, padding: "10px 12px", border: "1px solid #6366F122", cursor: "pointer" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#A5B4FC", fontFamily: "'JetBrains Mono', monospace" }}>{s.incidentId || s.id}</div>
+            <div style={{ fontSize: 10, color: "#C4CAD6", marginTop: 2 }}>
+              {s.currentAssignee || "Unassigned"} → <span style={{ color: "#6EE7B7", fontWeight: 600 }}>{s.suggestedAssignee || s.recommendedAssignee || "?"}</span>
+            </div>
+            {s.reason && <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{String(s.reason).substring(0, 80)}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ─── Phase 11.2: Incident Heatmap ──────────────────────── */
 function IncidentHeatmapWidget({ incidents }) {
   const heatData = useMemo(() => {
@@ -2409,6 +2456,9 @@ return (
 
     {/* ═══ Phase 11.1: SLA COUNTDOWN TRACKER ═══ */}
     {cardVisibility.slaCountdown?.on && <SlaCountdownWidget incidents={incidents} computeIncidentSla={computeIncidentSla} setActiveModule={setActiveModule} />}
+
+    {/* ═══ v3.28.0: Reassign Suggestions ═══ */}
+    <ReassignSuggestionsWidget setActiveModule={setActiveModule} />
 
     {/* ═══ Phase 11.2 & 11.3: INCIDENT HEATMAP + AI CONFIDENCE TRENDS ═══ */}
     {(cardVisibility.incidentHeatmap?.on || cardVisibility.aiConfTrend?.on) && (

@@ -72,6 +72,12 @@ const DEFAULTS = {
                          payload: { confidenceThreshold: 75, maxSuggestions: 3,
                                     customerWidgetEnabled: false, kbGroundingTopK: 5,
                                     rateLimitPerMin: 20 } },
+
+  // Phase B8 — Auto-attach top-K published KB articles to a new incident at
+  // create time, based on title/category keyword overlap. Helps the assignee
+  // start with relevant context. Off by default in prod; enable per-slot.
+  // payload.topK = max articles to attach (default 3).
+  kb_auto_attach:      { enabled: false, scope: "staging", payload: { topK: 3 } },
 };
 
 let _db = null;

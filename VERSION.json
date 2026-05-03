@@ -1,9 +1,9 @@
 {
-  "version": "3.27.0",
-  "build": "2026-05-05",
+  "version": "3.28.0",
+  "build": "2026-05-03",
   "phases": 13,
   "steps": 70,
-  "e2eTests": 359,
+  "e2eTests": 372,
   "collections": 74,
   "endpoints": "300+",
   "docs": [

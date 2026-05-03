@@ -581,6 +581,43 @@ module.exports = function createCoreRoutes(ctx) {
           const vResult = validate(collection, body);
           if (!vResult.success) return json(res, 400, { error: "Validation failed", details: vResult.error });
           if (collection === "incidents" && body.category) body.category = normalizeCategory(body.category);
+
+          // ─── Phase B8: Auto-attach top-K KB articles to new incidents ──
+          // Adds `relatedKbArticles` (array of { id, title, category, summary })
+          // before the row is written, so the assignee opens with context.
+          if (collection === "incidents" && featureFlags && featureFlags.isEnabled("kb_auto_attach")
+              && body.title && !Array.isArray(body.relatedKbArticles)) {
+            try {
+              const cfg = (featureFlags.payload && featureFlags.payload("kb_auto_attach")) || {};
+              const topK = Math.max(1, Math.min(10, Number(cfg.topK || 3)));
+              const haystackTerms = [
+                ...String(body.title || "").toLowerCase().split(/\W+/),
+                ...String(body.category || "").toLowerCase().split(/\W+/),
+                ...String(body.description || "").toLowerCase().split(/\W+/),
+              ].filter(t => t && t.length >= 3);
+              if (haystackTerms.length > 0) {
+                const kbRows = await db.getAll("kb");
+                const scored = [];
+                for (const r of kbRows) {
+                  let a; try { a = typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { continue; }
+                  if (!a || a.status !== "Published") continue;
+                  const blob = `${a.title || ""} ${a.summary || ""} ${(a.tags || []).join(" ")} ${a.category || ""}`.toLowerCase();
+                  let score = 0;
+                  for (const term of haystackTerms) if (blob.includes(term)) score++;
+                  if (score > 0) scored.push({ a, score });
+                }
+                scored.sort((x, y) => y.score - x.score);
+                body.relatedKbArticles = scored.slice(0, topK).map(({ a }) => ({
+                  id: a.id, title: a.title, category: a.category,
+                  summary: (a.summary || a.content || "").substring(0, 200),
+                }));
+                if (body.relatedKbArticles.length > 0) {
+                  console.log(`[KB Auto-Attach] Attached ${body.relatedKbArticles.length} article(s) to ${id}`);
+                }
+              }
+            } catch (kbErr) { console.warn("[KB Auto-Attach] Failed:", kbErr.message); }
+          }
+
           await db.upsert(collection, id, JSON.stringify(body));
           await db.audit(collection, id, "upsert", JSON.stringify(body), authResult.user?.email || body._user || "system");
           if (wsServer) wsServer.broadcast(collection, { action: "upsert", collection, id, summary: body.title || body.name || id });
