@@ -2,6 +2,8 @@
 // Evaluates workflow rules against real-time events and executes actions.
 // Runs server-side with periodic rule evaluation + event-driven triggers.
 
+const { computeSlaStatus_v2 } = require("./slaEngine.js");
+
 class WorkflowEngine {
   constructor(db, options = {}) {
     this.db = db;
@@ -761,11 +763,37 @@ class WorkflowEngine {
         const elapsedMin = (now - created) / 60000;
         const currentLevel = inc._escalationLevel || 0;
 
+        // v3.25 Phase B6: also support SLA-pct-aware thresholds.
+        // If a tier sets `slaPct`, trigger when SLA elapsed pct >= that value
+        // (uses computeSlaStatus_v2 already wired into incidents via inc.slaPct or inc._slaPct).
+        // Falls back to time-based thresholdMin when slaPct not set.
+        let incSlaPct = typeof inc.slaPct === "number" ? inc.slaPct
+          : typeof inc._slaPct === "number" ? inc._slaPct
+          : null;
+        if (incSlaPct === null) {
+          try {
+            const sla = computeSlaStatus_v2(inc, this._slaPolicy || undefined);
+            if (sla && typeof sla.worstPct === "number") incSlaPct = sla.worstPct;
+          } catch { /* ignore */ }
+        }
+
         // Find next escalation tier that should trigger
         for (const tier of this._escalationChain) {
           if (tier.level <= currentLevel) continue;
-          const threshold = inc.priority === "Sev-A" ? tier.thresholdMin : tier.thresholdMin * 2;
-          if (elapsedMin < threshold) break; // not ready for this tier yet
+          let triggered = false;
+          let triggerReason = "";
+          if (typeof tier.slaPct === "number" && incSlaPct !== null) {
+            if (incSlaPct >= tier.slaPct) {
+              triggered = true;
+              triggerReason = `SLA elapsed ${Math.round(incSlaPct)}% ≥ tier threshold ${tier.slaPct}%`;
+            } else break;
+          } else {
+            const threshold = inc.priority === "Sev-A" ? tier.thresholdMin : tier.thresholdMin * 2;
+            if (elapsedMin < threshold) break; // not ready for this tier yet
+            triggered = true;
+            triggerReason = `No resolution after ${Math.round(elapsedMin)} min (${inc.priority} threshold: ${threshold}min)`;
+          }
+          if (!triggered) break;
           if (inc.firstResponseAt && tier.level <= 1) continue; // has response, skip L1
 
           // Escalate to this tier
@@ -777,7 +805,7 @@ class WorkflowEngine {
           const escEntry = {
             id: `ESC-CHAIN-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             incidentId: inc.id, level: tier.level,
-            reason: `No resolution after ${Math.round(elapsedMin)} min (${inc.priority} threshold: ${threshold}min)`,
+            reason: triggerReason,
             notifyRoles: tier.notifyRoles, channels: tier.channels,
             triggeredBy: "EscalationChain", timestamp: new Date().toISOString(),
           };

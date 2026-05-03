@@ -553,6 +553,33 @@ describe("WorkflowEngine", () => {
         subject: expect.stringContaining("ESCALATION L1"),
       }));
     });
+
+    // v3.25 Phase B6 — SLA-pct-aware tiers
+    it("triggers tier when SLA elapsed pct meets tier.slaPct", async () => {
+      const engine = new WorkflowEngine(db);
+      engine.setEscalationChain([
+        { level: 1, slaPct: 75, notifyRoles: ["engineer"], channels: ["inapp"] },
+      ]);
+      engine._cycleIncidents = [
+        { id: "INC-EC-PCT", priority: "Sev-A", status: "Open",
+          createdAt: new Date(Date.now() - 60 * 60000).toISOString(), slaPct: 80 },
+      ];
+      await engine._runEscalationChain();
+      expect(db.upsert).toHaveBeenCalledWith("incidents", "INC-EC-PCT", expect.stringContaining('"escalationLevel":1'));
+    });
+
+    it("does NOT trigger SLA-pct tier below threshold", async () => {
+      const engine = new WorkflowEngine(db);
+      engine.setEscalationChain([
+        { level: 1, slaPct: 75, notifyRoles: ["engineer"], channels: ["inapp"] },
+      ]);
+      engine._cycleIncidents = [
+        { id: "INC-EC-PCT2", priority: "Sev-A", status: "Open",
+          createdAt: new Date(Date.now() - 60 * 60000).toISOString(), slaPct: 50 },
+      ];
+      await engine._runEscalationChain();
+      expect(db.upsert).not.toHaveBeenCalledWith("incidents", "INC-EC-PCT2", expect.anything());
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════

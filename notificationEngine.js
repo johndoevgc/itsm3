@@ -18,10 +18,36 @@ class NotificationEngine {
     this.stats = { sent: 0, failed: 0, byChannel: { email: 0, teams: 0, slack: 0, inapp: 0, webhook: 0 } };
   }
 
+  // ─── Quiet hours filter (v3.25) ───────────────────────────────────
+  // During quiet hours (default 22:00–07:00 Asia/Singapore + weekends),
+  // suppress info/warning notifications to noisy channels (email/teams/slack)
+  // for non-critical items. In-app notifications always pass (visible only when user is online).
+  // Critical severity always bypasses the filter. Configurable via env:
+  //   QUIET_HOURS_START=22  QUIET_HOURS_END=7  QUIET_HOURS_TZ=Asia/Singapore
+  //   QUIET_HOURS_ENABLED=true (default true)  QUIET_HOURS_WEEKEND=true (default true)
+  _isQuietHours() {
+    if (process.env.QUIET_HOURS_ENABLED === "false") return false;
+    try {
+      const tz = process.env.QUIET_HOURS_TZ || "Asia/Singapore";
+      const now = new Date();
+      const fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz, hour: "numeric", hour12: false, weekday: "short",
+      }).formatToParts(now);
+      const hour = parseInt(fmt.find(p => p.type === "hour")?.value || "0", 10);
+      const weekday = fmt.find(p => p.type === "weekday")?.value || "";
+      const isWeekend = (weekday === "Sat" || weekday === "Sun");
+      if (process.env.QUIET_HOURS_WEEKEND !== "false" && isWeekend) return true;
+      const startH = parseInt(process.env.QUIET_HOURS_START || "22", 10);
+      const endH   = parseInt(process.env.QUIET_HOURS_END   || "7",  10);
+      // Wraps midnight if start > end
+      return startH > endH ? (hour >= startH || hour < endH) : (hour >= startH && hour < endH);
+    } catch { return false; }
+  }
+
   // ─── Send notification through configured channels ────────────────
   async send(notification) {
     const {
-      channels = ["inapp"], // array of: email, teams, slack, inapp, webhook
+      channels: rawChannels = ["inapp"], // array of: email, teams, slack, inapp, webhook
       title,
       body,
       severity = "info", // info, warning, critical
@@ -31,6 +57,19 @@ class NotificationEngine {
       data = {},
     } = notification;
 
+    // v3.25: Quiet-hours filter — suppress noisy channels for non-critical items.
+    // Sev-A breach notifications (severity=critical) always go through.
+    let channels = rawChannels;
+    let suppressedDuringQuietHours = false;
+    if (severity !== "critical" && this._isQuietHours()) {
+      const noisyChannels = new Set(["email", "teams", "slack"]);
+      const filtered = rawChannels.filter(c => !noisyChannels.has(c));
+      if (filtered.length !== rawChannels.length) {
+        suppressedDuringQuietHours = true;
+        channels = filtered.length > 0 ? filtered : ["inapp"];
+      }
+    }
+
     const results = [];
     const record = {
       id: `NOTIF-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -38,6 +77,7 @@ class NotificationEngine {
       recipients, incidentId, data,
       createdAt: new Date().toISOString(),
       results: [],
+      suppressedDuringQuietHours,
     };
 
     for (const channel of channels) {
