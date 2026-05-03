@@ -120,11 +120,24 @@ function computeSlaStatus(incident, policy) {
 
   // If created is already a number (hours elapsed, from seed data), use it directly
   let hoursElapsed;
+  let elapsedSource = "wall_clock";
   if (typeof createdAt === "number") {
     hoursElapsed = createdAt;
   } else {
-    const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [], slaPauseHistory: incident.slaPauseHistory || [] } : { slaPauseHistory: incident.slaPauseHistory || [] };
-    hoursElapsed = getBusinessHoursElapsed(createdAt, now, bhOptions);
+    // v3.23.1: Prefer Zendesk's authoritative business-hour metrics when present.
+    // Falls back to local BH calc (which already subtracts slaPauseHistory).
+    const zm = incident.zdMetrics || null;
+    const isResolved = !!incident.resolvedAt || ["resolved", "closed"].includes(String(incident.status || "").toLowerCase());
+    if (zm && isResolved && Number.isFinite(zm.fullResolutionBizMin) && zm.fullResolutionBizMin >= 0) {
+      hoursElapsed = Math.round((zm.fullResolutionBizMin / 60) * 100) / 100;
+      elapsedSource = "zendesk_full_resolution";
+    } else if (zm && !isResolved && Number.isFinite(zm.agentWaitBizMin) && zm.agentWaitBizMin >= 0) {
+      hoursElapsed = Math.round((zm.agentWaitBizMin / 60) * 100) / 100;
+      elapsedSource = "zendesk_agent_wait";
+    } else {
+      const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [], slaPauseHistory: incident.slaPauseHistory || [] } : { slaPauseHistory: incident.slaPauseHistory || [] };
+      hoursElapsed = getBusinessHoursElapsed(createdAt, now, bhOptions);
+    }
   }
 
   const firstResponseTarget = sev.firstResponse;
@@ -151,6 +164,7 @@ function computeSlaStatus(incident, policy) {
     status,
     remainingHours: Math.max(0, Math.round((worstResponseTarget - hoursElapsed) * 100) / 100),
     breached: resolutionPct >= 100,
+    elapsedSource,
     computedAt: now.toISOString(),
   };
 }

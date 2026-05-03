@@ -179,7 +179,83 @@ describe("computeSlaStatus", () => {
   });
 });
 
-// ─── computeSlaStatus_v2 ────────────────────────────────────────────────
+// ─── v3.23.1: Zendesk metrics override + Pending/On Hold pause behavior ──
+describe("computeSlaStatus — zdMetrics override (v3.23.1)", () => {
+  const policy = DEFAULT_SLA_POLICY;
+
+  it("uses zdMetrics.fullResolutionBizMin when resolved", () => {
+    // Sev-C worst = 9h. ZD says 3h biz (180 min) → resolutionPct = 33.3%
+    const incident = {
+      id: "INC-Z1", priority: "Sev-C",
+      createdAt: "2026-04-22T09:00:00+08:00",
+      resolvedAt: "2026-04-30T17:00:00+08:00", // many wall-clock hours later
+      status: "Resolved",
+      zdMetrics: { fullResolutionBizMin: 180, agentWaitBizMin: 60 },
+    };
+    const r = computeSlaStatus(incident, policy);
+    expect(r.elapsedSource).toBe("zendesk_full_resolution");
+    expect(r.hoursElapsed).toBe(3);
+    expect(r.status).toBe("on_track");
+  });
+
+  it("uses zdMetrics.agentWaitBizMin when active (not resolved)", () => {
+    // Sev-C: 4h biz wait → 240 min → 4h elapsed → resolutionPct = 44%
+    const incident = {
+      id: "INC-Z2", priority: "Sev-C",
+      createdAt: "2026-04-22T09:00:00+08:00",
+      status: "Open",
+      zdMetrics: { fullResolutionBizMin: 999999, agentWaitBizMin: 240 },
+    };
+    const r = computeSlaStatus(incident, policy);
+    expect(r.elapsedSource).toBe("zendesk_agent_wait");
+    expect(r.hoursElapsed).toBe(4);
+  });
+
+  it("falls back to wall-clock when zdMetrics absent", () => {
+    const incident = { id: "INC-Z3", priority: "Sev-C", createdAt: 2 };
+    const r = computeSlaStatus(incident, policy);
+    expect(r.elapsedSource).toBe("wall_clock");
+    expect(r.hoursElapsed).toBe(2);
+  });
+
+  it("ignores fullResolutionBizMin when not resolved (uses wall_clock if no agentWait)", () => {
+    const incident = { id: "INC-Z4", priority: "Sev-C", createdAt: 1, status: "Open", zdMetrics: { fullResolutionBizMin: 60 } };
+    const r = computeSlaStatus(incident, policy);
+    expect(r.elapsedSource).toBe("wall_clock");
+    expect(r.hoursElapsed).toBe(1);
+  });
+});
+
+describe("getBusinessHoursElapsed — Pending+On Hold pause chain (v3.23)", () => {
+  it("subtracts BH across multiple closed pause entries (Pending then On Hold)", () => {
+    // Wed 9AM → Wed 6PM = 9h. Pause 10-11 (1h, Pending) and 13-15 (2h, On Hold) = 6h.
+    const created = new Date("2026-04-22T09:00:00+08:00");
+    const now = new Date("2026-04-22T18:00:00+08:00");
+    const hrs = getBusinessHoursElapsed(created, now, {
+      start: 9, end: 18, days: "Mon-Fri",
+      slaPauseHistory: [
+        { pausedAt: "2026-04-22T10:00:00+08:00", resumedAt: "2026-04-22T11:00:00+08:00", reason: "→ pending" },
+        { pausedAt: "2026-04-22T13:00:00+08:00", resumedAt: "2026-04-22T15:00:00+08:00", reason: "→ hold" },
+      ],
+    });
+    expect(hrs).toBe(6);
+  });
+
+  it("respects ongoing pause from On Hold transition (no resumedAt)", () => {
+    // Wed 9AM → Wed 5PM = 8h. Paused at 14:00 (On Hold), still ongoing at 17:00 → 5h.
+    const created = new Date("2026-04-22T09:00:00+08:00");
+    const now = new Date("2026-04-22T17:00:00+08:00");
+    const hrs = getBusinessHoursElapsed(created, now, {
+      start: 9, end: 18, days: "Mon-Fri",
+      slaPauseHistory: [
+        { pausedAt: "2026-04-22T14:00:00+08:00", reason: "→ hold (webhook)" },
+      ],
+    });
+    expect(hrs).toBe(5);
+  });
+});
+
+
 describe("computeSlaStatus_v2", () => {
   const policy = DEFAULT_SLA_POLICY;
 
