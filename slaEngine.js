@@ -124,16 +124,15 @@ function computeSlaStatus(incident, policy) {
   if (typeof createdAt === "number") {
     hoursElapsed = createdAt;
   } else {
-    // v3.23.1: Prefer Zendesk's authoritative business-hour metrics when present.
-    // Falls back to local BH calc (which already subtracts slaPauseHistory).
+    // v3.23.1 (corrected v3.23.2): Prefer Zendesk's authoritative full_resolution_time
+    // (business minutes) when the incident is RESOLVED. For active tickets we keep using
+    // local BH calc — Zendesk's `agent_wait_time` only counts Pending duration, not total
+    // active elapsed, so it would dramatically under-report SLA usage on Open tickets.
     const zm = incident.zdMetrics || null;
     const isResolved = !!incident.resolvedAt || ["resolved", "closed"].includes(String(incident.status || "").toLowerCase());
     if (zm && isResolved && Number.isFinite(zm.fullResolutionBizMin) && zm.fullResolutionBizMin >= 0) {
       hoursElapsed = Math.round((zm.fullResolutionBizMin / 60) * 100) / 100;
       elapsedSource = "zendesk_full_resolution";
-    } else if (zm && !isResolved && Number.isFinite(zm.agentWaitBizMin) && zm.agentWaitBizMin >= 0) {
-      hoursElapsed = Math.round((zm.agentWaitBizMin / 60) * 100) / 100;
-      elapsedSource = "zendesk_agent_wait";
     } else {
       const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [], slaPauseHistory: incident.slaPauseHistory || [] } : { slaPauseHistory: incident.slaPauseHistory || [] };
       hoursElapsed = getBusinessHoursElapsed(createdAt, now, bhOptions);

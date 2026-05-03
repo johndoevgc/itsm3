@@ -307,37 +307,38 @@ module.exports = function createZendeskRoutes(ctx) {
         if (t.created_at && inc.slaStartAt !== t.created_at) { inc.slaStartAt = t.created_at; changed = true; }
         if (fpc && inc.firstResponseAt !== fpc) { inc.firstResponseAt = fpc; changed = true; }
         if (solved && inc.resolvedAt !== solved) { inc.resolvedAt = solved; changed = true; }
-        // v3.23: capture Zendesk business-hour metrics for accurate SLA
-        const pickMin = (calBlock, bizBlock) => {
-          if (bizBlock != null) return bizBlock;
-          if (calBlock != null) return calBlock;
-          return null;
-        };
-        const replyBiz = safeMs.reply_time_in_minutes && safeMs.reply_time_in_minutes.business;
-        const replyCal = safeMs.reply_time_in_minutes && safeMs.reply_time_in_minutes.calendar;
-        const fullResBiz = safeMs.full_resolution_time_in_minutes && safeMs.full_resolution_time_in_minutes.business;
-        const fullResCal = safeMs.full_resolution_time_in_minutes && safeMs.full_resolution_time_in_minutes.calendar;
-        const agentWaitBiz = safeMs.agent_wait_time_in_minutes && safeMs.agent_wait_time_in_minutes.business;
-        const agentWaitCal = safeMs.agent_wait_time_in_minutes && safeMs.agent_wait_time_in_minutes.calendar;
-        const requesterWaitBiz = safeMs.requester_wait_time_in_minutes && safeMs.requester_wait_time_in_minutes.business;
-        const onHoldBiz = safeMs.on_hold_time_in_minutes && safeMs.on_hold_time_in_minutes.business;
+        // v3.23: capture Zendesk business-hour metrics for accurate SLA.
+        // CRITICAL: only store BUSINESS-hour values in `*BizMin` fields. Falling back to
+        // calendar minutes here would cause computeSlaStatus to treat 24h calendar time
+        // as 24h business time → massive over-count for tickets ZD hasn't computed biz metrics for yet.
+        const pickBiz = (block) => (block && Number.isFinite(block.business)) ? block.business : null;
         const newMetrics = {
-          replyTimeBizMin: pickMin(replyCal, replyBiz),
-          fullResolutionBizMin: pickMin(fullResCal, fullResBiz),
-          agentWaitBizMin: pickMin(agentWaitCal, agentWaitBiz),
-          requesterWaitBizMin: requesterWaitBiz != null ? requesterWaitBiz : null,
-          onHoldBizMin: onHoldBiz != null ? onHoldBiz : null,
+          replyTimeBizMin: pickBiz(safeMs.reply_time_in_minutes),
+          fullResolutionBizMin: pickBiz(safeMs.full_resolution_time_in_minutes),
+          agentWaitBizMin: pickBiz(safeMs.agent_wait_time_in_minutes),
+          requesterWaitBizMin: pickBiz(safeMs.requester_wait_time_in_minutes),
+          onHoldBizMin: pickBiz(safeMs.on_hold_time_in_minutes),
           updatedAt: t.updated_at || null,
           source,
         };
+        // Skip the metrics update entirely when ZD provided no business numbers AND no prior metrics —
+        // avoids writing a dummy all-null zdMetrics object that adds no information.
+        const allNull = newMetrics.replyTimeBizMin == null
+          && newMetrics.fullResolutionBizMin == null
+          && newMetrics.agentWaitBizMin == null
+          && newMetrics.requesterWaitBizMin == null
+          && newMetrics.onHoldBizMin == null;
         const prev = inc.zdMetrics || {};
-        if (prev.replyTimeBizMin !== newMetrics.replyTimeBizMin
-            || prev.fullResolutionBizMin !== newMetrics.fullResolutionBizMin
-            || prev.agentWaitBizMin !== newMetrics.agentWaitBizMin
-            || prev.requesterWaitBizMin !== newMetrics.requesterWaitBizMin
-            || prev.onHoldBizMin !== newMetrics.onHoldBizMin) {
-          inc.zdMetrics = newMetrics;
-          changed = true;
+        const hadPrev = !!inc.zdMetrics;
+        if (!(allNull && !hadPrev)) {
+          if (prev.replyTimeBizMin !== newMetrics.replyTimeBizMin
+              || prev.fullResolutionBizMin !== newMetrics.fullResolutionBizMin
+              || prev.agentWaitBizMin !== newMetrics.agentWaitBizMin
+              || prev.requesterWaitBizMin !== newMetrics.requesterWaitBizMin
+              || prev.onHoldBizMin !== newMetrics.onHoldBizMin) {
+            inc.zdMetrics = newMetrics;
+            changed = true;
+          }
         }
         if (changed) inc.zdLastSync = new Date().toISOString();
         return changed;
@@ -1462,18 +1463,23 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
             if (staleCandidates.length > 0) {
               const staleIds = [...new Set(staleCandidates.map(i => i.zdTicketId))];
               const zdCache = {};
+              const zdMsCache = {};
               for (let si = 0; si < staleIds.length; si += 100) {
                 try {
                   const batch = staleIds.slice(si, si + 100);
                   const res2 = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}&include=metric_sets`);
                   for (const t of (res2.tickets || [])) zdCache[t.id] = t;
+                  // Sideloaded metric_sets come back as a top-level array; match by ticket_id.
+                  for (const m of (res2.metric_sets || [])) {
+                    if (m && m.ticket_id != null) zdMsCache[m.ticket_id] = m;
+                  }
                 } catch { /* ignore */ }
               }
               let staleFixed = 0;
               for (const inc of staleCandidates) {
                 const zd = zdCache[inc.zdTicketId];
                 if (!zd) continue;
-                const ms = zd.metric_set || {};
+                const ms = zdMsCache[inc.zdTicketId] || zd.metric_set || {};
                 const ch = applyZendeskTicketSync(inc, zd, ms, "stale_check");
                 if (ch) {
                   inc.updatedAt = inc.zdLastSync;

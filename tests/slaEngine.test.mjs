@@ -198,8 +198,8 @@ describe("computeSlaStatus — zdMetrics override (v3.23.1)", () => {
     expect(r.status).toBe("on_track");
   });
 
-  it("uses zdMetrics.agentWaitBizMin when active (not resolved)", () => {
-    // Sev-C: 4h biz wait → 240 min → 4h elapsed → resolutionPct = 44%
+  it("does NOT use agentWaitBizMin for active tickets (it only counts Pending duration)", () => {
+    // Active Sev-C with ZD agent_wait=4h. Must fall back to wall_clock so SLA reflects total elapsed.
     const incident = {
       id: "INC-Z2", priority: "Sev-C",
       createdAt: "2026-04-22T09:00:00+08:00",
@@ -207,8 +207,7 @@ describe("computeSlaStatus — zdMetrics override (v3.23.1)", () => {
       zdMetrics: { fullResolutionBizMin: 999999, agentWaitBizMin: 240 },
     };
     const r = computeSlaStatus(incident, policy);
-    expect(r.elapsedSource).toBe("zendesk_agent_wait");
-    expect(r.hoursElapsed).toBe(4);
+    expect(r.elapsedSource).toBe("wall_clock");
   });
 
   it("falls back to wall-clock when zdMetrics absent", () => {
@@ -218,7 +217,7 @@ describe("computeSlaStatus — zdMetrics override (v3.23.1)", () => {
     expect(r.hoursElapsed).toBe(2);
   });
 
-  it("ignores fullResolutionBizMin when not resolved (uses wall_clock if no agentWait)", () => {
+  it("ignores fullResolutionBizMin when not resolved", () => {
     const incident = { id: "INC-Z4", priority: "Sev-C", createdAt: 1, status: "Open", zdMetrics: { fullResolutionBizMin: 60 } };
     const r = computeSlaStatus(incident, policy);
     expect(r.elapsedSource).toBe("wall_clock");
