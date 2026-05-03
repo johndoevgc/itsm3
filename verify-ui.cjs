@@ -34,7 +34,7 @@ async function showBanner(page, text) {
       });
       document.body.appendChild(banner);
     }, text);
-  } catch {}
+  } catch { /* ignore */ }
 }
 
 async function clickSidebar(page, label) {
@@ -157,7 +157,7 @@ async function clickSidebar(page, label) {
       await showBanner(page, "✅ ZD#8307 — Dedup fix verified, no duplicates");
     }
     await safeSS(page, "verify-05-zd8307.png");
-    try { await page.locator("input").first().fill(""); await sleep(1000); } catch {}
+    try { await page.locator("input").first().fill(""); await sleep(1000); } catch { /* ignore */ }
   });
 
   // ─── 6. ZENDESK INTEGRATION ──────────────────────────────────────
@@ -207,10 +207,10 @@ async function clickSidebar(page, label) {
   if (!browserClosed) {
     console.log("\n  Browser stays open for manual inspection.");
     console.log("  Press Ctrl+C to close.\n");
-    try { await sleep(300000); } catch {}
+    try { await sleep(300000); } catch { /* ignore */ }
   }
 
-  try { await context.close(); } catch {}
-  try { await browser.close(); } catch {}
+  try { await context.close(); } catch { /* ignore */ }
+  try { await browser.close(); } catch { /* ignore */ }
   process.exit(failed > 0 ? 1 : 0);
 })();

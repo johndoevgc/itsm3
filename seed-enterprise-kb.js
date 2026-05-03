@@ -3,9 +3,15 @@
 const mysql = require("mysql2/promise");
 
 async function main() {
+  // SECURITY (#4): refuse to run against the production MySQL host unless explicitly opted in.
+  const host = process.env.MYSQL_HOST || "vgc-itsm-mysql.mysql.database.azure.com";
+  if (/vgc-itsm1-mysql\.mysql\.database\.azure\.com/.test(host) && process.env.ALLOW_PROD_SEED_WRITES !== "true") {
+    console.error(`[seed-enterprise-kb] Refusing to run against production MySQL (${host}). Set ALLOW_PROD_SEED_WRITES=true.`);
+    process.exit(2);
+  }
   const kb = require("./kb-enterprise-articles.json");
   const conn = await mysql.createConnection({
-    host: process.env.MYSQL_HOST || "vgc-itsm-mysql.mysql.database.azure.com",
+    host,
     user: process.env.MYSQL_USER || "vgcadmin",
     password: process.env.MYSQL_PASSWORD || "",
     database: process.env.MYSQL_DATABASE || "flexibleserverdb",

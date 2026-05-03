@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let VERSION_META = { version: "0.0.0", build: "unknown" };
-try { VERSION_META = JSON.parse(readFileSync(resolve(__dirname, "VERSION.json"), "utf8")); } catch {}
+try { VERSION_META = JSON.parse(readFileSync(resolve(__dirname, "VERSION.json"), "utf8")); } catch { /* ignore */ }
 
 export default defineConfig({
   plugins: [react()],

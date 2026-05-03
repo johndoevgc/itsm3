@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import {
   COLORS, PRIORITY_COLORS, STATUS_COLORS, PERM_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
@@ -8,6 +8,11 @@ import {
 import {
   RBAC_PERMISSIONS, USERS,
 } from "../constants/rbac.js";
+
+// Lazy-loaded co-pilot tab. Heavy enough (chat history, AI calls) to defer
+// until an agent actually opens the "AI Co-Pilot" tab inside an incident.
+const LazyChatAssistTab = lazy(() => import("../components/ChatAssistTab.jsx")
+  .then(m => ({ default: m.ChatAssistTab || m.default })));
 
 /* ─── Sub-component: AI Resolution Tab (hooks-safe) ─── */
 function AiResolveTab({ inc, addActivity, showToast }) {
@@ -790,7 +795,7 @@ const IncidentDetailModal = () => {
         )}
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
-          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolution", icon: "🤖" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
+          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolution", icon: "🤖" }, { id: "copilot", label: "AI Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
             <button key={t.id} onClick={() => setDetailTab(t.id)}
               style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
               <span>{t.icon}</span> {t.label}
@@ -1257,6 +1262,16 @@ const IncidentDetailModal = () => {
 
           {/* ─── AI Resolution Suggestions Tab ─── */}
           {detailTab === "aiResolve" && <AiResolveTab inc={inc} addActivity={addActivity} showToast={showToast} />}
+          {detailTab === "copilot" && (
+            <Suspense fallback={<div style={{ color: "#5A6178", fontSize: 12, padding: 20 }}>Loading AI Co-Pilot…</div>}>
+              <LazyChatAssistTab
+                currentUser={currentUser}
+                showToast={showToast}
+                ticketId={inc.id}
+                compact={true}
+              />
+            </Suspense>
+          )}
 
           {/* ─── Major Incident Management Tab ─── */}
           {detailTab === "majorIncident" && (

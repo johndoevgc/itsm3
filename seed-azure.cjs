@@ -6,6 +6,11 @@ const fs = require("fs");
 const path = require("path");
 
 const BASE = process.argv[2] || "https://vgc-itsm-app.azurewebsites.net";
+// SECURITY (#4): refuse to run against production unless explicitly opted in.
+if (/vgc-itsm1-app\.azurewebsites\.net/.test(BASE) && process.env.ALLOW_PROD_SEED_WRITES !== "true") {
+  console.error(`[seed-azure] Refusing to run against production (${BASE}). Use staging or set ALLOW_PROD_SEED_WRITES=true.`);
+  process.exit(2);
+}
 const isHttps = BASE.startsWith("https");
 const client = isHttps ? https : http;
 

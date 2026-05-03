@@ -17,7 +17,6 @@ import {
 export default function SLATrackerModule({ ctx }) {
   const {
     incidents, slaPolicy, currentUser, showToast, search, setSearch,
-    isLocalDemoUser = false,
     setIncidents = () => {},
     setActiveModule = () => {},
     requests = [],
@@ -62,7 +61,7 @@ const SLAModule = useStableComponent(() => {
   const isSlaCompliant = (inc) => !computeIncidentSla(inc).isBreached;
 
   const refreshSlaFromZendesk = async () => {
-    if (isLocalDemoUser) { showToast("Demo mode — Zendesk sync unavailable", "info"); return; }
+    // (#4 follow-up, 2026-05-03) demo-mode guard removed; isLocalDemoUser was always false.
     setSlaRefreshing(true);
     try {
       await fetch("/api/zendesk/incremental-sync", { method: "POST" });

@@ -63,10 +63,12 @@ const loginCards = [
   },
 ];
 
-const handleLogin = (user) => {
-  setCurrentUser(user);
-  setIsLoggedIn(true);
+const handleLogin = (_user) => {
+  // intentionally no-op: demo bypass removed (production-only login).
+  // Reserved as a placeholder hook for future env-isolated demo URL.
 };
+// eslint-disable-next-line no-unused-vars
+void handleLogin;
 
 // ─── Local Auth (Dev Admin only) ────────────────────────────────────
 const handleLocalLogin = async () => {
@@ -190,7 +192,7 @@ return (
         </div>
       </div>
       <div style={{ fontSize: 13, color: "#5A617899", maxWidth: 500, margin: "0 auto", lineHeight: 1.6 }}>
-        Intelligent operations platform with Azure AI integration, predictive analytics, and automated remediation
+        Sign in to continue. This is the production environment — all actions are audited.
       </div>
     </div>
 
@@ -316,32 +318,8 @@ return (
                     ? "🔐 Live SSO • MFA Enforced • vgcsg.com Tenant"
                     : "🔐 Live SSO • Entra ID Sync • Role assigned by Admin"}
                 </div>
-                <button className="login-btn" onClick={() => handleLogin(card.user)} style={{
-                  width: "100%", padding: "8px 0", borderRadius: 8, marginTop: 6,
-                  background: "transparent", border: `1px solid ${card.borderColor}44`,
-                  color: card.borderColor, fontSize: 10, fontWeight: 600, cursor: "pointer",
-                  fontFamily: "'DM Sans', sans-serif",
-                }}>
-                  Demo Experience (Skip SSO)
-                </button>
               </>
-            ) : (
-              <>
-                <button className="login-btn" onClick={() => handleLogin(card.user)} style={{
-                  width: "100%", padding: "13px 0", borderRadius: 12,
-                  background: `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
-                  border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                  fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-                  "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
-                }}>
-                  Sign in — Demo Mode
-                </button>
-                <div style={{ textAlign: "center", marginTop: 10, fontSize: 10, color: "#5A617866" }}>
-                  Demo • {card.user.rbacRole}
-                </div>
-              </>
-            )}
+            ) : null}
           </div>
         </div>
       ))}

@@ -343,3 +343,45 @@ describe("SlaEngine", () => {
     expect(stats.policy.severities).toHaveProperty("Sev-A");
   });
 });
+
+// ─── Priority normalization regression tests ────────────────────────────
+describe("computeSlaStatus priority normalization", () => {
+  const policy = DEFAULT_SLA_POLICY;
+
+  it("treats P1 as Sev-A (not Sev-C fallback)", () => {
+    const r = computeSlaStatus({ id: "INC-P1", priority: "P1", createdAt: 1 }, policy);
+    expect(r.priority).toBe("Sev-A");
+    expect(r.firstResponseTarget).toBe(0.5);
+    expect(r.worstResponseTarget).toBe(4);
+    expect(r.rawPriority).toBe("P1");
+  });
+
+  it("treats P2 as Sev-B", () => {
+    const r = computeSlaStatus({ id: "INC-P2", priority: "P2", createdAt: 1 }, policy);
+    expect(r.priority).toBe("Sev-B");
+    expect(r.worstResponseTarget).toBe(4);
+  });
+
+  it("treats P3 as Sev-C", () => {
+    const r = computeSlaStatus({ id: "INC-P3", priority: "P3", createdAt: 1 }, policy);
+    expect(r.priority).toBe("Sev-C");
+    expect(r.worstResponseTarget).toBe(9);
+  });
+
+  it("treats P4 as Sev-D", () => {
+    const r = computeSlaStatus({ id: "INC-P4", priority: "P4", createdAt: 1 }, policy);
+    expect(r.priority).toBe("Sev-D");
+    expect(r.worstResponseTarget).toBe(27);
+  });
+
+  it("treats Critical/Urgent as Sev-A", () => {
+    expect(computeSlaStatus({ id: "INC-C", priority: "Critical", createdAt: 1 }, policy).priority).toBe("Sev-A");
+    expect(computeSlaStatus({ id: "INC-U", priority: "urgent", createdAt: 1 }, policy).priority).toBe("Sev-A");
+  });
+
+  it("falls back to Sev-C for missing/blank/unknown priority", () => {
+    expect(computeSlaStatus({ id: "INC-NULL", priority: null, createdAt: 1 }, policy).priority).toBe("Sev-C");
+    expect(computeSlaStatus({ id: "INC-BLANK", priority: "", createdAt: 1 }, policy).priority).toBe("Sev-C");
+    expect(computeSlaStatus({ id: "INC-WTF", priority: "wtf", createdAt: 1 }, policy).priority).toBe("Sev-C");
+  });
+});

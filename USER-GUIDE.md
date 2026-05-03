@@ -712,7 +712,6 @@ Yes. The platform includes:
 - **Role-Based Access Control (RBAC)** with 10+ roles
 - **Audit logging** for all data changes
 - **SPA security** — Path traversal attempts return the app shell, not server files
-- **Data isolation** — Demo mode users cannot access production data
 - All API communications use **HTTPS/TLS**
 
 ### Q: How do I export data?

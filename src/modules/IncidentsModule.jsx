@@ -1,14 +1,7 @@
-import React, { useState, useMemo, useEffect } from "react";
-import {
-  COLORS, PRIORITY_COLORS, STATUS_COLORS, inputStyle, btnStyle,
-} from "../constants/theme.js";
-import {
-  STATUS, OPEN_STATUSES, PRIORITY, SLA_TARGETS,
-} from "../constants/status.js";
+import React, { useState, useMemo } from "react";
+import { PRIORITY_COLORS, STATUS_COLORS, inputStyle, btnStyle } from "../constants/theme.js";
 import { APP_VERSION } from "../constants/version.js";
-import {
-  computeIncidentSla, formatSlaCountdown, genId, timeAgo,
-} from "../utils/slaHelpers.js";
+import { genId, timeAgo } from "../utils/slaHelpers.js";
 import {
   Badge, PriorityDot, DataTable, WorkflowHeader, SearchBar, useStableComponent,
 } from "../components/SharedComponents.jsx";
@@ -49,11 +42,11 @@ export default function IncidentsModule({ ctx }) {
   const {
     incidents, setIncidents, search, setSearch, currentUser, showToast,
     _save, setDetailItem, setModal, setActiveModule,
-    computeIncidentSlaFn, users,
+    computeIncidentSlaFn: _computeIncidentSlaFn, users,
     aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading,
     aiBulkDismissLoading, aiBulkApproveLoading,
     handleAiResolveAction, handleBulkDismiss, handleBulkApprove,
-    runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser,
+    runAiAutoResolve, aiResolveScanLoading,
     aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction,
     runAiWorkflowAssist, aiWorkflowScanLoading,
     historicalCloseRunning, runBulkCloseTickets,
@@ -99,7 +92,7 @@ const IncidentsModule = useStableComponent(() => {
   // Phase S1d — defer filter computation so commits don't block typing
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const deferredSearch = React.useDeferredValue(search);
-  // eslint-disable-next-line react-hooks/rules-of-hooks
+  // eslint-disable-next-line react-hooks/rules-of-hooks, react-hooks/exhaustive-deps
   const filtered = useMemo(() => {
     const q = (deferredSearch || "").toLowerCase();
     const list = q ? incidents.filter(i =>
@@ -116,6 +109,7 @@ const IncidentsModule = useStableComponent(() => {
       if (da !== db) return db - da;
       return (a.id || "").localeCompare(b.id || "");
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incidents, deferredSearch]);
   return (
     <div>
@@ -125,7 +119,7 @@ const IncidentsModule = useStableComponent(() => {
         <button style={btnStyle()} onClick={() => setModal("newIncident")}>+ New Incident</button>
         <button style={{ ...btnStyle("#0EA5E9"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open("/api/export/incidents?format=csv", "_blank")}>📥 Export CSV</button>
         <button style={{ ...btnStyle("#EC4899"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={() => {
-          if (isLocalDemoUser) { showToast("Demo mode — Zendesk import unavailable", "info"); return; }
+          // (#4 follow-up, 2026-05-03) demo-mode guard removed; isLocalDemoUser was always false.
           fetch("/api/zendesk/tickets").then(r => r.json()).then(data => {
             const tickets = data.tickets || [];
             if (tickets.length === 0) return;
@@ -156,6 +150,7 @@ const IncidentsModule = useStableComponent(() => {
                 setIncidents(prev => [newInc, ...prev]);
               }
             });
+            if (imported > 0) showToast(`✅ Imported ${imported} ticket${imported === 1 ? "" : "s"} from Zendesk`, "success");
           }).catch(() => {});
         }}>🎫 Import from Zendesk</button>
         <button style={{ ...btnStyle("#4CAF50"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={async () => {
@@ -306,7 +301,7 @@ const IncidentsModule = useStableComponent(() => {
                 </button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(group.incidents.length, 3)}, 1fr)`, gap: 1, background: "#1E213044" }}>
-                {group.incidents.map((inc, ii) => (
+                {group.incidents.map((inc, _ii) => (
                   <div key={inc.id} style={{ padding: "10px 12px", background: "#0A0C14", position: "relative" }}>
                     {inc.id === group.suggestedPrimary && (
                       <div style={{ position: "absolute", top: 4, right: 6, fontSize: 8, padding: "1px 6px", borderRadius: 4, background: "#4CAF5022", color: "#4CAF50", fontWeight: 700 }}>PRIMARY</div>
@@ -654,7 +649,7 @@ const IncidentsModule = useStableComponent(() => {
                     const inc = incidents.find(i => i.id === id);
                     if (inc) {
                       const updated = { ...inc, ...updates };
-                      try { await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, data: updated }) }); } catch {}
+                      try { await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, data: updated }) }); } catch { /* fire-and-forget */ }
                     }
                   }
                   showToast(`✅ Bulk ${bulkAction} applied to ${ids.length} incidents`, "success");

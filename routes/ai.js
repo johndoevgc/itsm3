@@ -3,10 +3,11 @@
  * Extracted from server.js — Phase 4
  */
 const https = require("https");
+const http = require("http");
 
 module.exports = function createAIRoutes(ctx) {
   return async function handleAIRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, PORT, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
+    const { db, json, readBody: _readBody, parseBody, sendText: _sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, PORT, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
   if (pathname === "/api/ai/knowledge" && req.method === "GET") {
     try {
       const items = await db.getAll("ai_knowledge");
@@ -15,6 +16,77 @@ module.exports = function createAIRoutes(ctx) {
     } catch (err) {
       console.error("[AI Knowledge GET]", err.message);
       return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
+  // ─── GET /api/ai/knowledge/pending ──────────────────────────────────────
+  // List ai_knowledge rows seeded by the VGC AI Assist CSAT auto-loop that
+  // are still awaiting engineer review.
+  if (pathname === "/api/ai/knowledge/pending" && req.method === "GET") {
+    try {
+      const items = await db.getAll("ai_knowledge");
+      const pending = items
+        .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+        .filter(e => e && e.reviewStatus === "pending")
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      return json(res, 200, { entries: pending, total: pending.length });
+    } catch (err) {
+      console.error("[AI Knowledge pending GET]", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
+  // ─── POST /api/ai/knowledge/:id/review ──────────────────────────────────
+  // Engineer approves or rejects a pending auto-seeded entry.
+  // Body: { action: "approve" | "reject", reviewer, notes?, edits? }
+  // - approve: clears reviewStatus, optionally applies title/content edits, audits.
+  // - reject:  deletes the row, audits.
+  {
+    const reviewMatch = pathname.match(/^\/api\/ai\/knowledge\/([^/]+)\/review$/);
+    if (reviewMatch && req.method === "POST") {
+      try {
+        const id = decodeURIComponent(reviewMatch[1]);
+        const body = await parseBody(req);
+        const { action, reviewer, notes, edits } = body || {};
+        if (action !== "approve" && action !== "reject") {
+          return json(res, 400, { error: "action must be 'approve' or 'reject'" });
+        }
+        const row = await db.getOne("ai_knowledge", id);
+        if (!row) return json(res, 404, { error: "knowledge entry not found" });
+        let entry;
+        try { entry = typeof row.data === "string" ? JSON.parse(row.data) : row.data; }
+        catch { return json(res, 500, { error: "entry parse failure" }); }
+        const actor = reviewer || authResult?.user?.email || authResult?.user?.name || "Unknown";
+
+        if (action === "reject") {
+          await db.deleteOne("ai_knowledge", id);
+          await db.audit("ai_knowledge", id, "review-reject",
+            JSON.stringify({ notes: notes || null }), actor);
+          return json(res, 200, { ok: true, action: "reject", id });
+        }
+        // approve
+        const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u)) ? u : null;
+        const updated = {
+          ...entry,
+          title: edits?.title ?? entry.title,
+          content: edits?.content ?? entry.content,
+          category: edits?.category ?? entry.category,
+          tags: Array.isArray(edits?.tags) ? edits.tags : entry.tags,
+          screenshotUrl: edits && "screenshotUrl" in edits ? safeUrl(edits.screenshotUrl) : (entry.screenshotUrl || null),
+          videoUrl: edits && "videoUrl" in edits ? safeUrl(edits.videoUrl) : (entry.videoUrl || null),
+          reviewStatus: "approved",
+          reviewedBy: actor,
+          reviewedAt: new Date().toISOString(),
+          reviewNotes: notes || null,
+        };
+        await db.upsert("ai_knowledge", id, JSON.stringify(updated));
+        await db.audit("ai_knowledge", id, "review-approve",
+          JSON.stringify({ notes: notes || null, edited: !!edits }), actor);
+        return json(res, 200, { ok: true, action: "approve", entry: updated });
+      } catch (err) {
+        console.error("[AI Knowledge review POST]", err.message);
+        return json(res, 500, { error: "Internal server error" });
+      }
     }
   }
   if (pathname === "/api/ai/knowledge" && req.method === "POST") {
@@ -300,7 +372,7 @@ module.exports = function createAIRoutes(ctx) {
         return json(res, 200, JSON.parse(meta.data));
       }
       return json(res, 200, { lastSync: null, totalEntries: (await db.getAll("ai_knowledge")).length, nextSync: null });
-    } catch (err) {
+    } catch {
       return json(res, 200, { lastSync: null, totalEntries: 0, nextSync: null });
     }
   }
@@ -312,7 +384,7 @@ module.exports = function createAIRoutes(ctx) {
     }
     try {
       const body = await parseBody(req);
-      const { topic, category, includeScreenshots } = body || {};
+      const { topic, category, includeScreenshots: _includeScreenshots } = body || {};
       if (!topic) return json(res, 400, { error: "topic is required" });
 
       // Gather all Zendesk ticket history related to this topic
@@ -547,7 +619,7 @@ LINK BACK: Reference the SharePoint Document Library: ${url || "SharePoint > Sha
           pastResolutions = "\n\nPAST RESOLUTIONS FROM KNOWLEDGE BASE:\n" +
             matched.map(m => `- ${m.title}: ${m.content.substring(0, 300)}`).join("\n");
         }
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
 
       const systemPrompt = `You are an expert IT troubleshooter and error resolver for VGC Technology Pte Ltd. You MUST solve every error presented to you.
 
@@ -1024,7 +1096,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       });
       const text = extractAIText(aiResult);
       return json(res, 200, { status: "connected", model: getAIModel("tertiary"), response: text.trim(), configured: true });
-    } catch (err) {
+    } catch {
       return json(res, 502, { error: "AI service error", configured: true });
     }
   }
@@ -1187,7 +1259,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     const { endpoint, apiKey, model } = body || {};
     ctx.updateOpenAIConfig({ endpoint, key: apiKey, model });
     // Persist to DB so settings survive restart
-    try { await db.upsert("tenant_settings", "openai_config", JSON.stringify({ id: "openai_config", endpoint: ctx.AZURE_OPENAI_ENDPOINT, apiKey: ctx.AZURE_OPENAI_KEY, model: ctx.AZURE_OPENAI_MODEL, updatedAt: new Date().toISOString() })); } catch {}
+    try { await db.upsert("tenant_settings", "openai_config", JSON.stringify({ id: "openai_config", endpoint: ctx.AZURE_OPENAI_ENDPOINT, apiKey: ctx.AZURE_OPENAI_KEY, model: ctx.AZURE_OPENAI_MODEL, updatedAt: new Date().toISOString() })); } catch { /* ignore */ }
     console.log(`[OPENAI] Settings updated & persisted. Model=${ctx.AZURE_OPENAI_MODEL}, Endpoint=${ctx.AZURE_OPENAI_ENDPOINT.substring(0, 60)}...`);
     return json(res, 200, { ok: true, model: ctx.AZURE_OPENAI_MODEL, models: AI_MODELS, message: "Azure OpenAI settings updated and persisted to database." });
   }
@@ -1213,7 +1285,7 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
     ctx.updateSolarWindsConfig({ apiKey, apiHost: (apiHost || "wwwasia.system-monitor.com").replace(/^(https?:\/\/)/, "").replace(/\/+$/, "") });
     if (global._solarwindsCache) global._solarwindsCache = { data: null, ts: 0 };
     // Persist to DB
-    try { await db.upsert("tenant_settings", "solarwinds_config", JSON.stringify({ id: "solarwinds_config", apiKey: ctx.SOLARWINDS_API_KEY, apiHost: ctx.SOLARWINDS_API_HOST, updatedAt: new Date().toISOString() })); } catch {}
+    try { await db.upsert("tenant_settings", "solarwinds_config", JSON.stringify({ id: "solarwinds_config", apiKey: ctx.SOLARWINDS_API_KEY, apiHost: ctx.SOLARWINDS_API_HOST, updatedAt: new Date().toISOString() })); } catch { /* ignore */ }
     console.log(`[SOLARWINDS] API settings updated & persisted. Host=${ctx.SOLARWINDS_API_HOST}`);
     return json(res, 200, { ok: true, message: "SolarWinds RMM settings updated and persisted to database." });
   }
@@ -1337,10 +1409,10 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
       }));
       // Try to fetch firewall groups (may fail with permissions)
       let fwGroups = [];
-      try { const g = await httpsGet(`${sc.dataRegion}/firewall/v1/firewall-groups?pageSize=50`, sophosHeaders); fwGroups = g?.items || []; } catch {}
+      try { const g = await httpsGet(`${sc.dataRegion}/firewall/v1/firewall-groups?pageSize=50`, sophosHeaders); fwGroups = g?.items || []; } catch { /* ignore */ }
       // Try alerts (may need different permissions)
       let alerts = [];
-      try { const a = await httpsGet(`${sc.dataRegion}/common/v1/alerts?pageSize=20`, sophosHeaders); alerts = (a?.items || []).map(al => ({ id: al.id, severity: al.severity, category: al.category, description: al.description, raisedAt: al.raisedAt, managedAgent: al.managedAgent })); } catch {}
+      try { const a = await httpsGet(`${sc.dataRegion}/common/v1/alerts?pageSize=20`, sophosHeaders); alerts = (a?.items || []).map(al => ({ id: al.id, severity: al.severity, category: al.category, description: al.description, raisedAt: al.raisedAt, managedAgent: al.managedAgent })); } catch { /* ignore */ }
       const result = {
         configured: true,
         tenantId: sc.tenantId,
@@ -1488,13 +1560,13 @@ Keep it conversational, actionable, and human-friendly. Be a helpful colleague, 
               headers: { "Content-Type": "application/json", "Content-Length": 0, "x-internal-sync": "1", "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN },
             }, (rr) => { rr.on("data", () => {}); rr.on("end", resolve); });
             r.on("error", () => resolve());
-            r.setTimeout(2000, () => { try { r.destroy(); } catch {} resolve(); });
+            r.setTimeout(2000, () => { try { r.destroy(); } catch { /* ignore */ } resolve(); });
             r.end();
           });
           // Re-read incident from DB in case timestamps were updated
           const fresh = await db.getOne("incidents", ticket.id);
-          if (fresh) { try { Object.assign(ticket, JSON.parse(fresh.data)); } catch {} }
-        } catch {}
+          if (fresh) { try { Object.assign(ticket, JSON.parse(fresh.data)); } catch { /* ignore */ } }
+        } catch { /* ignore */ }
       }
 
       // Gather context for AI
@@ -1837,7 +1909,7 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
                   if (result.actions && result.actions.length > 0 && wsServer) {
                     wsServer.broadcast("sla_guardian", { action: "sla_risk_detected", atRiskCount: result.actions.length, predictions: result.predictions });
                   }
-                } catch {}
+                } catch { /* ignore */ }
                 console.log(`[SLA Guardian] Post-triage prediction for ${inc.id}: ${d.substring(0, 200)}`);
               });
             });
@@ -2294,7 +2366,7 @@ Respond with ONLY valid JSON (no markdown):
     }
     try {
       const body = await parseBody(req, 200000);
-      const { incidents: clientIncidents, requests: clientRequests, requestedBy } = body;
+      const { incidents: clientIncidents, requests: _clientRequests, requestedBy } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
 
       const openIncidents = (clientIncidents || []).filter(i => !["Resolved", "Closed"].includes(i.status));
@@ -2438,7 +2510,7 @@ Respond with ONLY valid JSON (no markdown):
           if (incIssues.length > 0) {
             issues.push({ id: inc.id, priority: inc.priority, status: inc.status, issues: incIssues, fixed: changed });
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       return json(res, 200, {
@@ -2490,7 +2562,7 @@ Respond with ONLY valid JSON (no markdown):
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
           remediated++;
           details.push({ id: inc.id, priority: inc.priority, elapsed, target, breached, status: inc.slaStatus });
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       console.log(`[AI SLA Remediate] Remediated ${remediated}, already done ${alreadyDone}, skipped ${skipped} active`);
@@ -3053,7 +3125,7 @@ Return JSON ONLY: { "title": "clear article title", "category": "matching incide
         if (recentFb.length > 0) {
           feedbackContext = `\n\nRecent engineer feedback on KB quality:\n${recentFb.map(f => `- ${f.rating}: "${f.comment}"`).join("\n")}`;
         }
-      } catch {}
+      } catch { /* ignore */ }
 
       const orgName = await getOrgName();
       const results = [];
@@ -3136,7 +3208,7 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
       const allReqs = clientRequests || [];
 
       const now = new Date();
-      const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+      const _oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
 
       // Gather AI actions stats
       const aiActionsRows = await db.getAll("ai_actions");
@@ -3250,7 +3322,7 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
     }
     try {
       const body = await parseBody(req, 200000);
-      const { incidents: clientIncidents, problems: clientProblems, changes: clientChanges, requestedBy } = body;
+      const { incidents: clientIncidents, problems: clientProblems, changes: _clientChanges, requestedBy } = body;
       if (!requestedBy) return json(res, 400, { error: "requestedBy required" });
 
       const allInc = clientIncidents || [];
@@ -3885,7 +3957,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
 
       // Step 1: Run AI scan
       const allIncidents = clientIncidents || [];
-      const allChanges = clientChanges || [];
+      const _allChanges = clientChanges || [];
       const critical = allIncidents.filter(i =>
         (i.status === "Open" || i.status === "In Progress") &&
         (i.priority === "Sev-A" || i.priority === "Sev-B")
@@ -3996,7 +4068,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
             status: planDetail.properties?.status, numberOfSites: planDetail.properties?.numberOfSites,
             tier: planDetail.sku?.tier, size: planDetail.sku?.size, capacity: planDetail.sku?.capacity,
           };
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // Try to get Web App details
@@ -4012,7 +4084,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
             linuxFxVersion: appDetail.properties?.siteConfig?.linuxFxVersion,
             ftpsState: appDetail.properties?.siteConfig?.ftpsState,
           };
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // Try to get MySQL Flexible Server details
@@ -4028,7 +4100,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
             backupRetentionDays: mysqlDetail.properties?.backup?.backupRetentionDays,
             haEnabled: mysqlDetail.properties?.highAvailability?.mode !== "Disabled",
           };
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       return json(res, 200, {
@@ -4306,7 +4378,7 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
           zdMap.get(key).push(inc);
         }
       }
-      const visitedZdGroups = new Set();
+      const _visitedZdGroups = new Set();
       for (const [zdId, zdIncs] of zdMap) {
         if (zdIncs.length < 2) continue;
         // Skip if all incidents in this group are already in a subject-similarity group

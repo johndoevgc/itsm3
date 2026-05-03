@@ -1,10 +1,11 @@
-import React, { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { btnStyle, inputStyle } from "../constants/theme.js";
-import { PriorityDot, Modal } from "../components/SharedComponents.jsx";
+import { PriorityDot } from "../components/SharedComponents.jsx";
 import { genId } from "../utils/slaHelpers.js";
 import { KB_CATEGORIES } from "../constants/categories.js";
 import CardRenderer from "../components/chat/CardRenderer.jsx";
 import { buildChatCards } from "../utils/chatCardBuilder.js";
+import { CustomerChatTab } from "../components/CustomerChatTab.jsx";
 
 /* ═══════════════════════════════════════════════════════════════
    Enterprise Knowledge Portal — compact, professional, AI-embedded
@@ -26,7 +27,7 @@ const freshness = (iso) => {
 };
 const isAiAuthored = (a) => !!(a && (a.aiGenerated || a.source === "ai-incident-learning" || /\bai\b/i.test(a.author || "")));
 
-function KnowledgePortal({ kbArticles, portalSearch, setPortalSearch, setDetailItem, setModal, showToast, currentUser, incidents, setActiveModule }) {
+function KnowledgePortal({ kbArticles, portalSearch, setPortalSearch, setDetailItem: _setDetailItem, setModal: _setModal, showToast: _showToast, currentUser, incidents, setActiveModule }) {
   const [kpCategory, setKpCategory] = useState("all");
   const [kpArticle, setKpArticle] = useState(null);
   const [kpAiQuery, setKpAiQuery] = useState("");
@@ -403,7 +404,7 @@ function KnowledgePortal({ kbArticles, portalSearch, setPortalSearch, setDetailI
   );
 }
 
-export default function SelfServicePortal({ currentUser, incidents, setIncidents, requests, problems, changes, kbArticles, serviceCatalog, portalTab, setPortalTab, portalSearch, setPortalSearch, setActiveModule, setDetailItem, setModal, showToast }) {
+export default function SelfServicePortal({ currentUser, incidents, setIncidents, requests, problems: _problems, changes: _changes, kbArticles, serviceCatalog, portalTab, setPortalTab, portalSearch, setPortalSearch, setActiveModule, setDetailItem, setModal, showToast }) {
   const [showQuickForm, setShowQuickForm] = useState(false);
   const [qf, setQf] = useState({ title: "", description: "", urgency: "Standard", contactMethod: "Portal" });
   const [qfSubmitting, setQfSubmitting] = useState(false);
@@ -488,9 +489,9 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
                   activityLog: [{ id: genId("AL"), type: "create", user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: "Created via Self-Service Portal (Quick Form)" }]
                 };
                 if (setIncidents) setIncidents(prev => [newInc, ...prev]);
-                try { await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) }); } catch {}
+                try { await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) }); } catch { /* fire-and-forget */ }
                 // Trigger AI triage in background
-                try { fetch("/api/ai/triage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ incidentId: newInc.id }) }).catch(() => {}); } catch {}
+                try { fetch("/api/ai/triage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ incidentId: newInc.id }) }).catch(() => {}); } catch { /* fire-and-forget */ }
                 if (showToast) showToast(`✅ Issue "${qf.title}" submitted! We'll get back to you soon.`, "success");
                 setQf({ title: "", description: "", urgency: "Standard", contactMethod: "Portal" });
                 setShowQuickForm(false);
@@ -502,7 +503,7 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
 
       {/* Portal Tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0A0C14", padding: 4, borderRadius: 8 }}>
-        {[{ id: "myTickets", label: "My Tickets", icon: "🎫", count: openCount }, { id: "myRequests", label: "My Requests", icon: "📋", count: myRequests.length }, { id: "kb", label: "Knowledge Base", icon: "📚" }, { id: "catalog", label: "Service Catalog", icon: "🛍️" }].map(tab => (
+        {[{ id: "myTickets", label: "My Tickets", icon: "🎫", count: openCount }, { id: "myRequests", label: "My Requests", icon: "📋", count: myRequests.length }, { id: "kb", label: "Knowledge Base", icon: "📚" }, { id: "catalog", label: "Service Catalog", icon: "🛍️" }, { id: "chat", label: "Chat with Support", icon: "💬" }].map(tab => (
           <button key={tab.id} onClick={() => setPortalTab(tab.id)} style={{
             padding: "8px 14px", borderRadius: 6, border: "none", cursor: "pointer",
             background: portalTab === tab.id ? "#1E2130" : "transparent",
@@ -566,6 +567,11 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
       {/* Knowledge Base Tab — Enterprise Knowledge Portal */}
       {portalTab === "kb" && (
         <KnowledgePortal kbArticles={kbArticles} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} currentUser={currentUser} incidents={incidents} setActiveModule={setActiveModule} />
+      )}
+
+      {/* Chat with Support Tab — KB-grounded customer chat with handoff to live agent */}
+      {portalTab === "chat" && (
+        <CustomerChatTab currentUser={currentUser} showToast={showToast} />
       )}
 
       {/* Service Catalog Tab — enterprise grouped layout */}

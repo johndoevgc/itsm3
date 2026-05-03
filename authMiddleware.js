@@ -248,6 +248,13 @@ const PUBLIC_PREFIXES = [
 // MSAL is still bootstrapping or the user is in demo mode.
 const READ_ONLY_POST_ROUTES = new Set([
   "/api/ai/resolve-error",
+  "/api/chat-assist/message",
+  "/api/chat-assist/feedback",
+  // VGC AI Assist guided-flow endpoints — reachable by anonymous customer widget.
+  "/api/chat-assist/intake-action",
+  "/api/chat-assist/create-ticket",
+  "/api/chat-assist/csat",
+  "/api/chat-assist/book-slot",
 ]);
 
 function isPublicRoute(pathname) {
@@ -280,7 +287,7 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
           role: "System",
         };
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   // Rate limiting
@@ -318,20 +325,14 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
 
   const token = authHeader.slice(7);
 
-  // Local admin token: "Bearer local-hash:<sha256-hash>" — validated against LOCAL_ADMIN_PASSWORD_HASH
+  // (#3 follow-up, 2026-05-03) Local-admin SHA-256 bearer token ("local-hash:")
+  // is RETIRED. Production has used Entra SSO exclusively since 2026-05-02 and
+  // LOCAL_ADMIN_PASSWORD_HASH is unset on prod. Even if a future env-var mistake
+  // re-introduces the secret, this code path no longer trusts it — callers must
+  // present a valid Entra Bearer token instead.
   if (token.startsWith("local-hash:")) {
-    const providedHash = token.slice(11);
-    const localHash = process.env.LOCAL_ADMIN_PASSWORD_HASH;
-    if (localHash && providedHash.length === 64) {
-      try {
-        if (crypto.timingSafeEqual(Buffer.from(providedHash, "hex"), Buffer.from(localHash, "hex"))) {
-          return {
-            authenticated: true,
-            user: { email: process.env.LOCAL_ADMIN_EMAIL || "admin@localhost", name: process.env.LOCAL_ADMIN_NAME || "VGC Dev Admin", id: "LOCAL-vgcdevadmin" },
-            role: "VGC Dev Admin",
-          };
-        }
-      } catch {}
+    if (process.env.LOCAL_ADMIN_PASSWORD_HASH) {
+      console.warn("[Auth] local-hash bearer token rejected — path retired (LOCAL_ADMIN_PASSWORD_HASH still set on this host; please remove it).");
     }
     return { authenticated: false, user: null, role: "Read Only", skipped: false };
   }

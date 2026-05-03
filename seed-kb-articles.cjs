@@ -2,7 +2,11 @@
 // Usage: node seed-kb-articles.cjs
 const https = require("https");
 
-const BASE = "https://vgc-itsm1-app.azurewebsites.net";
+const BASE = process.env.SEED_BASE || "https://vgc-itsm1-app-staging.azurewebsites.net";
+if (/vgc-itsm1-app\.azurewebsites\.net/.test(BASE) && process.env.ALLOW_PROD_SEED_WRITES !== "true") {
+  console.error(`[seed-kb-articles] Refusing to run against production (${BASE}). Set SEED_BASE to staging or ALLOW_PROD_SEED_WRITES=true.`);
+  process.exit(2);
+}
 
 function post(path, body) {
   return new Promise((resolve, reject) => {

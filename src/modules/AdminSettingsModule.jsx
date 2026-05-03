@@ -1,22 +1,13 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
-import {
-  COLORS, PRIORITY_COLORS, STATUS_COLORS, PERM_COLORS, inputStyle, btnStyle,
-} from "../constants/theme.js";
+import { useState, useEffect, lazy, Suspense } from "react";
+import { COLORS, PERM_COLORS, inputStyle, btnStyle } from "../constants/theme.js";
 
 const WorkflowDesignerModule = lazy(() => import("./WorkflowDesignerModule.jsx"));
-import {
-  STATUS, OPEN_STATUSES, PRIORITY, SLA_TARGETS, DEFAULT_SLA_POLICY,
-} from "../constants/status.js";
-import {
-  RBAC_ROLES, RBAC_PERMISSIONS, DEV_ADMIN_EMAILS, ADMIN_EMAILS, USERS, INITIAL_CUSTOMERS,
-} from "../constants/rbac.js";
-import {
-  CATEGORIES, SERVICES, AI_FEATURE_EXPLAINERS, INTEGRATION_CATALOG,
-} from "../constants/categories.js";
+import { DEFAULT_SLA_POLICY } from "../constants/status.js";
+import { RBAC_ROLES, RBAC_PERMISSIONS } from "../constants/rbac.js";
 import { APP_VERSION } from "../constants/version.js";
 import { genId, sanitizeHTML , getBusinessHoursElapsed } from "../utils/slaHelpers.js";
 import {
-  Badge, PriorityDot, StatCard, DataTable, Modal, FormField, SearchBar,
+  Badge, PriorityDot, StatCard, DataTable, FormField, SearchBar,
 } from "../components/SharedComponents.jsx";
 import {
   EmailAuditTab, FeatureFlagsTab, AIDecisionsTab, ComplianceTab,
@@ -24,6 +15,9 @@ import {
 import {
   EmailWhitelistTab, DataMaintenanceTab, ZdCleanupTab,
 } from "../components/ExtractedTabs.jsx";
+import { DataHygieneTab } from "../components/DataHygieneTab.jsx";
+import { ChatAssistTab } from "../components/ChatAssistTab.jsx";
+import { KbReviewTab } from "../components/KbReviewTab.jsx";
 
 // Admin Settings Module — extracted from itsm-tool.jsx
 // Receives all parent state/setters via ctx prop object
@@ -32,10 +26,10 @@ export default function AdminSettingsModule({ ctx }) {
   const {
     currentUser, showToast, _save, adminTab, setAdminTab,
     incidents, problems, changes, requests, assets, kbArticles, serviceCatalog, customers,
-    users, vendors, search,
+    users: _users, vendors, search,
     slaPolicy, setSlaPolicy, slaEditingSev, setSlaEditingSev,
     notifChannels, setNotifChannels,
-    emailWhitelist, setEmailWhitelist, emailRejections,
+    emailWhitelist, setEmailWhitelist, emailRejections: _emailRejections,
     escalationConfig, setEscalationConfig, escalationLog, setEscalationLog,
     billingConfig, setBillingConfig,
     aiConfig, setAiConfig, azureOpenAI, setAzureOpenAI,
@@ -49,10 +43,10 @@ export default function AdminSettingsModule({ ctx }) {
     auditLogs, auditFilter, setAuditFilter, auditLoading,
     versionHistory, uatResults, uatRunning, uatLastRun,
     setUatResults, setUatRunning, setUatLastRun,
-    tourStep, runtimeConfig, profilePhoto, profilePhotoRef,
-    avatarConfig, notifPrefs, cardVisibility,
-    isDemoMode, wsConnected, globalLastSync, globalSyncActive, prodTestMode,
-    aiPipelineStats, modal, setModal, recycleBin, setRecycleBin,
+    tourStep, runtimeConfig: _runtimeConfig, profilePhoto: _profilePhoto, profilePhotoRef: _profilePhotoRef,
+    avatarConfig: _avatarConfig, notifPrefs: _notifPrefs, cardVisibility: _cardVisibility,
+    wsConnected: _wsConnected, globalLastSync: _globalLastSync, globalSyncActive: _globalSyncActive, prodTestMode: _prodTestMode,
+    aiPipelineStats: _aiPipelineStats, modal: _modal, setModal: _setModal, recycleBin: _recycleBin, setRecycleBin,
     wfAnimStep, setWfAnimStep, wfAnimPlaying, setWfAnimPlaying,
     historicalCloseCutoff, setHistoricalCloseCutoff,
     setVendors, setSearch,
@@ -88,9 +82,9 @@ export default function AdminSettingsModule({ ctx }) {
   const [brandingSettings, setBrandingSettings] = useState({ logo: "", primaryColor: "#64B5F6", accentColor: "#81C784" });
   const [smtpConfig, setSmtpConfig] = useState({ host: "", port: 587, user: "", pass: "", from: "", secure: true });
   const [pdpaConfig, setPdpaConfig] = useState({ enabled: false, retentionDays: 365, autoAnonymize: false });
-  const [infraConfig, setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90 });
-  const [infraLive, setInfraLive] = useState(null);
-  const [infraLoading, setInfraLoading] = useState(false);
+  const [infraConfig, _setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90 });
+  const [infraLive, _setInfraLive] = useState(null);
+  const [infraLoading, _setInfraLoading] = useState(false);
   const [swConfig, setSwConfig] = useState({});
   const [swSettingsOpen, setSwSettingsOpen] = useState(false);
   const [workflowRules, setWorkflowRules] = useState([]);
@@ -124,6 +118,22 @@ export default function AdminSettingsModule({ ctx }) {
   const [surveyDrafts, setSurveyDrafts] = useState([]);
   const [historicalCloseRunning, setHistoricalCloseRunning] = useState(false);
   const [historicalCloseResult, setHistoricalCloseResult] = useState(null);
+  // KB Review pending count — polled every 60s; drives red pill badge on the tab.
+  const [pendingKbCount, setPendingKbCount] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const fetchCount = async () => {
+      try {
+        const r = await fetch("/api/ai/knowledge/pending");
+        if (!r.ok) return;
+        const d = await r.json();
+        if (active) setPendingKbCount(Number(d.total) || 0);
+      } catch { /* ignore — non-critical */ }
+    };
+    fetchCount();
+    const id = setInterval(fetchCount, 60_000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
 
   const runHistoricalClose = async () => { setHistoricalCloseRunning(true); try { const r = await fetch("/api/incidents/historical-close", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ cutoff: historicalCloseCutoff }) }); const d = await r.json(); setHistoricalCloseResult(d); showToast("Historical close completed"); } catch(e) { showToast("Error: " + e.message); } finally { setHistoricalCloseRunning(false); } };
 
@@ -159,6 +169,9 @@ const allTabs = [
   { section: "DATA & OPS" },
   { id: "migration", label: "Import", icon: "📦", devOnly: true },
   { id: "dataMaintenance", label: "Maintenance", icon: "🧹", devOnly: true },
+  { id: "dataHygiene", label: "Data Hygiene", icon: "🧬", devOnly: true },
+  { id: "chatAssist", label: "Chat Assist", icon: "💬" },
+  { id: "kbReview", label: "AI KB Review", icon: "📚" },
   { id: "zdCleanup", label: "ZD Cleanup", icon: "🧽", devOnly: true },
   { id: "reportSchedules", label: "Reports", icon: "📅" },
   { id: "reportExport", label: "Export", icon: "📤" },
@@ -198,6 +211,13 @@ return (
           display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s"
         }}>
           <span style={{ fontSize: 14 }}>{tab.icon}</span> {tab.label}
+          {tab.id === "kbReview" && pendingKbCount > 0 && (
+            <span style={{
+              background: "#DC2626", color: "#fff", fontSize: 9, fontWeight: 700,
+              borderRadius: 999, padding: "1px 7px", minWidth: 16, textAlign: "center",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}>{pendingKbCount > 99 ? "99+" : pendingKbCount}</span>
+          )}
         </button>
       ))}
     </div>
@@ -1395,7 +1415,7 @@ return (
                 const aiSuggestRole = (user) => {
                   const title = (user.jobTitle || "").toLowerCase();
                   const dept = (user.department || "").toLowerCase();
-                  const name = (user.displayName || "").toLowerCase();
+                  const _name = (user.displayName || "").toLowerCase();
                   let role = "End User", reason = "Default — no matching criteria", confidence = 60;
                   if (title.includes("admin") || title.includes("administrator")) { role = "Administrator"; reason = `Job title "${user.jobTitle}" suggests admin role`; confidence = 90; }
                   else if (title.includes("service desk lead") || title.includes("team lead") || title.includes("supervisor")) { role = "Service Desk Lead"; reason = `Job title "${user.jobTitle}" suggests team leadership`; confidence = 88; }
@@ -2437,7 +2457,7 @@ return (
         ...versionHistory.map(v => ({ ...v, source: "local" })),
         ...auditLogs.map(a => {
           let parsed = {};
-          try { parsed = JSON.parse(a.data || "{}"); } catch (e) {}
+          try { parsed = JSON.parse(a.data || "{}"); } catch { /* malformed audit row */ }
           return {
             id: `DB_${a.id || a.record_id}`,
             timestamp: a.timestamp || a.created_at,
@@ -2657,7 +2677,7 @@ return (
         { id: "UAT-025", module: "Incidents", scenario: "Incident lifecycle: New→Assigned→In Progress→Resolved→Closed", type: "workflow", test: () => { const statuses = ["New", "Assigned", "In Progress", "Resolved", "Closed"]; const found = statuses.filter(s => incidents.some(i => i.status === s)); return { pass: found.length >= 2, detail: `Statuses found: ${found.join(", ")}` }; } },
         { id: "UAT-026", module: "Changes", scenario: "Change workflow: submission → approval → implementation", type: "workflow", test: () => { return { pass: changes.length >= 0, detail: `${changes.length} changes tracked` }; } },
         { id: "UAT-027", module: "Approvals", scenario: "Approval workflow accessible", type: "workflow", test: () => { const pending = changes.filter(c => c.status === "Awaiting Approval").length + requests.filter(r => r.status === "Pending Approval").length; return { pass: true, detail: `${pending} pending approvals` }; } },
-        { id: "UAT-028", module: "AI Training", scenario: "AI knowledge training panel available", type: "workflow", test: () => { return { pass: typeof kbForm === "object" && kbForm.hasOwnProperty("title"), detail: "Training form initialized" }; } },
+        { id: "UAT-028", module: "AI Training", scenario: "AI knowledge training panel available", type: "workflow", test: () => { return { pass: typeof kbForm === "object" && Object.prototype.hasOwnProperty.call(kbForm, "title"), detail: "Training form initialized" }; } },
         { id: "UAT-029", module: "AI Training", scenario: "Document upload for AI training supported", type: "workflow", test: () => { return { pass: typeof SUPPORTED_UPLOAD_TYPES === "object", detail: `${Object.keys(SUPPORTED_UPLOAD_TYPES).length} file types supported` }; } },
         { id: "UAT-030", module: "Version History", scenario: "Audit & version history tracking active", type: "workflow", test: () => { return { pass: versionHistory.length >= 0, detail: `${versionHistory.length} version history entries` }; } },
       ];
@@ -2748,7 +2768,7 @@ return (
             )}
             <div style={{ maxHeight: 500, overflow: "auto" }}>
               {(uatResults.length > 0 ? uatResults : UAT_TESTS.map(t => ({ ...t, status: "Pending", detail: "—", duration: 0 }))).map((t, i) => {
-                const statusColor = { Passed: "#81C784", Failed: "#FF6B6B", Error: "#FFB347", Pending: "#5A6178" }[t.status] || "#5A6178";
+                const _statusColor = { Passed: "#81C784", Failed: "#FF6B6B", Error: "#FFB347", Pending: "#5A6178" }[t.status] || "#5A6178";
                 const typeIcon = { api: "🌐", ui: "🖥️", integration: "🔗", compliance: "🛡️", workflow: "⟳" }[t.type] || "📋";
                 return (
                   <div key={t.id} style={{ display: "grid", gridTemplateColumns: "70px 28px 100px 1fr 80px 60px 70px", gap: 8, padding: "8px 10px", background: i % 2 === 0 ? "#0A0C14" : "#12141E", borderRadius: 4, marginBottom: 2, alignItems: "center", fontSize: 11 }}>
@@ -4959,6 +4979,21 @@ return (
     {/* Data Maintenance */}
     {activeTab === "dataMaintenance" && (
       <DataMaintenanceTab currentUser={currentUser} showToast={showToast} setRecycleBin={setRecycleBin} _save={_save} />
+    )}
+
+    {/* Data Hygiene — surfaces orphaned AI rows + priority drift, with dry-run cleanup */}
+    {activeTab === "dataHygiene" && (
+      <DataHygieneTab currentUser={currentUser} showToast={showToast} />
+    )}
+
+    {/* Chat Assist — agent-side AI co-pilot. KB-grounded, audited. */}
+    {activeTab === "chatAssist" && (
+      <ChatAssistTab currentUser={currentUser} showToast={showToast} />
+    )}
+
+    {/* AI Knowledge Review — VGC AI Assist CSAT autoseed queue */}
+    {activeTab === "kbReview" && (
+      <KbReviewTab currentUser={currentUser} showToast={showToast} />
     )}
 
     {/* Phase 8 — Zendesk Cleanup & Reconciliation */}

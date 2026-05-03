@@ -3,6 +3,11 @@
 const http = require('http');
 
 const BASE = process.env.ITSM_URL || 'https://vgc-itsm1-app.azurewebsites.net';
+// SECURITY (#4): refuse to run against production unless explicitly opted in.
+if (/vgc-itsm1-app\.azurewebsites\.net/.test(BASE) && process.env.ALLOW_PROD_SEED_WRITES !== 'true') {
+  console.error(`[seed-kb-docs] Refusing to run against production (${BASE}). Use staging or set ALLOW_PROD_SEED_WRITES=true.`);
+  process.exit(2);
+}
 
 const docs = [
   { title: 'Architecture Guide', category: 'Documentation', tags: ['architecture','system','deployment'], summary: 'System overview, tech stack, architecture layers, AI system, auth pipeline, deployment topology.', content: 'See docs/Architecture-Guide.html for full documentation. Covers: React 19 + Vite 8, Node.js 20 raw HTTP server, Azure MySQL document store, 3-tier Azure OpenAI, Microsoft Entra ID SSO, WebSocket real-time updates.', doc_file: 'Architecture-Guide.html' },

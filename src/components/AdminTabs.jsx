@@ -140,7 +140,7 @@ export const EmailAuditTab = () => {
             <tbody>
               {zdAudit.items.length === 0 && <tr><td style={cellStyle} colSpan={4}>No ZD push suppressions yet.</td></tr>}
               {zdAudit.items.map((r, i) => {
-                let parsed = {}; try { parsed = typeof r.data === "string" ? JSON.parse(r.data) : (r.data || {}); } catch {}
+                let parsed = {}; try { parsed = typeof r.data === "string" ? JSON.parse(r.data) : (r.data || {}); } catch { /* ignore */ }
                 return (
                   <tr key={i}>
                     <td style={cellStyle}><code style={{ color: "#5A6178", fontSize: 11 }}>{r.timestamp ? String(r.timestamp).slice(0, 19).replace("T", " ") : "-"}</code></td>

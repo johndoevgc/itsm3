@@ -619,7 +619,7 @@ export default function Dashboard({ ctx }) {
     aiActions, showAiActionsPanel, setShowAiActionsPanel,
     setTicketsSubTab, setAnalyticsSubTab,
     approvalInstances, escalationConfig,
-    isDemoMode, prodTestMode, runtimeConfig,
+    prodTestMode, runtimeConfig,
     aiPipelineStats,
     setVendors, softDelete,
     zdConnected, wsBridgeConnected, zdAutoStats, zdAiQueue, setZdTab,
@@ -639,6 +639,25 @@ const [workloadData, setWorkloadData] = useState(null);
 const [workloadLoading, setWorkloadLoading] = useState(false);
 const [correlationData, setCorrelationData] = useState(null);
 const [correlationLoading, setCorrelationLoading] = useState(false);
+
+// (#2 follow-up, 2026-05-03) live system status from /api/status — replaces
+// the hardcoded System Health array. Refreshes every 60s. Falls back to the
+// static placeholders if the fetch fails.
+const [systemStatus, setSystemStatus] = useState(null);
+useEffect(() => {
+  let cancelled = false;
+  const load = async () => {
+    try {
+      const r = await fetch("/api/status");
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!cancelled) setSystemStatus(d);
+    } catch { /* ignore — keep last value */ }
+  };
+  load();
+  const id = setInterval(load, 60000);
+  return () => { cancelled = true; clearInterval(id); };
+}, []);
 
 // API helpers (relative paths, no base URL needed)
 const API = "";
@@ -2912,22 +2931,44 @@ return (
             onMouseEnter={e => e.currentTarget.style.color = "#06B6D4"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
             <span style={{ color: "#06B6D4" }}>💻</span> System Health <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Infra →</span>
           </h3>
-          {[
-            { label: "Azure SQL Serverless", status: "Online", cpu: 23, color: "#4CAF50" },
-            { label: "App Service (P1v3)", status: "Healthy", cpu: 41, color: "#4CAF50" },
-            { label: "Entra ID SSO", status: "Connected", cpu: null, color: "#4CAF50" },
-            { label: "AI Engine", status: "Running", cpu: 67, color: "#FFB347" },
-            { label: "Email Gateway", status: "Online", cpu: 12, color: "#4CAF50" },
-          ].map((s, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < 4 ? "1px solid #1E213033" : "none" }}>
-              <span style={{ fontSize: 11, color: "#C4CAD6" }}>{s.label}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                {s.cpu !== null && <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{s.cpu}% CPU</span>}
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: s.color, boxShadow: `0 0 4px ${s.color}66` }} />
-                <span style={{ fontSize: 10, color: s.color, fontWeight: 600 }}>{s.status}</span>
+          {(() => {
+            // Live components from /api/status, with sensible fallback colors.
+            const comps = systemStatus?.components;
+            const fmtRows = (n) => typeof n === "number" ? n.toLocaleString() : "";
+            const items = comps ? [
+              { label: "Database", status: comps.database?.status || "unknown" },
+              { label: "API", status: comps.api?.status || "unknown" },
+              { label: "AI Engine", status: comps.ai_engine?.status || "unknown" },
+              { label: "SLA Engine", status: comps.sla_engine?.status || "unknown" },
+              { label: "WebSocket", status: comps.websocket?.status || "unknown" },
+              {
+                label: "Audit Log",
+                status: comps.audit_log?.status || "unknown",
+                meta: comps.audit_log?.rows != null ? `${fmtRows(comps.audit_log.rows)} rows` : null,
+              },
+            ] : [
+              { label: "Azure SQL Serverless", status: "loading" },
+              { label: "App Service (P1v3)", status: "loading" },
+              { label: "Entra ID SSO", status: "loading" },
+              { label: "AI Engine", status: "loading" },
+              { label: "Email Gateway", status: "loading" },
+            ];
+            const colorOf = (s) => s === "operational" ? "#4CAF50"
+              : s === "stale" ? "#FFB347"
+              : s === "disabled" ? "#5A6178"
+              : s === "stopped" || s === "down" ? "#FF6B6B"
+              : "#5A6178";
+            return items.map((s, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < items.length - 1 ? "1px solid #1E213033" : "none" }}>
+                <span style={{ fontSize: 11, color: "#C4CAD6" }}>{s.label}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {s.meta && <span style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{s.meta}</span>}
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: colorOf(s.status), boxShadow: `0 0 4px ${colorOf(s.status)}66` }} />
+                  <span style={{ fontSize: 10, color: colorOf(s.status), fontWeight: 600, textTransform: "capitalize" }}>{s.status}</span>
+                </div>
               </div>
-            </div>
-          ))}
+            ));
+          })()}
         </div>
 
         {/* Change Calendar — Visual Month View (4A) */}

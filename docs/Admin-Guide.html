@@ -265,7 +265,7 @@ az deployment group create --resource-group &lt;rg&gt; \
     <h2>7. Database Maintenance</h2>
     <ul>
       <li><strong>Stats:</strong> <code>GET /api/db-stats</code> — record counts per collection</li>
-      <li><strong>Clean & Seed:</strong> <code>POST /api/db-clean-seed</code> — reset to demo data (destructive!)</li>
+      <li><strong>Clean & Seed:</strong> <code>POST /api/db-clean-seed</code> — admin-gated; reseeds baseline reference data. Defaults to dry-run; pass <code>{apply:true}</code> to execute.</li>
       <li><strong>Cache:</strong> <code>POST /api/cache/clear</code> — flush in-memory cache</li>
       <li><strong>Audit Integrity:</strong> <code>GET /api/audit/verify-integrity</code> — verify audit log hasn't been tampered</li>
     </ul>

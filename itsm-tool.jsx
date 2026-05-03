@@ -58,8 +58,9 @@ import {
 } from "./src/utils/aiEngine.jsx";
 
 export default function ITSMApp() {
-  // Demo mode flag — hardcoded false for production
-  const isDemoMode = false;
+  // (#A follow-up, 2026-05-03) `isDemoMode` removed — it was hardcoded `false` and
+  // every guard that read it was dead code. The DashboardModule context no longer
+  // receives it.
 
   // ─── Runtime Config (fetched from server /api/config) ──────────────
   const [runtimeConfig, setRuntimeConfig] = useState(null);
@@ -121,7 +122,7 @@ export default function ITSMApp() {
             }
             return [];
           }
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
       }
       const curVer = localStorage.getItem("vgc_data_version");
       if (curVer !== DATA_VERSION) {
@@ -197,7 +198,7 @@ export default function ITSMApp() {
           const data = await r.json();
           if (data.prodTestMode) setProdTestMode(true);
         }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
     };
     checkProdMode();
     const iv = setInterval(checkProdMode, 5 * 60 * 1000);
@@ -519,7 +520,7 @@ export default function ITSMApp() {
   const [showCardSettings, setShowCardSettings] = useState(false);
   const [dashboardEditMode, setDashboardEditMode] = useState(false);
   const [cardLayout, setCardLayout] = useState(() => {
-    try { const s = localStorage.getItem("vgc_card_layout"); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("vgc_card_layout"); if (s) return JSON.parse(s); } catch (e) { /* ignore */ }
     return {};
   });
   const [dragState, setDragState] = useState(null);
@@ -774,9 +775,12 @@ export default function ITSMApp() {
 
   // ─── HARD RULE: Data Isolation Mode ────────────────────────────────
   // User classification for data isolation
-  // isLocalDemoUser: non-Entra demo/dev users → seed data only, no production API calls
-  // isEntraProductionUser: Entra ID users → real Zendesk/API data only
-  const isLocalDemoUser = !!(currentUser && (currentUser.id === "DEMO-001" || currentUser.rbacRole === "VGC Dev Admin") && currentUser.authType !== "entra");
+  // (#4 follow-up, 2026-05-03) `isLocalDemoUser` was a heuristic that never matched
+  // any real user (LOCAL admin has id `LOCAL-vgcdevadmin` / role `Administrator`,
+  // not `DEMO-001` / `VGC Dev Admin`). Demo Experience buttons were removed in 2026-05-02,
+  // so the only remaining auth paths are Entra SSO (production) and the local Dev Admin
+  // (also production). All ~20 `if (isLocalDemoUser) return;` guards have been deleted.
+  // isEntraProductionUser still distinguishes Entra-authed sessions for write-path gating.
   const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
   const portalSessionIdRef = useRef(null);
@@ -799,7 +803,7 @@ export default function ITSMApp() {
 
   const clearPortalSessionId = useCallback(() => {
     portalSessionIdRef.current = null;
-    try { sessionStorage.removeItem("vgc_portal_session_id"); } catch (e) {}
+    try { sessionStorage.removeItem("vgc_portal_session_id"); } catch (e) { /* ignore */ }
   }, []);
 
   const startPortalSessionNow = useCallback(async (sessionId) => {
@@ -837,10 +841,10 @@ export default function ITSMApp() {
     }
   }, [azureOpenAI]);
   useEffect(() => {
-    try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch (e) {}
+    try { localStorage.setItem("vgc_dismissed_alerts", JSON.stringify(dismissedProactiveAlerts)); } catch (e) { /* ignore */ }
   }, [dismissedProactiveAlerts]);
   useEffect(() => {
-    try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch (e) {}
+    try { localStorage.setItem("vgc_card_layout", JSON.stringify(cardLayout)); } catch (e) { /* ignore */ }
   }, [cardLayout]);
 
   // ─── GLOBAL AI ERROR INTERCEPTOR (Hard Rule: AI must solve every error) ──
@@ -908,19 +912,11 @@ export default function ITSMApp() {
             } catch (e) { /* per-collection error isolated */ }
           }));
           // Also clean seed data from the DB itself
-          if (!window.__vgcWaitForApiAuth || await window.__vgcWaitForApiAuth(8000)) {
-            fetch("/api/db-clean-seed", { method: "POST" }).then(r => r.json()).catch(() => {});
-          }
+          // SECURITY (#1 follow-up, 2026-05-03): auto-call removed. /api/db-clean-seed is now
+          // admin-gated and dry-run by default; admins can trigger it from the Data Hygiene UI.
+          // Previously this fired on every Entra login and produced harmless 401s in network/audit logs.
         } catch (e) { console.warn("[DATA ISOLATION] DB re-hydration failed:", e.message); }
       })();
-    }
-    if (isLocalDemoUser) {
-      ["vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats","vgc_customers","vgc_service_reports"].forEach(k => localStorage.removeItem(k));
-      setCustomers([]);
-      setServiceReports([]);
-      setZdTickets([]);
-      setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
-      setZdAiQueue([]);
     }
   }, [currentUser, isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -942,7 +938,7 @@ export default function ITSMApp() {
       sessionStorage.removeItem("vgc_current_user");
       localStorage.removeItem("vgc_current_user");
       ["vgc_customers","vgc_service_reports","vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, [clearPortalSessionId]);
 
   const endPortalSession = useCallback(async () => {
@@ -954,7 +950,7 @@ export default function ITSMApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId }),
       });
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
     clearPortalSessionId();
   }, [clearPortalSessionId, isEntraProductionUser]);
 
@@ -990,7 +986,7 @@ export default function ITSMApp() {
         if (!response.ok) return;
         const data = await response.json().catch(() => ({}));
         if (data && data.active === false) staleSignOut(data);
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
     };
     const start = async () => {
       try {
@@ -1001,14 +997,14 @@ export default function ITSMApp() {
           await heartbeat();
           heartbeatTimer = setInterval(heartbeat, 30000);
         }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
     };
     const onStorage = (event) => {
       if (event.key !== "vgc_active_session_marker" || !event.newValue) return;
       try {
         const marker = JSON.parse(event.newValue);
         if (marker.email === email && marker.sessionId && marker.sessionId !== sessionId) staleSignOut({ code: "STALE_SESSION" });
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
     };
     const onServerStale = (event) => staleSignOut(event.detail || { code: "STALE_SESSION" });
     window.addEventListener("storage", onStorage);
@@ -1150,7 +1146,7 @@ export default function ITSMApp() {
       try {
         const stored = sessionStorage.getItem("itsm_sso_fallback");
         if (stored) { fallbackUser = JSON.parse(stored); sessionStorage.removeItem("itsm_sso_fallback"); }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       // Enrich with live Entra ID data, load DB-stored role, then set user
       (async () => {
@@ -1163,7 +1159,7 @@ export default function ITSMApp() {
             entraUsersList = syncData.users || [];
             entraProfile = entraUsersList.find(u => u.email === email);
           }
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
 
         // ─── Bulk-prefetch Entra user photos (cached server-side, 24h TTL) ──
         // Stored in localStorage `vgc_entra_photos` and exposed globally via
@@ -1224,7 +1220,7 @@ export default function ITSMApp() {
               dbStoredRole = d.rbacRole || null;
             }
           }
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
 
         // Determine role: DB-stored > DEV_ADMIN check > ADMIN check > default L1 Support
         const determineRole = (baseRole) => {
@@ -1342,7 +1338,7 @@ export default function ITSMApp() {
         try {
           if (localStorage.getItem(dismissKey) === "true" || sessionStorage.getItem(sessionKey) === "true") return;
           sessionStorage.setItem(sessionKey, "true");
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
         if (cancelled) return;
         setDisasterAlert({ ...alert, id: alertId });
         autoDismissTimer = setTimeout(() => setDisasterAlert(null), 10000);
@@ -1356,7 +1352,7 @@ export default function ITSMApp() {
   const dismissDisasterAlert = useCallback(() => {
     const alertId = disasterAlert?.id;
     setDisasterAlert(null);
-    try { if (alertId) localStorage.setItem(`vgc_disaster_dismissed:${alertId}`, "true"); } catch (e) {}
+    try { if (alertId) localStorage.setItem(`vgc_disaster_dismissed:${alertId}`, "true"); } catch (e) { /* ignore */ }
   }, [disasterAlert]);
 
   // ─── High-Severity Incident Auto-Escalation Engine ────────────────────
@@ -1885,7 +1881,7 @@ export default function ITSMApp() {
     try {
       const res = await fetch("/api/ai/briefings");
       if (res.ok) { const data = await res.json(); setAiBriefings(data.briefings || []); }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, []);
 
   // ─── Phase 5: AI Pattern Detection ────────────────────────────────
@@ -1957,7 +1953,7 @@ export default function ITSMApp() {
     try {
       const res = await fetch("/api/ai/patterns");
       if (res.ok) { const data = await res.json(); setAiPatterns(data.patterns || []); }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, []);
 
   const createProblemFromPattern = useCallback(async (patternId) => {
@@ -1986,12 +1982,11 @@ export default function ITSMApp() {
           .filter(Boolean);
         setIncidents(items.filter(i => !/^(INC000)\d$/.test(i.id)));
       }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, []);
 
   // ─── Phase 6: AI Historical Incident Closure ──────────────────────
   const runHistoricalClose = useCallback(async (dryRun = true) => {
-    if (isLocalDemoUser) { showToast("Demo mode — Historical close unavailable", "info"); return; }
     setHistoricalCloseRunning(true);
     try {
       const res = await fetch("/api/ai/historical-close", {
@@ -2013,7 +2008,6 @@ export default function ITSMApp() {
 
   // ─── AI Auto-Resolve: Scan + Queue Management ─────────────────────
   const fetchAiResolveQueue = useCallback(async () => {
-    if (isLocalDemoUser) return;
     try {
       const res = await fetch("/api/ai/resolve-queue");
       if (res.ok) {
@@ -2021,11 +2015,10 @@ export default function ITSMApp() {
         const items = (data.items || []).filter(i => !_isTestRecord(i.incidentId));
         setAiResolveQueue(items);
       }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, []);
 
   const runAiAutoResolve = useCallback(async () => {
-    if (isLocalDemoUser) { showToast("Demo mode — AI auto-resolve unavailable", "info"); return; }
     setAiResolveScanLoading(true);
     try {
       const res = await fetch("/api/ai/auto-resolve", {
@@ -2043,7 +2036,6 @@ export default function ITSMApp() {
   }, [currentUser?.name, fetchAiResolveQueue]);
 
   const handleBulkDismiss = useCallback(async () => {
-    if (isLocalDemoUser) return;
     setAiBulkDismissLoading(true);
     try {
       const res = await fetch("/api/ai/resolve-queue/bulk-dismiss", {
@@ -2059,7 +2051,6 @@ export default function ITSMApp() {
   }, [currentUser?.name, fetchAiResolveQueue]);
 
   const handleBulkApprove = useCallback(async (consultedBy = []) => {
-    if (isLocalDemoUser) return;
     setAiBulkApproveLoading(true);
     try {
       const res = await fetch("/api/ai/resolve-queue/bulk-approve", {
@@ -2097,7 +2088,6 @@ export default function ITSMApp() {
 
   // ─── AI Auto Follow-Up Handler ──────────────────────────────────────
   const runAiAutoFollowUp = useCallback(async () => {
-    if (isLocalDemoUser) return;
     setAiFollowUpLoading(true);
     try {
       const res = await fetch("/api/ai/auto-followup", {
@@ -2113,7 +2103,6 @@ export default function ITSMApp() {
 
   // ─── Cleanup Stale Queue Handler ────────────────────────────────────
   const runCleanupQueue = useCallback(async () => {
-    if (isLocalDemoUser) return;
     setCleanupLoading(true);
     try {
       const res = await fetch("/api/ai/cleanup-queue", {
@@ -2130,23 +2119,21 @@ export default function ITSMApp() {
 
   // Fetch AI resolve queue on login
   useEffect(() => {
-    if (isLoggedIn && !isLocalDemoUser) fetchAiResolveQueue();
+    if (isLoggedIn) fetchAiResolveQueue();
   }, [isLoggedIn, fetchAiResolveQueue]);
 
   // ─── AI Workflow Assist: Scan + Queue Management ──────────────────────
   const fetchAiWorkflowQueue = useCallback(async () => {
-    if (isLocalDemoUser) return;
     try {
       const res = await fetch("/api/ai/workflow-queue");
       if (res.ok) {
         const data = await res.json();
         setAiWorkflowQueue((data.items || []).filter(i => i.status === "pending"));
       }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, []);
 
   const runAiWorkflowAssist = useCallback(async () => {
-    if (isLocalDemoUser) { showToast("Demo mode — AI workflow assist unavailable", "info"); return; }
     setAiWorkflowScanLoading(true);
     try {
       const res = await fetch("/api/ai/workflow-assist", {
@@ -2183,12 +2170,11 @@ export default function ITSMApp() {
 
   // Fetch AI workflow queue on login
   useEffect(() => {
-    if (isLoggedIn && !isLocalDemoUser) fetchAiWorkflowQueue();
+    if (isLoggedIn) fetchAiWorkflowQueue();
   }, [isLoggedIn, fetchAiWorkflowQueue]);
 
   // ─── AI Learn from Incidents → KB Articles ─────────────────────────────
   const runKbLearning = useCallback(async () => {
-    if (isLocalDemoUser) { showToast("Demo mode — KB learning unavailable", "info"); return; }
     setKbLearningLoading(true);
     try {
       const res = await fetch("/api/ai/learn-incidents-kb", {
@@ -2903,7 +2889,7 @@ export default function ITSMApp() {
 
   // ─── Persist to localStorage + SQLite Database ─────────────────────────
   const DB_API = "/api/db";
-  const _save = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} };
+  const _save = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* ignore */ } };
 
   // ─── Recycle Bin helpers ───────────────────────────────────────────────
   const RECYCLE_LABELS = { customers: "Customer", vendors: "Vendor", workflow_rules: "Workflow Rule", service_reports: "Service Report", service_catalog: "Catalog Item", managed_users: "User", kb_articles: "KB Article", survey_templates: "Survey Template", ai_actions: "AI Action" };
@@ -2941,7 +2927,6 @@ export default function ITSMApp() {
     // Trailing debounce per collection — coalesces bursts (bulk imports, undo/redo, rapid edits)
     if (_dbSyncTimers.current[collection]) clearTimeout(_dbSyncTimers.current[collection]);
     _dbSyncTimers.current[collection] = setTimeout(async () => {
-      if (isLocalDemoUser) return;
       if (isEntraProductionUser && window.__vgcWaitForApiAuth) {
         const authReady = await window.__vgcWaitForApiAuth(8000);
         if (!authReady) return;
@@ -2952,7 +2937,7 @@ export default function ITSMApp() {
         body: JSON.stringify(data),
       }).catch(() => {}); // silent fail — localStorage is primary fallback
     }, 800);
-  }, [isLocalDemoUser, isEntraProductionUser]);
+  }, [isEntraProductionUser]);
 
   // Sync a single record to the SQLite backend
   // HARD RULE: Demo users must NEVER write to the shared production DB
@@ -2960,7 +2945,6 @@ export default function ITSMApp() {
     if (!record || !record.id) return;
     (async () => {
       if (!isEntraProductionUser) return;
-      if (isLocalDemoUser) return;
       if (isEntraProductionUser && window.__vgcWaitForApiAuth) {
         const authReady = await window.__vgcWaitForApiAuth(8000);
         if (!authReady) return;
@@ -2971,7 +2955,7 @@ export default function ITSMApp() {
         body: JSON.stringify(record),
       }).catch(() => {});
     })();
-  }, [isLocalDemoUser, isEntraProductionUser]);
+  }, [isEntraProductionUser]);
 
   const dbInitRef = useRef(false);
 
@@ -2980,8 +2964,6 @@ export default function ITSMApp() {
     if (dbInitRef.current) return;
     if (!isEntraProductionUser) return;
     dbInitRef.current = true;
-    // HARD RULE: Always load from production DB
-    if (isDemoMode) return;
     fetch(`${DB_API}-stats`).then(r => r.json()).then(async (stats) => {
       // Hydrate state from DB if localStorage was empty (new browser/device)
       const hydrateMap = [
@@ -3015,7 +2997,7 @@ export default function ITSMApp() {
                 }
               }
             }
-          } catch (e) {}
+          } catch (e) { /* ignore */ }
         }
       }
       // Seed DB from state if DB is empty — ONLY for demo/local users
@@ -3031,7 +3013,7 @@ export default function ITSMApp() {
             setSlaPolicy(prev => ({ ...prev, ...saved, severities: { ...prev.severities, ...saved.severities }, supportHours: { ...prev.supportHours, ...(saved.supportHours || {}) } }));
           }
         }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       // ─── Load Tenant Settings from server (persists across deploys) ─────
       try {
@@ -3043,7 +3025,7 @@ export default function ITSMApp() {
             _save("vgc_general_settings", ts);
           }
         }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       // ─── Load Incident Templates from server ─────
       try {
@@ -3052,7 +3034,7 @@ export default function ITSMApp() {
           const tplData = await tplr.json();
           if (tplData.data && tplData.data.length > 0) setIncidentTemplates(tplData.data);
         }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       // ─── Load Approval Chains + Instances ─────
       try {
@@ -3060,19 +3042,19 @@ export default function ITSMApp() {
         if (acr.ok) { const d = await acr.json(); if (d.data) setApprovalChains(d.data); }
         const air = await fetch(`${DB_API}/approval_instances`);
         if (air.ok) { const d = await air.json(); if (d.data) setApprovalInstances(d.data); }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       // ─── Load Report Schedules ─────
       try {
         const rsr = await fetch("/api/reports/schedules");
         if (rsr.ok) { const d = await rsr.json(); if (d.data) setReportSchedules(d.data); }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       // ─── Load Email Whitelist ─────
       try {
         const ewlr = await fetch(`${DB_API}/email_whitelist`);
         if (ewlr.ok) { const d = await ewlr.json(); if (d.data && d.data.length > 0) setEmailWhitelist(d.data); }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
 
       if (!isEntraProductionUser) {
         const syncMap = [
@@ -3123,7 +3105,7 @@ export default function ITSMApp() {
       localStorage.removeItem("vgc_current_user");
       if (currentUser) sessionStorage.setItem("vgc_current_user", JSON.stringify(currentUser));
       else sessionStorage.removeItem("vgc_current_user");
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }, [currentUser]);
   useEffect(() => { _save("vgc_integrations", integrations); _dbSync("integrations", integrations); }, [integrations]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { _save("vgc_managed_users", managedUsers); _dbSync("users", managedUsers); }, [managedUsers]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3159,9 +3141,9 @@ export default function ITSMApp() {
           await fetch("/api/zendesk/sync-organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
           const custR = await fetch("/api/db/customers");
           if (custR.ok) { const custData = await custR.json(); if (Array.isArray(custData.data) && custData.data.length > 0) setCustomers(custData.data); }
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
         setGlobalLastSync(new Date());
-      } catch (e) {} finally { setGlobalSyncActive(false); }
+      } catch (e) { /* ignore */ } finally { setGlobalSyncActive(false); }
     };
     doSync(); // immediate on mount
     globalSyncRef.current = setInterval(() => { if (!tabVisibleRef.current) return; doSync(); }, 60000); // every 60s
@@ -3213,7 +3195,7 @@ export default function ITSMApp() {
         ws.onopen = () => {
           reconnectDelay = 1000;
           setWsBridgeConnected(true);
-          try { ws.send(JSON.stringify({ type: "subscribe", channels: ["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "ai_cards", "system"] })); } catch {}
+          try { ws.send(JSON.stringify({ type: "subscribe", channels: ["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "ai_cards", "system"] })); } catch { /* ignore */ }
         };
         ws.onmessage = (ev) => {
           try {
@@ -3255,7 +3237,7 @@ export default function ITSMApp() {
           reconnectTimer = setTimeout(connect, reconnectDelay);
           reconnectDelay = Math.min(reconnectDelay * 2, 30000);
         };
-        ws.onerror = () => { try { ws.close(); } catch {} };
+        ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
       } catch {
         if (!stopped) reconnectTimer = setTimeout(connect, reconnectDelay);
       }
@@ -3265,7 +3247,7 @@ export default function ITSMApp() {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       for (const t of refreshTimers.values()) clearTimeout(t);
-      try { ws && ws.close(); } catch {}
+      try { ws && ws.close(); } catch { /* ignore */ }
     };
   }, [isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3788,10 +3770,9 @@ export default function ITSMApp() {
     setAiAttachments([]);
     setAiLoading(true);
     (async () => {
-      const dataMode = isLocalDemoUser ? "DEMO" : "PRODUCTION";
       const systemPrompt = [
         `You are VGC AI — the intelligent assistant for VGC Technology Pte Ltd, Singapore. You work alongside ${currentUser.name} (${currentUser.rbacRole || "ITSM User"}) as a helpful, friendly colleague — not a bot. Always answer directly in your FIRST sentence — no preamble, no "let me check", no clarifying questions. Jump straight to the solution.`,
-        `CURRENT DATA MODE: ${dataMode}. ${isLocalDemoUser ? "You are in DEMO MODE — all data shown is sample/seed data only. NEVER attempt to fetch, display, or reference production Zendesk data. If the user asks about production tickets or real customer data, ALERT them: 'You are in Demo Mode — production data is not available. Please sign in with your Entra ID account to access production data.'" : "You are in PRODUCTION MODE — all data comes from live Zendesk and ITSM APIs. NEVER show demo/hardcoded data. If any response contains placeholder ticket IDs (like INC0001 or #48201-48208 from seed data), flag it immediately and refresh from live sources."}`,
+        `CURRENT DATA MODE: PRODUCTION. You are in PRODUCTION MODE — all data comes from live Zendesk and ITSM APIs. NEVER show demo/hardcoded data. If any response contains placeholder ticket IDs (like INC0001 or #48201-48208 from seed data), flag it immediately and refresh from live sources.`,
         `DATA ISOLATION GUARD (HARD RULE): If you detect a human mistake that could mix demo data into production or vice versa — IMMEDIATELY alert the user with a clear warning. Examples: trying to use demo ticket IDs in production, attempting to connect Zendesk in demo mode, referencing hardcoded data in production mode. Say: "⚠️ Data Isolation Alert: [explain the issue]. This could compromise data integrity."`,
         `TONE & STYLE: Be warm, conversational, and human. Write like a brilliant senior engineer who always has the answer. NEVER ask the user clarifying questions — ALWAYS give a direct, confident answer immediately. If the question is ambiguous, cover ALL likely scenarios in your response instead of asking which one they mean. Use natural language, contractions, and a friendly tone. Break responses into short conversational chunks — never dump a wall of text. Use casual phrasing like "Here's exactly what you need to do...", "Got it — the fix is...", "I've seen this before — here's the solution...". Think like a real expert: anticipate what they need and deliver it upfront. Never say "Could you clarify?", "What do you mean by?", "Can you provide more details?" — instead, give the answer directly and cover edge cases.`,
         `REFERENCE LINKS (HARD RULE): When recommending solutions, ALWAYS include relevant reference links. Priority order: 1) Official vendor documentation (Microsoft Learn, Cisco docs, Fortinet KB, Dell Support, etc.) 2) Trusted industry sources (NIST, CIS, OWASP, ITIL) 3) Community-verified solutions (Stack Overflow, Spiceworks, Reddit r/sysadmin) — but ONLY if they have accepted/verified answers. Format links as markdown: [Title](URL). For Microsoft products, always link to https://learn.microsoft.com/... For Cisco, use https://www.cisco.com/c/en/us/support/... For Fortinet, use https://docs.fortinet.com/... Include 1-3 reference links per response when applicable. If you don't have a specific URL, still mention the official documentation source (e.g., "Check Microsoft Learn for the latest guidance on this").`,
@@ -4215,11 +4196,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   // ── Core Functions ──
   const zdConnect = async () => {
-    // HARD RULE: Demo user must NOT connect to production Zendesk
-    if (isLocalDemoUser) {
-      setZdError("⚠️ Data Isolation: Demo mode cannot access production Zendesk. Sign in with your Entra ID account to access production data.");
-      return;
-    }
     setZdLoading(true); setZdError(null);
     try {
       const r = await fetch("/api/zendesk/me");
@@ -4231,13 +4207,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       try {
         const ar = await fetch("/api/zendesk/agents");
         if (ar.ok) { const ad = await ar.json(); setZdAgents(ad.agents || []); setZdGroups(ad.groups || []); }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
     } catch (e) { setZdError(e.message); setZdConnected(false); }
     finally { setZdLoading(false); }
   };
 
   const zdFetchTickets = async (status, page) => {
-    if (isLocalDemoUser) return; // Data Isolation: no production API calls in demo mode
     const s = status || zdFilter; const p = page || 1;
     setZdLoading(true);
     try {
@@ -4251,7 +4226,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   };
 
   const zdFetchStats = async () => {
-    if (isLocalDemoUser) return; // Data Isolation: no production API calls in demo mode
     try {
       const r = await fetch("/api/zendesk/stats");
       if (r.ok) {
@@ -4272,7 +4246,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     try {
       const r = await fetch(`/api/zendesk/tickets/${ticketId}/comments`);
       if (r.ok) { const data = await r.json(); setZdComments(data.comments || []); }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   };
 
   const zdSelectTicket = async (ticket) => {
@@ -4520,7 +4494,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       zdFetchedRef.current = true;
       zdConnect().then(() => {
         // Auto-start first triage pass on connect
-        if (!isLocalDemoUser && azureOpenAI.enabled) {
+        if (azureOpenAI.enabled) {
           setTimeout(() => { if (Date.now() - zdBatchThrottleRef.current > 60000) { zdBatchThrottleRef.current = Date.now(); zdAutoTriageBatch(); } }, 3000);
         }
       });
@@ -4539,22 +4513,21 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(fixed));
           setZdAiQueue(fixed);
         }
-      } catch (e) {}
+      } catch (e) { /* ignore */ }
     }
     localStorage.setItem("vgc_zd_queue_v2", "1");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Persist AI queue, triaged IDs, stats, and logs to localStorage ──
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch (e) {} }, [zdAiQueue]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch (e) {} }, [zdTriagedIds]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(normalizeZdAutoStats(zdAutoStats))); } catch (e) {} }, [zdAutoStats]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch (e) {} }, [zdAutoLog]);
-  React.useEffect(() => { try { if (zdStats && typeof zdStats === "object") localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch (e) {} }, [zdStats]);
-  React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch (e) {} }, [zdTickets]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_ai_queue", JSON.stringify(zdAiQueue)); } catch (e) { /* ignore */ } }, [zdAiQueue]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_triaged_ids", JSON.stringify([...zdTriagedIds])); } catch (e) { /* ignore */ } }, [zdTriagedIds]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_stats", JSON.stringify(normalizeZdAutoStats(zdAutoStats))); } catch (e) { /* ignore */ } }, [zdAutoStats]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_auto_log", JSON.stringify(zdAutoLog.slice(0, 100))); } catch (e) { /* ignore */ } }, [zdAutoLog]);
+  React.useEffect(() => { try { if (zdStats && typeof zdStats === "object") localStorage.setItem("vgc_zd_stats", JSON.stringify(zdStats)); } catch (e) { /* ignore */ } }, [zdStats]);
+  React.useEffect(() => { try { localStorage.setItem("vgc_zd_tickets", JSON.stringify(zdTickets)); } catch (e) { /* ignore */ } }, [zdTickets]);
 
   // Auto-polling for new tickets (every 120s when automation is on)
   React.useEffect(() => {
-    if (isLocalDemoUser) return; // Data Isolation
     if (zdConnected && zdAutoMode && azureOpenAI.enabled) {
       // Run immediately on enable (throttled to prevent spam on remounts)
       if (Date.now() - zdBatchThrottleRef.current > 60000) { zdBatchThrottleRef.current = Date.now(); zdAutoTriageBatch(); }
@@ -4566,7 +4539,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   // Real-time incremental sync polling (every 90s)
   React.useEffect(() => {
-    if (isLocalDemoUser) return; // Data Isolation: no production polling in demo mode
     if (zdConnected && zdRealTimeEnabled) {
       // Fetch sync status on connect
       fetch("/api/zendesk/sync-status").then(r => r.json()).then(data => setZdSyncStatus(data)).catch(() => {});
@@ -4593,7 +4565,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           // Always refresh sync status & incidents
           const statusR = await fetch("/api/zendesk/sync-status");
           if (statusR.ok) setZdSyncStatus(await statusR.json());
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
       }, 90000);
       return () => clearInterval(zdRealTimePollRef.current);
     }
@@ -4627,11 +4599,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             ⚙️ Operations <span style={{ background: "#CE93D822", color: "#CE93D8", padding: "1px 6px", borderRadius: 8, fontSize: 9 }}>{problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length}</span>
           </button>
         </div>
-        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users: managedUsers, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, isLocalDemoUser, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading, zdStats, globalSyncActive, globalLastSync }} />)}
+        {ticketsSubTab === "incidents" && (<IncidentsModule ctx={{ incidents, setIncidents, search, setSearch, currentUser, showToast, _save, setDetailItem, setModal, setActiveModule, computeIncidentSlaFn: computeIncidentSla, users: managedUsers, aiResolveQueue, aiResolveFilter, setAiResolveFilter, aiResolveLoading, aiBulkDismissLoading, aiBulkApproveLoading, handleAiResolveAction, handleBulkDismiss, handleBulkApprove, runAiAutoResolve, aiResolveScanLoading, aiWorkflowQueue, aiWorkflowLoading, handleAiWorkflowAction, runAiWorkflowAssist, aiWorkflowScanLoading, historicalCloseRunning, runBulkCloseTickets, runAiAutoFollowUp, aiFollowUpLoading, runCleanupQueue, cleanupLoading, zdStats, globalSyncActive, globalLastSync }} />)}
         {ticketsSubTab === "zendesk" && (<ZendeskModule
           assets={assets} changes={changes} currentUser={currentUser} customers={customers} incidents={incidents} requests={requests}
           setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} users={managedUsers}
-          setIncidents={setIncidents} setCustomers={setCustomers} azureOpenAI={azureOpenAI} isLocalDemoUser={isLocalDemoUser}
+          setIncidents={setIncidents} setCustomers={setCustomers} azureOpenAI={azureOpenAI}
           zdState={{
             zdTab, zdTickets, zdStats, zdConnected, zdLoading, zdError, zdFilter, zdSelectedTicket, zdPage, zdRenderLimit,
             zdExpandedSections, zdComments, zdTriagedIds, zdAiQueue, zdAutoMode, zdAutoStats, zdAiProcessing,
@@ -4706,7 +4678,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     aiActions, showAiActionsPanel, setShowAiActionsPanel,
     setTicketsSubTab, setAnalyticsSubTab,
     approvalInstances, escalationConfig,
-    isDemoMode, prodTestMode, runtimeConfig,
+    prodTestMode, runtimeConfig,
     aiPipelineStats,
     setVendors, softDelete,
     zdConnected, wsBridgeConnected, zdAutoStats: safeZdAutoStats, zdAiQueue, setZdTab,
@@ -4837,7 +4809,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         setUatResults, setUatRunning, setUatLastRun,
         tourStep, runtimeConfig, profilePhoto, profilePhotoRef,
         avatarConfig, notifPrefs, cardVisibility,
-        isDemoMode, wsConnected, globalLastSync, globalSyncActive, prodTestMode,
+        wsConnected, globalLastSync, globalSyncActive, prodTestMode,
         aiPipelineStats, modal, setModal, recycleBin, setRecycleBin,
         wfAnimStep, setWfAnimStep, wfAnimPlaying, setWfAnimPlaying,
         historicalCloseCutoff, setHistoricalCloseCutoff,
@@ -5185,10 +5157,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 <span style={{
                   fontSize: 7, fontWeight: 700, padding: "1px 6px", borderRadius: 4, display: "inline-block", marginTop: 3,
                   fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.5px",
-                  background: isLocalDemoUser ? "#FFB34722" : "#4CAF5022",
-                  color: isLocalDemoUser ? "#FFB347" : "#4CAF50",
-                  border: `1px solid ${isLocalDemoUser ? "#FFB34733" : "#4CAF5033"}`
-                }}>{isLocalDemoUser ? "DEMO MODE" : "PRODUCTION"}</span>
+                  background: "#4CAF5022",
+                  color: "#4CAF50",
+                  border: "1px solid #4CAF5033"
+                }}>PRODUCTION</span>
               </div>
             </div>
           ) : (
@@ -5220,7 +5192,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 top: "calc(50% - 2px)", left: "calc(50% - 2px)"
               }} />
               {/* Data mode dot indicator on collapsed sidebar */}
-              <div style={{ width: 6, height: 6, borderRadius: "50%", margin: "6px auto 0", background: isLocalDemoUser ? "#FFB347" : "#4CAF50", boxShadow: `0 0 6px ${isLocalDemoUser ? "#FFB34788" : "#4CAF5088"}` }} title={isLocalDemoUser ? "Demo Mode" : "Production"} />
+              <div style={{ width: 6, height: 6, borderRadius: "50%", margin: "6px auto 0", background: "#4CAF50", boxShadow: "0 0 6px #4CAF5088" }} title="Production" />
             </div>
           )}
           <button onClick={() => setSideCollapsed(!sideCollapsed)} className="sidebar-collapse-btn" style={{
@@ -5318,7 +5290,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 <div style={{ fontSize: 12, fontWeight: 600, color: "#E8ECF4", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{msalUser?.displayName || currentUser.name}</div>
                 <div style={{ fontSize: 10, color: "#EC4899", fontFamily: "'JetBrains Mono', monospace" }}>{msalUser?.jobTitle || currentUser.rbacRole}</div>
                 <div style={{ fontSize: 8, color: isMsalAuthenticated ? "#4CAF50" : "#FFB347", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 3 }}>
-                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: isMsalAuthenticated ? "#4CAF50" : "#FFB347", animation: "pulse 2s infinite" }} /> {isMsalAuthenticated ? "Entra ID Connected" : "Demo Mode"}
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: isMsalAuthenticated ? "#4CAF50" : "#FFB347", animation: "pulse 2s infinite" }} /> {isMsalAuthenticated ? "Entra ID Connected" : "Local Admin"}
                 </div>
                 {msalUser?.mail && <div style={{ fontSize: 7, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{msalUser.mail}</div>}
               </div>
@@ -6746,7 +6718,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
                     <span style={{ fontSize: 8, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{kbEntries.length} entries</span>
                     <button onClick={async () => {
-                      try { const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const d = await r.json(); fetchKbEntries(); trackAction("AI Training", "Knowledge Sync", `${d.syncedThisRun || 0} new entries synced. Total: ${d.totalEntries}`, "AI"); setAiMessages(prev => [...prev, { role: "ai", text: `🔄 Synced! ${d.syncedThisRun || 0} new entries. Total: ${d.totalEntries}`, source: "azure" }]); } catch (e) {}
+                      try { const r = await fetch("/api/ai/knowledge/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const d = await r.json(); fetchKbEntries(); trackAction("AI Training", "Knowledge Sync", `${d.syncedThisRun || 0} new entries synced. Total: ${d.totalEntries}`, "AI"); setAiMessages(prev => [...prev, { role: "ai", text: `🔄 Synced! ${d.syncedThisRun || 0} new entries. Total: ${d.totalEntries}`, source: "azure" }]); } catch (e) { /* ignore */ }
                     }} style={{ background: "none", border: "1px solid #06B6D433", borderRadius: 3, padding: "1px 5px", fontSize: 8, color: "#06B6D4", cursor: "pointer" }} title="Sync all knowledge system-wide">🔄</button>
                   </span>
                 </div>
@@ -7246,7 +7218,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           `Browser: ${navigator.userAgent}\n` +
           `URL: ${window.location.href}\n` +
           `User: ${currentUser?.name || "Unknown"} (${currentUser?.email || "N/A"})\n` +
-          `SSO Status: ${isMsalAuthenticated ? "Entra ID Connected" : "Demo Mode"}\n` +
+          `SSO Status: ${isMsalAuthenticated ? "Entra ID Connected" : "Local Admin"}\n` +
           `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
           `Technical Details:\n${ea.details}\n\n` +
           `Stack Trace:\n${ea.stack || "N/A"}\n\n` +

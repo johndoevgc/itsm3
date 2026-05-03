@@ -39,7 +39,7 @@ if (cluster.isPrimary) {
   const shutdown = (sig) => {
     console.log(`[Cluster] ${sig} received — shutting down workers`);
     for (const id in cluster.workers) {
-      try { cluster.workers[id].process.kill(sig); } catch {}
+      try { cluster.workers[id].process.kill(sig); } catch { /* ignore */ }
     }
     setTimeout(() => process.exit(0), 12000).unref();
   };

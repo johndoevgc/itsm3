@@ -5,6 +5,7 @@
 const https = require("https");
 const crypto = require("crypto");
 const { validate } = require("../src/server/validation");
+const { normalizePriority, priorityToPCode } = require("../src/utils/priorityNormalize.cjs");
 
 function parseStoredRecord(row) {
   if (!row) return null;
@@ -583,7 +584,7 @@ module.exports = function createCoreRoutes(ctx) {
             const _newIncTo = safeRecipient(body);
             if (!_newIncTo) {
               console.warn(`[Incident Create] No valid recipient for ${id} — skipping confirmation email`);
-              try { await db.audit("incidents", id, "email_skipped_no_recipient", JSON.stringify({ stage: "create" }), "system"); } catch {}
+              try { await db.audit("incidents", id, "email_skipped_no_recipient", JSON.stringify({ stage: "create" }), "system"); } catch { /* ignore */ }
             } else {
             queueOrSendCustomerEmail({
               to: [_newIncTo],
@@ -632,7 +633,7 @@ module.exports = function createCoreRoutes(ctx) {
                   affectedServices: body.affectedServices || [],
                   source: "auto_severity_trigger",
                 };
-                await db.upsert("mim_records", mimRecord.id, mimRecord);
+                await db.upsert("mim_records", mimRecord.id, JSON.stringify(mimRecord));
                 try {
                   const liveRow = await db.getOne("incidents", id);
                   if (liveRow) {
@@ -642,7 +643,7 @@ module.exports = function createCoreRoutes(ctx) {
                     liveInc.mimRecordId = mimRecord.id;
                     await db.upsert("incidents", id, JSON.stringify(liveInc));
                   }
-                } catch {}
+                } catch { /* ignore */ }
                 await db.audit("mim_records", mimRecord.id, "auto_declared", JSON.stringify({ incidentId: id, priority: body.priority }), "system");
                 if (wsServer) wsServer.broadcast("mim", { action: "auto_declared", incidentId: id, mimId: mimRecord.id });
                 notifyTeamsMajorIncident(mimRecord, { ...body, id }).catch(() => {});
@@ -695,7 +696,7 @@ module.exports = function createCoreRoutes(ctx) {
               const existing = typeof existingRow.data === "string" ? JSON.parse(existingRow.data) : existingRow.data;
               previousAssignee = existing.assignedTo || existing.assignee || null;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
 
         // ─── Stamp resolvedAt when incident transitions to Resolved/Closed ──
@@ -752,7 +753,7 @@ module.exports = function createCoreRoutes(ctx) {
                     await db.upsert("ai_actions", item.id, JSON.stringify(item));
                     dismissed++;
                   }
-                } catch {}
+                } catch { /* ignore */ }
               }
               if (dismissed > 0) console.log(`[Auto-Dismiss] ${dismissed} pending ai_actions dismissed for ${recordId} (${body.status})`);
             } catch (e) { console.warn("[Auto-Dismiss]", e.message); }
@@ -762,7 +763,7 @@ module.exports = function createCoreRoutes(ctx) {
           const _resTo = safeRecipient(body);
           if (!_resTo) {
             console.warn(`[Incident Resolve] No valid recipient for ${recordId} — skipping ${body.status} email`);
-            try { await db.audit("incidents", recordId, "email_skipped_no_recipient", JSON.stringify({ stage: "resolve", status: body.status }), "system"); } catch {}
+            try { await db.audit("incidents", recordId, "email_skipped_no_recipient", JSON.stringify({ stage: "resolve", status: body.status }), "system"); } catch { /* ignore */ }
           } else {
           queueOrSendCustomerEmail({
             to: [_resTo],
@@ -1358,31 +1359,64 @@ module.exports = function createCoreRoutes(ctx) {
       for (const c of VALID_COLLECTIONS) {
         stats[c] = await db.count(c);
       }
+      // audit_log lives in its own table (not itsm_data), so report it separately.
+      try { if (typeof db.countAudit === "function") stats.audit_log = await db.countAudit(); } catch { /* tolerate older backend */ }
       return json(res, 200, { database: db.label, collections: stats, timestamp: new Date().toISOString() });
     } catch (err) {
       return json(res, 500, { error: "Internal server error" });
     }
   }
 
-  // ─── Seed Data Cleanup (for Entra production users) ──────────────────
+  // ─── Seed Data Cleanup (admin-gated, dry-run by default) ──────────────
   if (pathname === "/api/db-clean-seed" && req.method === "POST") {
+    // SECURITY (#2): require authenticated admin role. Previously this was unauthenticated
+    // and called automatically by the SPA on every Entra login — a real prod row whose ID
+    // happened to match the seed regex would have been silently deleted.
+    if (!authResult || !authResult.authenticated) {
+      return json(res, 401, { error: "Authentication required" });
+    }
+    const role = authResult.role || "";
+    if (!["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
     try {
+      const body = await readBody(req).catch(() => ({}));
+      const apply = body && body.apply === true; // default = dry-run
       const seedPattern = /^(INC000|PRB000|CHG000|REQ000)\d$/;
       const collections = ["incidents", "problems", "changes", "requests"];
+      const matches = [];
       let totalDeleted = 0;
       for (const coll of collections) {
         const rows = await db.getAll(coll);
         for (const row of rows) {
           const item = typeof row.data === "string" ? JSON.parse(row.data) : (row.data || row);
-          const isSeed = seedPattern.test(row.id || item.id);
-          const isSeedLinked = item.title?.includes("Problem from INC000") || (Array.isArray(item.linkedIncidents) && item.linkedIncidents.some(id => /^INC000\d$/.test(id)));
+          const id = row.id || item.id;
+          const isSeed = seedPattern.test(id);
+          const isSeedLinked = item.title?.includes("Problem from INC000") || (Array.isArray(item.linkedIncidents) && item.linkedIncidents.some(linkedId => /^INC000\d$/.test(linkedId)));
           if (isSeed || isSeedLinked) {
-            await db.deleteOne(coll, row.id || item.id);
-            totalDeleted++;
+            matches.push({ collection: coll, id, title: item.title || "", reason: isSeed ? "id_pattern" : "linked_to_seed" });
+            if (apply) {
+              await db.deleteOne(coll, id);
+              totalDeleted++;
+            }
           }
         }
       }
-      return json(res, 200, { ok: true, cleaned: totalDeleted, timestamp: new Date().toISOString() });
+      if (apply) {
+        try {
+          await db.audit("_admin", authResult.user?.email || role, "db-clean-seed",
+            JSON.stringify({ deleted: totalDeleted, matches: matches.slice(0, 50) }),
+            authResult.user?.email || role);
+        } catch { /* ignore audit failure */ }
+      }
+      return json(res, 200, {
+        ok: true,
+        dryRun: !apply,
+        matchCount: matches.length,
+        deleted: apply ? totalDeleted : 0,
+        sample: matches.slice(0, 25),
+        timestamp: new Date().toISOString(),
+      });
     } catch (err) {
       return json(res, 500, { error: "Internal server error" });
     }
@@ -1407,23 +1441,9 @@ module.exports = function createCoreRoutes(ctx) {
     }
   }
 
-  // ─── Local Auth: POST /api/auth/local ─────────────────────────────────
+  // ─── Local Auth: POST /api/auth/local — RETIRED (#3, 2026-05-03) ───────
   if (pathname === "/api/auth/local" && req.method === "POST") {
-    try {
-      const body = await readBody(req);
-      const { username, password } = body;
-      if (!username || !password) return json(res, 400, { error: "Username and password required" });
-      const localUser = LOCAL_USERS[username.toLowerCase()];
-      if (!localUser) return json(res, 401, { error: "Invalid credentials" });
-      const inputHash = crypto.createHash("sha256").update(password).digest("hex");
-      if (!crypto.timingSafeEqual(Buffer.from(inputHash), Buffer.from(localUser.passwordHash))) {
-        return json(res, 401, { error: "Invalid credentials" });
-      }
-      await db.audit("auth", username, "local_login", JSON.stringify({ username, timestamp: new Date().toISOString() }), username);
-      return json(res, 200, { ok: true, user: localUser.profile });
-    } catch (err) {
-      return json(res, 500, { error: "Internal server error" });
-    }
+    return json(res, 410, { error: "Local admin login retired. Use Entra SSO." });
   }
 
   // ─── Entra ID User Sync: GET /api/entra/users ─────────────────────────
@@ -2137,32 +2157,222 @@ module.exports = function createCoreRoutes(ctx) {
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
-  // ─── POST /api/purge-test-data — Remove E2E/test records from all collections ───
+  // ─── POST /api/purge-test-data — Remove explicit list of test record IDs ───
+  // SECURITY: requires Administrator / VGC Dev Admin / Tenant Admin.
+  // SAFETY: requires explicit `ids` array per collection. No broad pattern matching.
+  // Body: { dryRun?: bool=true, targets: { incidents:[...], assets:[...], ... } }
   if (pathname === "/api/purge-test-data" && req.method === "POST") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
     try {
-      const TEST_PATTERNS = [/^INC-E2E-/i, /^INC-MOH/i, /^INC-D\d$/i, /^INC000\d$/i, /^PRB000\d$/i, /^CHG000\d$/i, /^REQ000\d$/i, /^AST000\d$/i];
-      const TEST_STRINGS = ["E2E Agent", "user@test.com", "e2e-test", "test-automation", "E2E Test"];
-      const COLLECTIONS_TO_SCAN = ["incidents", "problems", "changes", "requests", "assets", "customers", "kb", "users", "audit_log", "worklogs", "automation_rules", "sla_breaches", "notifications", "releases", "known_errors"];
+      const body = await readBody(req);
+      const dryRun = body?.dryRun !== false;
+      const targets = (body && typeof body.targets === "object") ? body.targets : null;
+      if (!targets) return json(res, 400, { error: "targets {collection: [ids...]} required" });
       const results = {};
+      let totalRequested = 0;
       let totalPurged = 0;
-      for (const coll of COLLECTIONS_TO_SCAN) {
-        try {
-          const rows = await db.getAll(coll);
-          let deleted = 0;
-          for (const row of rows) {
-            const item = typeof row.data === "string" ? JSON.parse(row.data) : (row.data || row);
-            const id = item.id || row.id || "";
-            const str = JSON.stringify(item);
-            const isTest = TEST_PATTERNS.some(p => p.test(id)) || TEST_STRINGS.some(s => str.includes(s));
-            if (isTest) {
-              try { await db.delete(coll, row.id || id); deleted++; } catch {}
+      for (const [coll, ids] of Object.entries(targets)) {
+        if (!VALID_COLLECTIONS.has(coll)) {
+          results[coll] = { error: "invalid collection" };
+          continue;
+        }
+        if (!Array.isArray(ids)) {
+          results[coll] = { error: "ids must be an array" };
+          continue;
+        }
+        const found = [];
+        const missing = [];
+        for (const id of ids) {
+          totalRequested++;
+          const row = await db.getOne(coll, id);
+          if (!row) { missing.push(id); continue; }
+          found.push(id);
+          if (!dryRun) {
+            try {
+              await db.deleteOne(coll, id);
+              await db.audit(coll, id, "purge-test-data", null, authResult.name || authResult.email || "admin");
+              totalPurged++;
+            } catch (e) {
+              found.pop();
+              missing.push(id);
             }
           }
-          if (deleted > 0) { results[coll] = deleted; totalPurged += deleted; }
-        } catch {}
+        }
+        results[coll] = { requested: ids.length, found: found.length, missing: missing.length, foundIds: found, missingIds: missing };
       }
-      await db.audit("system", "purge-test-data", "purge", JSON.stringify({ totalPurged, collections: results }), auth.name || "System");
-      return json(res, 200, { ok: true, totalPurged, collections: results, timestamp: new Date().toISOString() });
+      return json(res, 200, { ok: true, dryRun, totalRequested, totalPurged, results, timestamp: new Date().toISOString() });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── POST /api/admin/purge-audit-records — Targeted audit_log purge by record id ───
+  // SECURITY: requires Administrator / VGC Dev Admin / Tenant Admin.
+  // Body: { dryRun?: bool=true, targets: { incidents:[...], assets:[...], ... } }
+  if (pathname === "/api/admin/purge-audit-records" && req.method === "POST") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    if (typeof db.deleteAuditByRecord !== "function") {
+      return json(res, 501, { error: "deleteAuditByRecord not implemented for this DB backend" });
+    }
+    try {
+      const body = await readBody(req);
+      const dryRun = body?.dryRun !== false;
+      const targets = (body && typeof body.targets === "object") ? body.targets : null;
+      if (!targets) return json(res, 400, { error: "targets {collection: [ids...]} required" });
+      const results = {};
+      let totalDeleted = 0;
+      for (const [coll, ids] of Object.entries(targets)) {
+        if (typeof coll !== "string" || !/^[a-z_]+$/.test(coll)) {
+          results[coll] = { error: "invalid collection" };
+          continue;
+        }
+        if (!Array.isArray(ids) || ids.length === 0) {
+          results[coll] = { error: "ids must be a non-empty array" };
+          continue;
+        }
+        if (dryRun) {
+          results[coll] = { wouldDelete: "unknown (dry-run; run without dryRun:true to execute)", idCount: ids.length };
+        } else {
+          const n = await db.deleteAuditByRecord(coll, ids);
+          totalDeleted += n;
+          results[coll] = { deleted: n, idCount: ids.length };
+        }
+      }
+      if (!dryRun) {
+        try { await db.audit("system", "purge-audit-records", "purge", JSON.stringify({ totalDeleted, targets }), authResult.name || authResult.email || "admin"); } catch { /* ignore */ }
+      }
+      return json(res, 200, { ok: true, dryRun, totalDeleted, results, timestamp: new Date().toISOString() });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── GET /api/admin/data-hygiene/summary ──────────────────────────────
+  // Surfaces test/orphaned/drifted rows so admins can see what would be cleaned.
+  // SECURITY: Administrator / VGC Dev Admin / Tenant Admin only.
+  if (pathname === "/api/admin/data-hygiene/summary" && req.method === "GET") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const SAMPLE_LIMIT = 25;
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const incidentIds = new Set(incidents.map(i => i.id));
+
+      // Orphaned AI side-effect rows (parent incident no longer exists)
+      const orphanCollections = ["ai_actions", "ai_resolve_queue", "ai_triage_history"];
+      const orphaned = {};
+      let totalOrphaned = 0;
+      for (const coll of orphanCollections) {
+        try {
+          const rows = await db.getAll(coll);
+          const items = rows.map(r => {
+            const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            return { id: r.id || d.id, incidentId: d.incidentId || d.ticketId || d.incident_id || null };
+          });
+          const orphans = items.filter(x => x.incidentId && !incidentIds.has(x.incidentId));
+          orphaned[coll] = {
+            total: items.length,
+            orphanCount: orphans.length,
+            sampleIds: orphans.slice(0, SAMPLE_LIMIT).map(o => o.id),
+          };
+          totalOrphaned += orphans.length;
+        } catch {
+          orphaned[coll] = { total: 0, orphanCount: 0, sampleIds: [], error: "collection unavailable" };
+        }
+      }
+
+      // Priority drift: incidents stored with non-canonical priority
+      const CANONICAL = new Set(["Sev-A", "Sev-B", "Sev-C", "Sev-D"]);
+      const drift = incidents
+        .filter(i => i.priority != null && !CANONICAL.has(i.priority))
+        .map(i => ({ id: i.id, current: i.priority, normalized: normalizePriority(i.priority) }));
+      const driftByValue = {};
+      for (const d of drift) driftByValue[d.current] = (driftByValue[d.current] || 0) + 1;
+
+      // Test-pattern incidents (heuristic, evidence only — never auto-deleted)
+      const testHeuristics = incidents.filter(i => {
+        const t = `${i.title || ""} ${i.id || ""}`.toLowerCase();
+        return /\b(test|sample|demo|e2e|seed|fixture)\b/.test(t);
+      }).map(i => ({ id: i.id, title: i.title, createdBy: i.createdBy }));
+
+      // Audit_log size + retention status (uses lightweight COUNT(*), not getAllAudit)
+      let auditCount = null;
+      try {
+        if (typeof db.countAudit === "function") auditCount = await db.countAudit();
+      } catch { /* ignore */ }
+      const auditPurgeStatus = (purgeStatus && purgeStatus.auditPurge) ? purgeStatus.auditPurge : null;
+      const retentionDays = parseInt(process.env.AUDIT_RETENTION_DAYS || "30", 10);
+
+      return json(res, 200, {
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        incidents: { total: incidents.length, withPriority: incidents.filter(i => i.priority).length },
+        orphanedAiRows: { totalOrphaned, byCollection: orphaned },
+        priorityDrift: {
+          totalDrifted: drift.length,
+          byValue: driftByValue,
+          sample: drift.slice(0, SAMPLE_LIMIT),
+        },
+        testPatternIncidents: {
+          count: testHeuristics.length,
+          sample: testHeuristics.slice(0, SAMPLE_LIMIT),
+          note: "Heuristic match on title/id keywords. Use POST /api/purge-test-data with explicit ids to remove.",
+        },
+        auditLog: {
+          totalRows: auditCount,
+          retentionDays,
+          purgeStatus: auditPurgeStatus,
+        },
+      });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── POST /api/admin/data-hygiene/normalize-priorities ────────────────
+  // Rewrites incidents.priority through normalizePriority. dryRun default true.
+  // SECURITY: Administrator / VGC Dev Admin / Tenant Admin only.
+  if (pathname === "/api/admin/data-hygiene/normalize-priorities" && req.method === "POST") {
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const body = await readBody(req);
+      const dryRun = body?.dryRun !== false;
+      const onlyDrifted = body?.onlyDrifted !== false; // default: only touch non-canonical rows
+      const incRows = await db.getAll("incidents");
+      const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      const CANONICAL = new Set(["Sev-A", "Sev-B", "Sev-C", "Sev-D"]);
+      const changes = [];
+      for (const inc of incidents) {
+        if (!inc || !inc.id) continue;
+        const before = inc.priority;
+        const after = normalizePriority(before);
+        if (onlyDrifted && CANONICAL.has(before)) continue;
+        if (before === after) continue;
+        changes.push({ id: inc.id, before, after });
+        if (!dryRun) {
+          try {
+            const updated = { ...inc, priority: after, priorityNormalizedAt: new Date().toISOString() };
+            await db.upsert("incidents", inc.id, JSON.stringify(updated));
+            await db.audit("incidents", inc.id, "normalize-priority", JSON.stringify({ before, after }), authResult.name || authResult.email || "admin");
+          } catch {
+            // Mark as failed; keep loop going.
+            changes[changes.length - 1].error = "upsert failed";
+          }
+        }
+      }
+      const applied = changes.filter(c => !c.error).length;
+      return json(res, 200, {
+        ok: true,
+        dryRun,
+        onlyDrifted,
+        scanned: incidents.length,
+        wouldChange: changes.length,
+        applied: dryRun ? 0 : applied,
+        sample: changes.slice(0, 50),
+        timestamp: new Date().toISOString(),
+      });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
@@ -2179,7 +2389,7 @@ module.exports = function createCoreRoutes(ctx) {
         scope:   body.scope,
         payload: body.payload,
       });
-      try { await db.audit("feature_flags", body.name, "set", JSON.stringify(rec), req.user?.email || "system"); } catch {}
+      try { await db.audit("feature_flags", body.name, "set", JSON.stringify(rec), req.user?.email || "system"); } catch { /* ignore */ }
       return json(res, 200, { ok: true, flag: rec });
     } catch (e) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -2202,7 +2412,7 @@ module.exports = function createCoreRoutes(ctx) {
         ts: payload.ts || new Date().toISOString(),
       };
       const actor = (req.user && req.user.email) || "anonymous";
-      try { await db.audit("client_errors", safe.route || "unknown", "react_error", JSON.stringify(safe), actor); } catch {}
+      try { await db.audit("client_errors", safe.route || "unknown", "react_error", JSON.stringify(safe), actor); } catch { /* ignore */ }
       return json(res, 200, { ok: true });
     } catch (e) { return json(res, 200, { ok: false, error: String(e.message).slice(0, 200) }); }
   }
@@ -2210,7 +2420,24 @@ module.exports = function createCoreRoutes(ctx) {
   // Health check
   if (pathname === "/api/health") {
     let dbOk = false;
-    try { dbOk = await db.ping(); } catch {}
+    try { dbOk = await db.ping(); } catch { /* ignore */ }
+    // Audit log info — cached 60s to avoid hammering DB on liveness probes
+    if (!global.__auditHealthCache || (Date.now() - global.__auditHealthCache.at) > 60000) {
+      const cache = { at: Date.now(), rows: null, lastWrite: null };
+      try { if (typeof db.countAudit === "function") cache.rows = await db.countAudit(); } catch { /* ignore */ }
+      try {
+        if (typeof db.lastAuditTs === "function") {
+          const ts = await db.lastAuditTs();
+          cache.lastWrite = ts ? new Date(ts).toISOString() : null;
+        }
+      } catch { /* ignore */ }
+      global.__auditHealthCache = cache;
+    }
+    const auditInfo = {
+      rows: global.__auditHealthCache.rows,
+      lastWrite: global.__auditHealthCache.lastWrite,
+      retentionDays: parseInt(process.env.AUDIT_RETENTION_DAYS || "30", 10),
+    };
     return json(res, 200, {
       status: "ok",
       version: APP_VERSION.version,
@@ -2241,6 +2468,7 @@ module.exports = function createCoreRoutes(ctx) {
       prodTestEmail: PROD_TEST_MODE ? EMAIL_REDIRECT_TARGET : null,
       emailRedirectMode: EMAIL_REDIRECT_MODE,
       emailRedirectTarget: EMAIL_REDIRECT_MODE ? EMAIL_REDIRECT_TARGET : null,
+      audit: auditInfo,
       timestamp: new Date().toISOString(),
     });
   }
@@ -2248,12 +2476,31 @@ module.exports = function createCoreRoutes(ctx) {
   // ─── GET /api/status — Public status page endpoint (no auth required) ──
   if (pathname === "/api/status" && req.method === "GET") {
     let dbOk = false;
-    try { dbOk = await db.ping(); } catch {}
+    try { dbOk = await db.ping(); } catch { /* ignore */ }
     const aiOk = !!(AZURE_OPENAI_KEY && AZURE_OPENAI_ENDPOINT);
     const slaOk = slaEngine ? !!slaEngine.timer : false;
     const wsOk = wsServer ? wsServer.getStats().totalConnections >= 0 : false;
     const allOk = dbOk && slaOk;
     const uptimeSec = process.uptime();
+
+    // Audit-log freshness: stale if no write in the last 24h. Reuse the cache
+    // populated by /api/health when available.
+    let auditRows = null, auditLastWrite = null;
+    if (global.__auditHealthCache && (Date.now() - global.__auditHealthCache.at) < 60000) {
+      auditRows = global.__auditHealthCache.rows;
+      auditLastWrite = global.__auditHealthCache.lastWrite;
+    } else {
+      try { if (typeof db.countAudit === "function") auditRows = await db.countAudit(); } catch { /* ignore */ }
+      try {
+        if (typeof db.lastAuditTs === "function") {
+          const ts = await db.lastAuditTs();
+          auditLastWrite = ts ? new Date(ts).toISOString() : null;
+        }
+      } catch { /* ignore */ }
+      global.__auditHealthCache = { at: Date.now(), rows: auditRows, lastWrite: auditLastWrite };
+    }
+    const auditFresh = auditLastWrite ? ((Date.now() - new Date(auditLastWrite).getTime()) < 86400000) : false;
+    const auditStatus = auditLastWrite ? (auditFresh ? "operational" : "stale") : "unknown";
 
     // Read persisted uptime history
     let uptimePct30d = null;
@@ -2271,7 +2518,7 @@ module.exports = function createCoreRoutes(ctx) {
         }
         if (totalCount > 0) uptimePct30d = Math.round((okCount / totalCount) * 10000) / 100;
       }
-    } catch {}
+    } catch { /* ignore */ }
 
     return json(res, 200, {
       status: allOk ? "operational" : (dbOk ? "degraded" : "down"),
@@ -2282,6 +2529,7 @@ module.exports = function createCoreRoutes(ctx) {
         ai_engine: { status: aiOk ? "operational" : "disabled" },
         sla_engine: { status: slaOk ? "operational" : "stopped" },
         websocket: { status: wsOk ? "operational" : "down" },
+        audit_log: { status: auditStatus, rows: auditRows, lastWrite: auditLastWrite },
       },
       uptime: {
         currentSeconds: Math.round(uptimeSec),
@@ -2326,7 +2574,7 @@ module.exports = function createCoreRoutes(ctx) {
       const now = new Date();
       const thirtyDaysAgo = new Date(now - 30 * 86400000);
       const recentIncidents = incidents.filter(i => new Date(i.createdAt || 0) >= thirtyDaysAgo);
-      const criticalCount = recentIncidents.filter(i => i.priority === "P1" || i.priority === "Critical").length;
+      const criticalCount = recentIncidents.filter(i => normalizePriority(i.priority) === "Sev-A").length;
       return json(res, 200, {
         generatedAt: now.toISOString(),
         dataResidency: { region: process.env.AZURE_REGION || "Southeast Asia", provider: "Microsoft Azure", dbHost: process.env.MYSQL_HOST || "local" },
@@ -2349,7 +2597,7 @@ module.exports = function createCoreRoutes(ctx) {
           const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
           const st = item?.status || "unknown";
           statusBreakdown[st] = (statusBreakdown[st] || 0) + 1;
-        } catch {}
+        } catch { /* ignore */ }
       }
       return json(res, 200, {
         purgeStatus,
@@ -2373,6 +2621,42 @@ module.exports = function createCoreRoutes(ctx) {
     return json(res, 200, { thresholds: AI_THRESHOLDS, timestamp: new Date().toISOString() });
   }
 
+  // ─── POST /api/admin/audit-purge-now — Manual trigger for audit_log retention prune ───
+  // SECURITY: Administrator / VGC Dev Admin / Tenant Admin only.
+  if (pathname === "/api/admin/audit-purge-now" && req.method === "POST") {
+    if (!authResult || !authResult.authenticated) return json(res, 401, { error: "Authentication required" });
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const body = await readBody(req).catch(() => ({}));
+      const keepDays = Math.max(1, parseInt(
+        body?.keepDays ?? process.env.AUDIT_RETENTION_DAYS ?? "30", 10
+      ));
+      if (typeof db.pruneAudit !== "function") {
+        return json(res, 501, { error: "pruneAudit not supported on this backend" });
+      }
+      const startTime = Date.now();
+      const before = (typeof db.countAudit === "function") ? await db.countAudit() : null;
+      const deleted = await db.pruneAudit(keepDays);
+      const after = (typeof db.countAudit === "function") ? await db.countAudit() : null;
+      const result = { deleted, keepDays, before, after, durationMs: Date.now() - startTime };
+      if (purgeStatus && purgeStatus.auditPurge) {
+        purgeStatus.auditPurge.lastRun = new Date().toISOString();
+        purgeStatus.auditPurge.lastResult = { ...result, manual: true };
+        purgeStatus.auditPurge.totalDeleted += deleted;
+        purgeStatus.auditPurge.runCount++;
+      }
+      try {
+        await db.audit("_admin", authResult.user?.email || authResult.role, "audit-purge-now", JSON.stringify(result), authResult.user?.email || authResult.role);
+      } catch { /* ignore */ }
+      console.log(`[Audit Purge] Manual run by ${authResult.user?.email || authResult.role}: deleted ${deleted} (keep ${keepDays}d, ${before}->${after})`);
+      return json(res, 200, { ok: true, ...result, timestamp: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
   // ─── POST /api/ai/cleanup-now — Manual trigger for AI queue cleanup ───
   if (pathname === "/api/ai/cleanup-now" && req.method === "POST") {
     try {
@@ -2381,7 +2665,7 @@ module.exports = function createCoreRoutes(ctx) {
       const incRows = await db.getAll("incidents");
       const resolvedIds = new Set();
       for (const r of incRows) {
-        try { const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id); } catch {}
+        try { const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id); } catch { /* ignore */ }
       }
       const actionRows = await db.getAll("ai_actions");
       let deleted = 0, cappedDel = 0;
@@ -2398,7 +2682,7 @@ module.exports = function createCoreRoutes(ctx) {
           } else {
             pendingItems.push(item);
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
       if (pendingItems.length > AI_THRESHOLDS.maxPendingTotal) {
         pendingItems.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
@@ -2435,7 +2719,7 @@ module.exports = function createCoreRoutes(ctx) {
               await db.deleteOne("ai_actions", item.id);
               deleted++;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
       }
       if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
@@ -2489,7 +2773,7 @@ module.exports = function createCoreRoutes(ctx) {
           const ts = item.timestamp || item.createdAt || item.created;
           if (ts && new Date(ts) >= cutoff) continue;
           candidates.push({ id: r.id || item.id, status: item.status, type: item.type, timestamp: ts });
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       if (dryRun) {
@@ -2508,7 +2792,7 @@ module.exports = function createCoreRoutes(ctx) {
 
       let deleted = 0;
       for (const c of candidates) {
-        try { await db.deleteOne("ai_actions", c.id); deleted++; } catch {}
+        try { await db.deleteOne("ai_actions", c.id); deleted++; } catch { /* ignore */ }
       }
       if (deleted > 0 && cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
 
@@ -2522,7 +2806,7 @@ module.exports = function createCoreRoutes(ctx) {
           filters: { olderThanDays, statuses: filterStatuses, types: types || "all" },
           timestamp: new Date().toISOString(),
         });
-      } catch {}
+      } catch { /* ignore */ }
 
       console.log(`[AI Purge] Manual purge: ${deleted} records (olderThan=${olderThanDays}d, statuses=${filterStatuses.join(",")})`);
       return json(res, 200, { deleted, filters: { olderThanDays, statuses: filterStatuses, types: types || "all" } });
@@ -2731,7 +3015,7 @@ Keep resolutions concise and professional. Do NOT mention AI or automation in th
       // Dedup: load existing pending resolutions to avoid duplicates
       const _resExisting = await db.getAll("ai_resolve_queue");
       const _resPendingIncIds = new Set();
-      for (const r of _resExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.incidentId) _resPendingIncIds.add(it.incidentId); } catch {} }
+      for (const r of _resExisting) { try { const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (it && it.status === "pending_approval" && it.incidentId) _resPendingIncIds.add(it.incidentId); } catch { /* ignore */ } }
 
       const suggestions = [];
       let skipped = 0;
@@ -2797,9 +3081,9 @@ Respond ONLY with valid JSON:
                     _customerCompany = c.company || c.name || "";
                     break;
                   }
-                } catch {}
+                } catch { /* ignore */ }
               }
-            } catch {}
+            } catch { /* ignore */ }
           }
 
           const suggestion = {
@@ -2844,7 +3128,7 @@ Respond ONLY with valid JSON:
             suggestion.sevABlocked = true;
             suggestion.classificationReasoning = `[BLOCKED FROM AUTO-RESOLVE: ${inc.priority}] ` + classificationReasoning;
             await db.upsert("ai_resolve_queue", suggestion.id, JSON.stringify(suggestion));
-            try { await db.audit("ai_resolve_queue", suggestion.id, "sev_a_auto_resolve_blocked", JSON.stringify({ incidentId: inc.id, priority: inc.priority, confidence: suggestion.confidence }), "system"); } catch {}
+            try { await db.audit("ai_resolve_queue", suggestion.id, "sev_a_auto_resolve_blocked", JSON.stringify({ incidentId: inc.id, priority: inc.priority, confidence: suggestion.confidence }), "system"); } catch { /* ignore */ }
             suggestions.push(suggestion);
             console.warn(`[AI Auto-Resolve] BLOCKED auto-resolve for ${inc.id} (${inc.priority}) — Major Incident Process requires human approval`);
             continue;
@@ -2990,7 +3274,7 @@ Respond ONLY with valid JSON:
           inc.updatedAt = new Date().toISOString();
           inc.aiResolved = true;
           inc.skipZendeskSync = true; // Flag: do NOT push to Zendesk
-          await db.upsert("incidents", inc.id, inc);
+          await db.upsert("incidents", inc.id, JSON.stringify(inc));
           // Phase C1 — schedule CSAT survey for AI-resolved incidents
           scheduleCsatSurvey(inc, `AI (approved by ${approvedBy})`).catch(e => console.warn("[CSAT Schedule]", e.message));
         }
@@ -3022,7 +3306,7 @@ Respond ONLY with valid JSON:
         const _aiResTo = safeRecipient(suggestion);
         if (!_aiResTo) {
           console.warn(`[AI Resolve Approve] No valid recipient for ${suggestion.incidentId} — skipping customer email`);
-          try { await db.audit("ai_resolve_queue", suggestionId, "email_skipped_no_recipient", JSON.stringify({ stage: "approve" }), approvedBy || "system"); } catch {}
+          try { await db.audit("ai_resolve_queue", suggestionId, "email_skipped_no_recipient", JSON.stringify({ stage: "approve" }), approvedBy || "system"); } catch { /* ignore */ }
         } else {
         queueOrSendCustomerEmail({
           to: [_aiResTo],
@@ -3220,7 +3504,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
             inc.updatedAt = new Date().toISOString();
             inc.aiResolved = true;
             inc.skipZendeskSync = true;
-            await db.upsert("incidents", inc.id, inc);
+            await db.upsert("incidents", inc.id, JSON.stringify(inc));
             scheduleCsatSurvey(inc, `AI (bulk approved by ${approvedBy})`).catch(e => console.warn("[CSAT Schedule]", e.message));
           }
 
@@ -3288,7 +3572,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
       }
 
       console.log(`[AI Bulk Approve] ${approved} approved, ${skipped} skipped (threshold: ${threshold}%)`);
-      try { await db.audit("ai_resolve_queue", "bulk_approve", "bulk_approve", JSON.stringify({ approved, skipped, threshold, approvedBy }), approvedBy); } catch {}
+      try { await db.audit("ai_resolve_queue", "bulk_approve", "bulk_approve", JSON.stringify({ approved, skipped, threshold, approvedBy }), approvedBy); } catch { /* ignore */ }
       return json(res, 200, { success: true, approved, skipped, threshold, approvedItems });
     } catch (err) {
       console.error("[AI Bulk Approve]", err.message);
@@ -3323,7 +3607,7 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
         try {
           const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
           if (t && t.id) zdTickets[t.id] = t;
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // ── 2. Separate incidents by state ──
@@ -3497,7 +3781,7 @@ Respond in JSON ONLY:
             const _fuTo = safeRecipient(inc);
             if (!_fuTo) {
               console.warn(`[AI Follow-Up] No valid recipient for ${inc.id} — skipping email`);
-              try { await db.audit("incidents", inc.id, "email_skipped_no_recipient", JSON.stringify({ stage: "ai_followup" }), requestedBy || "system"); } catch {}
+              try { await db.audit("incidents", inc.id, "email_skipped_no_recipient", JSON.stringify({ stage: "ai_followup" }), requestedBy || "system"); } catch { /* ignore */ }
             } else {
               queueOrSendCustomerEmail({
                 to: [_fuTo],
@@ -3909,7 +4193,7 @@ Respond in JSON ONLY:
             zdTicketId: inc.zdTicketId || null,
           };
 
-          await db.upsert("ai_workflow_queue", wfAction.id, wfAction);
+          await db.upsert("ai_workflow_queue", wfAction.id, JSON.stringify(wfAction));
           actions.push(wfAction);
 
           // ─── Auto-execute workflow action in PROD_TEST_MODE ───
@@ -3945,7 +4229,7 @@ Respond in JSON ONLY:
                 await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
               }
 
-              await db.upsert("ai_workflow_queue", wfAction.id, wfAction);
+              await db.upsert("ai_workflow_queue", wfAction.id, JSON.stringify(wfAction));
               console.log(`[AI Pipeline] Auto-executed ${wfAction.action} for ${inc.id} (${wfAction.confidence}% confidence)`);
             } catch (execErr) {
               console.warn(`[AI Pipeline] Auto-execute failed for ${inc.id}:`, execErr.message);
@@ -4019,9 +4303,12 @@ Respond in JSON ONLY:
               if (suggestion.suggestedAssignee) inc.assignee = suggestion.suggestedAssignee;
               inc.updatedAt = new Date().toISOString();
               inc.skipZendeskSync = true;
-              await db.upsert("incidents", inc.id, inc);
+              await db.upsert("incidents", inc.id, JSON.stringify(inc));
             }
-          } catch {}
+          } catch (incErr) {
+            console.warn(`[AI Workflow] Incident update failed for ${suggestion.incidentId}:`, incErr.message);
+            suggestion.incidentUpdateError = incErr.message;
+          }
         }
       } else if (action === "reject") {
         suggestion.status = "rejected";
@@ -4029,12 +4316,13 @@ Respond in JSON ONLY:
         suggestion.rejectedAt = new Date().toISOString();
       }
 
-      await db.upsert("ai_workflow_queue", suggestionId, suggestion);
+      await db.upsert("ai_workflow_queue", suggestionId, JSON.stringify(suggestion));
       if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+      try { await db.audit("ai_workflow_queue", suggestionId, action, JSON.stringify({ action: suggestion.action, incidentId: suggestion.incidentId }), approvedBy || "unknown"); } catch { /* ignore */ }
       return json(res, 200, { success: true, suggestion });
     } catch (err) {
-      console.error("[AI Workflow Queue Action]", err.message);
-      return json(res, 500, { error: "Internal server error" });
+      console.error("[AI Workflow Queue Action]", err && err.stack || err.message);
+      return json(res, 500, { error: "Internal server error", detail: err && err.message });
     }
   }
 
@@ -4054,7 +4342,7 @@ Respond in JSON ONLY:
         try {
           const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
           if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id);
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // Process ai_actions
@@ -4079,7 +4367,7 @@ Respond in JSON ONLY:
             if (!_dedupMap[dedupKey]) _dedupMap[dedupKey] = [];
             _dedupMap[dedupKey].push(item);
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
       // Sort each group by createdAt desc, mark older ones as duplicates
       const _dupeIds = new Set();
@@ -4128,7 +4416,7 @@ Respond in JSON ONLY:
               wfDismissed++;
             }
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       if (cacheLayer) { cacheLayer.invalidatePrefix("ai_actions"); cacheLayer.invalidatePrefix("ai_workflow_queue"); }
@@ -4162,7 +4450,7 @@ Respond in JSON ONLY:
               if (!dryRun) await db.deleteOne(coll, r.id || item.id);
               deleted++;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
         result[coll] = { total: rows.length, dismissed: deleted, remaining: rows.length - deleted };
       }
@@ -4207,7 +4495,7 @@ Respond in JSON ONLY:
               if (!dryRun) await db.deleteOne(coll, r.id || item.id);
               deleted++;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
         result[coll] = { total: rows.length, purged: deleted, remaining: rows.length - deleted };
       }
@@ -4262,7 +4550,7 @@ Respond in JSON ONLY:
         existingTitles = kbRows.map(r => {
           try { const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return (d.title || "").toLowerCase(); } catch { return ""; }
         }).filter(Boolean);
-      } catch {}
+      } catch { /* ignore */ }
 
       const articles = [];
       for (const [category, incs] of Object.entries(categoryMap)) {
@@ -4332,7 +4620,7 @@ Create a professional KB article. Respond in JSON ONLY:
             relatedArticles: [],
           };
 
-          await db.upsert("kb", article.id, article);
+          await db.upsert("kb", article.id, JSON.stringify(article));
           articles.push(article);
           existingTitles.push(article.title.toLowerCase());
           console.log(`[AI KB Learn] Created article: ${article.title} (from ${incs.length} incidents)`);
@@ -4812,7 +5100,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     if (!body.description || !body.hours) return json(res, 400, { error: "description and hours required" });
     const id = `WL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const entry = { id, incidentId: incId, user: auth.name || "System", hours: parseFloat(body.hours) || 0, category: body.category || "other", description: body.description, billable: !!body.billable, loggedAt: new Date().toISOString() };
-    await db.upsert("worklogs", id, entry);
+    await db.upsert("worklogs", id, JSON.stringify(entry));
     await db.audit("worklogs", id, "create", `Work log: ${entry.hours}h - ${entry.description}`, auth.name || "System");
     if (wsServer) wsServer.broadcast("worklog", { action: "created", incidentId: incId, entry });
     return json(res, 201, entry);
@@ -4840,7 +5128,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       if (lastOpen) return json(res, 400, { error: "SLA already paused" });
       inc.slaPauseHistory.push({ pausedAt: now, resumedAt: null, reason: body.reason || "Status change" });
       inc.slaPaused = true;
-      await db.upsert("incidents", incId, inc);
+      await db.upsert("incidents", incId, JSON.stringify(inc));
       await db.audit("incidents", incId, "sla_pause", "SLA clock paused", auth.name || "System");
       return json(res, 200, { success: true, slaPauseHistory: inc.slaPauseHistory });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -4857,7 +5145,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       if (!lastOpen) return json(res, 400, { error: "SLA is not paused" });
       lastOpen.resumedAt = new Date().toISOString();
       inc.slaPaused = false;
-      await db.upsert("incidents", incId, inc);
+      await db.upsert("incidents", incId, JSON.stringify(inc));
       await db.audit("incidents", incId, "sla_resume", "SLA clock resumed", auth.name || "System");
       return json(res, 200, { success: true, slaPauseHistory: inc.slaPauseHistory });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -4878,9 +5166,9 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       inc.majorBridge = body.bridge || { active: true, link: `https://teams.microsoft.com/l/meetup-join/vgc-mim-${body.incidentId}`, participants: [] };
       inc.majorTimeline = [{ time: now, event: "Major Incident Declared", user: auth.name || "System" }];
       inc.majorComms = [];
-      await db.upsert("incidents", body.incidentId, inc);
+      await db.upsert("incidents", body.incidentId, JSON.stringify(inc));
       const mimRecord = { id: `MIM-${Date.now()}`, incidentId: body.incidentId, declaredAt: now, declaredBy: auth.name || "System", status: "active", affectedServices: body.affectedServices || [], severity: inc.priority };
-      await db.upsert("mim_records", mimRecord.id, mimRecord);
+      await db.upsert("mim_records", mimRecord.id, JSON.stringify(mimRecord));
       await db.audit("incidents", body.incidentId, "mim_declare", "Major Incident declared", auth.name || "System");
       if (wsServer) wsServer.broadcast("mim", { action: "declared", incidentId: body.incidentId, mimId: mimRecord.id });
       notifyTeamsMajorIncident(mimRecord, inc).catch(() => {});
@@ -4900,7 +5188,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
           try {
             const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
             if (m && m.incidentId === body.incidentId && m.status === "active") { mimRow = r; break; }
-          } catch {}
+          } catch { /* ignore */ }
         }
       }
       if (!mimRow) return json(res, 404, { error: "MIM record not found" });
@@ -4909,8 +5197,8 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       mim.mimReviewedBy = (auth && auth.name) || body.reviewedBy || "Unknown";
       mim.mimReviewedAt = new Date().toISOString();
       mim.mimNotes = body.notes || mim.mimNotes || "";
-      await db.upsert("mim_records", mim.id, mim);
-      try { await db.audit("mim_records", mim.id, "mim_review", JSON.stringify({ reviewedBy: mim.mimReviewedBy }), mim.mimReviewedBy); } catch {}
+      await db.upsert("mim_records", mim.id, JSON.stringify(mim));
+      try { await db.audit("mim_records", mim.id, "mim_review", JSON.stringify({ reviewedBy: mim.mimReviewedBy }), mim.mimReviewedBy); } catch { /* ignore */ }
       if (wsServer) wsServer.broadcast("mim", { action: "reviewed", incidentId: mim.incidentId, mimId: mim.id });
       return json(res, 200, { success: true, mim });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -4926,7 +5214,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       inc.isMajorIncident = false;
       inc.majorResolvedAt = new Date().toISOString();
       inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: "Major Incident Revoked", user: auth.name || "System" }];
-      await db.upsert("incidents", body.incidentId, inc);
+      await db.upsert("incidents", body.incidentId, JSON.stringify(inc));
       await db.audit("incidents", body.incidentId, "mim_revoke", "Major Incident revoked", auth.name || "System");
       return json(res, 200, { success: true });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -4950,7 +5238,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       const comm = { type: body.type || "Status Update", message: body.message, sentBy: auth.name || "System", sentAt: new Date().toISOString() };
       inc.majorComms = [...(inc.majorComms || []), comm];
       inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: `Comms sent: ${comm.type}`, user: auth.name || "System" }];
-      await db.upsert("incidents", body.incidentId, inc);
+      await db.upsert("incidents", body.incidentId, JSON.stringify(inc));
       return json(res, 201, { success: true, communication: comm });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -4970,7 +5258,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       await db.upsert("email_preferences", id, JSON.stringify({
         id, email, autoConfirm: false, updatedAt: new Date().toISOString(), source: "unsubscribe_link",
       }));
-      try { await db.audit("email_preferences", id, "unsubscribe", JSON.stringify({ email }), email); } catch {}
+      try { await db.audit("email_preferences", id, "unsubscribe", JSON.stringify({ email }), email); } catch { /* ignore */ }
       if (req.method === "GET") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(`<!doctype html><html><body style="font-family:Arial,sans-serif;max-width:560px;margin:64px auto;padding:24px;color:#333;"><h2>You're unsubscribed</h2><p><b>${email}</b> will no longer receive automatic confirmation emails from VGC ITSM. Tickets you raise are still tracked and visible in the dashboard.</p><p style="color:#888;font-size:12px;">To re-enable, POST to <code>/api/email-preferences/subscribe</code>.</p></body></html>`);
@@ -4988,7 +5276,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       await db.upsert("email_preferences", id, JSON.stringify({
         id, email, autoConfirm: true, updatedAt: new Date().toISOString(), source: "resubscribe",
       }));
-      try { await db.audit("email_preferences", id, "subscribe", JSON.stringify({ email }), email); } catch {}
+      try { await db.audit("email_preferences", id, "subscribe", JSON.stringify({ email }), email); } catch { /* ignore */ }
       return json(res, 200, { success: true, email });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -5059,9 +5347,9 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
               const domain = email.split("@")[1];
               if (!domains.includes(domain)) continue;
               if (!candidates.has(email)) candidates.set(email, coll);
-            } catch {}
+            } catch { /* ignore */ }
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       const eligible = candidates.size;
@@ -5082,7 +5370,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
           await db.audit("email_preferences", "bulk_seed", "bulk_seed", JSON.stringify({
             domains, eligible, inserted, skippedCount: skipped.length, source,
           }), (authResult.user && authResult.user.email) || "admin");
-        } catch {}
+        } catch { /* ignore */ }
       }
       return json(res, 200, {
         dryRun, domains, scanned: eligible, eligible, inserted,
@@ -5104,7 +5392,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
           try {
             const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
             if (m && m.incidentId === body.incidentId) { mimRow = r; break; }
-          } catch {}
+          } catch { /* ignore */ }
         }
       }
       if (!mimRow) return json(res, 404, { error: "MIM record not found" });
@@ -5114,8 +5402,8 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       mim.postMortemBy = (auth && auth.name) || body.author || "Unknown";
       mim.postMortemAt = new Date().toISOString();
       if (body.close) { mim.status = "closed"; mim.closedAt = mim.postMortemAt; }
-      await db.upsert("mim_records", mim.id, mim);
-      try { await db.audit("mim_records", mim.id, "post_mortem", JSON.stringify({ url: mim.postMortemUrl, by: mim.postMortemBy }), mim.postMortemBy); } catch {}
+      await db.upsert("mim_records", mim.id, JSON.stringify(mim));
+      try { await db.audit("mim_records", mim.id, "post_mortem", JSON.stringify({ url: mim.postMortemUrl, by: mim.postMortemBy }), mim.postMortemBy); } catch { /* ignore */ }
       if (wsServer) wsServer.broadcast("mim", { action: "post_mortem", incidentId: mim.incidentId, mimId: mim.id });
       return json(res, 200, { success: true, mim });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -5157,7 +5445,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       await db.upsert("shadow_diffs", id, JSON.stringify({
         flag, kind: "decision", decision, approvedBy, notes: notes || "", at,
       }));
-      try { await db.audit("shadow_diffs", flag, "promotion_decision", JSON.stringify({ decision, approvedBy, notes }), approvedBy); } catch {}
+      try { await db.audit("shadow_diffs", flag, "promotion_decision", JSON.stringify({ decision, approvedBy, notes }), approvedBy); } catch { /* ignore */ }
       // Map shadow flag -> recommended live flag flip
       const liveFlag = flag.replace(/_v2$/, "");
       const recommendation = decision === "promote"
@@ -5201,7 +5489,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
           rec.rescheduledAt = at;
         }
         await db.upsert("ai_email_outbox", id, JSON.stringify(rec));
-        try { await db.audit("ai_email_outbox", id, `cooling_off_${action}`, JSON.stringify({ approvedBy, delayMinutes: body && body.delayMinutes }), approvedBy); } catch {}
+        try { await db.audit("ai_email_outbox", id, `cooling_off_${action}`, JSON.stringify({ approvedBy, delayMinutes: body && body.delayMinutes }), approvedBy); } catch { /* ignore */ }
         return json(res, 200, { ok: true, id, action, status: rec.status, sendAfter: rec.sendAfter });
       } catch (err) { return json(res, 500, { error: "Internal server error" }); }
     }
@@ -5244,7 +5532,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     try {
       const dayKey = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" })).toISOString().slice(0, 10);
       // Force re-capture by removing existing
-      try { await db.upsert("compliance_evidence", `evidence_${dayKey}`, JSON.stringify({ _superseded: true })); } catch {}
+      try { await db.upsert("compliance_evidence", `evidence_${dayKey}`, JSON.stringify({ _superseded: true })); } catch { /* ignore */ }
       if (workflowEngine && typeof workflowEngine._captureComplianceEvidence === "function") {
         await workflowEngine._captureComplianceEvidence(dayKey);
         const row = await db.getOne("compliance_evidence", `evidence_${dayKey}`);
@@ -5302,7 +5590,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       kb.workaround = body.workaround || kb.workaround || "";
       kb.knownErrorAt = new Date().toISOString();
       kb.knownErrorBy = auth.name || "System";
-      await db.upsert("kb", kbId, kb);
+      await db.upsert("kb", kbId, JSON.stringify(kb));
       await db.upsert("known_errors", kbId, { kbId, problemId: kb.linkedProblem, workaround: kb.workaround, createdAt: kb.knownErrorAt, createdBy: kb.knownErrorBy });
       await db.audit("kb", kbId, "known_error", `Flagged as Known Error, linked to ${kb.linkedProblem || "none"}`, auth.name || "System");
       return json(res, 200, { success: true, kb });
@@ -5345,7 +5633,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       const userPrompt = `Proposed change:\nTitle: ${body.title}\nDescription: ${body.description || ""}\nType: ${body.type || "Normal"}\nAffected services: ${(body.affectedServices || []).join(", ") || "unspecified"}\nScheduled: ${body.scheduledAt || "unspecified"}\n\nHistorical context: ${failed.length} of ${changes.length} past changes failed.`;
       const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 800 });
       let assessment = { riskScore: 5, riskLevel: "Medium", factors: [], mitigations: [], recommendation: "" };
-      try { assessment = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch {}
+      try { assessment = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch { /* ignore */ }
       return json(res, 200, { ...assessment, model: aiResult.model, tier: aiResult.tier });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -5397,7 +5685,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     if (!body.name || !body.type) return json(res, 400, { error: "name and type required" });
     const id = `CF-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const field = { id, name: body.name, label: body.label || body.name, type: body.type, module: body.module || "incidents", required: !!body.required, options: body.options || [], defaultValue: body.defaultValue || null, position: body.position || 999, visible: body.visible !== false, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
-    await db.upsert("custom_fields", id, field);
+    await db.upsert("custom_fields", id, JSON.stringify(field));
     await db.audit("custom_fields", id, "create", `Custom field: ${field.name} (${field.type})`, auth.name || "System");
     return json(res, 201, field);
   }
@@ -5412,7 +5700,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     if (!row) return json(res, 404, { error: "Custom field not found" });
     const existing = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
     const updated = { ...existing, ...body, id: cfId, updatedAt: new Date().toISOString() };
-    await db.upsert("custom_fields", cfId, updated);
+    await db.upsert("custom_fields", cfId, JSON.stringify(updated));
     await db.audit("custom_fields", cfId, "update", `Custom field updated: ${updated.name}`, auth.name || "System");
     return json(res, 200, updated);
   }
@@ -5442,7 +5730,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     const userId = decodeURIComponent(pathname.split("/")[3]);
     const body = await parseBody(req);
     const prefs = { userId, channels: body.channels || { inapp: true, email: true }, types: body.types || {}, updatedAt: new Date().toISOString() };
-    await db.upsert("notification_preferences", userId, prefs);
+    await db.upsert("notification_preferences", userId, JSON.stringify(prefs));
     await db.audit("notification_preferences", userId, "update", "Notification preferences updated", auth.name || userId);
     return json(res, 200, prefs);
   }
@@ -5465,7 +5753,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     if (!body.role || !body.fields) return json(res, 400, { error: "role and fields required" });
     const id = `FV-${body.role}`;
     const rule = { id, role: body.role, module: body.module || "incidents", fields: body.fields, updatedAt: new Date().toISOString(), updatedBy: auth.name || "System" };
-    await db.upsert("field_visibility_rules", id, rule);
+    await db.upsert("field_visibility_rules", id, JSON.stringify(rule));
     await db.audit("field_visibility_rules", id, "upsert", `Field visibility for ${body.role}`, auth.name || "System");
     return json(res, 200, rule);
   }
@@ -5482,7 +5770,7 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     try {
       const sessionId = body.sessionId || `CHAT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       let session = null;
-      try { const row = await db.getOne("ai_chat_sessions", sessionId); if (row) session = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch {}
+      try { const row = await db.getOne("ai_chat_sessions", sessionId); if (row) session = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { /* ignore */ }
       if (!session) session = { id: sessionId, userId: auth.name || "anonymous", messages: [], createdAt: new Date().toISOString() };
       session.messages.push({ role: "user", content: body.message, timestamp: new Date().toISOString() });
       const recentContext = session.messages.slice(-10).map(m => `${m.role}: ${m.content}`).join("\n");
@@ -5501,25 +5789,25 @@ Otherwise, provide helpful conversational responses as plain text.`;
       try {
         const jsonMatch = reply.match(/\{[^{}]*"action"[^{}]*\}/);
         if (jsonMatch) { action = JSON.parse(jsonMatch[0]); reply = reply.replace(jsonMatch[0], "").trim(); }
-      } catch {}
+      } catch { /* ignore */ }
       // Execute actions
       let actionResult = null;
       if (action) {
         if (action.action === "create_ticket") {
           const id = `INC-${Date.now().toString(36).toUpperCase()}`;
-          const ticket = { id, title: action.title || "New ticket via AI Chat", description: action.description || body.message, priority: action.priority || "P3", category: action.category || "General", status: "New", source: "ai_chat", createdBy: auth.name || "anonymous", createdAt: new Date().toISOString() };
-          await db.upsert("incidents", id, ticket);
+          const ticket = { id, title: action.title || "New ticket via AI Chat", description: action.description || body.message, priority: normalizePriority(action.priority), category: action.category || "General", status: "New", source: "ai_chat", createdBy: auth.name || "anonymous", createdAt: new Date().toISOString() };
+          await db.upsert("incidents", id, JSON.stringify(ticket));
           actionResult = { action: "ticket_created", ticketId: id, title: ticket.title };
           reply = reply || `I've created ticket ${id}: "${ticket.title}". Our team will review it shortly.`;
         } else if (action.action === "check_status" && action.ticketId) {
-          try { const row = await db.getOne("incidents", action.ticketId); if (row) { const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data; actionResult = { action: "status_found", ticketId: inc.id, status: inc.status, priority: inc.priority, assignee: inc.assignee }; reply = reply || `Ticket ${inc.id} is currently "${inc.status}" (${inc.priority}), assigned to ${inc.assignee || "unassigned"}.`; } else { reply = reply || `I couldn't find ticket ${action.ticketId}. Please check the ID.`; } } catch {}
+          try { const row = await db.getOne("incidents", action.ticketId); if (row) { const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data; actionResult = { action: "status_found", ticketId: inc.id, status: inc.status, priority: inc.priority, assignee: inc.assignee }; reply = reply || `Ticket ${inc.id} is currently "${inc.status}" (${inc.priority}), assigned to ${inc.assignee || "unassigned"}.`; } else { reply = reply || `I couldn't find ticket ${action.ticketId}. Please check the ID.`; } } catch { /* ignore */ }
         } else if (action.action === "search_kb" && action.query) {
-          try { const kbs = await db.getAll("kb"); const articles = kbs.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).filter(a => (a.title || "").toLowerCase().includes(action.query.toLowerCase()) || (a.content || "").toLowerCase().includes(action.query.toLowerCase())).slice(0, 3); actionResult = { action: "kb_results", count: articles.length, articles: articles.map(a => ({ id: a.id, title: a.title })) }; if (articles.length > 0) { reply = reply || `I found ${articles.length} KB article(s): ${articles.map(a => `"${a.title}"`).join(", ")}. Would you like details?`; } else { reply = reply || `No KB articles found for "${action.query}". Would you like to create a ticket instead?`; } } catch {}
+          try { const kbs = await db.getAll("kb"); const articles = kbs.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data).filter(a => (a.title || "").toLowerCase().includes(action.query.toLowerCase()) || (a.content || "").toLowerCase().includes(action.query.toLowerCase())).slice(0, 3); actionResult = { action: "kb_results", count: articles.length, articles: articles.map(a => ({ id: a.id, title: a.title })) }; if (articles.length > 0) { reply = reply || `I found ${articles.length} KB article(s): ${articles.map(a => `"${a.title}"`).join(", ")}. Would you like details?`; } else { reply = reply || `No KB articles found for "${action.query}". Would you like to create a ticket instead?`; } } catch { /* ignore */ }
         }
       }
       session.messages.push({ role: "assistant", content: reply, action: actionResult, timestamp: new Date().toISOString() });
       if (session.messages.length > 50) session.messages = session.messages.slice(-30);
-      await db.upsert("ai_chat_sessions", sessionId, session);
+      await db.upsert("ai_chat_sessions", sessionId, JSON.stringify(session));
       return json(res, 200, { sessionId, reply, action: actionResult, model: aiResult.model, tier: aiResult.tier });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -5556,10 +5844,10 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const userPrompt = `Incident: ${inc.title}\nDescription: ${inc.description || ""}\nCategory: ${inc.category}/${inc.subcategory || ""}\nResolution: ${inc.resolution || inc.resolutionNotes || ""}\nWork logs: ${worklogs.map(w => `${w.category}: ${w.description}`).join("; ") || "none"}`;
       const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 1200 });
       let draft = { title: `KB: ${inc.title}`, category: inc.category, summary: "", content: aiResult.text, tags: [] };
-      try { const parsed = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); draft = { ...draft, ...parsed }; } catch {}
+      try { const parsed = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); draft = { ...draft, ...parsed }; } catch { /* ignore */ }
       const draftId = `KBD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const kbDraft = { id: draftId, incidentId: body.incidentId, ...draft, status: "draft", generatedBy: "AI", generatedAt: new Date().toISOString(), model: aiResult.model };
-      await db.upsert("ai_kb_drafts", draftId, kbDraft);
+      await db.upsert("ai_kb_drafts", draftId, JSON.stringify(kbDraft));
       await db.audit("ai_kb_drafts", draftId, "create", `AI KB draft from ${body.incidentId}`, auth.name || "System");
       return json(res, 201, kbDraft);
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -5573,9 +5861,9 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const draft = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
       const kbId = `KB-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const article = { id: kbId, title: draft.title, category: draft.category || "General", content: draft.content, summary: draft.summary, tags: draft.tags || [], status: "Published", author: auth.name || "AI", sourceIncident: draft.incidentId, createdAt: new Date().toISOString(), aiGenerated: true };
-      await db.upsert("kb", kbId, article);
+      await db.upsert("kb", kbId, JSON.stringify(article));
       draft.status = "published"; draft.publishedAs = kbId; draft.publishedAt = new Date().toISOString();
-      await db.upsert("ai_kb_drafts", draftId, draft);
+      await db.upsert("ai_kb_drafts", draftId, JSON.stringify(draft));
       await db.audit("kb", kbId, "create", `Published from AI draft ${draftId}`, auth.name || "System");
       return json(res, 201, { article, draftId });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -5595,13 +5883,15 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.from || !body.subject) return json(res, 400, { error: "from and subject required" });
     try {
       const id = `INC-${Date.now().toString(36).toUpperCase()}`;
-      let aiCategory = { category: "General", priority: "P3", subcategory: "" };
+      let aiCategory = { category: "General", priority: "Sev-C", subcategory: "" };
       try {
         const aiResult = await callAI("You are an IT ticket triage engine. Categorize this email into an IT ticket. Return JSON: {\"category\":\"...\",\"subcategory\":\"...\",\"priority\":\"P1-P4\"}", `From: ${body.from}\nSubject: ${body.subject}\nBody: ${(body.body || "").substring(0, 500)}`, { tier: "tertiary", maxTokens: 200 });
-        try { aiCategory = { ...aiCategory, ...JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()) }; } catch {}
-      } catch {}
+        try { aiCategory = { ...aiCategory, ...JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()) }; } catch { /* ignore */ }
+      } catch { /* ignore */ }
+      // Always normalize the priority returned by the model so it lands as Sev-A..D.
+      aiCategory.priority = normalizePriority(aiCategory.priority);
       const ticket = { id, title: body.subject, description: body.body || body.subject, category: aiCategory.category, subcategory: aiCategory.subcategory, priority: aiCategory.priority, status: "New", source: "email", requesterEmail: body.from, requesterName: body.fromName || body.from.split("@")[0], createdAt: new Date().toISOString(), createdBy: "email-ingest", emailMessageId: body.messageId || null };
-      await db.upsert("incidents", id, ticket);
+      await db.upsert("incidents", id, JSON.stringify(ticket));
       await db.audit("incidents", id, "create", `Email-to-ticket from ${body.from}`, "email-ingest");
       if (wsServer) wsServer.broadcast("incident", { action: "created", incident: ticket });
       return json(res, 201, { ticketId: id, category: aiCategory.category, priority: aiCategory.priority, source: "email" });
@@ -5639,7 +5929,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const userPrompt = `Weekly ticket volumes (last 90 days):\n${Object.entries(weekBuckets).map(([w, cats]) => `${w}: ${JSON.stringify(cats)} (total: ${Object.values(cats).reduce((s, v) => s + v, 0)})`).join("\n")}`;
       const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 800 });
       let forecast = { forecast: [], insights: "" };
-      try { forecast = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch {}
+      try { forecast = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch { /* ignore */ }
       return json(res, 200, { ...forecast, dataPoints: last90.length, weeksAnalyzed: Object.keys(weekBuckets).length, model: aiResult.model });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -5667,7 +5957,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const userPrompt = `Query: "${body.query}"\nItems:\n${corpus.slice(0, 100).map(c => `${c.id}: [${c.type}] ${c.title} — ${c.snippet}`).join("\n")}`;
       const aiResult = await callAI(systemPrompt, userPrompt, { tier: "tertiary", maxTokens: 500 });
       let ranked = { results: [] };
-      try { ranked = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch {}
+      try { ranked = JSON.parse(aiResult.text.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch { /* ignore */ }
       const rankedIds = new Map((ranked.results || []).map(r => [r.id, r.relevance]));
       const enriched = corpus.filter(c => rankedIds.has(c.id)).map(c => ({ ...c, relevance: rankedIds.get(c.id) })).sort((a, b) => b.relevance - a.relevance).slice(0, 10);
       return json(res, 200, { query: body.query, results: enriched, total: enriched.length, model: aiResult.model });
@@ -5722,7 +6012,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
           const author = a.author || a.createdBy;
           if (author && scores[author]) { scores[author].kbContributions++; scores[author].points += 8; }
         });
-      } catch {}
+      } catch { /* ignore */ }
       const leaderboard = Object.values(scores).sort((a, b) => b.points - a.points).map((s, i) => ({ rank: i + 1, ...s, avgCsat: Math.round(s.avgCsat * 10) / 10 }));
       return json(res, 200, { period, leaderboard, totalAgents: leaderboard.length });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -5743,7 +6033,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     const userId = decodeURIComponent(pathname.split("/")[4]);
     const body = await parseBody(req);
     const layout = { userId, widgets: body.widgets || [], layout: body.layout || "custom", positions: body.positions || {}, updatedAt: new Date().toISOString() };
-    await db.upsert("dashboard_layouts", userId, layout);
+    await db.upsert("dashboard_layouts", userId, JSON.stringify(layout));
     return json(res, 200, layout);
   }
 
@@ -5765,7 +6055,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.name) return json(res, 400, { error: "name required" });
     const id = `REL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const release = { id, name: body.name, type: body.type || "Minor", status: "Plan", description: body.description || "", owner: body.owner || auth.name || "System", linkedChanges: body.linkedChanges || [], scheduledStart: body.scheduledStart || null, scheduledEnd: body.scheduledEnd || null, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
-    await db.upsert("releases", id, release);
+    await db.upsert("releases", id, JSON.stringify(release));
     await db.audit("releases", id, "create", `Release: ${release.name}`, auth.name || "System");
     return json(res, 201, release);
   }
@@ -5789,7 +6079,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const VALID_STATUSES = ["Plan", "Build", "Test", "Deploy", "Review", "Closed"];
       if (body.status && !VALID_STATUSES.includes(body.status)) return json(res, 400, { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}` });
       Object.assign(release, { ...body, id, updatedAt: new Date().toISOString(), updatedBy: auth.name || "System" });
-      await db.upsert("releases", id, release);
+      await db.upsert("releases", id, JSON.stringify(release));
       await db.audit("releases", id, "update", `Release updated: ${JSON.stringify(body).substring(0, 200)}`, auth.name || "System");
       return json(res, 200, release);
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -5805,7 +6095,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const release = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
       if (!release.linkedChanges) release.linkedChanges = [];
       if (!release.linkedChanges.includes(body.changeId)) release.linkedChanges.push(body.changeId);
-      await db.upsert("releases", id, release);
+      await db.upsert("releases", id, JSON.stringify(release));
       return json(res, 200, { releaseId: id, linkedChanges: release.linkedChanges });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
@@ -5830,8 +6120,8 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.title || !body.requesterEmail) return json(res, 400, { error: "title and requesterEmail required" });
     try {
       const id = `INC-${Date.now().toString(36).toUpperCase()}`;
-      const ticket = { id, title: body.title, description: body.description || "", category: body.category || "General", priority: body.priority || "P3", status: "New", source: "self-service", requesterEmail: body.requesterEmail, requesterName: body.requesterName || body.requesterEmail.split("@")[0], createdAt: new Date().toISOString(), createdBy: body.requesterEmail };
-      await db.upsert("incidents", id, ticket);
+      const ticket = { id, title: body.title, description: body.description || "", category: body.category || "General", priority: normalizePriority(body.priority), status: "New", source: "self-service", requesterEmail: body.requesterEmail, requesterName: body.requesterName || body.requesterEmail.split("@")[0], createdAt: new Date().toISOString(), createdBy: body.requesterEmail };
+      await db.upsert("incidents", id, JSON.stringify(ticket));
       await db.audit("incidents", id, "create", `Self-service ticket from ${body.requesterEmail}`, body.requesterEmail);
       return json(res, 201, { ticketId: id, title: ticket.title, status: ticket.status });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -5867,7 +6157,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.team || !body.hourlyRate) return json(res, 400, { error: "team and hourlyRate required" });
     const id = `RATE-${(body.team || "").replace(/\s+/g, "-").toLowerCase()}`;
     const rate = { id, team: body.team, hourlyRate: parseFloat(body.hourlyRate), currency: body.currency || "USD", effectiveFrom: body.effectiveFrom || new Date().toISOString(), updatedBy: auth.name || "System" };
-    await db.upsert("cost_rates", id, rate);
+    await db.upsert("cost_rates", id, JSON.stringify(rate));
     return json(res, 200, rate);
   }
   // GET /api/cost/rates
@@ -5977,7 +6267,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.vendor || !body.name) return json(res, 400, { error: "vendor and name required" });
     const id = `CTR-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const contract = { id, name: body.name, vendor: body.vendor, type: body.type || "Service", status: body.status || "Active", startDate: body.startDate || new Date().toISOString(), endDate: body.endDate || null, value: body.value || 0, currency: body.currency || "USD", renewalAlertDays: body.renewalAlertDays || 30, slaTerms: body.slaTerms || "", notes: body.notes || "", createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
-    await db.upsert("contracts", id, contract);
+    await db.upsert("contracts", id, JSON.stringify(contract));
     await db.audit("contracts", id, "create", `Contract: ${contract.name} (${contract.vendor})`, auth.name || "System");
     return json(res, 201, contract);
   }
@@ -5990,7 +6280,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       if (!row) return json(res, 404, { error: "Contract not found" });
       const contract = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
       Object.assign(contract, { ...body, id, updatedAt: new Date().toISOString(), updatedBy: auth.name || "System" });
-      await db.upsert("contracts", id, contract);
+      await db.upsert("contracts", id, JSON.stringify(contract));
       await db.audit("contracts", id, "update", `Contract updated`, auth.name || "System");
       return json(res, 200, contract);
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -6071,7 +6361,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.channelName || !body.webhookUrl) return json(res, 400, { error: "channelName and webhookUrl required" });
     const id = `TW-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const webhook = { id, channelName: body.channelName, webhookUrl: body.webhookUrl, events: body.events || ["ticket_created", "ticket_resolved", "sla_breach"], enabled: body.enabled !== false, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
-    await db.upsert("teams_webhooks", id, webhook);
+    await db.upsert("teams_webhooks", id, JSON.stringify(webhook));
     return json(res, 201, webhook);
   }
   // GET /api/integrations/teams/webhooks
@@ -6090,7 +6380,8 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const webhooks = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
       const target = body.webhookId ? webhooks.find(w => w.id === body.webhookId) : webhooks.find(w => w.channelName === body.channelName);
       if (!target) return json(res, 404, { error: "Webhook not found" });
-      const card = { "@type": "MessageCard", "@context": "http://schema.org/extensions", summary: body.title || "ITSM Notification", themeColor: body.priority === "P1" ? "FF0000" : body.priority === "P2" ? "FF8C00" : "0078D4", title: body.title || "ITSM Update", sections: [{ activityTitle: body.subtitle || "", text: body.message || "", facts: (body.facts || []).map(f => ({ name: f.name, value: f.value })) }] };
+      const cardSev = normalizePriority(body.priority);
+      const card = { "@type": "MessageCard", "@context": "http://schema.org/extensions", summary: body.title || "ITSM Notification", themeColor: cardSev === "Sev-A" ? "FF0000" : cardSev === "Sev-B" ? "FF8C00" : "0078D4", title: body.title || "ITSM Update", sections: [{ activityTitle: body.subtitle || "", text: body.message || "", facts: (body.facts || []).map(f => ({ name: f.name, value: f.value })) }] };
       // In production, POST to target.webhookUrl. Here we log and return success.
       return json(res, 200, { sent: true, webhookId: target.id, channelName: target.channelName, card });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -6106,7 +6397,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
         const id = asset.id || asset.serialNumber || asset.hostname || `DISC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         const existing = await db.getOne("assets", id).catch(() => null);
         const record = { id, name: asset.name || asset.hostname || id, hostname: asset.hostname, type: asset.type || "Server", os: asset.os, ipAddress: asset.ipAddress || asset.ip, serialNumber: asset.serialNumber, manufacturer: asset.manufacturer, model: asset.model, status: asset.status || "Active", discoveredAt: new Date().toISOString(), discoverySource: body.source || "api", ...asset };
-        await db.upsert("assets", id, record);
+        await db.upsert("assets", id, JSON.stringify(record));
         if (existing) updated++; else added++;
       }
       await db.audit("assets", "discovery", "ingest", `Discovery ingest: ${added} added, ${updated} updated from ${body.source || "api"}`, auth.name || "System");
@@ -6130,7 +6421,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.email) return json(res, 400, { error: "email required" });
     const id = `SUB-${body.email.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase()}`;
     const sub = { id, email: body.email, subscribedAt: new Date().toISOString(), active: true, services: body.services || [] };
-    await db.upsert("status_subscribers", id, sub);
+    await db.upsert("status_subscribers", id, JSON.stringify(sub));
     return json(res, 201, { subscribed: true, email: body.email });
   }
   // GET /api/status/subscribers
@@ -6158,7 +6449,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
   if (pathname.startsWith("/api/dashboards/layouts/") && req.method === "POST") {
     const userId = decodeURIComponent(pathname.split("/")[4]);
     const layout = { userId, widgets: body.widgets || [], layout: body.layout || "custom", positions: body.positions || {}, updatedAt: new Date().toISOString() };
-    await db.upsert("dashboard_layouts", userId, layout);
+    await db.upsert("dashboard_layouts", userId, JSON.stringify(layout));
     return json(res, 200, layout);
   }
   // ═══════════════════════════════════════════════════════════════════════
@@ -6204,7 +6495,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.name || !body.dataSource) return json(res, 400, { error: "name and dataSource required" });
     const id = body.id || `RPT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const report = { id, name: body.name, dataSource: body.dataSource, filters: body.filters || [], groupBy: body.groupBy || null, columns: body.columns || [], chartType: body.chartType || "table", schedule: body.schedule || null, createdAt: body.createdAt || new Date().toISOString(), createdBy: auth.name || "System", updatedAt: new Date().toISOString() };
-    await db.upsert("saved_reports", id, report);
+    await db.upsert("saved_reports", id, JSON.stringify(report));
     return json(res, 201, report);
   }
   // GET /api/reports/saved — list saved reports
@@ -6255,14 +6546,14 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       const slaRate = resolved.length > 0 ? Math.round(slaMet / resolved.length * 100) : 100;
       const csatScores = incidents.filter(i => i.csatScore).map(i => i.csatScore);
       const avgCsat = csatScores.length > 0 ? Math.round(csatScores.reduce((s, c) => s + c, 0) / csatScores.length * 10) / 10 : 0;
-      const p1Open = incidents.filter(i => i.priority === "P1" && !["Resolved", "Closed"].includes(i.status)).length;
+      const p1Open = incidents.filter(i => normalizePriority(i.priority) === "Sev-A" && !["Resolved", "Closed"].includes(i.status)).length;
       const operationalServices = services.filter(s => s.status === "Operational").length;
       const healthScore = Math.round((slaRate * 0.4) + ((operationalServices / Math.max(services.length, 1)) * 100 * 0.3) + (Math.min(avgCsat / 5, 1) * 100 * 0.3));
       return json(res, 200, {
         healthScore, totalTickets: total, openTickets: open, slaComplianceRate: slaRate, avgCsat,
         p1OpenCount: p1Open, serviceHealth: { total: services.length, operational: operationalServices },
         changeSuccessRate: changes.length > 0 ? Math.round(changes.filter(c => c.status === "Completed" || c.status === "Closed").length / changes.length * 100) : 100,
-        riskHeatmap: { high: incidents.filter(i => i.priority === "P1").length, medium: incidents.filter(i => i.priority === "P2").length, low: incidents.filter(i => i.priority === "P3" || i.priority === "P4").length },
+        riskHeatmap: { high: incidents.filter(i => normalizePriority(i.priority) === "Sev-A").length, medium: incidents.filter(i => normalizePriority(i.priority) === "Sev-B").length, low: incidents.filter(i => { const s = normalizePriority(i.priority); return s === "Sev-C" || s === "Sev-D"; }).length },
         generatedAt: new Date().toISOString()
       });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -6385,7 +6676,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
         activeTickets: activeTickets.length, ticketsLast1h: last1h.length,
         activeAgents: activeAgents.length, agentList: activeAgents.slice(0, 20),
         slaCountdowns: slaCounting.slice(0, 20),
-        byPriority: { P1: activeTickets.filter(i => i.priority === "P1").length, P2: activeTickets.filter(i => i.priority === "P2").length, P3: activeTickets.filter(i => i.priority === "P3").length, P4: activeTickets.filter(i => i.priority === "P4").length },
+        byPriority: (() => { const c = { P1: 0, P2: 0, P3: 0, P4: 0 }; for (const i of activeTickets) { const p = priorityToPCode(i.priority); c[p] = (c[p] || 0) + 1; } return c; })(),
         timestamp: new Date().toISOString()
       });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -6493,7 +6784,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
           if (!existing) { results.failed++; results.errors.push(`${id} not found`); continue; }
           const data = typeof existing.data === "string" ? JSON.parse(existing.data) : existing.data;
           const updated = { ...data, ...body.updates, updatedAt: new Date().toISOString(), updatedBy: auth.name || "System" };
-          await db.upsert(body.collection, id, updated);
+          await db.upsert(body.collection, id, JSON.stringify(updated));
           results.updated++;
         } catch (e) { results.failed++; results.errors.push(`${id}: ${e.message}`); }
       }
@@ -6513,7 +6804,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
           if (!existing) continue;
           const data = typeof existing.data === "string" ? JSON.parse(existing.data) : existing.data;
           const updated = { ...data, status: "Closed", resolution: body.resolution || "Bulk closed", closedAt: new Date().toISOString(), closedBy: auth.name || "System" };
-          await db.upsert("incidents", id, updated);
+          await db.upsert("incidents", id, JSON.stringify(updated));
           closed++;
         } catch (e) { /* skip */ }
       }
@@ -6533,8 +6824,8 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     const body = await parseBody(req);
     if (!body.name || !body.category) return json(res, 400, { error: "name and category required" });
     const id = body.id || `TMPL-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-    const tmpl = { id, name: body.name, category: body.category, priority: body.priority || "P3", description: body.description || "", checklist: body.checklist || [], fields: body.fields || {}, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
-    await db.upsert("ticket_templates", id, tmpl);
+    const tmpl = { id, name: body.name, category: body.category, priority: normalizePriority(body.priority), description: body.description || "", checklist: body.checklist || [], fields: body.fields || {}, createdAt: new Date().toISOString(), createdBy: auth.name || "System" };
+    await db.upsert("ticket_templates", id, JSON.stringify(tmpl));
     return json(res, 201, tmpl);
   }
 
@@ -6552,7 +6843,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     if (!body.name || !body.conditions) return json(res, 400, { error: "name and conditions required" });
     const id = body.id || `FLTR-${Date.now()}`;
     const filter = { id, name: body.name, conditions: body.conditions, collection: body.collection || "incidents", shared: body.shared || false, user: body.user || auth.name || "default", createdAt: new Date().toISOString() };
-    await db.upsert("saved_filters", id, filter);
+    await db.upsert("saved_filters", id, JSON.stringify(filter));
     return json(res, 201, filter);
   }
 

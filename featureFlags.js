@@ -63,6 +63,15 @@ const DEFAULTS = {
   // The backend owns eligibility, SLA, audit, and customer-contact safety.
   zendesk_ai_safe_solve: { enabled: true, scope: "all",
                            payload: { confidenceThreshold: 90, solveThreshold: 95, atRiskMinutes: 60 } },
+
+  // Chat Assist — KB-grounded conversational helper for both agents (ticket
+  // co-pilot side panel) and customers (self-service portal widget). Sessions
+  // persist in `chat_assist_sessions`; messages are PII-redacted before each
+  // OpenAI call. Off in prod by default — enable per slot once tuned.
+  chat_assist:         { enabled: false, scope: "staging",
+                         payload: { confidenceThreshold: 75, maxSuggestions: 3,
+                                    customerWidgetEnabled: false, kbGroundingTopK: 5,
+                                    rateLimitPerMin: 20 } },
 };
 
 let _db = null;

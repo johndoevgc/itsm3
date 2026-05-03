@@ -56,9 +56,7 @@
     </ul>
     <h3>Local Authentication</h3>
     <ul>
-      <li>SHA-256 password hashing with salt</li>
-      <li>JWT tokens with configurable expiry</li>
-      <li>Demo/development mode with local user store</li>
+      <li><strong>RETIRED 2026-05-03:</strong> The SHA-256 local-admin login (<code>POST /api/auth/local</code> and <code>Bearer local-hash:</code>) is no longer accepted. Both paths return <code>410</code>/<code>401</code>. All authentication is via Microsoft Entra ID SSO.</li>
     </ul>
   </div>
 

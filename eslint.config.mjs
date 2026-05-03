@@ -32,10 +32,10 @@ export default [
       },
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
       "no-undef": "warn",        // route files share closure scope with server.js; needs refactor before promoting
       "no-console": "off",
-      "eqeqeq": ["warn", "always"],
+      "eqeqeq": ["warn", "always", { "null": "ignore" }],
       "no-constant-condition": "warn",
       "no-debugger": "error",
       "no-empty": "warn",
@@ -61,7 +61,7 @@ export default [
       },
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
       "no-undef": "error",
       "no-console": "off",
       "no-empty": "warn",
@@ -81,7 +81,7 @@ export default [
       },
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
       "no-undef": "warn",
       "no-console": "off",
       "no-empty": "warn",
@@ -110,7 +110,7 @@ export default [
       },
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
       "no-undef": "error",
       "no-console": "off",
       "no-empty": "warn",
@@ -131,10 +131,10 @@ export default [
       },
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
       "no-undef": "warn",
       "no-console": "off",
-      "eqeqeq": ["warn", "always"],
+      "eqeqeq": ["warn", "always", { "null": "ignore" }],
       "no-constant-condition": "warn",
       "no-debugger": "error",
       "no-empty": "warn",
@@ -170,11 +170,11 @@ export default [
     },
     rules: {
       ...js.configs.recommended.rules,
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
       // v3.20: promoted from "warn" to "error" — was the root cause of users/aiEngine ReferenceError crashes
       "no-undef": "error",
       "no-console": "off",
-      "eqeqeq": ["warn", "always"],
+      "eqeqeq": ["warn", "always", { "null": "ignore" }],
       "no-constant-condition": "warn",
       "no-debugger": "error",
       "no-empty": "warn",

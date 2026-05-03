@@ -5,7 +5,7 @@ import { Modal, FormField, SearchBar } from "../components/SharedComponents.jsx"
 import { sanitizeHTML , computeIncidentSla, computeMTTR } from "../utils/slaHelpers.js";
 
 export default function ReportingModule({  assets, changes, csatAiAnalysis, currentUser, customers, incidents, problems, requests, serviceReports, setActiveModule, setServiceReports, showToast, softDelete,
-  smtpConfig, isLocalDemoUser, fetchCsatScores, runCsatAiAnalysis, submitCsatResponse
+  smtpConfig, fetchCsatScores, runCsatAiAnalysis, submitCsatResponse
  }) {
   const [reportForm, setReportForm] = useState({ name: "", type: "Incident Summary", period: "This Month", format: "PDF", schedule: "None" });
   const [editingReportId, setEditingReportId] = useState(null);
@@ -750,7 +750,7 @@ export default function ReportingModule({  assets, changes, csatAiAnalysis, curr
       {/* Zendesk Analytics Tab */}
       {reportTab === "zendesk" && (() => {
         const loadZdAnalytics = () => {
-          if (isLocalDemoUser) { showToast("Demo mode — Zendesk analytics unavailable", "info"); return; }
+          // (#4 follow-up, 2026-05-03) demo-mode guard removed; isLocalDemoUser was always false.
           setZdLoading(true);
           Promise.all([
             fetch("/api/zendesk/stats").then(r => r.json()).catch(() => null),

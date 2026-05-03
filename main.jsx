@@ -126,7 +126,7 @@ class ErrorBoundary extends Component {
         body: JSON.stringify(payload),
         keepalive: true,
       }).catch(() => {});
-    } catch {}
+    } catch { /* ignore */ }
   }
   render() {
     if (this.state.error) return <div style={{color:"#FF6B6B",padding:40,fontFamily:"monospace",whiteSpace:"pre-wrap",background:"#080A12",minHeight:"100vh"}}>

@@ -172,6 +172,19 @@ if (Test-Path $srcServerDir) {
   Info "Uploaded $($srcServerFiles.Count) src/server files"
 }
 
+# Upload src/utils/ shared CJS helpers used by the backend (priorityNormalize.cjs etc.)
+$srcUtilsDir = "src/utils"
+if (Test-Path $srcUtilsDir) {
+  try { Invoke-WebRequest -Method PUT -Uri "$vfsBase/src/" -Headers $h | Out-Null } catch {}
+  try { Invoke-WebRequest -Method PUT -Uri "$vfsBase/src/utils/" -Headers $h | Out-Null } catch {}
+  $srcUtilsFiles = Get-ChildItem $srcUtilsDir -Filter "*.cjs" -File -ErrorAction SilentlyContinue
+  foreach ($uf in $srcUtilsFiles) {
+    Info "Uploading src/utils/$($uf.Name)"
+    Invoke-WebRequest -Method PUT -Uri "$vfsBase/src/utils/$($uf.Name)" -Headers $h -InFile $uf.FullName | Out-Null
+  }
+  if ($srcUtilsFiles) { Info "Uploaded $($srcUtilsFiles.Count) src/utils CJS files" }
+}
+
 # Upload config/data files
 @("profiles.json","VERSION.json","kb-enterprise-articles.json") | Where-Object { Test-Path $_ } | ForEach-Object {
   Info "Uploading $_"

@@ -23,7 +23,6 @@ export default function CustomersModule({ ctx }) {
     customerForm, setCustomerForm,
     editingCustomerId, setEditingCustomerId,
     softDelete = () => {},
-    isLocalDemoUser = false,
   } = ctx;
   const [customerViewMode, setCustomerViewMode] = useState("list");
 
@@ -94,7 +93,7 @@ return (
       </div>
       {canEdit && <button onClick={openAdd} style={{ ...btnStyle("#6366F1"), fontSize: 12, padding: "8px 16px" }}>+ Add Customer</button>}
       <button onClick={() => {
-        if (isLocalDemoUser) { showToast("Demo mode — Zendesk import unavailable", "info"); return; }
+        // (#4 follow-up, 2026-05-03) demo-mode guard removed; isLocalDemoUser is always false now.
         fetch("/api/zendesk/organizations").then(r => r.json()).then(data => {
           const orgs = data.organizations || [];
           if (orgs.length === 0) return;

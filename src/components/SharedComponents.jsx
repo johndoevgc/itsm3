@@ -417,7 +417,7 @@ export const SearchBar = React.memo(function SearchBar({ value, onChange, placeh
       try {
         const pos = cached.selStart ?? cached.value.length;
         inputRef.current.setSelectionRange(pos, cached.selEnd ?? pos);
-      } catch {}
+      } catch { /* ignore */ }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -437,9 +437,9 @@ export const SearchBar = React.memo(function SearchBar({ value, onChange, placeh
     const fn = onChangeRef.current;
     if (!fn) return;
     if (React.startTransition) {
-      React.startTransition(() => { try { fn(next); } catch {} });
+      React.startTransition(() => { try { fn(next); } catch { /* ignore */ } });
     } else {
-      try { fn(next); } catch {}
+      try { fn(next); } catch { /* ignore */ }
     }
   };
 

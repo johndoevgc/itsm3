@@ -2,7 +2,11 @@
 // VGC-ITSM v3.13.0 — Full Production Verification Suite
 // Tests APIs, HTML, security, integrations, RBAC, and notification lifecycle
 // ═══════════════════════════════════════════════════════════════════════
-const BASE = "https://vgc-itsm1-app.azurewebsites.net";
+const BASE = process.env.E2E_BASE || "https://vgc-itsm1-app-staging.azurewebsites.net";
+if (/vgc-itsm1-app\.azurewebsites\.net/.test(BASE) && process.env.ALLOW_PROD_E2E_WRITES !== "true") {
+  console.error(`[e2e-full-test] Refusing to run against production (${BASE}). Set E2E_BASE to staging or ALLOW_PROD_E2E_WRITES=true.`);
+  process.exit(2);
+}
 let pass = 0, fail = 0, total = 0;
 const results = [];
 

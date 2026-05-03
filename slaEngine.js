@@ -4,8 +4,10 @@
 
 // Optional integrations (loaded lazily — slaEngine is also imported by tests)
 let _featureFlags = null, _shadow = null;
-try { _featureFlags = require("./featureFlags"); } catch {}
-try { _shadow = require("./shadowMode"); } catch {}
+try { _featureFlags = require("./featureFlags"); } catch { /* ignore */ }
+try { _shadow = require("./shadowMode"); } catch { /* ignore */ }
+
+const { normalizePriority } = require("./src/utils/priorityNormalize.cjs");
 
 // ─── Default SLA Policy (matches client-side DEFAULT_SLA_POLICY) ────────
 const DEFAULT_SLA_POLICY = {
@@ -108,7 +110,11 @@ function getBusinessHoursElapsed(createdAt, now, options = {}) {
 
 // ─── Compute SLA status for a single incident ──────────────────────────
 function computeSlaStatus(incident, policy) {
-  const sev = policy.severities[incident.priority] || policy.severities["Sev-C"];
+  // Normalize priority so legacy P1..P4 / Critical / High / etc. map onto
+  // canonical Sev-A..Sev-D before policy lookup. Avoids silent Sev-C fallback
+  // when a record was created via the email or self-service path with a P-code.
+  const canonicalPriority = normalizePriority(incident.priority);
+  const sev = policy.severities[canonicalPriority] || policy.severities["Sev-C"];
   const createdAt = incident.createdAt || incident.created_at || incident.created;
   const now = new Date();
 
@@ -135,7 +141,8 @@ function computeSlaStatus(incident, policy) {
 
   return {
     incidentId: incident.id,
-    priority: incident.priority,
+    priority: canonicalPriority,
+    rawPriority: incident.priority,
     hoursElapsed,
     firstResponseTarget,
     worstResponseTarget,
@@ -226,12 +233,12 @@ class SlaEngine {
           if (tier && tier.customer) {
             this._customerPolicies[tier.customer] = tier;
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
       if (Object.keys(this._customerPolicies).length > 0) {
         console.log(`[SLA Engine] Loaded ${Object.keys(this._customerPolicies).length} customer SLA tier overrides`);
       }
-    } catch {}
+    } catch { /* ignore */ }
     this.currentPolicy = this.policy;
   }
 
@@ -270,7 +277,7 @@ class SlaEngine {
             return; // no changes
           }
           this._lastDataHash = hash;
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // Get open incidents (use optimized query if available)
@@ -408,7 +415,7 @@ class SlaEngine {
       try {
         const existing = await this.db.getOne("sla_history", snapshotId);
         if (existing) return; // already logged today
-      } catch {}
+      } catch { /* ignore */ }
 
       const incRows = await this.db.getAll("incidents");
       const incidents = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
@@ -450,4 +457,4 @@ class SlaEngine {
   }
 }
 
-module.exports = { SlaEngine, computeSlaStatus, computeSlaStatus_v2, getBusinessHoursElapsed, DEFAULT_SLA_POLICY };
+module.exports = { SlaEngine, computeSlaStatus, computeSlaStatus_v2, getBusinessHoursElapsed, DEFAULT_SLA_POLICY, normalizePriority };

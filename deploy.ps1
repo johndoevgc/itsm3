@@ -171,12 +171,9 @@ az appservice plan create `
     --output none
 Write-Ok "App Service Plan '$planName' (P1v3 Linux) created"
 
-az webapp create `
-    --name $AppName `
-    --resource-group $ResourceGroup `
-    --plan $planName `
-    --runtime "NODE|22-lts" `
-    --output none
+$env:_RG = $ResourceGroup; $env:_APP = $AppName; $env:_PLAN = $planName
+az --% webapp create --name %_APP% --resource-group %_RG% --plan %_PLAN% --runtime "NODE|22-lts" --output none
+if ($LASTEXITCODE -ne 0) { throw "Web App create failed (exit $LASTEXITCODE)" }
 Write-Ok "Web App '$AppName' created"
 
 # Configure app settings

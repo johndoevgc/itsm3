@@ -452,7 +452,7 @@ module.exports = function createZendeskRoutes(ctx) {
           try {
             const u = await zdRequest("GET", `/users/${aid}.json`);
             if (u?.user) authorMap[aid] = { name: u.user.name, email: u.user.email, role: u.user.role };
-          } catch {}
+          } catch { /* ignore */ }
         }
         for (const c of recentComments) {
           const a = authorMap[c.author];
@@ -465,7 +465,7 @@ module.exports = function createZendeskRoutes(ctx) {
           try {
             const reqData = await zdRequest("GET", `/users/${ticket.ticket.requester_id}.json`);
             requester = reqData?.user || null;
-          } catch {}
+          } catch { /* ignore */ }
         }
         // Fetch Zendesk organization info
         let zdOrg = null;
@@ -474,7 +474,7 @@ module.exports = function createZendeskRoutes(ctx) {
           try {
             const orgData = await zdRequest("GET", `/organizations/${orgId}.json`);
             zdOrg = orgData?.organization ? { name: orgData.organization.name, domains: orgData.organization.domain_names || [] } : null;
-          } catch {}
+          } catch { /* ignore */ }
         }
         // Match ITSM customer by org name or requester email domain
         let itsmCustomer = null;
@@ -492,7 +492,7 @@ module.exports = function createZendeskRoutes(ctx) {
               break;
             }
           }
-        } catch {}
+        } catch { /* ignore */ }
         // Count historical tickets from same requester
         let historicalTicketCount = 0;
         let lastTicketDate = null;
@@ -502,7 +502,7 @@ module.exports = function createZendeskRoutes(ctx) {
             const histResults = histSearch?.results || [];
             historicalTicketCount = histSearch?.count || histResults.length;
             if (histResults.length > 1) lastTicketDate = histResults[1]?.created_at; // [0] is current ticket
-          } catch {}
+          } catch { /* ignore */ }
         }
         // SLA target hours mapping
         const slaHoursMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
@@ -670,7 +670,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           try {
             const requesterResult = await zdRequest("GET", `/users/${ticket.requester_id}.json`);
             requester = requesterResult.user || null;
-          } catch {}
+          } catch { /* ignore */ }
         }
 
         const flagPayload = featureFlags?.payload ? featureFlags.payload("zendesk_ai_safe_solve") || {} : {};
@@ -733,7 +733,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         if (dryRun || !decision.eligible) {
           try {
             await db.upsert("zd_ai_safe_solve", auditId, JSON.stringify({ id: auditId, ticketId, dryRun: true, eligible: decision.eligible, decision, requestedBy, createdAt: new Date().toISOString() }));
-          } catch {}
+          } catch { /* ignore */ }
           return json(res, 200, baseResponse);
         }
 
@@ -780,8 +780,8 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
 
         const auditRecord = { id: auditId, ticketId, requestedBy, dryRun: false, eligible: true, decision, appliedActions, emailResult, linkedIncident, createdAt: new Date().toISOString() };
         await db.upsert("zd_ai_safe_solve", auditId, JSON.stringify(auditRecord));
-        try { await db.audit("zd_ai_safe_solve", auditId, "apply", JSON.stringify({ ticketId, decision: decision.decision, confidence: decision.confidence, targetStatus: decision.targetStatus, publicComment: false }), requestedBy); } catch {}
-        try { wsServer && wsServer.broadcast && wsServer.broadcast("zendesk/ai-safe-solve", { ticketId, decision: decision.decision, targetStatus: decision.targetStatus, auditId }); } catch {}
+        try { await db.audit("zd_ai_safe_solve", auditId, "apply", JSON.stringify({ ticketId, decision: decision.decision, confidence: decision.confidence, targetStatus: decision.targetStatus, publicComment: false }), requestedBy); } catch { /* ignore */ }
+        try { wsServer && wsServer.broadcast && wsServer.broadcast("zendesk/ai-safe-solve", { ticketId, decision: decision.decision, targetStatus: decision.targetStatus, auditId }); } catch { /* ignore */ }
 
         return json(res, 200, { ...baseResponse, success: true, applied: true, appliedActions, updateResult, email: emailResult, linkedIncident });
       }
@@ -890,7 +890,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           try {
             const usersResult = await zdRequest("GET", `/users/show_many.json?ids=${batch.join(",")}`);
             (usersResult.users || []).forEach(u => { requesters[u.id] = { name: u.name, email: u.email, phone: u.phone }; });
-          } catch {}
+          } catch { /* ignore */ }
         }
         // Attach requester to each ticket
         const enriched = tickets.map(t => ({ ...t, requester: requesters[t.requester_id] || null }));
@@ -956,7 +956,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           try {
             const _b = await parseBody(req);
             await db.audit("zendesk_sync", String(_b && _b.zdTicketId || "unknown"), "push_suppressed_flag", JSON.stringify({ action: _b && _b.action, status: _b && _b.status }), "system");
-          } catch {}
+          } catch { /* ignore */ }
           return json(res, 200, { suppressed: true, reason: "flag_off:zd_push_back" });
         }
         const body = await parseBody(req);
@@ -968,7 +968,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           const _key = `${zdTicketId}|${String(comment).trim().substring(0, 200)}`;
           const _last = _zdPushDedup.get(_key);
           if (_last && Date.now() - _last < 60_000) {
-            try { await db.audit("zendesk_sync", String(zdTicketId), "push_suppressed_dedup", JSON.stringify({ action, withinSec: Math.round((Date.now()-_last)/1000) }), "system"); } catch {}
+            try { await db.audit("zendesk_sync", String(zdTicketId), "push_suppressed_dedup", JSON.stringify({ action, withinSec: Math.round((Date.now()-_last)/1000) }), "system"); } catch { /* ignore */ }
             console.log(`[ZD Sync] Dedup-suppressed comment to #${zdTicketId} (within 60s)`);
             return json(res, 200, { suppressed: true, reason: "dedup_60s" });
           }
@@ -1110,7 +1110,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                 const inc = JSON.parse(row.data);
                 if (inc.zdTicketId) _fiIncByZdId.add(String(inc.zdTicketId));
                 _fiIncById.add(inc.id);
-              } catch {}
+              } catch { /* ignore */ }
             }
           }
           while (hasMore) {
@@ -1259,7 +1259,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                 const inc = JSON.parse(row.data);
                 if (inc.zdTicketId) _incByZdId.set(String(inc.zdTicketId), { row, inc });
                 _incById.set(inc.id, { row, inc });
-              } catch {}
+              } catch { /* ignore */ }
             }
           }
           while (hasMore) {
@@ -1379,7 +1379,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                       syncResult.commentsAdded++;
                     }
                   }
-                } catch {}
+                } catch { /* ignore */ }
               }
 
               hasMore = !result.end_of_stream && result.next_page;
@@ -1413,7 +1413,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                 if (["closed", "resolved"].includes((inc.status || "").toLowerCase())) continue;
                 const lastSync = inc.zdLastSync ? new Date(inc.zdLastSync).getTime() : 0;
                 if (staleNow - lastSync > STALE_THRESHOLD) staleCandidates.push(inc);
-              } catch {}
+              } catch { /* ignore */ }
             }
             if (staleCandidates.length > 0) {
               const staleIds = [...new Set(staleCandidates.map(i => i.zdTicketId))];
@@ -1423,7 +1423,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                   const batch = staleIds.slice(si, si + 100);
                   const res2 = await zdRequest("GET", `/tickets/show_many.json?ids=${batch.join(",")}`);
                   for (const t of (res2.tickets || [])) zdCache[t.id] = { status: t.status, priority: t.priority };
-                } catch {}
+                } catch { /* ignore */ }
               }
               let staleFixed = 0;
               for (const inc of staleCandidates) {
@@ -1610,11 +1610,11 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
               detail: `Silently closed by cleanup operation (requested by ${requestedBy}). No customer notification sent.`
             }];
             await db.upsert("incidents", inc.id, JSON.stringify(inc));
-            try { await db.audit("incidents", inc.id, "silent-close-email-orphan", JSON.stringify({ reason: inc.closureReason, requestedBy }), requestedBy); } catch {}
-            try { wsServer && wsServer.broadcast && wsServer.broadcast("incidents/update", { id: inc.id, status: "Closed", silent: true }); } catch {}
+            try { await db.audit("incidents", inc.id, "silent-close-email-orphan", JSON.stringify({ reason: inc.closureReason, requestedBy }), requestedBy); } catch { /* ignore */ }
+            try { wsServer && wsServer.broadcast && wsServer.broadcast("incidents/update", { id: inc.id, status: "Closed", silent: true }); } catch { /* ignore */ }
             closed++;
           }
-          try { cacheLayer && cacheLayer.invalidatePrefix && cacheLayer.invalidatePrefix("incidents"); } catch {}
+          try { cacheLayer && cacheLayer.invalidatePrefix && cacheLayer.invalidatePrefix("incidents"); } catch { /* ignore */ }
 
           return json(res, 200, {
             success: true,
@@ -1707,7 +1707,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
               try {
                 const inc = JSON.parse(r.data);
                 if (openStatuses.has((inc.status || "").trim()) && inc.zdTicketId) openLinked.push(inc);
-              } catch {}
+              } catch { /* ignore */ }
             }
           }
 
@@ -1889,7 +1889,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                 try {
                   const inc = JSON.parse(row.data);
                   if (inc.zdTicketId) _whIncByZdId.set(String(inc.zdTicketId), inc);
-                } catch {}
+                } catch { /* ignore */ }
               }
               const _whLinked = _whIncByZdId.get(String(t.id));
               if (_whLinked) {
@@ -1984,7 +1984,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                       importedAt: new Date().toISOString(),
                     }));
                   }
-                } catch {}
+                } catch { /* ignore */ }
               }
             }
           }
@@ -2041,7 +2041,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
               if (zdId && !inc._deleted) {
                 zdLinked.push({ inc, zdTicketId: String(zdId) });
               }
-            } catch {}
+            } catch { /* ignore */ }
           }
           console.log(`[ZD SyncAll] Phase 1: Found ${zdLinked.length} ZD-linked incidents`);
 

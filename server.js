@@ -137,7 +137,7 @@ async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens 
         tier = "secondary"; console.warn(`[AI Budget] 80% budget used, downgrading primary to secondary`);
       }
     }
-  } catch {}
+  } catch { /* ignore */ }
   const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
   let currentTier = tier;
   let lastError = null;
@@ -247,7 +247,7 @@ const EMAIL_REDIRECT_TARGET = process.env.EMAIL_REDIRECT_TARGET || "hlaing@vgcte
 // Customer-facing emails go here when redirect is active
 const CUSTOMER_REDIRECT_TARGET = process.env.CUSTOMER_REDIRECT_TARGET || "johndoe@vgcsg.com";
 // Legacy aliases (referenced elsewhere)
-const PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
+const _PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
 const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
 // Phase G — in-memory dedup of outbound ZD sync comments (key: ticketId|commentText, value: ts)
@@ -257,32 +257,16 @@ const _zdPushDedup = new Map();
 const INTERNAL_DOMAINS = (process.env.INTERNAL_DOMAINS || "vgctechnology.com,vgcsg.com")
   .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 
-// ─── Local Auth: Dev Admin ──────────────────────────────────────────────
-// Password is stored as SHA-256 hash (never plain text)
-// Local admin users are configured via environment variables
-// Format: LOCAL_ADMIN_PASSWORD_HASH = SHA-256 hash of the password
-const LOCAL_USERS = process.env.LOCAL_ADMIN_PASSWORD_HASH ? {
-  vgcdevadmin: {
-    passwordHash: process.env.LOCAL_ADMIN_PASSWORD_HASH,
-    profile: {
-      id: "LOCAL-vgcdevadmin",
-      name: process.env.LOCAL_ADMIN_NAME || "VGC Dev Admin",
-      role: "Administrator",
-      avatar: "SA",
-      team: "IT",
-      gender: "other",
-      rbacRole: "Administrator",
-      email: process.env.LOCAL_ADMIN_EMAIL || "admin@localhost",
-      phone: "",
-      location: "",
-      department: "IT",
-      pcName: "",
-      employeeId: "ADMIN001",
-      authType: "local",
-    },
-  },
-} : {};
-const localAuthEnabled = Object.keys(LOCAL_USERS).length > 0;
+// ─── Local Auth: RETIRED (#3 follow-up, 2026-05-03) ─────────────────────
+// Production uses Entra SSO exclusively. The LOCAL_ADMIN_PASSWORD_HASH backdoor
+// has been removed from the auth surface. Both POST /api/auth/local and the
+// "Bearer local-hash:<sha256>" header path now unconditionally reject. Kept as
+// empty objects so downstream destructuring doesn't crash.
+if (process.env.LOCAL_ADMIN_PASSWORD_HASH) {
+  console.warn("[Auth] LOCAL_ADMIN_PASSWORD_HASH is set but the local-admin auth path has been retired. Please remove the env var.");
+}
+const LOCAL_USERS = {};
+const localAuthEnabled = false;
 
 const MIME = {
   ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
@@ -609,7 +593,7 @@ async function _logConfirmation(email, incidentId) {
       id, email: String(email).toLowerCase(), lastSentAt: new Date().toISOString(),
       lastIncidentId: incidentId || null,
     }));
-  } catch {}
+  } catch { /* ignore */ }
 }
 
 // E1+E4+E5 unified gate: returns { send: boolean, reason?: string }.
@@ -687,7 +671,7 @@ async function getAiActionsDedupState() {
         if (item.type) pendingByTypeInc.add(`${item.type}:${item.incidentId}`);
       }
       if (item.title) pendingByTitle.add(item.title.toLowerCase().replace(/[^a-z0-9]/g, ""));
-    } catch {}
+    } catch { /* ignore */ }
   }
   return { pendingByIncident, pendingTotal, pendingByTypeInc, pendingByTitle };
 }
@@ -782,10 +766,14 @@ async function initDatabase() {
       type: "mssql",
       label: `Azure SQL: ${mssqlConfig.server}/${mssqlConfig.database}`,
       upsert: async (coll, id, data) => {
+        // Defensive: callers occasionally pass an object instead of a JSON string.
+        // The DB column is NVarChar(MAX); without this guard MSSQL throws and the
+        // route returns 500 "Internal server error" (workflow-queue approve bug).
+        const payload = (typeof data === "string" || data == null) ? data : JSON.stringify(data);
         await pool.request()
           .input("coll", sql.NVarChar(64), coll)
           .input("id", sql.NVarChar(128), id)
-          .input("data", sql.NVarChar(sql.MAX), data)
+          .input("data", sql.NVarChar(sql.MAX), payload)
           .query(`MERGE itsm_data AS t
             USING (SELECT @coll AS collection, @id AS id, @data AS data) AS s
             ON t.collection = s.collection AND t.id = s.id
@@ -816,6 +804,14 @@ async function initDatabase() {
           .input("coll", sql.NVarChar(64), coll)
           .query("SELECT COUNT(*) AS cnt FROM itsm_data WHERE collection = @coll");
         return r.recordset[0].cnt;
+      },
+      countAudit: async () => {
+        const r = await pool.request().query("SELECT COUNT(*) AS cnt FROM audit_log");
+        return r.recordset[0].cnt;
+      },
+      lastAuditTs: async () => {
+        const r = await pool.request().query("SELECT MAX([timestamp]) AS ts FROM audit_log");
+        return r.recordset[0].ts || null;
       },
       audit: async (coll, rid, action, data, user) => {
         await pool.request()
@@ -871,7 +867,7 @@ async function initDatabase() {
           .query(`SELECT id, data FROM itsm_data WHERE collection = @coll AND JSON_VALUE(data, '$.${jsonPath.replace(/[^a-zA-Z0-9_.]/g, "")}') = @val ORDER BY updated_at DESC`);
         return r.recordset;
       },
-      getPage: async (coll, { limit = 50, offset = 0, orderBy = "updated_at DESC" } = {}) => {
+      getPage: async (coll, { limit = 50, offset = 0, orderBy: _orderBy = "updated_at DESC" } = {}) => {
         const r = await pool.request()
           .input("coll", sql.NVarChar(64), coll)
           .input("offset", sql.Int, offset)
@@ -890,6 +886,17 @@ async function initDatabase() {
         const r = await pool.request()
           .input("cutoff", sql.DateTime2, new Date(Date.now() - keepDays * 86400000))
           .query("DELETE FROM audit_log WHERE [timestamp] < @cutoff");
+        return r.rowsAffected?.[0] || 0;
+      },
+      deleteAuditByRecord: async (coll, ids) => {
+        if (!Array.isArray(ids) || ids.length === 0) return 0;
+        const request = pool.request().input("coll", sql.NVarChar(64), coll);
+        const placeholders = ids.map((id, i) => {
+          const p = `id${i}`;
+          request.input(p, sql.NVarChar(128), id);
+          return `@${p}`;
+        }).join(",");
+        const r = await request.query(`DELETE FROM audit_log WHERE collection = @coll AND record_id IN (${placeholders})`);
         return r.rowsAffected?.[0] || 0;
       },
       getMaxUpdatedAt: async (coll) => {
@@ -965,11 +972,14 @@ async function initDatabase() {
       type: "mysql",
       label: `MySQL: ${process.env.MYSQL_HOST || "vgc-itsm-mysql.mysql.database.azure.com"}`,
       upsert: async (coll, id, data) => {
+        // Defensive: stringify objects so MySQL stores valid JSON instead of
+        // "[object Object]". Callers in routes/* sometimes pass raw objects.
+        const payload = (typeof data === "string" || data == null) ? data : JSON.stringify(data);
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
             await pool.execute(
               "INSERT INTO itsm_data (collection, id, data) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP",
-              [coll, id, data]
+              [coll, id, payload]
             );
             return;
           } catch (e) {
@@ -1012,6 +1022,14 @@ async function initDatabase() {
       count: async (coll) => {
         const [rows] = await pool.execute("SELECT COUNT(*) as cnt FROM itsm_data WHERE collection = ?", [coll]);
         return rows[0].cnt;
+      },
+      countAudit: async () => {
+        const [rows] = await pool.execute("SELECT COUNT(*) as cnt FROM audit_log");
+        return rows[0].cnt;
+      },
+      lastAuditTs: async () => {
+        const [rows] = await pool.execute("SELECT MAX(timestamp) as ts FROM audit_log");
+        return rows[0]?.ts || null;
       },
       audit: async (coll, rid, action, data, user) => {
         await pool.execute("INSERT INTO audit_log (collection, record_id, action, data, user_name) VALUES (?, ?, ?, ?, ?)", [coll, rid, action, data, user]);
@@ -1075,6 +1093,15 @@ async function initDatabase() {
         const [result] = await pool.execute("DELETE FROM audit_log WHERE timestamp < ?", [cutoff]);
         return result.affectedRows || 0;
       },
+      deleteAuditByRecord: async (coll, ids) => {
+        if (!Array.isArray(ids) || ids.length === 0) return 0;
+        const placeholders = ids.map(() => "?").join(",");
+        const [result] = await pool.query(
+          `DELETE FROM audit_log WHERE collection = ? AND record_id IN (${placeholders})`,
+          [coll, ...ids]
+        );
+        return result.affectedRows || 0;
+      },
       getMaxUpdatedAt: async (coll) => {
         const [rows] = await pool.execute("SELECT MAX(updated_at) AS max_updated FROM itsm_data WHERE collection = ?", [coll]);
         return rows[0]?.max_updated || null;
@@ -1134,6 +1161,8 @@ async function initDatabase() {
       getOne: sdb.prepare("SELECT data FROM itsm_data WHERE collection = ? AND id = ?"),
       deleteOne: sdb.prepare("DELETE FROM itsm_data WHERE collection = ? AND id = ?"),
       count: sdb.prepare("SELECT COUNT(*) as cnt FROM itsm_data WHERE collection = ?"),
+      countAudit: sdb.prepare("SELECT COUNT(*) as cnt FROM audit_log"),
+      lastAuditTs: sdb.prepare("SELECT MAX(timestamp) as ts FROM audit_log"),
       audit: sdb.prepare("INSERT INTO audit_log (collection, record_id, action, data, user_name) VALUES (?, ?, ?, ?, ?)"),
       getAudit: sdb.prepare("SELECT * FROM audit_log WHERE collection = ? ORDER BY timestamp DESC LIMIT ?"),
       getAllAudit: sdb.prepare("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?"),
@@ -1151,11 +1180,16 @@ async function initDatabase() {
     db = {
       type: "sqlite",
       label: `SQLite: ${DB_PATH}`,
-      upsert: async (coll, id, data) => s.upsert.run(coll, id, data),
+      upsert: async (coll, id, data) => {
+        const payload = (typeof data === "string" || data == null) ? data : JSON.stringify(data);
+        return s.upsert.run(coll, id, payload);
+      },
       getAll: async (coll) => s.getAll.all(coll),
       getOne: async (coll, id) => s.getOne.get(coll, id) || null,
       deleteOne: async (coll, id) => s.deleteOne.run(coll, id),
       count: async (coll) => s.count.get(coll).cnt,
+      countAudit: async () => s.countAudit.get().cnt,
+      lastAuditTs: async () => s.lastAuditTs.get()?.ts || null,
       audit: async (coll, rid, action, data, user) => s.audit.run(coll, rid, action, data, user),
       getAudit: async (coll, limit) => s.getAudit.all(coll, limit),
       getAllAudit: async (limit) => s.getAllAudit.all(limit),
@@ -1172,6 +1206,14 @@ async function initDatabase() {
       pruneAudit: async (keepDays) => {
         const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
         const info = s.pruneAudit.run(cutoff);
+        return info.changes || 0;
+      },
+      deleteAuditByRecord: async (coll, ids) => {
+        if (!Array.isArray(ids) || ids.length === 0) return 0;
+        const placeholders = ids.map(() => "?").join(",");
+        const info = sdb.prepare(
+          `DELETE FROM audit_log WHERE collection = ? AND record_id IN (${placeholders})`
+        ).run(coll, ...ids);
         return info.changes || 0;
       },
       getMaxUpdatedAt: async (coll) => {
@@ -1382,17 +1424,17 @@ function formatResolutionText(raw) {
   // Convert markdown bold **text** to <strong>
   text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   // Detect numbered items: (1), 1., 1) — split into ordered list
-  const numberedPattern = /(?:^|\n)\s*(?:\(?\d+\)?[\.\):])\s+/;
+  const numberedPattern = /(?:^|\n)\s*(?:\(?\d+\)?[.):])\s+/;
   if (numberedPattern.test(text)) {
-    const items = text.split(/(?:^|\n)\s*(?:\(?\d+\)?[\.\):])\s+/).filter(Boolean);
+    const items = text.split(/(?:^|\n)\s*(?:\(?\d+\)?[.):])\s+/).filter(Boolean);
     if (items.length > 1) {
       return `<ol style="margin:8px 0;padding-left:20px;color:#1F2937;font-size:13px;line-height:1.7;">${items.map(i => `<li style="margin-bottom:6px;">${i.trim().replace(/\n/g, " ")}</li>`).join("")}</ol>`;
     }
   }
   // Detect bullet points: •, -, *
-  const bulletPattern = /(?:^|\n)\s*[•\-\*]\s+/;
+  const bulletPattern = /(?:^|\n)\s*[•\-*]\s+/;
   if (bulletPattern.test(text)) {
-    const items = text.split(/(?:^|\n)\s*[•\-\*]\s+/).filter(Boolean);
+    const items = text.split(/(?:^|\n)\s*[•\-*]\s+/).filter(Boolean);
     if (items.length > 1) {
       return `<ul style="margin:8px 0;padding-left:20px;color:#1F2937;font-size:13px;line-height:1.7;">${items.map(i => `<li style="margin-bottom:6px;">${i.trim().replace(/\n/g, " ")}</li>`).join("")}</ul>`;
     }
@@ -1420,7 +1462,7 @@ function buildEmailTemplate(opts = {}) {
     resolvedBy = "",
     resolution = "",
     rootCause = "",
-    customerName = "",
+    customerName: _customerName = "",
     customerMessage = "",
     description = "",
     impactAssessment = null,
@@ -1694,6 +1736,7 @@ const VALID_COLLECTIONS = new Set([
   "notification_preferences",
   "mim_records",
   "ai_chat_sessions",
+  "chat_assist_sessions",
   "ai_kb_drafts",
   "channel_stats",
   "gamification_scores",
@@ -1734,7 +1777,7 @@ const VALID_COLLECTIONS = new Set([
 
 // ─── Version Info ─────────────────────────────────────────────────────
 let APP_VERSION = { version: "unknown", build: "unknown" };
-try { APP_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, "VERSION.json"), "utf8")); } catch {}
+try { APP_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, "VERSION.json"), "utf8")); } catch { /* ignore */ }
 
 // ─── Zendesk Sync State ──────────────────────────────────────────────
 let zdSyncInProgress = false;
@@ -1763,7 +1806,7 @@ async function getOrgName() {
       const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
       if (d.orgName) _cachedOrgName = d.orgName;
     }
-  } catch {}
+  } catch { /* ignore */ }
   _orgNameCacheTs = Date.now();
   return _cachedOrgName;
 }
@@ -1971,7 +2014,7 @@ async function processInboundEmails() {
           const entry = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
           if (entry.type === "domain" && entry.value) allowedDomains.add(entry.value.toLowerCase());
           if (entry.type === "email" && entry.value) allowedEmails.add(entry.value.toLowerCase());
-        } catch {}
+        } catch { /* ignore */ }
       }
     } catch (e) { console.warn("[Email-to-Ticket] Could not load email_whitelist:", e.message); }
     // 2. Merge customer domains as fallback (backward compat)
@@ -1982,7 +2025,7 @@ async function processInboundEmails() {
           const cust = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
           const domain = (cust.email || "").split("@")[1]?.toLowerCase();
           if (domain) allowedDomains.add(domain);
-        } catch {}
+        } catch { /* ignore */ }
       }
     } catch (e) { console.warn("[Email-to-Ticket] Could not load customers for whitelist:", e.message); }
     console.log(`[Email-to-Ticket] Allowed domains: ${[...allowedDomains].join(", ")}`);
@@ -2034,7 +2077,7 @@ async function processInboundEmails() {
           id: rejId, from, subject: (subject || "").substring(0, 200), reason,
           processedAt: new Date().toISOString(),
         }));
-      } catch {}
+      } catch { /* ignore */ }
       rejectedCount++;
     };
 
@@ -2437,7 +2480,7 @@ async function _markEmailRead(token, sender, messageId) {
 
 
 // ─── Phase 4: Route handler references (initialized in start()) ────
-let handleZendesk, handleAI, handleCore;
+let handleZendesk, handleAI, handleCore, handleChatAssist;
 const server = http.createServer(async (req, res) => {
   // Phase T2 — stash req on res so helpers (json, etc.) can negotiate compression.
   res.req = req;
@@ -2487,13 +2530,14 @@ const server = http.createServer(async (req, res) => {
     if (handleCore && await handleCore(req, res, pathname, auth, authResult, urlObj)) return;
     if (handleZendesk && await handleZendesk(req, res, pathname, auth, authResult, urlObj)) return;
     if (handleAI && await handleAI(req, res, pathname, auth, authResult, urlObj)) return;
+    if (handleChatAssist && await handleChatAssist(req, res, pathname, auth, authResult, urlObj)) return;
   } catch (handlerErr) {
     console.error(`[Route] ${req.method} ${pathname} crashed:`, handlerErr && handlerErr.stack || handlerErr);
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal server error", correlationId }));
     } else {
-      try { res.end(); } catch {}
+      try { res.end(); } catch { /* ignore */ }
     }
     return;
   }
@@ -2502,7 +2546,7 @@ const server = http.createServer(async (req, res) => {
   const distDir = path.join(__dirname, "dist");
   const hasDistDir = fs.existsSync(distDir);
   const serveRoot = hasDistDir ? distDir : __dirname;
-  let filePath = path.resolve(serveRoot, (pathname === "/" ? "index.html" : pathname).replace(/^[\/]+/, ""));
+  let filePath = path.resolve(serveRoot, (pathname === "/" ? "index.html" : pathname).replace(/^[/]+/, ""));
   const ext = path.extname(filePath).toLowerCase();
   // Security: prevent directory traversal
   if (!path.normalize(filePath).startsWith(path.normalize(serveRoot))) {
@@ -2652,7 +2696,7 @@ async function start() {
   // Start SLA Engine (after DB is initialized)
   // Initialize WebSocket server
   wsServer = new WebSocketServer();
-  server.on("upgrade", (req, socket, head) => wsServer.handleUpgrade(req, socket));
+  server.on("upgrade", (req, socket, _head) => wsServer.handleUpgrade(req, socket));
 
   // Initialize Notification Engine
   notifyEngine = new NotificationEngine({ graphSendMail, buildEmailTemplate, wsServer, db });
@@ -2768,7 +2812,8 @@ async function start() {
   handleCore = require("./routes/core")(ctx);
   handleZendesk = require("./routes/zendesk")(ctx);
   handleAI = require("./routes/ai")(ctx);
-  console.log("[Phase 4] Route handlers initialized (core, zendesk, ai)");
+  handleChatAssist = require("./routes/chatAssist")(ctx);
+  console.log("[Phase 4] Route handlers initialized (core, zendesk, ai, chatAssist)");
 
   server.listen(PORT, async () => {
     const stats = {};
@@ -2802,6 +2847,15 @@ async function start() {
         console.log(`[Settings] Restored SolarWinds config from DB. Host=${SOLARWINDS_API_HOST}`);
       }
     } catch (e) { console.log("[Settings] Could not restore persisted settings:", e.message); }
+
+    // SECURITY (#3): Auto-seeders below populate fresh DBs with default KB / templates /
+    // approval chains / email whitelist / SG holidays. Each block is idempotent (guarded by
+    // count === 0) so it cannot overwrite existing prod data, but the master switch lets
+    // operators turn off all bootstrap writes on stable prod environments.
+    // Set ENABLE_AUTOSEED=false on prod once initial data is in place.
+    if (process.env.ENABLE_AUTOSEED === "false") {
+      console.log("[Seed] ENABLE_AUTOSEED=false — skipping all auto-seed blocks");
+    } else {
 
     // Seed default KB articles if none exist
     if (stats.kb === 0) {
@@ -2878,7 +2932,7 @@ async function start() {
               }));
               seeded++;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
         // Always add internal domains
         for (const intDomain of ["vgctechnology.com", "vgcsg.com"]) {
@@ -2921,6 +2975,8 @@ async function start() {
         console.log(`[Seed] Created SG 2026 public holidays (${holidays2026.holidays.length} holidays)`);
       }
     } catch (e) { console.warn("[Seed] SG holidays seed failed:", e.message); }
+
+    } // end ENABLE_AUTOSEED guard (#3)
 
     // ─── Auto-create setup_completed for existing deployments ───────
     try {
@@ -2989,7 +3045,7 @@ async function start() {
             await db.upsert("incidents", inc.id, JSON.stringify(inc));
             backfilled++;
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
       if (backfilled > 0) console.log(`[SLA Migration] Backfilled ${backfilled} incidents with missing SLA fields`);
     } catch (e) { console.warn("[SLA Migration] Failed:", e.message); }
@@ -2998,7 +3054,6 @@ async function start() {
     const runDailySync = async () => {
       try {
         console.log("[Daily Sync] Starting AI knowledge sync...");
-        const https = require("https");
         const syncReq = require("http").request({ hostname: "localhost", port: PORT, path: "/api/ai/knowledge/sync", method: "POST", headers: { "Content-Type": "application/json", "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN } }, (r) => {
           let data = ""; r.on("data", c => data += c);
           r.on("end", () => console.log("[Daily Sync] Result:", data.substring(0, 200)));
@@ -3136,7 +3191,7 @@ async function start() {
         .toString().split(",").map(s => s.trim()).filter(Boolean);
       const result = { id: `AP-${Date.now().toString(36)}`, type: "ai_autopilot", reason, rolloutWeek, maxTicketsPerRun, status: "running", startedAt, steps: [] };
       try {
-        try { await db.upsert("ai_audit_log", result.id, JSON.stringify(result)); if (cacheLayer) cacheLayer.invalidatePrefix("ai_audit_log"); } catch {}
+        try { await db.upsert("ai_audit_log", result.id, JSON.stringify(result)); if (cacheLayer) cacheLayer.invalidatePrefix("ai_audit_log"); } catch { /* ignore */ }
         if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) {
           result.steps.push({ step: "ai_ready", skipped: true, reason: "Azure OpenAI not configured" });
           return;
@@ -3228,7 +3283,7 @@ async function start() {
       } finally {
         result.status = "finished";
         result.finishedAt = new Date().toISOString();
-        try { await db.upsert("ai_audit_log", result.id, JSON.stringify(result)); if (cacheLayer) cacheLayer.invalidatePrefix("ai_audit_log"); } catch {}
+        try { await db.upsert("ai_audit_log", result.id, JSON.stringify(result)); if (cacheLayer) cacheLayer.invalidatePrefix("ai_audit_log"); } catch { /* ignore */ }
         console.log(`[AI Autopilot] ${reason} complete: ${result.steps.map(s => `${s.step}:${s.ok === false ? "fail" : s.skipped ? "skip" : "ok"}`).join(", ")}`);
         aiAutopilotRunning = false;
       }
@@ -3290,6 +3345,60 @@ async function start() {
     }, 2 * 60 * 1000);
     _shutdownTimeouts.push(slaGuardianStartTimer);
     console.log("[SLA Guardian] Proactive SLA prediction scheduled every 15 minutes");
+
+    // ─── KB Review Digest: Daily nudge to engineers ─────────────────
+    // Notifies the engineering channel when AI-seeded ai_knowledge entries
+    // pile up in the review queue (auto-seeded by VGC AI Assist CSAT loop +
+    // agent promote-to-KB). Threshold and recipients configurable via env.
+    const KB_DIGEST_INTERVAL_MS = 24 * 60 * 60 * 1000; // every 24 hours
+    const KB_DIGEST_THRESHOLD = Number(process.env.KB_DIGEST_THRESHOLD || 5);
+    const KB_DIGEST_STALE_DAYS = Number(process.env.KB_DIGEST_STALE_DAYS || 7);
+    const KB_DIGEST_RECIPIENTS = (process.env.KB_DIGEST_RECIPIENTS || "")
+      .split(",").map(s => s.trim()).filter(Boolean);
+    const runKbDigest = async () => {
+      try {
+        const rows = await db.getAll("ai_knowledge");
+        const pending = rows
+          .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+          .filter(e => e && e.reviewStatus === "pending");
+        if (pending.length === 0) return;
+        const now = Date.now();
+        const oldest = pending.reduce((min, e) => {
+          const t = new Date(e.createdAt || 0).getTime();
+          return Number.isFinite(t) && t < min ? t : min;
+        }, now);
+        const oldestDays = Math.round((now - oldest) / 86400000);
+        const shouldNotify = pending.length >= KB_DIGEST_THRESHOLD || oldestDays >= KB_DIGEST_STALE_DAYS;
+        if (!shouldNotify) {
+          console.log(`[KB Digest] ${pending.length} pending, oldest ${oldestDays}d — below threshold (${KB_DIGEST_THRESHOLD}/${KB_DIGEST_STALE_DAYS}d).`);
+          return;
+        }
+        const sample = pending.slice(0, 5).map(e => `• ${e.title || "(untitled)"} — ${e.category || "General"}`).join("\n");
+        const title = `📚 AI KB Review: ${pending.length} entries pending`;
+        const body = `${pending.length} AI-suggested KB entries are awaiting engineer review (oldest ${oldestDays} day${oldestDays === 1 ? "" : "s"}).\n\nTop entries:\n${sample}\n\nReview at: Admin Settings → AI KB Review`;
+        if (notifyEngine) {
+          await notifyEngine.send({
+            channels: KB_DIGEST_RECIPIENTS.length ? ["email", "inapp"] : ["inapp"],
+            title, body,
+            severity: oldestDays >= KB_DIGEST_STALE_DAYS ? "warning" : "info",
+            type: "kb_review_digest",
+            recipients: KB_DIGEST_RECIPIENTS,
+            data: { pendingCount: pending.length, oldestDays },
+          });
+        }
+        console.log(`[KB Digest] Notified — ${pending.length} pending, oldest ${oldestDays}d.`);
+      } catch (e) {
+        console.warn("[KB Digest] Run failed:", e.message);
+      }
+    };
+    // First run after 10 min, then daily.
+    const kbDigestStartTimer = setTimeout(() => {
+      runKbDigest();
+      const kbDigestInterval = setInterval(runKbDigest, KB_DIGEST_INTERVAL_MS);
+      _shutdownIntervals.push(kbDigestInterval);
+    }, 10 * 60 * 1000);
+    _shutdownTimeouts.push(kbDigestStartTimer);
+    console.log(`[KB Digest] Daily AI KB review digest enabled (threshold=${KB_DIGEST_THRESHOLD}, stale=${KB_DIGEST_STALE_DAYS}d, recipients=${KB_DIGEST_RECIPIENTS.length})`);
 
     // ─── v3.14 Layer 3: Adaptive Zendesk Incremental Sync ──────────
     // Cadence based on open severity load:
@@ -3358,7 +3467,7 @@ async function start() {
           try {
             const inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
             if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id);
-          } catch {}
+          } catch { /* ignore */ }
         }
         const actionRows = await db.getAll("ai_actions");
         let deleted = 0;
@@ -3378,7 +3487,7 @@ async function start() {
             } else {
               pendingItems.push(item);
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
         // Cap enforcement: if still over maxPendingTotal, delete oldest by createdAt
         if (pendingItems.length > AI_THRESHOLDS.maxPendingTotal) {
@@ -3430,7 +3539,7 @@ async function start() {
               if (tsRaw) { const d = new Date(tsRaw); isOld = isNaN(d.getTime()) || d < cutoff; }
               else { isOld = true; }
               if (isOld) { await db.deleteOne(coll, r.id || item.id); deleted++; }
-            } catch {}
+            } catch { /* ignore */ }
           }
           if (deleted > 0) { collResults[coll] = deleted; console.log(`[Scheduled Purge] ${coll}: deleted ${deleted}/${rows.length} old records`); }
         }
@@ -3442,7 +3551,7 @@ async function start() {
             try {
               const item = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
               if (item && item.status === "dismissed") { await db.deleteOne(coll, r.id || item.id); deleted++; }
-            } catch {}
+            } catch { /* ignore */ }
           }
           if (deleted > 0) { collResults[coll + "_dismissed"] = deleted; console.log(`[Scheduled Purge] ${coll}: deleted ${deleted} dismissed records`); }
         }
@@ -3486,7 +3595,7 @@ async function start() {
               await db.deleteOne("ai_actions", r.id || item.id);
               deleted++;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
 
         // Pass 2: if still over MAX_AI_ACTIONS, delete oldest terminal records regardless of age
@@ -3500,7 +3609,7 @@ async function start() {
               if (item && TERMINAL_STATUSES.has(item.status)) {
                 remaining.push({ id: r.id || item.id, ts: item.createdAt || item.approvedAt || "1970-01-01" });
               }
-            } catch {}
+            } catch { /* ignore */ }
           }
           remaining.sort((a, b) => a.ts.localeCompare(b.ts)); // oldest first
           const excess = freshRows.length - MAX_AI_ACTIONS;
@@ -3593,7 +3702,7 @@ async function start() {
     const runUptimeSnapshot = async () => {
       try {
         let dbOk = false;
-        try { dbOk = await db.ping(); } catch {}
+        try { dbOk = await db.ping(); } catch { /* ignore */ }
         const slaOk = slaEngine ? !!slaEngine.timer : false;
         const allOk = dbOk && slaOk;
         const snapshot = {
@@ -3624,7 +3733,7 @@ async function start() {
               await db.deleteOne("uptime_log", r.id || item.id);
               pruned++;
             }
-          } catch {}
+          } catch { /* ignore */ }
         }
         if (pruned > 0) console.log(`[Uptime] Pruned ${pruned} snapshots older than 90 days${pruned >= PRUNE_BATCH ? " (batch limit reached, more next cycle)" : ""}`);
       } catch (e) {
@@ -3675,8 +3784,8 @@ const _gracefulShutdown = (signal) => {
   const finalize = () => {
     if (exited) return;
     exited = true;
-    try { _shutdownIntervals.forEach(h => { try { clearInterval(h); } catch {} }); } catch {}
-    try { _shutdownTimeouts.forEach(h => { try { clearTimeout(h); } catch {} }); } catch {}
+    try { _shutdownIntervals.forEach(h => { try { clearInterval(h); } catch { /* ignore */ } }); } catch { /* ignore */ }
+    try { _shutdownTimeouts.forEach(h => { try { clearTimeout(h); } catch { /* ignore */ } }); } catch { /* ignore */ }
     if (zdAutoSyncInterval) clearInterval(zdAutoSyncInterval);
     if (workflowEngine) workflowEngine.stop();
     if (cacheLayer) cacheLayer.stop();

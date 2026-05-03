@@ -24,7 +24,7 @@ const normalizeZdAutoStats = (stats) => {
 };
 
 export default function ZendeskModule({  assets, changes, currentUser, customers, incidents, requests, setActiveModule, setDetailItem, setModal, showToast, users,
-  setIncidents, setCustomers, azureOpenAI, isLocalDemoUser, zdState = {}, zdActions = {}
+  setIncidents, setCustomers, azureOpenAI, zdState = {}, zdActions = {}
  }) {
   const [localZdTab, setLocalZdTab] = useState("tickets");
   const [localZdTickets, setLocalZdTickets] = useState([]);
@@ -184,7 +184,6 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
 
   // ── Full Historical Import ──
   const zdFullImport = async (options = {}) => {
-    if (isLocalDemoUser) { setZdError("⚠️ Data Isolation: Demo mode cannot run production imports."); return; }
     if (zdSyncInProgress) return;
     setZdSyncInProgress(true);
     setZdSyncProgress({ phase: "Starting", message: "Initiating full historical import from Zendesk..." });
@@ -752,7 +751,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                       addAutoLog({ type: "info", message: `Batch approving ${highConf.length} high-confidence items...` });
                       let sent = 0;
                       for (const q of highConf) {
-                        try { await zdApproveAndSend(q); sent++; } catch (e) {}
+                        try { await zdApproveAndSend(q); sent++; } catch (e) { /* ignore */ }
                       }
                       addAutoLog({ type: "human_approved", message: `Batch approved: ${sent}/${highConf.length} responses sent successfully` });
                     }} disabled={zdLoading}
@@ -769,7 +768,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                         addAutoLog({ type: "info", message: `Batch approving ${routineItems.length} routine category items...` });
                         let sent = 0;
                         for (const q of routineItems) {
-                          try { await zdApproveAndSend(q); sent++; } catch (e) {}
+                          try { await zdApproveAndSend(q); sent++; } catch (e) { /* ignore */ }
                         }
                         addAutoLog({ type: "human_approved", message: `Routine batch: ${sent}/${routineItems.length} sent successfully` });
                       }} disabled={zdLoading}

@@ -24,7 +24,7 @@ export function I18nProvider({ children }) {
   const setLocale = useCallback((loc) => {
     if (!LOCALES[loc]) return;
     setLocaleState(loc);
-    try { localStorage.setItem(LOCALE_KEY, loc); } catch (_) {}
+    try { localStorage.setItem(LOCALE_KEY, loc); } catch (_) { /* ignore */ }
   }, []);
 
   const t = useCallback((key, fallback) => {

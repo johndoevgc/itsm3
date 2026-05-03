@@ -1,8 +1,23 @@
 // e2e-azure-test.cjs — End-to-end tests against Azure deployment
 const https = require("https");
 
-const BASE = "https://vgc-itsm1-app.azurewebsites.net";
-const AUTH_HASH = "94e3cdf1d4691811f46c8ad2e12724992e652d2aa3d66cecbf86e147a61739a8";
+const BASE = process.env.E2E_BASE || "https://vgc-itsm1-app-staging.azurewebsites.net";
+// Hard guard: this script writes test data. Refuse production unless caller
+// explicitly opts in with ALLOW_PROD_E2E_WRITES=true.
+if (/vgc-itsm1-app\.azurewebsites\.net/.test(BASE) && process.env.ALLOW_PROD_E2E_WRITES !== "true") {
+  console.error(`[e2e-azure-test] Refusing to run against production (${BASE}).`);
+  console.error(`Set E2E_BASE=https://vgc-itsm1-app-staging.azurewebsites.net or ALLOW_PROD_E2E_WRITES=true to override.`);
+  process.exit(2);
+}
+// SECURITY (#8 follow-up, 2026-05-03): hardcoded fallback hash removed.
+// Set LOCAL_ADMIN_PASSWORD_HASH_HEX in your shell before running. The local-admin
+// auth path is disabled on production (LOCAL_ADMIN_PASSWORD_HASH unset there),
+// so this script only works against staging anyway.
+const AUTH_HASH = process.env.LOCAL_ADMIN_PASSWORD_HASH_HEX;
+if (!AUTH_HASH) {
+  console.error("[e2e-azure-test] LOCAL_ADMIN_PASSWORD_HASH_HEX env var not set. Aborting.");
+  process.exit(2);
+}
 const AUTH_HEADER = `Bearer local-hash:${AUTH_HASH}`;
 let pass = 0, fail = 0, tests = [];
 

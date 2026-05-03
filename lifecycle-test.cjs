@@ -2,7 +2,11 @@
 // Exercises ALL 4 Phases: Create → SLA → Approval → CMDB → Runbook → Resolve
 const https = require("https");
 
-const BASE = "https://vgc-itsm1-app.azurewebsites.net";
+const BASE = process.env.LIFECYCLE_BASE || "https://vgc-itsm1-app-staging.azurewebsites.net";
+if (/vgc-itsm1-app\.azurewebsites\.net/.test(BASE) && process.env.ALLOW_PROD_E2E_WRITES !== "true") {
+  console.error(`[lifecycle-test] Refusing to run against production (${BASE}). Set LIFECYCLE_BASE to staging or ALLOW_PROD_E2E_WRITES=true.`);
+  process.exit(2);
+}
 const TEST_ID = "INC-TEST-VPN-001";
 // Local admin auth: uses the SHA-256 hash from LOCAL_ADMIN_PASSWORD_HASH env var
 const AUTH_TOKEN = process.env.TEST_AUTH_TOKEN || "";
@@ -25,7 +29,7 @@ function request(method, path, body) {
       res.on("data", c => buf += c);
       res.on("end", () => {
         let json = {};
-        try { json = JSON.parse(buf); } catch {}
+        try { json = JSON.parse(buf); } catch { /* ignore */ }
         resolve({ status: res.statusCode, json, body: buf });
       });
     });

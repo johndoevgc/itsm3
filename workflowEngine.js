@@ -54,7 +54,7 @@ class WorkflowEngine {
             return; // no changes — skip entire cycle
           }
           this._lastDataHash = hash;
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // Load ALL open incidents ONCE for the entire cycle
@@ -180,7 +180,7 @@ class WorkflowEngine {
           req.end();
 
           this._log("action", "AUTO_RESOLVE", `Triggered auto-resolve for idle incident ${inc.id} (idle ${Math.round(idle / 3600000)}h)`);
-        } catch {}
+        } catch { /* ignore */ }
       }
     } catch (err) {
       console.warn("[WorkflowEngine] Auto-resolve scan error:", err.message);
@@ -280,7 +280,7 @@ class WorkflowEngine {
               incidentId: inc.id,
             }).catch(() => {});
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
     } catch (err) {
       this._log("error", rule.id, `Auto-close scan failed: ${err.message}`);
@@ -341,7 +341,7 @@ class WorkflowEngine {
               incidentId: inc.id,
             }).catch(() => {});
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
     } catch (err) {
       this._log("error", rule.id, `Auto-escalation scan failed: ${err.message}`);
@@ -378,7 +378,7 @@ class WorkflowEngine {
               incidentId: sla.incidentId,
             }).catch(() => {});
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
     } catch (err) {
       this._log("error", rule.id, `SLA breach alert scan failed: ${err.message}`);
@@ -501,9 +501,9 @@ class WorkflowEngine {
 
             break; // only report first match
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   // ─── Execution log ────────────────────────────────────────────────────
@@ -558,7 +558,7 @@ class WorkflowEngine {
           const attained = slaItems.filter(s => !s.breached).length;
           slaAttainment = Math.round((attained / total) * 1000) / 10;
         }
-      } catch {}
+      } catch { /* ignore */ }
       if (closedToday.length > 0) {
         const total = closedToday.reduce((sum, i) => {
           const t = new Date(i.resolvedAt).getTime() - new Date(i.createdAt || i.resolvedAt).getTime();
@@ -577,7 +577,7 @@ class WorkflowEngine {
           const sum = recent.reduce((s, c) => s + (Number(c.rating) || 0), 0);
           csatAvg = Math.round((sum / recent.length) * 10) / 10;
         }
-      } catch {}
+      } catch { /* ignore */ }
 
       // Change freeze violations + total changes
       let totalChanges = 0, freezeViolations = 0;
@@ -586,7 +586,7 @@ class WorkflowEngine {
         const chItems = chRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(c => c && !c._deleted);
         totalChanges = chItems.length;
         freezeViolations = chItems.filter(c => c.freezeViolation === true).length;
-      } catch {}
+      } catch { /* ignore */ }
 
       const evidence = {
         id, date: dayKey, capturedAt: new Date().toISOString(),
@@ -603,7 +603,7 @@ class WorkflowEngine {
         signedBy: "system",
       };
       await this.db.upsert("compliance_evidence", id, JSON.stringify(evidence));
-      try { await this.db.audit("compliance_evidence", id, "snapshot", JSON.stringify(evidence.metrics), "system"); } catch {}
+      try { await this.db.audit("compliance_evidence", id, "snapshot", JSON.stringify(evidence.metrics), "system"); } catch { /* ignore */ }
       this._log("action", "COMPLIANCE_EVIDENCE", `Captured ${id}: SLA ${slaAttainment}%, MTTR ${mttrHours}h, CSAT ${csatAvg}`);
     } catch (err) {
       this._log("error", "COMPLIANCE_EVIDENCE", `Capture failed: ${err.message}`);
@@ -630,14 +630,14 @@ class WorkflowEngine {
       try {
         const slaRows = await this.db.getAll("sla_tracking");
         slaBreaches = slaRows.filter(r => { try { const s = JSON.parse(r.data); return s.status === "breached" && !s._deleted; } catch { return false; } }).length;
-      } catch {}
+      } catch { /* ignore */ }
 
       // Pending AI approvals
       let pendingAI = 0;
       try {
         const aiRows = await this.db.getAll("ai_resolve_queue");
         pendingAI = aiRows.filter(r => { try { const s = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return s.status === "pending"; } catch { return false; } }).length;
-      } catch {}
+      } catch { /* ignore */ }
 
       const summary = {
         date: todayStr,
