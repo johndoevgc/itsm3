@@ -238,8 +238,17 @@ function MessageCards({ cards, onAction, disabled }) {
     <div>
       {cards.map((c, i) => {
         if (c.type === "category-grid") {
-          return <CategoryGrid key={i} options={c.options} disabled={disabled}
-            onPick={v => onAction({ kind: c.kind, value: v })} />;
+          return (
+            <div key={i}>
+              {c.sectionLabel && (
+                <div style={{ fontSize: 10, color: "#5A6178", marginTop: 12, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  — {c.sectionLabel} —
+                </div>
+              )}
+              <CategoryGrid options={c.options} disabled={disabled}
+                onPick={v => onAction({ kind: c.kind, value: v })} />
+            </div>
+          );
         }
         if (c.type === "quick-reply") {
           return <QuickReplyChips key={i} options={c.options} disabled={disabled}
@@ -266,8 +275,113 @@ function MessageCards({ cards, onAction, disabled }) {
         if (c.type === "media") {
           return <MediaCard key={i} screenshotUrl={c.screenshotUrl} videoUrl={c.videoUrl} caption={c.caption} />;
         }
+        if (c.type === "recent-tickets") {
+          return <RecentTicketsCard key={i} tickets={c.tickets} newIssueLabel={c.newIssueLabel}
+            disabled={disabled} onAction={a => onAction(a)} />;
+        }
+        if (c.type === "form") {
+          return <FormCard key={i} formKey={c.formKey} title={c.title} fields={c.fields}
+            initialValues={c.initialValues} submitLabel={c.submitLabel}
+            disabled={disabled} onSubmit={vals => onAction({ kind: c.kind, value: { formKey: c.formKey, fields: vals } })} />;
+        }
         return null;
       })}
+    </div>
+  );
+}
+
+// ─── v3.30.0 cards ───────────────────────────────────────────────────────
+
+function RecentTicketsCard({ tickets, newIssueLabel, onAction, disabled }) {
+  const STATUS_COLOR = { Open: "#3B82F6", "In Progress": "#F59E0B", Resolved: "#22C55E", Closed: "#6B7280" };
+  return (
+    <div style={{
+      background: "#0A0C14", border: "1px solid #2A2F44", borderRadius: 8,
+      padding: 12, marginTop: 8,
+    }}>
+      <div style={{ fontSize: 11, color: "#A8B0C4", marginBottom: 8, fontWeight: 600 }}>
+        🕐 Your recent tickets — tap one if today's issue is the same
+      </div>
+      {tickets.map(t => (
+        <button
+          key={t.id}
+          disabled={disabled}
+          onClick={() => onAction({ kind: "link-existing", value: t.id })}
+          style={{
+            display: "block", width: "100%", textAlign: "left",
+            background: "#0F1117", border: "1px solid #1E2130", borderRadius: 6,
+            padding: "8px 10px", marginBottom: 6, cursor: disabled ? "default" : "pointer",
+            opacity: disabled ? 0.5 : 1,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#E8ECF4" }}>🎫 {t.id}</div>
+            <div style={{
+              background: (STATUS_COLOR[t.status] || "#6B7280") + "33",
+              color: STATUS_COLOR[t.status] || "#A8B0C4",
+              fontSize: 9, fontWeight: 700, borderRadius: 4, padding: "2px 6px",
+            }}>{t.status}</div>
+          </div>
+          <div style={{ fontSize: 11, color: "#A8B0C4", marginTop: 2 }}>{t.title}</div>
+        </button>
+      ))}
+      <button
+        disabled={disabled}
+        onClick={() => onAction({ kind: "link-existing", value: "new" })}
+        style={{
+          marginTop: 4, width: "100%",
+          background: "#1E2130", border: "1px solid #2A2F44", borderRadius: 6,
+          color: "#E8ECF4", padding: "8px 10px", fontSize: 11, fontWeight: 600,
+          cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+        }}
+      >{newIssueLabel || "🆕 No, this is a new issue"}</button>
+    </div>
+  );
+}
+
+function FormCard({ title, fields, initialValues, submitLabel, onSubmit, disabled }) {
+  const [values, setValues] = useState(() => {
+    const init = {};
+    for (const f of fields) init[f.key] = (initialValues && initialValues[f.key]) || "";
+    return init;
+  });
+  const update = (k, v) => setValues(prev => ({ ...prev, [k]: v }));
+  return (
+    <div style={{
+      background: "#0A0C14", border: "1px solid #2A2F44", borderRadius: 8,
+      padding: 12, marginTop: 8,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>📝 {title}</div>
+      {fields.map(f => (
+        <div key={f.key} style={{ marginBottom: 10 }}>
+          <label style={{ display: "block", fontSize: 10, color: "#A8B0C4", marginBottom: 4 }}>
+            {f.label}{f.required && <span style={{ color: "#EF4444" }}> *</span>}
+          </label>
+          <input
+            type="text"
+            value={values[f.key]}
+            onChange={e => update(f.key, e.target.value)}
+            placeholder={f.placeholder || ""}
+            disabled={disabled}
+            style={{
+              width: "100%", boxSizing: "border-box",
+              background: "#0F1117", border: "1px solid #1E2130", borderRadius: 6,
+              color: "#E8ECF4", padding: "8px 10px", fontSize: 12,
+              fontFamily: "'Space Grotesk', sans-serif",
+            }}
+          />
+        </div>
+      ))}
+      <button
+        disabled={disabled}
+        onClick={() => onSubmit(values)}
+        style={{
+          marginTop: 4, width: "100%",
+          background: "#22C55E", border: "none", borderRadius: 6,
+          color: "#fff", padding: "10px 14px", fontSize: 12, fontWeight: 700,
+          cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+        }}
+      >{submitLabel || "Submit"}</button>
     </div>
   );
 }
@@ -424,6 +538,26 @@ export function CustomerChatTab({ currentUser, showToast }) {
           ...prev,
           messages: d.message ? [...(prev.messages || []), d.message] : (prev.messages || []),
         }));
+        return;
+      }
+      // v3.30.0 — chained next-actions after CSAT thanks. Handled locally
+      // (no server round-trip) so the customer can flow into a new intake.
+      if (kind === "next-action") {
+        if (value === "log-another") {
+          // Soft-reset: start a brand-new session.
+          greetingFiredRef.current = false;
+          await startSession();
+          showToast?.("Started a new conversation", "info");
+          return;
+        }
+        if (value === "browse-kb") {
+          window.open("/docs/Customer-Quick-Guide.html", "_blank", "noopener,noreferrer");
+          return;
+        }
+        if (value === "talk-agent") {
+          await handleCardAction({ kind: "request-agent" });
+          return;
+        }
         return;
       }
       // All other intake-action kinds

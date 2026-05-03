@@ -613,6 +613,112 @@ describe("VGC AI Assist newTicketId format", () => {
   });
 });
 
+// ─── v3.30.0 — history-aware persona, forms, chained next-actions ────────
+describe("v3.30.0 history-aware greeting", () => {
+  function freshSession(history) {
+    return {
+      id: "s_h", channel: "customer", messages: [],
+      intake: defaultIntake(),
+      history: history || [],
+    };
+  }
+  it("uses default greeting + 2 cards when no history", () => {
+    const s = freshSession();
+    const m = advanceIntake(s, { kind: "start-greeting" }, "Alice");
+    expect(m.text).toMatch(/Hi Alice/);
+    expect(m.cards.length).toBe(2);
+    expect(m.cards.find(c => c.type === "recent-tickets")).toBeUndefined();
+  });
+  it("personalizes greeting + prepends recent-tickets card when open tickets exist", () => {
+    const hist = [
+      { id: "INC-001", title: "VPN issue",  status: "Open",       createdAt: "2026-05-01T10:00:00Z" },
+      { id: "INC-002", title: "Password",    status: "Resolved",  createdAt: "2026-04-28T10:00:00Z" },
+    ];
+    const s = freshSession(hist);
+    const m = advanceIntake(s, { kind: "start-greeting" }, "Alice");
+    expect(m.text).toMatch(/Welcome back Alice/);
+    expect(m.text).toMatch(/1 open ticket/);
+    expect(m.cards[0].type).toBe("recent-tickets");
+    expect(m.cards[0].tickets).toHaveLength(2);
+  });
+  it("link-existing with ticket id pivots to solution stage and binds ticketId", () => {
+    const s = freshSession([{ id: "INC-001", title: "X", status: "Open" }]);
+    advanceIntake(s, { kind: "start-greeting" }, "Bob");
+    const m = advanceIntake(s, { kind: "link-existing", value: "INC-001" });
+    expect(s.intake.stage).toBe("solution");
+    expect(s.intake.ticketId).toBe("INC-001");
+    expect(s.ticketId).toBe("INC-001");
+    expect(m.text).toMatch(/INC-001/);
+  });
+  it("link-existing 'new' returns to symptom selection", () => {
+    const s = freshSession([{ id: "INC-001", title: "X", status: "Open" }]);
+    advanceIntake(s, { kind: "start-greeting" }, "Bob");
+    const m = advanceIntake(s, { kind: "link-existing", value: "new" });
+    expect(m.cards.some(c => c.kind === "pick-symptom")).toBe(true);
+  });
+});
+
+describe("v3.30.0 conversational forms", () => {
+  function freshSession() {
+    return { id: "s_f", channel: "customer", messages: [], intake: defaultIntake() };
+  }
+  it("printer symptom renders a form card and pivots to form-fill", () => {
+    const s = freshSession();
+    advanceIntake(s, { kind: "start-greeting" }, "Alice");
+    const m = advanceIntake(s, { kind: "pick-symptom", value: "printer-offline" });
+    expect(s.intake.stage).toBe("form-fill");
+    expect(s.intake.pendingForm).toBe("printer-form");
+    expect(m.cards[0].type).toBe("form");
+    expect(m.cards[0].fields.length).toBeGreaterThan(0);
+  });
+  it("submit-form rejects when required fields missing and re-renders form", () => {
+    const s = freshSession();
+    s.intake.stage = "form-fill";
+    s.intake.pendingForm = "printer-form";
+    s.intake.fields.title = "Printer is offline / not responding";
+    s.intake.category = "Printer & Peripherals";
+    const m = advanceIntake(s, { kind: "submit-form", value: { formKey: "printer-form", fields: { errorMsg: "Jam" } } });
+    expect(s.intake.stage).toBe("form-fill"); // unchanged
+    expect(m.text).toMatch(/I still need/);
+    expect(m.cards[0].type).toBe("form");
+  });
+  it("submit-form with all required fields jumps directly to confirm with summary", () => {
+    const s = freshSession();
+    s.intake.stage = "form-fill";
+    s.intake.pendingForm = "printer-form";
+    s.intake.fields.title = "Printer is offline / not responding";
+    s.intake.category = "Printer & Peripherals";
+    const m = advanceIntake(s, {
+      kind: "submit-form",
+      value: { formKey: "printer-form", fields: { printerName: "HP-3F", location: "Level 3", errorMsg: "" } },
+    });
+    expect(s.intake.stage).toBe("confirm");
+    expect(s.intake.fields.printerName).toBe("HP-3F");
+    expect(s.intake.fields.impact).toBe("Significant slowdown");
+    expect(s.intake.fields.priority).toBe("Normal – within 2 days");
+    expect(s.intake.fields.description).toMatch(/Printer name.*HP-3F/);
+    expect(m.cards[0].type).toBe("intake-summary");
+  });
+});
+
+describe("v3.30.0 history → system prompt context", () => {
+  it("buildSystemPrompt includes CUSTOMER CONTEXT block when history provided", () => {
+    const { summarizeHistoryForPrompt } = createChatAssistRoutes.__internal;
+    const ctx = summarizeHistoryForPrompt([
+      { id: "INC-A", title: "VPN", status: "Open" },
+      { id: "INC-B", title: "Pwd", status: "Resolved" },
+    ]);
+    const prompt = buildSystemPrompt("customer", "en", ctx);
+    expect(prompt).toMatch(/CUSTOMER CONTEXT/);
+    expect(prompt).toMatch(/INC-A/);
+    expect(prompt).toMatch(/Welcome back/);
+  });
+  it("buildSystemPrompt without history is unchanged", () => {
+    const prompt = buildSystemPrompt("customer", "en", "");
+    expect(prompt).not.toMatch(/CUSTOMER CONTEXT/);
+  });
+});
+
 describe("VGC AI Assist /create-ticket endpoint", () => {
   async function setupCustomer() {
     await featureFlags.init({

@@ -221,7 +221,7 @@ const VGC_CUSTOMER_PERSONA = [
   "If the issue is outside your knowledge after a thorough KB check, say 'I'm checking further' or 'Let me connect you with an engineer' — never just 'I don't know'.",
 ].join(" ");
 
-function buildSystemPrompt(channel, lang) {
+function buildSystemPrompt(channel, lang, historyContext) {
   const base = channel === "customer" ? VGC_CUSTOMER_PERSONA : [
     "You are an IT service-desk co-pilot helping the on-call agent.",
     "Suggest the next best response or remediation step.",
@@ -230,8 +230,10 @@ function buildSystemPrompt(channel, lang) {
     "Keep replies under 120 words. Use markdown bullets when listing steps.",
   ].join(" ");
   const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "en";
-  if (useLang === "en") return base;
-  return `${base}\n\nIMPORTANT: Reply in ${LANG_NAMES[useLang]} (the language the customer is writing in). Keep KB IDs and ticket numbers in their original format.`;
+  const langSuffix = useLang === "en" ? "" :
+    `\n\nIMPORTANT: Reply in ${LANG_NAMES[useLang]} (the language the customer is writing in). Keep KB IDs and ticket numbers in their original format.`;
+  const histSuffix = historyContext ? `\n\n${historyContext}` : "";
+  return `${base}${histSuffix}${langSuffix}`;
 }
 
 // ─── VGC AI Assist intake state machine ──────────────────────────────────
@@ -384,6 +386,133 @@ const SELF_HELP_GUIDES = {
   },
 };
 
+// ─── Conversational forms (v3.30.0) ──────────────────────────────────────
+// Structured multi-field forms rendered as a single card. Used when the
+// engineer would otherwise have to ask for the same details over chat
+// (e.g., printer name + floor, software request fields). Tapping Submit
+// jumps the intake straight to the summary stage — no impact/priority
+// follow-up needed because the form already captures it (or it's inferred).
+const FORM_TEMPLATES = {
+  "printer-form": {
+    title: "Printer issue — quick form",
+    intro: "Tell me which printer and where it is, and I'll log it for you.",
+    fields: [
+      { key: "printerName", label: "Printer name or number", placeholder: "e.g. HP-Floor3-Reception",  required: true },
+      { key: "location",    label: "Floor or room",          placeholder: "e.g. Level 3, near pantry",  required: true },
+      { key: "errorMsg",    label: "Error on screen (if any)", placeholder: "e.g. PC LOAD LETTER",      required: false },
+    ],
+    impact: "Significant slowdown",
+    priority: "Normal – within 2 days",
+  },
+  "software-request-form": {
+    title: "Software install request",
+    intro: "Tell me what you need and I'll route it for approval.",
+    fields: [
+      { key: "softwareName", label: "Software name + version", placeholder: "e.g. Adobe Acrobat Pro 2024", required: true },
+      { key: "businessReason", label: "Why you need it (1 line)", placeholder: "e.g. Sign client contracts in PDF", required: true },
+      { key: "urgency",      label: "When do you need it by?", placeholder: "e.g. By Friday for client meeting", required: false },
+    ],
+    impact: "Minor inconvenience",
+    priority: "Normal – within 2 days",
+  },
+  "vpn-form": {
+    title: "VPN connection issue",
+    intro: "A few quick details so an engineer can help fast.",
+    fields: [
+      { key: "errorMsg",   label: "Error code or message",   placeholder: "e.g. Error 720 / Authentication failed", required: false },
+      { key: "vpnClient",  label: "VPN client you use",       placeholder: "e.g. Cisco AnyConnect, GlobalProtect", required: false },
+      { key: "location",   label: "Where are you connecting from?", placeholder: "e.g. Home (StarHub fibre), client site", required: false },
+    ],
+    impact: "Significant slowdown",
+    priority: "High – within today",
+  },
+  "access-request-form": {
+    title: "Access / permission request",
+    intro: "What do you need access to?",
+    fields: [
+      { key: "system",     label: "System or folder",       placeholder: "e.g. SharePoint Finance site, ERP module X", required: true },
+      { key: "accessType", label: "Type of access",          placeholder: "e.g. Read-only, edit, admin", required: true },
+      { key: "reason",     label: "Reason / approver",        placeholder: "e.g. Project ABC, approved by John Lim", required: true },
+    ],
+    impact: "Minor inconvenience",
+    priority: "Normal – within 2 days",
+  },
+  "phishing-form": {
+    title: "Suspicious email report",
+    intro: "Help us protect everyone — share what you can.",
+    fields: [
+      { key: "fromAddress", label: "Sender email address",      placeholder: "e.g. notmyceo@fakebank.com", required: true },
+      { key: "subject",     label: "Email subject line",         placeholder: "e.g. URGENT: Wire transfer needed", required: true },
+      { key: "didClick",    label: "Did you click any link or open attachment?", placeholder: "Yes / No", required: true },
+    ],
+    impact: "Significant slowdown",
+    priority: "Critical – need it now",
+  },
+};
+
+// Map symptom value → form template key. Symptoms not listed fall through
+// to the normal impact/priority flow.
+const SYMPTOM_FORM_MAP = {
+  "printer-offline":       "printer-form",
+  "paper-jam":             "printer-form",
+  "scanner-not-working":   "printer-form",
+  "need-software-install": "software-request-form",
+  "vpn-wont-connect":      "vpn-form",
+  "need-new-access":       "access-request-form",
+  "phishing-suspicious":   "phishing-form",
+};
+
+// ─── Customer history loader (v3.30.0) ───────────────────────────────────
+// Returns up to 5 of the customer's most recent tickets so we can:
+//   1. Personalize the greeting ("Welcome back — I see your ticket INC-…")
+//   2. Inject context into the AI system prompt for empathy/relevance
+//   3. Offer "Same issue?" linking instead of duplicate ticket creation
+async function loadCustomerHistory(db, customerEmail, limit = 5) {
+  if (!db || !customerEmail) return [];
+  try {
+    const rows = await db.getAll("incidents");
+    const mine = [];
+    for (const r of rows) {
+      try {
+        const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+        if (!t) continue;
+        const email = t.requesterEmail || t.reportedByEmail || t.requestedBy || t.reportedBy;
+        if (typeof email === "string" && email.toLowerCase() === customerEmail.toLowerCase()) {
+          mine.push({
+            id: t.id,
+            title: t.title || t.summary || "(no title)",
+            status: t.status || "Open",
+            severity: t.severity || t.priority || null,
+            createdAt: t.createdAt || t.created || t.timestamp || null,
+            resolvedAt: t.resolvedAt || null,
+          });
+        }
+      } catch { /* skip bad row */ }
+    }
+    mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    return mine.slice(0, limit);
+  } catch (err) {
+    console.warn("[ChatAssist] loadCustomerHistory failed:", err.message);
+    return [];
+  }
+}
+
+// Compact history → 1-line context for the AI system prompt.
+function summarizeHistoryForPrompt(history) {
+  if (!history || !history.length) return "";
+  const open = history.filter(t => !["Resolved", "Closed", "Cancelled"].includes(t.status));
+  const recent = history.slice(0, 3);
+  const lines = [
+    `CUSTOMER CONTEXT — this customer has logged ${history.length} ticket(s) in the past:`,
+    ...recent.map(t => `  - ${t.id} (${t.status}): ${t.title}`),
+  ];
+  if (open.length) {
+    lines.push(`They currently have ${open.length} OPEN ticket(s). Be empathetic; if today's issue resembles an open one, gently ask if it's related instead of treating it as new.`);
+  }
+  lines.push("Use 'Welcome back' tone. Reference past tickets only when it's clearly relevant — never quote private detail you can't see.");
+  return lines.join("\n");
+}
+
 // VGC AI Assist intake — kept intentionally short (4 questions, mostly
 // 1-tap) so customers can log a ticket in under 30 seconds. Detail beyond
 // title/description is captured later by the engineer or auto-extracted by
@@ -531,7 +660,6 @@ function advanceIntake(session, action, customerName) {
   const intake = session.intake;
   const kind = action?.kind;
   const value = action?.value;
-
   // Helper: emit prompt for a given field stage.
   const promptForStage = (stage) => {
     const idx = findFieldIndex(stage);
@@ -545,15 +673,58 @@ function advanceIntake(session, action, customerName) {
     case "start-greeting": {
       intake.stage = "category";
       const lang = intake.lang || "en";
-      const greeting = t("greetingTemplate", lang, firstName(customerName));
-      // Show TWO cards: the 30 quick-symptom shortcuts (most users) AND the
-      // 10 broad categories below for when nothing matches.
+      // v3.30.0 — personalized greeting if we have past tickets for this user.
+      const history = Array.isArray(session.history) ? session.history : [];
+      const openTickets = history.filter(t => !["Resolved", "Closed", "Cancelled"].includes(t.status));
+      let greeting;
+      if (history.length && lang === "en") {
+        const fname = firstName(customerName);
+        if (openTickets.length) {
+          greeting = `Welcome back ${fname} 👋 I see you have ${openTickets.length} open ticket${openTickets.length > 1 ? "s" : ""} with us. Is today's issue related to one of those, or is it something new?`;
+        } else {
+          greeting = `Welcome back ${fname} 👋 Good to see you again. What can I help you with today? Tap a symptom below to log a ticket in seconds.`;
+        }
+      } else {
+        greeting = t("greetingTemplate", lang, firstName(customerName));
+      }
+      const cards = [];
+      // History card first when relevant.
+      if (history.length) {
+        cards.push({
+          type: "recent-tickets",
+          kind: "link-existing",
+          tickets: history.slice(0, 3).map(t => ({
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            createdAt: t.createdAt,
+          })),
+          newIssueLabel: "🆕 No, this is a new issue",
+        });
+      }
+      cards.push({ type: "category-grid", kind: "pick-symptom",     options: SYMPTOM_OPTIONS });
+      cards.push({ type: "category-grid", kind: "select-category",  options: CATEGORY_OPTIONS, sectionLabel: "Or pick a broad category" });
+      return buildAssistantMessage({ text: greeting, cards });
+    }
+    case "link-existing": {
+      // Customer tapped one of their past tickets — bind the session to it
+      // and pivot to the SOLUTION stage so AI can pick up the conversation.
+      if (value === "new") {
+        // Treat as fresh start.
+        return buildAssistantMessage({
+          text: "No problem — let's log it as a new issue. Tap the symptom that best matches:",
+          cards: [
+            { type: "category-grid", kind: "pick-symptom",    options: SYMPTOM_OPTIONS },
+            { type: "category-grid", kind: "select-category", options: CATEGORY_OPTIONS, sectionLabel: "Or pick a broad category" },
+          ],
+        });
+      }
+      // value should be an existing ticket id
+      intake.ticketId = value;
+      intake.stage = "solution";
+      session.ticketId = value;
       return buildAssistantMessage({
-        text: greeting,
-        cards: [
-          { type: "category-grid", kind: "pick-symptom",     options: SYMPTOM_OPTIONS },
-          { type: "category-grid", kind: "select-category",  options: CATEGORY_OPTIONS, sectionLabel: "Or pick a broad category" },
-        ],
+        text: `Got it — I'll continue with ${value}. Tell me what's happening now and I'll suggest next steps based on what we've already tried.`,
       });
     }
     case "pick-symptom": {
@@ -564,6 +735,26 @@ function advanceIntake(session, action, customerName) {
       if (!sym) return null;
       intake.category = sym.category;
       intake.fields.title = sym.title;
+      // v3.30.0 — if this symptom has a structured form template, render it
+      // INSTEAD of asking impact/priority. The form already has implicit
+      // priority defaults baked in, so submitting jumps straight to summary.
+      const formKey = SYMPTOM_FORM_MAP[sym.value];
+      if (formKey && FORM_TEMPLATES[formKey]) {
+        const tpl = FORM_TEMPLATES[formKey];
+        intake.pendingForm = formKey;
+        intake.stage = "form-fill";
+        return buildAssistantMessage({
+          text: tpl.intro,
+          cards: [{
+            type: "form",
+            kind: "submit-form",
+            formKey,
+            title: tpl.title,
+            fields: tpl.fields,
+            submitLabel: "✅ Submit & log ticket",
+          }],
+        });
+      }
       // If a self-help guide exists for this symptom, offer it BEFORE
       // collecting impact/priority. Customer can either try it (and skip
       // the ticket entirely if it works) or proceed straight to the ticket.
@@ -590,6 +781,42 @@ function advanceIntake(session, action, customerName) {
       return buildAssistantMessage({
         text: `Got it — I'll log this as "${sym.title}". One quick question:`,
         cards: [{ type: "quick-reply", kind: "pick-impact", options: IMPACT_OPTIONS }],
+      });
+    }
+    case "submit-form": {
+      // value is { formKey, fields: { ... } }
+      const formKey = value?.formKey || intake.pendingForm;
+      const tpl = FORM_TEMPLATES[formKey];
+      if (!tpl) return null;
+      const inputs = (value && value.fields) || {};
+      // Validate required fields.
+      const missing = tpl.fields.filter(f => f.required && !String(inputs[f.key] || "").trim());
+      if (missing.length) {
+        return buildAssistantMessage({
+          text: `I still need: ${missing.map(f => f.label).join(", ")}. Please complete those fields and submit again.`,
+          cards: [{
+            type: "form", kind: "submit-form", formKey,
+            title: tpl.title, fields: tpl.fields, submitLabel: "✅ Submit & log ticket",
+            initialValues: inputs,
+          }],
+        });
+      }
+      // Persist all form values into intake.fields and apply implicit
+      // impact/priority. Build a description from the form data.
+      for (const f of tpl.fields) {
+        if (inputs[f.key]) intake.fields[f.key] = String(inputs[f.key]).slice(0, 1000);
+      }
+      const descLines = tpl.fields
+        .filter(f => inputs[f.key])
+        .map(f => `${f.label}: ${inputs[f.key]}`);
+      intake.fields.description = descLines.join("\n");
+      intake.fields.impact   = intake.fields.impact   || tpl.impact;
+      intake.fields.priority = intake.fields.priority || tpl.priority;
+      intake.stage = "confirm";
+      intake.pendingForm = null;
+      return buildAssistantMessage({
+        text: "Perfect — I've got everything I need. Here's a quick summary, tap to confirm:",
+        cards: [summaryCard(intake)],
       });
     }
     case "try-self-help": {
@@ -837,6 +1064,13 @@ module.exports = function createChatAssistRoutes(ctx) {
           customerCompany: body.customerCompany || null,
           customerEmail: body.customerEmail || null,
         };
+        // v3.30.0 — history-aware persona: load past tickets for this
+        // customer so the greeting and AI prompt can be personalized.
+        if (channel === "customer" && session.customerEmail) {
+          try {
+            session.history = await loadCustomerHistory(db, session.customerEmail, 5);
+          } catch { session.history = []; }
+        }
         await saveSession(db, session);
         await db.audit(SESSION_COLLECTION, session.id, "create",
           JSON.stringify({ channel, ticketId: session.ticketId }), session.createdBy);
@@ -939,7 +1173,8 @@ module.exports = function createChatAssistRoutes(ctx) {
 
         // AI call — keep options minimal (no temperature; GPT-5.4 rejects it)
         const lang = session.intake?.lang || "en";
-        const sysPrompt = buildSystemPrompt(session.channel, lang);
+        const histCtx = session.channel === "customer" ? summarizeHistoryForPrompt(session.history) : "";
+        const sysPrompt = buildSystemPrompt(session.channel, lang, histCtx);
         const userPrompt = buildUserPrompt(session, kbContext, redacted);
         let replyText = "";
         let aiOk = false;
@@ -1372,6 +1607,17 @@ module.exports = function createChatAssistRoutes(ctx) {
           text: r >= 4
             ? t("csatThanksHigh", session.intake?.lang || "en")
             : t("csatThanksLow", session.intake?.lang || "en"),
+          // v3.30.0 — keep the conversation alive: offer next-best actions
+          // instead of a dead-end. Frontend handles each kind locally.
+          cards: [{
+            type: "quick-reply",
+            kind: "next-action",
+            options: [
+              { value: "log-another", label: "🆕 Log another issue",      icon: null },
+              { value: "browse-kb",   label: "📚 Browse self-help articles", icon: null },
+              { value: "talk-agent",  label: "👤 Talk to an engineer",     icon: null },
+            ],
+          }],
         });
         session.messages = session.messages || [];
         session.messages.push(thanksMsg);
@@ -1575,6 +1821,10 @@ module.exports.__internal = {
   PRIORITY_OPTIONS,
   SYMPTOM_OPTIONS,
   SELF_HELP_GUIDES,
+  FORM_TEMPLATES,
+  SYMPTOM_FORM_MAP,
+  loadCustomerHistory,
+  summarizeHistoryForPrompt,
   SLA_BY_SEVERITY,
   VGC_CUSTOMER_PERSONA,
   // i18n
