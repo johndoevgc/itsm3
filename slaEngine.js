@@ -199,17 +199,48 @@ class SlaEngine {
     this.lastRun = null;
     this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0, cyclesSkipped: 0, lastCycleMs: 0 };
     this.onBreach = options.onBreach || null; // callback(escalation) for notification
-    this._notifiedBreaches = new Set(); // dedup: track incident IDs already notified this session
+    this._notifiedBreaches = new Set(); // dedup: track incident IDs already notified — restored from DB on start()
     this._lastDataHash = null; // change-detection
+    // v3.24: by default use computeSlaStatus_v2 (worst-of response/resolution).
+    // Set feature flag `sla_v1_legacy` to roll back. Read once per cycle.
+    this._useV1 = false;
   }
 
   async start() {
     console.log(`[SLA Engine] Started — checking every ${this.interval / 60000} minutes`);
     // Load custom policy from DB if saved
     await this.loadPolicy();
+    // v3.24 Phase A1: restore breach-notification dedup so a process restart
+    // doesn't re-fire alerts for incidents already notified within the last 7 days.
+    await this._restoreNotifiedBreaches();
     // Run immediately, then on interval
     await this.runCycle();
     this.timer = setInterval(() => this.runCycle(), this.interval);
+  }
+
+  // v3.24 Phase A1: persisted breach dedup. Stored in `sla_breach_notifications`
+  // collection: { id: incidentId, notifiedAt, hoursElapsed }.
+  async _restoreNotifiedBreaches() {
+    try {
+      if (!this.db || !this.db.getAll) return;
+      const rows = await this.db.getAll("sla_breach_notifications");
+      const cutoffMs = Date.now() - 7 * 86400000;
+      let restored = 0;
+      for (const r of rows) {
+        try {
+          const rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!rec || !rec.id) continue;
+          const notifiedMs = rec.notifiedAt ? new Date(rec.notifiedAt).getTime() : 0;
+          if (notifiedMs >= cutoffMs) {
+            this._notifiedBreaches.add(rec.id);
+            restored++;
+          }
+        } catch { /* ignore */ }
+      }
+      if (restored > 0) console.log(`[SLA Engine] Restored ${restored} breach-dedup entries from DB`);
+    } catch (err) {
+      console.warn("[SLA Engine] Could not restore breach dedup:", err.message);
+    }
   }
 
   stop() {
@@ -316,30 +347,13 @@ class SlaEngine {
         // Use per-customer SLA policy if available
         const incPolicy = this.getPolicyForIncident(inc);
 
-        // Phase 2 shadow mode: when `shadow_sla_v2` flag is on, use v2 directly
-        // (promoted from shadow to production). Otherwise fall back to v1.
-        const v2On = _featureFlags && _featureFlags.isEnabled("shadow_sla_v2");
-        let sla;
-        if (v2On && _shadow) {
-          sla = await _shadow.run({
-            name:      "shadow_sla_v2",
-            enabled:   true,
-            control:   () => computeSlaStatus_v2(inc, incPolicy),
-            candidate: () => computeSlaStatus(inc, incPolicy),
-            keys:      ["status", "breached", "hoursElapsed", "firstResponseTarget", "worstResponseTarget"],
-            onDiff:    async (d) => {
-              try {
-                await this.db.upsert("shadow_diffs", `sla_${inc.id}_${Date.now()}`, JSON.stringify({
-                  flag: "shadow_sla_v2", incidentId: inc.id, ...d, at: new Date().toISOString(),
-                }));
-              } catch { /* non-fatal */ }
-            },
-          });
-        } else if (v2On) {
-          sla = computeSlaStatus_v2(inc, incPolicy);
-        } else {
-          sla = computeSlaStatus(inc, incPolicy);
-        }
+        // v3.24 Phase A2: v2 (worst-of response/resolution) is now DEFAULT.
+        // Roll back via feature flag `sla_v1_legacy`. The `shadow_sla_v2` flag is
+        // retained for compat but no longer changes behavior since v2 is default.
+        const useV1 = _featureFlags && _featureFlags.isEnabled("sla_v1_legacy");
+        const sla = useV1
+          ? computeSlaStatus(inc, incPolicy)
+          : computeSlaStatus_v2(inc, incPolicy);
 
         // Collect SLA tracking update (batch later)
         slaUpdates.push({ id: inc.id, data: {
@@ -358,7 +372,7 @@ class SlaEngine {
           // Auto-escalate on breach — deduplicate to avoid notification flood
           if (!this._notifiedBreaches.has(inc.id)) {
             this._notifiedBreaches.add(inc.id);
-            escalations.push({
+            const esc = {
               id: `ESC-${inc.id}-${Date.now()}`,
               incidentId: inc.id,
               title: inc.title,
@@ -367,7 +381,15 @@ class SlaEngine {
               reason: `SLA breached — ${sla.hoursElapsed}h elapsed vs ${sla.worstResponseTarget}h target`,
               type: "sla_breach",
               timestamp: now.toISOString(),
-            });
+            };
+            escalations.push(esc);
+            // v3.24 Phase A1: persist dedup record so process restart doesn't re-fire.
+            try {
+              await this.db.upsert("sla_breach_notifications", inc.id, JSON.stringify({
+                id: inc.id, notifiedAt: now.toISOString(), hoursElapsed: sla.hoursElapsed,
+                worstResponseTarget: sla.worstResponseTarget, priority: inc.priority,
+              }));
+            } catch { /* non-fatal */ }
             escalated++;
           }
         }
@@ -442,8 +464,8 @@ class SlaEngine {
       let openAtRisk = 0, openBreached = 0;
       for (const inc of open) {
         const policy = this.getPolicyForIncident(inc);
-        const v2On = _featureFlags && _featureFlags.isEnabled("shadow_sla_v2");
-        const sla = v2On ? computeSlaStatus_v2(inc, policy) : computeSlaStatus(inc, policy);
+        const useV1 = _featureFlags && _featureFlags.isEnabled("sla_v1_legacy");
+        const sla = useV1 ? computeSlaStatus(inc, policy) : computeSlaStatus_v2(inc, policy);
         if (sla.status === "at_risk" || sla.status === "critical") openAtRisk++;
         if (sla.breached) openBreached++;
       }

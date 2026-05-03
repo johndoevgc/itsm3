@@ -410,6 +410,63 @@ describe("SlaEngine", () => {
     expect(onBreach).toHaveBeenCalledTimes(1);
   });
 
+  // v3.24 Phase A1 — persisted dedup
+  it("persists breach notification record to sla_breach_notifications collection", async () => {
+    mockDb.getMaxUpdatedAt.mockResolvedValueOnce("hash-x");
+    const incident = { id: "INC-PERSIST", priority: "Sev-A", status: "Open", createdAt: 50 };
+    mockDb.getOpen.mockResolvedValue([{ data: JSON.stringify(incident) }]);
+    const engine = new SlaEngine(mockDb, { onBreach: vi.fn() });
+    await engine.runCycle();
+    // Look for an upsert into sla_breach_notifications keyed by incident id
+    const persisted = mockDb.upsert.mock.calls.find(
+      c => c[0] === "sla_breach_notifications" && c[1] === "INC-PERSIST",
+    );
+    expect(persisted).toBeTruthy();
+    const rec = JSON.parse(persisted[2]);
+    expect(rec.id).toBe("INC-PERSIST");
+    expect(rec.priority).toBe("Sev-A");
+    expect(rec.notifiedAt).toBeTruthy();
+  });
+
+  it("restores breach dedup from DB on start, suppressing re-notification", async () => {
+    // Simulate a prior breach notification within retention window
+    const recentlyNotified = {
+      id: "INC-RESTORED",
+      notifiedAt: new Date().toISOString(),
+      hoursElapsed: 50,
+      worstResponseTarget: 4,
+      priority: "Sev-A",
+    };
+    mockDb.getAll.mockImplementation((coll) => {
+      if (coll === "sla_breach_notifications") return Promise.resolve([{ data: JSON.stringify(recentlyNotified) }]);
+      return Promise.resolve([]);
+    });
+    mockDb.getMaxUpdatedAt.mockResolvedValueOnce("hash-r");
+    mockDb.getOpen.mockResolvedValue([{ data: JSON.stringify({ id: "INC-RESTORED", priority: "Sev-A", status: "Open", createdAt: 50 }) }]);
+
+    const onBreach = vi.fn();
+    const engine = new SlaEngine(mockDb, { onBreach });
+    // Manually invoke restore + cycle (start() also registers a setInterval; avoid that)
+    await engine._restoreNotifiedBreaches();
+    await engine.runCycle();
+    expect(onBreach).not.toHaveBeenCalled();
+  });
+
+  it("ignores stale dedup entries older than 7 days on restore", async () => {
+    const stale = {
+      id: "INC-STALE",
+      notifiedAt: new Date(Date.now() - 10 * 86400000).toISOString(),
+      priority: "Sev-A",
+    };
+    mockDb.getAll.mockImplementation((coll) => {
+      if (coll === "sla_breach_notifications") return Promise.resolve([{ data: JSON.stringify(stale) }]);
+      return Promise.resolve([]);
+    });
+    const engine = new SlaEngine(mockDb);
+    await engine._restoreNotifiedBreaches();
+    expect(engine._notifiedBreaches.has("INC-STALE")).toBe(false);
+  });
+
   it("getStats returns current stats with policy", () => {
     const engine = new SlaEngine(mockDb);
     const stats = engine.getStats();
