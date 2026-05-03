@@ -100,9 +100,27 @@ module.exports = function createAIRoutes(ctx) {
 - Top at-risk assignees: ${summary.topAtRiskAssignees.map(c => `${c.name}(${c.count})`).join(", ") || "none"}
 Worst offenders:
 ${top || "none"}`;
-        const aiRes = await callAI(sys, user, { tier: "primary", maxTokens: 800, timeout: 25000 });
-        aiModel = aiRes && (aiRes.model || aiRes.modelId) || null;
-        const text = (aiRes && aiRes.text) || extractAIText(aiRes) || "";
+        const aiPayload = { model: ctx.AZURE_OPENAI_MODEL, input: [{ role: "system", content: sys }, { role: "user", content: user }], max_output_tokens: 800 };
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({
+            hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search,
+            method: "POST",
+            headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY },
+          }, (aiResp) => {
+            let data = ""; aiResp.on("data", c => data += c);
+            aiResp.on("end", () => {
+              if (aiResp.statusCode >= 200 && aiResp.statusCode < 300) resolve(JSON.parse(data));
+              else reject(new Error(`Azure OpenAI ${aiResp.statusCode}: ${data.substring(0, 300)}`));
+            });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(25000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (25s)")); });
+          aiReq.write(JSON.stringify(aiPayload));
+          aiReq.end();
+        });
+        aiModel = ctx.AZURE_OPENAI_MODEL;
+        const text = extractAIText(aiResult) || "";
         const m = text.match(/\{[\s\S]*\}$/);
         if (m) {
           try {
