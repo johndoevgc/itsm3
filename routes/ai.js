@@ -2565,6 +2565,38 @@ Respond with ONLY valid JSON (no markdown):
         if (!Array.isArray(predictions)) predictions = [predictions];
       } catch { predictions = []; }
 
+      // D16 — Track every prediction for forecast-accuracy analysis (precision/recall).
+      // Fire-and-forget: failures here must not block the response.
+      const predictedAtIso = new Date().toISOString();
+      const trackingModel = getAIModel("secondary");
+      Promise.all(predictions.map(async (pred) => {
+        if (!pred || !pred.ticketId) return;
+        try {
+          // Parse "Xh Ym" / "Xh" / "Xm" / number into hours
+          let horizonHours = 0;
+          const raw = pred.predictedBreachIn;
+          if (typeof raw === "number") horizonHours = raw;
+          else if (typeof raw === "string") {
+            const hMatch = raw.match(/(\d+(?:\.\d+)?)\s*h/i);
+            const mMatch = raw.match(/(\d+(?:\.\d+)?)\s*m/i);
+            if (hMatch) horizonHours += parseFloat(hMatch[1]);
+            if (mMatch) horizonHours += parseFloat(mMatch[1]) / 60;
+          }
+          const id = `PRED-${pred.ticketId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          await db.upsert("sla_predictions", id, JSON.stringify({
+            id,
+            incidentId: pred.ticketId,
+            predictedAt: predictedAtIso,
+            predictedBreach: (pred.breachProbability || 0) >= 50,
+            predictedHorizonHours: horizonHours,
+            confidence: Number(pred.breachProbability || 0),
+            model: trackingModel,
+          }));
+        } catch (e) {
+          console.warn("[AI SLA Predict] track failed:", e.message);
+        }
+      })).catch(() => {});
+
       const now = new Date().toISOString();
       const actions = [];
       // Unified dedup: use shared helper + per-incident cap

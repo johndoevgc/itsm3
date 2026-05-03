@@ -61,6 +61,89 @@ const SLAModule = useStableComponent(() => {
     const id = setInterval(fetchAiInsights, 5 * 60 * 1000); // refresh every 5 min
     return () => clearInterval(id);
   }, [fetchAiInsights]);
+
+  // ─── Phase D Ops Panels: Forensics, Extension Candidates, Reassign Suggestions ──
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [forensics, setForensics] = useState(null);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [extendCandidates, setExtendCandidates] = useState([]);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [reassignSuggestions, setReassignSuggestions] = useState([]);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [opsLoading, setOpsLoading] = useState(false);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [opsError, setOpsError] = useState(null);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const fetchOpsPanels = useCallback(async () => {
+    setOpsLoading(true);
+    setOpsError(null);
+    try {
+      const [fRes, eRes, rRes] = await Promise.all([
+        fetch("/api/sla/forensics?days=30"),
+        fetch("/api/sla/extend-candidates"),
+        fetch("/api/sla/reassign-suggestions"),
+      ]);
+      if (fRes.ok) setForensics(await fRes.json());
+      if (eRes.ok) {
+        const j = await eRes.json();
+        setExtendCandidates(Array.isArray(j.candidates) ? j.candidates : (Array.isArray(j) ? j : []));
+      }
+      if (rRes.ok) {
+        const j = await rRes.json();
+        setReassignSuggestions(Array.isArray(j.suggestions) ? j.suggestions : (Array.isArray(j) ? j : []));
+      }
+    } catch (e) {
+      setOpsError(e.message);
+    } finally {
+      setOpsLoading(false);
+    }
+  }, []);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    fetchOpsPanels();
+    const id = setInterval(fetchOpsPanels, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [fetchOpsPanels]);
+
+  const applyReassign = async (incidentId, newAssignee) => {
+    if (!incidentId || !newAssignee) return;
+    if (!window.confirm(`Reassign ${incidentId} to ${newAssignee}?`)) return;
+    try {
+      const r = await fetch(`/api/db/incidents/${encodeURIComponent(incidentId)}`);
+      if (!r.ok) throw new Error(`load ${r.status}`);
+      const row = await r.json();
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : (row.data || row);
+      inc.assignee = newAssignee;
+      inc.activityLog = Array.isArray(inc.activityLog) ? inc.activityLog : [];
+      inc.activityLog.push({
+        ts: new Date().toISOString(),
+        user: currentUser?.email || "ops",
+        action: "reassign",
+        note: `Reassigned to ${newAssignee} via SLA Reassign Suggestions`,
+      });
+      const save = await fetch("/api/db/incidents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: inc.id, data: JSON.stringify(inc) }),
+      });
+      if (!save.ok) throw new Error(`save ${save.status}`);
+      showToast(`Reassigned ${incidentId} → ${newAssignee}`, "success");
+      fetchOpsPanels();
+    } catch (e) {
+      showToast(`Reassign failed: ${e.message}`, "error");
+    }
+  };
+
+  const causeLabels = {
+    no_assignee: "No assignee",
+    no_first_response: "No first response",
+    long_pending_state: "Long pending state",
+    afterhours_creation: "After-hours creation",
+    weekend_creation: "Weekend creation",
+    priority_drift: "Priority drift",
+    stale_no_activity_24h: "Stale (>24h no activity)",
+    other: "Other",
+  };
   // Phase 8 — tighten SLA scope. Exclude:
   // - already Resolved/Closed/Cancelled
   // - historicalClose / archived flags (defensive — should already be Closed)
@@ -252,6 +335,116 @@ const SLAModule = useStableComponent(() => {
         {!aiInsightsError && !aiInsights && aiInsightsLoading && (
           <div style={{ fontSize: 12, color: "#A0AEC0", textAlign: "center", padding: 20 }}>Analyzing open incidents...</div>
         )}
+      </div>
+
+      {/* ─── Phase D Ops Panels ──────────────────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 16, marginBottom: 20 }}>
+        {/* Forensics */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FF634722", padding: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <h3 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🔍 Breach Forensics (last 30d)</h3>
+            <button style={{ ...btnStyle("#FF6347"), fontSize: 10, padding: "4px 10px", opacity: opsLoading ? 0.6 : 1 }} onClick={fetchOpsPanels} disabled={opsLoading}>
+              {opsLoading ? "⏳" : "🔄"}
+            </button>
+          </div>
+          {opsError && <div style={{ fontSize: 11, color: "#FF6B6B", marginBottom: 8 }}>{opsError}</div>}
+          {forensics ? (
+            <>
+              <div style={{ fontSize: 11, color: "#8B92A8", marginBottom: 10, fontFamily: "'JetBrains Mono', monospace" }}>
+                {forensics.totalBreaches || 0} breach{(forensics.totalBreaches || 0) !== 1 ? "es" : ""} · window {forensics.windowDays || 30}d
+              </div>
+              {Array.isArray(forensics.topCauses) && forensics.topCauses.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                  {forensics.topCauses.slice(0, 5).map((c, i) => {
+                    const pct = forensics.totalBreaches ? Math.round((c.count / forensics.totalBreaches) * 100) : 0;
+                    return (
+                      <div key={c.cause || i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 4, borderLeft: "3px solid #FF6347" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600 }}>{causeLabels[c.cause] || c.cause}</div>
+                          <div style={{ background: "#1E2130", height: 3, borderRadius: 2, marginTop: 4, overflow: "hidden" }}>
+                            <div style={{ width: `${pct}%`, height: "100%", background: "#FF6347" }} />
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#FF6347", fontFamily: "'JetBrains Mono', monospace", minWidth: 36, textAlign: "right" }}>{c.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "#5A6178", textAlign: "center", padding: 16 }}>No breaches in window 🎉</div>
+              )}
+              {Array.isArray(forensics.samples) && forensics.samples.length > 0 && (
+                <details>
+                  <summary style={{ fontSize: 10, color: "#8B92A8", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>Sample tickets ({forensics.samples.length})</summary>
+                  <div style={{ marginTop: 8, maxHeight: 180, overflow: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                    {forensics.samples.slice(0, 25).map(s => (
+                      <div key={s.id} style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: "#A0AEC0", padding: "3px 6px" }}>
+                        <span style={{ color: "#A78BFA" }}>{s.id}</span> · <span style={{ color: "#FFB347" }}>{(s.causes || []).join(", ")}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 11, color: "#5A6178", textAlign: "center", padding: 16 }}>{opsLoading ? "Loading..." : "No data"}</div>
+          )}
+        </div>
+
+        {/* Reassign Suggestions */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #4CAF5022", padding: 18 }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>🔄 Reassign Suggestions ({reassignSuggestions.length})</h3>
+          {reassignSuggestions.length === 0 ? (
+            <div style={{ fontSize: 11, color: "#5A6178", textAlign: "center", padding: 16 }}>{opsLoading ? "Loading..." : "No suggestions — workload balanced"}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflow: "auto" }}>
+              {reassignSuggestions.slice(0, 10).map(s => (
+                <div key={s.incidentId || s.id} style={{ padding: "8px 12px", background: "#0A0C14", borderRadius: 4, borderLeft: "3px solid #4CAF50" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", color: "#A78BFA", fontWeight: 600 }}>{s.incidentId || s.id}</span>
+                    <span style={{ fontSize: 10, color: "#FFB347" }}>{s.priority || ""}</span>
+                    <span style={{ flex: 1, fontSize: 10, color: "#8B92A8", fontFamily: "'JetBrains Mono', monospace" }}>{s.reason || ""}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+                    <span style={{ color: "#5A6178" }}>{s.currentAssignee || "unassigned"}</span>
+                    <span style={{ color: "#5A6178" }}>→</span>
+                    <span style={{ color: "#4CAF50", fontWeight: 600 }}>{s.suggestedAssignee || "—"}</span>
+                    {s.suggestedAssignee && (
+                      <button
+                        style={{ ...btnStyle("#4CAF50"), fontSize: 10, padding: "3px 10px", marginLeft: "auto" }}
+                        onClick={() => applyReassign(s.incidentId || s.id, s.suggestedAssignee)}
+                      >
+                        Apply
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Extension Candidates */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #FFB34722", padding: 18 }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⏸️ SLA Extension Candidates ({extendCandidates.length})</h3>
+          {extendCandidates.length === 0 ? (
+            <div style={{ fontSize: 11, color: "#5A6178", textAlign: "center", padding: 16 }}>{opsLoading ? "Loading..." : "No incidents stuck in blocked states"}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflow: "auto" }}>
+              {extendCandidates.slice(0, 12).map(c => (
+                <div key={c.id} style={{ padding: "6px 10px", background: "#0A0C14", borderRadius: 4, borderLeft: "3px solid #FFB347", display: "flex", alignItems: "center", gap: 10, fontSize: 11 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#A78BFA", fontWeight: 600, minWidth: 90 }}>{c.id}</span>
+                  <span style={{ color: "#FFB347", minWidth: 70 }}>{c.status || "—"}</span>
+                  <span style={{ color: "#8B92A8", fontFamily: "'JetBrains Mono', monospace" }}>{(c.ageHours != null ? c.ageHours : c.elapsedHours || 0).toFixed ? (c.ageHours != null ? c.ageHours : c.elapsedHours).toFixed(1) : (c.ageHours || c.elapsedHours || 0)}h</span>
+                  <span style={{ flex: 1, color: "#C4CAD6", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.title || ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 9, color: "#5A6178", marginTop: 8, fontFamily: "'JetBrains Mono', monospace" }}>
+            Open in blocked state &gt;4h. Pause manually from incident detail.
+          </div>
+        </div>
       </div>
 
       {/* Severity SLA Targets Overview */}
