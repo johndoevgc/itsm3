@@ -961,24 +961,47 @@ async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
 
-    // Phase 6 — Generated columns + indexes for common JSON field queries
-    const alterStmts = [
-      "ALTER TABLE itsm_data ADD COLUMN IF NOT EXISTS gen_status VARCHAR(32) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(data, '$.status'))) STORED",
-      "ALTER TABLE itsm_data ADD COLUMN IF NOT EXISTS gen_priority VARCHAR(16) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(data, '$.priority'))) STORED",
-      "ALTER TABLE itsm_data ADD COLUMN IF NOT EXISTS gen_assignee VARCHAR(128) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(data, '$.assignee'))) STORED",
+    // Phase 6 — Generated columns + indexes for common JSON field queries.
+    // NOTE: MySQL 8.x does NOT support `ADD COLUMN IF NOT EXISTS` or
+    // `CREATE INDEX IF NOT EXISTS` (those are MariaDB extensions). We must
+    // probe INFORMATION_SCHEMA and only issue the DDL when missing.
+    const dbName = process.env.MYSQL_DB || "itsmdb";
+    const colDefs = [
+      { name: "gen_status",   table: "itsm_data", ddl: "ALTER TABLE itsm_data ADD COLUMN gen_status VARCHAR(32) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(data, '$.status'))) STORED" },
+      { name: "gen_priority", table: "itsm_data", ddl: "ALTER TABLE itsm_data ADD COLUMN gen_priority VARCHAR(16) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(data, '$.priority'))) STORED" },
+      { name: "gen_assignee", table: "itsm_data", ddl: "ALTER TABLE itsm_data ADD COLUMN gen_assignee VARCHAR(128) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(data, '$.assignee'))) STORED" },
     ];
-    const idxStmts = [
-      "CREATE INDEX IF NOT EXISTS idx_gen_status ON itsm_data (collection, gen_status)",
-      "CREATE INDEX IF NOT EXISTS idx_gen_priority ON itsm_data (collection, gen_priority)",
-      "CREATE INDEX IF NOT EXISTS idx_gen_assignee ON itsm_data (collection, gen_assignee)",
-      "CREATE INDEX IF NOT EXISTS idx_coll_updated ON itsm_data (collection, updated_at DESC)",
-      "CREATE INDEX IF NOT EXISTS idx_audit_coll_ts ON audit_log (collection, timestamp DESC)",
+    const idxDefs = [
+      { name: "idx_gen_status",    table: "itsm_data", ddl: "CREATE INDEX idx_gen_status ON itsm_data (collection, gen_status)" },
+      { name: "idx_gen_priority",  table: "itsm_data", ddl: "CREATE INDEX idx_gen_priority ON itsm_data (collection, gen_priority)" },
+      { name: "idx_gen_assignee",  table: "itsm_data", ddl: "CREATE INDEX idx_gen_assignee ON itsm_data (collection, gen_assignee)" },
+      { name: "idx_coll_updated",  table: "itsm_data", ddl: "CREATE INDEX idx_coll_updated ON itsm_data (collection, updated_at DESC)" },
+      { name: "idx_audit_coll_ts", table: "audit_log", ddl: "CREATE INDEX idx_audit_coll_ts ON audit_log (collection, timestamp DESC)" },
     ];
-    for (const stmt of [...alterStmts, ...idxStmts]) {
-      try { await pool.execute(stmt); } catch (e) {
-        if (!e.message.includes("Duplicate") && !e.message.includes("already exists")) {
-          console.warn("[DB Phase 6]", e.message.substring(0, 120));
-        }
+    for (const c of colDefs) {
+      try {
+        const [r] = await pool.execute(
+          "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=? LIMIT 1",
+          [dbName, c.table, c.name]
+        );
+        if (r.length) continue;
+        await pool.query(c.ddl);
+        console.log(`[DB Phase 6] Added column ${c.name}`);
+      } catch (e) {
+        console.warn(`[DB Phase 6] column ${c.name}:`, e.message.substring(0, 160));
+      }
+    }
+    for (const ix of idxDefs) {
+      try {
+        const [r] = await pool.execute(
+          "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND INDEX_NAME=? LIMIT 1",
+          [dbName, ix.table, ix.name]
+        );
+        if (r.length) continue;
+        await pool.query(ix.ddl);
+        console.log(`[DB Phase 6] Created index ${ix.name}`);
+      } catch (e) {
+        console.warn(`[DB Phase 6] index ${ix.name}:`, e.message.substring(0, 160));
       }
     }
     console.log("[DB Phase 6] Generated columns + indexes applied");
