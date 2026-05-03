@@ -1796,6 +1796,8 @@ const VALID_COLLECTIONS = new Set([
   "tenant_settings",
   "feature_flags",
   "shadow_diffs",
+  "sla_breach_notifications",
+  "sla_predictions",
   "ai_email_outbox",
   "email_preferences",
   "email_confirm_log",

@@ -4660,6 +4660,274 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
   }
 
   // ─── Frontend Config Endpoint (no auth required) ──────────────────
+
+  // ════════════════════════════════════════════════════════════════════════
+  // v3.26 Phase C+D — SLA observability endpoints
+  // ════════════════════════════════════════════════════════════════════════
+
+  // GET /api/sla/forensics — D14: aggregate post-mortem on breached incidents.
+  // Read-only. Returns root-cause buckets derived deterministically from data
+  // (no AI calls). Useful as input for D15 (AI classifier) later.
+  if (pathname === "/api/sla/forensics" && req.method === "GET") {
+    try {
+      const days = Math.min(parseInt(urlObj?.searchParams?.get("days") || "30", 10), 180);
+      const cutoffMs = Date.now() - days * 86400000;
+      const breachRows = await db.getAll("sla_breach_notifications");
+
+      const buckets = {
+        no_assignee: 0,
+        no_first_response: 0,
+        long_pending_state: 0,
+        afterhours_creation: 0,
+        weekend_creation: 0,
+        priority_drift: 0, // priority changed mid-flight
+        stale_no_activity_24h: 0,
+        other: 0,
+      };
+      const samples = [];
+      let total = 0;
+
+      for (const row of breachRows) {
+        try {
+          const rec = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!rec || !rec.id) continue;
+          const notifiedMs = rec.notifiedAt ? new Date(rec.notifiedAt).getTime() : 0;
+          if (notifiedMs < cutoffMs) continue;
+          total++;
+
+          const incRow = await db.getOne("incidents", rec.id);
+          if (!incRow) { buckets.other++; continue; }
+          const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+          if (!inc) { buckets.other++; continue; }
+
+          const causes = [];
+          if (!inc.assignee || inc.assignee === "Unassigned") { buckets.no_assignee++; causes.push("no_assignee"); }
+          if (!inc.firstResponseAt && !inc.firstAckAt) { buckets.no_first_response++; causes.push("no_first_response"); }
+          if (inc.status === "Pending" || inc.status === "On Hold") { buckets.long_pending_state++; causes.push("long_pending_state"); }
+          const created = new Date(inc.createdAt || 0);
+          if (!isNaN(created.getTime())) {
+            const day = created.getUTCDay();
+            const sgHour = (created.getUTCHours() + 8) % 24;
+            if (day === 0 || day === 6) { buckets.weekend_creation++; causes.push("weekend_creation"); }
+            else if (sgHour < 9 || sgHour >= 18) { buckets.afterhours_creation++; causes.push("afterhours_creation"); }
+          }
+          if (Array.isArray(inc.activityLog)) {
+            const priorityChanges = inc.activityLog.filter(a => /priority/i.test(a.detail || "")).length;
+            if (priorityChanges > 0) { buckets.priority_drift++; causes.push("priority_drift"); }
+            const lastAct = inc.activityLog[inc.activityLog.length - 1];
+            if (lastAct && lastAct.time) {
+              const lastMs = new Date(lastAct.time).getTime();
+              if (Date.now() - lastMs > 24 * 3600000) { buckets.stale_no_activity_24h++; causes.push("stale_no_activity_24h"); }
+            }
+          }
+          if (causes.length === 0) { buckets.other++; causes.push("other"); }
+
+          if (samples.length < 25) {
+            samples.push({
+              id: inc.id, priority: inc.priority, status: inc.status,
+              assignee: inc.assignee, hoursElapsed: rec.hoursElapsed,
+              worstResponseTarget: rec.worstResponseTarget,
+              notifiedAt: rec.notifiedAt, causes,
+            });
+          }
+        } catch { /* skip */ }
+      }
+
+      return json(res, 200, {
+        windowDays: days, totalBreaches: total, buckets,
+        topCauses: Object.entries(buckets).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>({cause:k,count:v})),
+        samples,
+      });
+    } catch (err) {
+      return json(res, 500, { error: "Forensics failed", details: err.message });
+    }
+  }
+
+  // POST /api/sla/track-prediction — D16: log a prediction for later accuracy analysis.
+  // Called by /api/ai/sla-predict scheduler. Each entry: { incidentId, predictedAt, predictedBreach, predictedHorizonHours }.
+  if (pathname === "/api/sla/track-prediction" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      if (!body || !body.incidentId) return json(res, 400, { error: "incidentId required" });
+      const id = `PRED-${body.incidentId}-${Date.now()}`;
+      await db.upsert("sla_predictions", id, JSON.stringify({
+        id, incidentId: body.incidentId,
+        predictedAt: new Date().toISOString(),
+        predictedBreach: !!body.predictedBreach,
+        predictedHorizonHours: Number(body.predictedHorizonHours || 0),
+        confidence: Number(body.confidence || 0),
+        model: body.model || null,
+      }));
+      return json(res, 200, { ok: true, id });
+    } catch (err) {
+      return json(res, 500, { error: "track-prediction failed", details: err.message });
+    }
+  }
+
+  // GET /api/sla/forecast-accuracy — D16: compute precision/recall of past predictions
+  // by joining sla_predictions with sla_breach_notifications.
+  if (pathname === "/api/sla/forecast-accuracy" && req.method === "GET") {
+    try {
+      const days = Math.min(parseInt(urlObj?.searchParams?.get("days") || "14", 10), 90);
+      const cutoffMs = Date.now() - days * 86400000;
+      const [predRows, breachRows] = await Promise.all([
+        db.getAll("sla_predictions"),
+        db.getAll("sla_breach_notifications"),
+      ]);
+      const breachIds = new Set();
+      for (const r of breachRows) {
+        try {
+          const rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          const ms = rec?.notifiedAt ? new Date(rec.notifiedAt).getTime() : 0;
+          if (ms >= cutoffMs && rec?.id) breachIds.add(rec.id);
+        } catch { /* skip */ }
+      }
+
+      let tp=0, fp=0, fn=0, total=0;
+      const seenPredictedIds = new Set();
+      for (const r of predRows) {
+        try {
+          const rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!rec || !rec.incidentId) continue;
+          const ms = rec.predictedAt ? new Date(rec.predictedAt).getTime() : 0;
+          if (ms < cutoffMs) continue;
+          total++;
+          if (rec.predictedBreach) {
+            seenPredictedIds.add(rec.incidentId);
+            if (breachIds.has(rec.incidentId)) tp++;
+            else fp++;
+          }
+        } catch { /* skip */ }
+      }
+      // false negatives: breaches that were not predicted
+      for (const bid of breachIds) {
+        if (!seenPredictedIds.has(bid)) fn++;
+      }
+      const precision = (tp + fp) > 0 ? Math.round((tp / (tp + fp)) * 100) : null;
+      const recall    = (tp + fn) > 0 ? Math.round((tp / (tp + fn)) * 100) : null;
+      const f1 = (precision !== null && recall !== null && (precision + recall) > 0)
+        ? Math.round((2 * precision * recall) / (precision + recall)) : null;
+      return json(res, 200, {
+        windowDays: days, totalPredictions: total,
+        truePositives: tp, falsePositives: fp, falseNegatives: fn,
+        precisionPct: precision, recallPct: recall, f1Pct: f1,
+        actualBreaches: breachIds.size,
+      });
+    } catch (err) {
+      return json(res, 500, { error: "forecast-accuracy failed", details: err.message });
+    }
+  }
+
+  // GET /api/sla/extend-candidates — C13: identify open incidents whose breach
+  // was caused by legitimate blockers (vendor wait, customer wait), where SLA
+  // extension may be warranted. Read-only — no auto-extend.
+  if (pathname === "/api/sla/extend-candidates" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      const candidates = [];
+      for (const row of incRows) {
+        try {
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!inc || !inc.id) continue;
+          const status = (inc.status || "").toLowerCase();
+          if (["closed", "resolved", "cancelled"].includes(status)) continue;
+          // Heuristic: status indicates external blocker AND ticket is aging
+          const blockedStates = new Set(["pending", "on hold", "waiting on customer", "waiting on vendor"]);
+          if (!blockedStates.has(status)) continue;
+          const created = new Date(inc.createdAt || 0).getTime();
+          if (!created) continue;
+          const hoursElapsed = (Date.now() - created) / 3600000;
+          if (hoursElapsed < 4) continue;
+          candidates.push({
+            id: inc.id, title: inc.title, priority: inc.priority,
+            status: inc.status, assignee: inc.assignee,
+            hoursElapsed: Math.round(hoursElapsed * 10) / 10,
+            reason: `${inc.status} for ${Math.round(hoursElapsed)}h — review for SLA extension`,
+            customerImpact: inc.customer || inc.customerName || null,
+          });
+        } catch { /* skip */ }
+      }
+      candidates.sort((a, b) => b.hoursElapsed - a.hoursElapsed);
+      return json(res, 200, { count: candidates.length, candidates: candidates.slice(0, 50) });
+    } catch (err) {
+      return json(res, 500, { error: "extend-candidates failed", details: err.message });
+    }
+  }
+
+  // GET /api/sla/reassign-suggestions — B7-lite: suggest skill-based reassignment
+  // for at-risk unassigned-or-stale incidents. Suggestion-only; admin must apply.
+  if (pathname === "/api/sla/reassign-suggestions" && req.method === "GET") {
+    try {
+      const incRows = await db.getAll("incidents");
+      // Load skill map from workflow engine if available, else from DB
+      let skillMap = ctx.workflowEngine && ctx.workflowEngine._skillMap;
+      if (!skillMap) {
+        const sm = await db.getOne("workflow_config", "skill_map").catch(() => null);
+        try { skillMap = sm && (typeof sm.data === "string" ? JSON.parse(sm.data) : sm.data); } catch { /* ignore */ }
+      }
+      if (!skillMap || Object.keys(skillMap).length === 0) {
+        return json(res, 200, { count: 0, suggestions: [], note: "no skill map configured" });
+      }
+
+      // Build current workload across all open incidents
+      const workload = {};
+      const incidents = [];
+      for (const row of incRows) {
+        try {
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!inc || !inc.id) continue;
+          const status = (inc.status || "").toLowerCase();
+          if (["closed", "resolved", "cancelled"].includes(status)) continue;
+          incidents.push(inc);
+          if (inc.assignee && inc.assignee !== "Unassigned") {
+            workload[inc.assignee] = (workload[inc.assignee] || 0) + 1;
+          }
+        } catch { /* skip */ }
+      }
+
+      const suggestions = [];
+      for (const inc of incidents) {
+        const created = new Date(inc.createdAt || 0).getTime();
+        if (!created) continue;
+        const hoursElapsed = (Date.now() - created) / 3600000;
+        // Trigger when: (a) Sev-A/B + unassigned, OR (b) any priority + stale > 8h with no firstResponse
+        const trigger = (
+          (!inc.assignee || inc.assignee === "Unassigned") && (inc.priority === "Sev-A" || inc.priority === "Sev-B")
+        ) || (
+          hoursElapsed > 8 && !inc.firstResponseAt && !inc.firstAckAt
+        );
+        if (!trigger) continue;
+        const cat = inc.category || "";
+        const candidates = skillMap[cat];
+        if (!candidates || candidates.length === 0) continue;
+        // Pick lowest-workload candidate that is NOT the current (stuck) assignee
+        let best = null, bestLoad = Infinity;
+        for (const name of candidates) {
+          if (name === inc.assignee) continue;
+          const load = workload[name] || 0;
+          if (load < bestLoad) { bestLoad = load; best = name; }
+        }
+        if (!best) continue;
+        suggestions.push({
+          incidentId: inc.id, title: inc.title, priority: inc.priority,
+          category: cat, currentAssignee: inc.assignee || "Unassigned",
+          suggestedAssignee: best, suggestedAssigneeWorkload: bestLoad,
+          hoursElapsed: Math.round(hoursElapsed * 10) / 10,
+          reason: !inc.assignee || inc.assignee === "Unassigned"
+            ? `${inc.priority} unassigned for ${Math.round(hoursElapsed)}h`
+            : `Stale ${Math.round(hoursElapsed)}h with no first response`,
+        });
+      }
+      suggestions.sort((a, b) => {
+        const pri = { "Sev-A": 4, "Sev-B": 3, "Sev-C": 2, "Sev-D": 1 };
+        return (pri[b.priority] || 0) - (pri[a.priority] || 0) || b.hoursElapsed - a.hoursElapsed;
+      });
+      return json(res, 200, { count: suggestions.length, suggestions: suggestions.slice(0, 50) });
+    } catch (err) {
+      return json(res, 500, { error: "reassign-suggestions failed", details: err.message });
+    }
+  }
+
     return false;
   };
 };
