@@ -195,6 +195,18 @@ const KnowledgeModule = useStableComponent(() => {
         <button style={{ ...btnStyle(), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open(SHAREPOINT_KB_CONFIG.baseUrl, "_blank", "noopener")}>🔗 SharePoint Site</button>
         <button style={btnStyle()} onClick={() => setModal("newKBArticle")}>+ New Article</button>
         <button style={{ ...btnStyle("#0EA5E9"), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open("/api/export/kb?format=csv", "_blank")}>📥 Export CSV</button>
+        <a
+          href="/docs/Customer-Quick-Guide.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open the Customer Quick Guide (how to log an issue & chat with AI)"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            background: "#1E2130", border: "1px solid #2A2F44", borderRadius: 6,
+            padding: "6px 14px", fontSize: 11, color: "#A8B0C4", fontWeight: 600,
+            textDecoration: "none", cursor: "pointer",
+          }}
+        >📘 Help</a>
         <button style={{ ...btnStyle("#06B6D4"), fontSize: 11, padding: "6px 14px", display: "flex", alignItems: "center", gap: 4 }} onClick={async () => {
           try {
             const r = await fetch("/api/db/kb");
