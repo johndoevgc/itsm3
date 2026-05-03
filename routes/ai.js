@@ -100,7 +100,7 @@ module.exports = function createAIRoutes(ctx) {
 - Top at-risk assignees: ${summary.topAtRiskAssignees.map(c => `${c.name}(${c.count})`).join(", ") || "none"}
 Worst offenders:
 ${top || "none"}`;
-        const aiPayload = { model: ctx.AZURE_OPENAI_MODEL, input: [{ role: "system", content: sys }, { role: "user", content: user }], max_output_tokens: 800 };
+        const aiPayload = { model: ctx.AI_MODELS?.secondary || "gpt-5.4-mini", input: [{ role: "system", content: sys }, { role: "user", content: user }], max_output_tokens: 2000 };
         const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
         const aiResult = await new Promise((resolve, reject) => {
           const aiReq = https.request({
@@ -115,11 +115,11 @@ ${top || "none"}`;
             });
           });
           aiReq.on("error", reject);
-          aiReq.setTimeout(25000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (25s)")); });
+          aiReq.setTimeout(60000, () => { aiReq.destroy(); reject(new Error("Azure OpenAI timeout (60s)")); });
           aiReq.write(JSON.stringify(aiPayload));
           aiReq.end();
         });
-        aiModel = ctx.AZURE_OPENAI_MODEL;
+        aiModel = aiPayload.model;
         const text = extractAIText(aiResult) || "";
         const m = text.match(/\{[\s\S]*\}$/);
         if (m) {

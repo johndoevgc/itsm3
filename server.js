@@ -117,13 +117,23 @@ const AI_MODELS = {
   secondary: process.env.AZURE_OPENAI_MODEL_SECONDARY || "gpt-5.4-mini",
   tertiary: process.env.AZURE_OPENAI_MODEL_TERTIARY || "gpt-5.4-nano",
 };
-// Fallback cascade: if the requested tier fails, try the next one down
-const AI_FALLBACK = { primary: "secondary", secondary: "tertiary", tertiary: null };
+// Fallback cascade: each tier falls back; tertiary/secondary ultimately retry primary
+// (primary is the always-provisioned model). Combined with `tried` set to prevent loops.
+const AI_FALLBACK = { primary: "secondary", secondary: "primary", tertiary: "primary" };
 function getAIModel(tier) { return AI_MODELS[tier] || AI_MODELS.primary; }
+// Tiers known to be unprovisioned/unhealthy this process. Populated when we see
+// 404 / DeploymentNotFound from Azure OpenAI; cleared on process restart.
+const _deadAITiers = new Set();
+function _isDeploymentMissing(msg) {
+  return /^AI 404\b/.test(msg) || /DeploymentNotFound/i.test(msg) || /deployment .*(?:does not exist|not found)/i.test(msg);
+}
+function _isAuthError(msg) { return /^AI 401\b/.test(msg) || /^AI 403\b/.test(msg); }
 
 // Centralized AI call helper with automatic model fallback
 async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens = 1500, timeout = 30000 } = {}) {
   if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) throw new Error("Azure OpenAI not configured");
+  // If the requested tier is known dead, promote up the chain to a healthy one.
+  while (_deadAITiers.has(tier) && AI_FALLBACK[tier]) tier = AI_FALLBACK[tier];
   // Budget enforcement: check monthly spend
   try {
     const now = new Date();
@@ -132,16 +142,22 @@ async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens 
     if (row) {
       const usage = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
       if (usage.estimatedCostUSD >= AI_MONTHLY_BUDGET_USD) {
-        if (tier !== "tertiary") { tier = "tertiary"; console.warn(`[AI Budget] Monthly budget $${AI_MONTHLY_BUDGET_USD} exceeded ($${usage.estimatedCostUSD}), downgrading to nano`); }
-      } else if (usage.estimatedCostUSD >= AI_MONTHLY_BUDGET_USD * 0.8 && tier === "primary") {
+        // Prefer cheapest healthy tier; if tertiary is dead, fall back up.
+        if (tier !== "tertiary" && !_deadAITiers.has("tertiary")) { tier = "tertiary"; console.warn(`[AI Budget] Monthly budget $${AI_MONTHLY_BUDGET_USD} exceeded ($${usage.estimatedCostUSD}), downgrading to nano`); }
+        else if (_deadAITiers.has("tertiary") && tier === "primary" && !_deadAITiers.has("secondary")) { tier = "secondary"; console.warn(`[AI Budget] over budget but tertiary dead — using secondary`); }
+      } else if (usage.estimatedCostUSD >= AI_MONTHLY_BUDGET_USD * 0.8 && tier === "primary" && !_deadAITiers.has("secondary")) {
         tier = "secondary"; console.warn(`[AI Budget] 80% budget used, downgrading primary to secondary`);
       }
     }
   } catch { /* ignore */ }
   const aiUrl = new URL(AZURE_OPENAI_ENDPOINT);
   let currentTier = tier;
+  const tried = new Set();
   let lastError = null;
   while (currentTier) {
+    if (tried.has(currentTier)) { currentTier = AI_FALLBACK[currentTier]; continue; }
+    if (_deadAITiers.has(currentTier)) { tried.add(currentTier); currentTier = AI_FALLBACK[currentTier]; continue; }
+    tried.add(currentTier);
     const model = getAIModel(currentTier);
     const payload = { model, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], max_output_tokens: maxTokens };
     try {
@@ -185,7 +201,19 @@ async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens 
       return { text, model, tier: currentTier, fallback: currentTier !== tier, inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0 };
     } catch (err) {
       lastError = err;
-      console.error(`[AI] ${model} failed: ${err.message}, trying fallback...`);
+      const msg = err.message || "";
+      // 401/403 — no point cascading; key/scope problem affects all tiers.
+      if (_isAuthError(msg)) {
+        console.error(`[AI] ${model} auth error: ${msg} — abort cascade`);
+        break;
+      }
+      // 404 / DeploymentNotFound — mark this tier dead for the rest of the process.
+      if (_isDeploymentMissing(msg)) {
+        _deadAITiers.add(currentTier);
+        console.error(`[AI] ${model} (${currentTier}) deployment missing: ${msg} — marking tier dead`);
+      } else {
+        console.error(`[AI] ${model} failed: ${msg}, trying fallback...`);
+      }
       currentTier = AI_FALLBACK[currentTier];
     }
   }
