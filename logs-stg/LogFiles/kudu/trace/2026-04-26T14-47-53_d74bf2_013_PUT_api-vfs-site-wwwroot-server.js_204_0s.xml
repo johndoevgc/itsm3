@@ -1,0 +1,6 @@
+<step title="Incoming Request" date="2026-04-26T14:47:53.118" instance="d74bf2" url="/api/vfs/site/wwwroot/server.js" method="PUT" type="request" pid="831,1,15" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="curl/8.18.0" Authorization="Bas..." Content-Type="application/octet-stream" If-Match="*" Content-Length="553534" X-ARR-LOG-ID="e562f4c1-3506-473a-9fac-988dbed22311" CLIENT-IP="4.193.130.137:1988" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/vfs/site/wwwroot/server.js" X-Client-IP="4.193.130.137" X-Client-Port="1988" >
+  <step title="Cleanup Xml Logs" date="2026-04-26T14:47:53.120" >
+    <step title="Cleanup Infos" date="2026-04-26T14:47:53.141" totalFiles="899" totalCleanup="739" /><!-- duration: 5ms -->
+  </step><!-- duration: 29ms -->
+  <step title="Outgoing response" date="2026-04-26T14:47:53.217" type="response" statusCode="204" statusText="NoContent" /><!-- duration: 3ms -->
+</step><!-- duration: 106ms -->

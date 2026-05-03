@@ -439,9 +439,24 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
       </div>
 
       {/* Quick Actions */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
         <button style={{ ...btnStyle(showQuickForm ? "#333" : "#FF6B6B"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => setShowQuickForm(!showQuickForm)}>{showQuickForm ? "✕ Cancel" : "🎫 Report an Issue"}</button>
         <button style={{ ...btnStyle("#6366F1"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => setPortalTab("catalog")}>📋 Submit a Request</button>
+        <button style={{ ...btnStyle("#06B6D4"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => setPortalTab("chat")}>💬 Chat with AI</button>
+        <a
+          href="/docs/Customer-Quick-Guide.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="How to log an issue, request a service, and chat with AI"
+          style={{
+            marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6,
+            background: "#1E2130", border: "1px solid #2A2F44", borderRadius: 8,
+            padding: "10px 16px", fontSize: 12, color: "#A8B0C4", fontWeight: 600,
+            textDecoration: "none", cursor: "pointer",
+          }}
+        >
+          📘 Help
+        </a>
       </div>
 
       {/* ═══ Simplified Quick Issue Form ═══ */}

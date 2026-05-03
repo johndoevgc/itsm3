@@ -1,0 +1,6 @@
+<step title="Incoming Request" date="2026-04-26T12:44:54.008" instance="d74bf2" url="/dump" method="GET" type="request" pid="831,1,20" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="identity" Authorization="Bas..." x-ms-client-request-id="b6b340e5-416d-11f1-9b95-6045bd2161f1" X-ARR-LOG-ID="b6b340e5-416d-11f1-9b95-6045bd2161f1" CLIENT-IP="4.193.130.137:1985" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/dump" X-Client-IP="4.193.130.137" X-Client-Port="1985" >
+  <step title="Cleanup Xml Logs" date="2026-04-26T12:44:54.012" >
+    <step title="Cleanup Infos" date="2026-04-26T12:44:54.034" totalFiles="873" totalCleanup="713" /><!-- duration: 6ms -->
+  </step><!-- duration: 32ms -->
+  <step title="Outgoing response" date="2026-04-26T12:45:21.508" type="response" statusCode="200" statusText="OK" /><!-- duration: 3ms -->
+</step><!-- duration: 27508ms -->

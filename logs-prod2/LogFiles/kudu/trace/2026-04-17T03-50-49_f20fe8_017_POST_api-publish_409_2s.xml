@@ -1,0 +1,14 @@
+<step title="Incoming Request" date="2026-04-17T03:50:49.126" instance="f20fe8" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="833,1,16" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30; ARRAffinitySameSite=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30" Content-Length="30743885" x-ms-client-request-id="99c40536-3a10-11f1-8910-6045bd2161f1" x-ms-artifact-checksum="99678fbac183b1e2313ba3dd6bd7e03378a48a596ec3110edc57cf4ad413a7d4" X-ARR-LOG-ID="99c40536-3a10-11f1-8910-6045bd2161f1" CLIENT-IP="4.193.130.137:1154" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="4.193.130.137" X-Client-Port="1154" >
+  <step title="OneDeploy" date="2026-04-17T03:50:49.246" >
+    <step title="Starting PushDeployAsync" date="2026-04-17T03:50:49.284" /><!-- duration: 22ms -->
+    <step title="WEBSITE_RUN_FROM_PACKAGE is set to 1. Writing zip to SitePackagesPath" date="2026-04-17T03:50:49.324" /><!-- duration: 11ms -->
+    <step title="Copying zip to SitePackages /home/data/SitePackages/20260417035049.zip from request body" date="2026-04-17T03:50:49.348" /><!-- duration: 3ms -->
+    <step title="Writing multipart request body to /home/data/SitePackages/20260417035049.zip" date="2026-04-17T03:50:49.354" /><!-- duration: 4ms -->
+    <step title="Start deployment in the background" date="2026-04-17T03:50:51.081" >
+      <step title="Acquiring Deployment Lock" date="2026-04-17T03:50:51.113" /><!-- duration: 17ms -->
+      <step title="Cannot Acquire Deployment Lock already held" date="2026-04-17T03:50:51.138" /><!-- duration: 3ms -->
+    </step><!-- duration: 106ms -->
+    <step title="There is a deployment currently in progress. Please try again when it completes." date="2026-04-17T03:50:51.192" /><!-- duration: 3ms -->
+  </step><!-- duration: 1953ms -->
+  <step title="Outgoing response" date="2026-04-17T03:50:51.204" type="response" statusCode="409" statusText="Conflict" /><!-- duration: 3ms -->
+</step><!-- duration: 2086ms -->

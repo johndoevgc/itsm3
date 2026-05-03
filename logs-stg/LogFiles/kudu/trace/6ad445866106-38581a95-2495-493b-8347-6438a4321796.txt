@@ -1,0 +1,1 @@
+2026-04-26T14:35:25  Startup Request, url: /api/vfs/site/wwwroot/assets/index-Byzjrtm6.js, method: DELETE, type: request, pid: 830,1,69, ScmType: LocalGit, SCM_DO_BUILD_DURING_DEPLOYMENT: false

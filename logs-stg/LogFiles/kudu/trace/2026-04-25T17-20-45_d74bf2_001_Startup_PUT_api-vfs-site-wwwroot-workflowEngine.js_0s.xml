@@ -1,0 +1,5 @@
+<step title="Startup Request" date="2026-04-25T17:20:45.028" instance="d74bf2" url="/api/vfs/site/wwwroot/workflowEngine.js" method="PUT" type="request" pid="831,1,15" ScmType="LocalGit" SCM_DO_BUILD_DURING_DEPLOYMENT="false" >
+  <step title="Cleanup Xml Logs" date="2026-04-25T17:20:45.033" >
+    <step title="Cleanup Infos" date="2026-04-25T17:20:45.057" totalFiles="801" totalCleanup="641" /><!-- duration: 11ms -->
+  </step><!-- duration: 41ms -->
+</step><!-- duration: 50ms -->

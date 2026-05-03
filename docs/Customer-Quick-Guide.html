@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VGC-ITSM — Customer Quick Guide</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #2b2f3a; line-height: 1.6; }
+
+  .header { background: linear-gradient(135deg, #1a237e 0%, #0d47a1 60%, #1565c0 100%); color: white; padding: 48px 60px; }
+  .header h1 { font-size: 32px; font-weight: 300; letter-spacing: 1px; }
+  .header .subtitle { font-size: 15px; opacity: 0.9; margin-top: 10px; }
+  .header .badge { display: inline-block; background: #4caf50; color: white; padding: 5px 18px; border-radius: 20px; font-size: 13px; margin-top: 14px; font-weight: 600; }
+
+  .meta-bar { display: flex; gap: 40px; padding: 18px 60px; background: white; border-bottom: 1px solid #e0e0e0; font-size: 13px; flex-wrap: wrap; }
+  .meta-bar .item { display: flex; flex-direction: column; }
+  .meta-bar .label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .meta-bar .value { font-weight: 600; color: #1a237e; }
+
+  .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+  .section { background: white; border-radius: 10px; padding: 28px 32px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 24px; }
+
+  h2 { font-size: 20px; font-weight: 600; margin: 0 0 18px; color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 10px; }
+  h3 { font-size: 16px; font-weight: 600; margin: 22px 0 10px; color: #283593; }
+  h4 { font-size: 14px; font-weight: 600; margin: 14px 0 6px; color: #455; }
+  p { font-size: 14px; margin: 8px 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 13px; }
+  th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 10px 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; color: #c2185b; }
+  ul, ol { margin: 8px 0 8px 22px; }
+  li { margin: 5px 0; font-size: 14px; }
+
+  .toc { columns: 2; column-gap: 24px; margin: 12px 0; }
+  .toc a { display: block; padding: 4px 0; color: #1a237e; text-decoration: none; font-size: 13px; }
+  .toc a:hover { text-decoration: underline; }
+
+  .tip   { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .warn  { background: #fff3e0; border-left: 4px solid #ff9800; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .info  { background: #e3f2fd; border-left: 4px solid #2196f3; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .quote { background: #f3e5f5; border-left: 4px solid #9c27b0; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 13px; font-style: italic; }
+
+  .kbd { display: inline-block; background: #e8eaf6; border: 1px solid #c5cae9; border-radius: 3px; padding: 1px 7px; font-family: monospace; font-size: 12px; }
+
+  /* Step cards */
+  .steps { display: grid; grid-template-columns: 1fr; gap: 14px; margin: 14px 0; }
+  .step { display: flex; gap: 16px; padding: 14px 16px; background: #fafbff; border: 1px solid #e8eaf6; border-radius: 8px; }
+  .step .num { flex: 0 0 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #1a237e, #1565c0); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; }
+  .step .body { flex: 1; }
+  .step .body h4 { margin: 2px 0 4px; font-size: 14px; color: #1a237e; }
+  .step .body p  { margin: 0; font-size: 13px; color: #555; }
+
+  /* Pill / channel cards */
+  .channels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 14px 0; }
+  .channel { padding: 16px; border-radius: 10px; border: 1px solid #e0e0e0; background: #fff; }
+  .channel .icon { font-size: 26px; }
+  .channel h4 { margin: 8px 0 4px; color: #1a237e; font-size: 14px; }
+  .channel p  { margin: 0; font-size: 12.5px; color: #555; }
+  .channel.recommended { border-color: #4caf50; background: #f1f8e9; box-shadow: 0 0 0 2px rgba(76,175,80,0.18); }
+  .channel.recommended .pill { display: inline-block; background: #4caf50; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; margin-left: 6px; vertical-align: middle; }
+
+  /* Mock-up frame for "screenshots" */
+  .mock { background: #0d1117; border-radius: 12px; padding: 0; margin: 18px 0; box-shadow: 0 8px 24px rgba(0,0,0,0.18); overflow: hidden; }
+  .mock .titlebar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #161b22; border-bottom: 1px solid #30363d; }
+  .mock .titlebar .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .mock .titlebar .dot.r { background: #ff5f56; }
+  .mock .titlebar .dot.y { background: #ffbd2e; }
+  .mock .titlebar .dot.g { background: #27c93f; }
+  .mock .titlebar .url { flex: 1; text-align: center; color: #8b949e; font-size: 12px; font-family: monospace; }
+  .mock svg { display: block; width: 100%; height: auto; }
+
+  .caption { text-align: center; font-size: 12px; color: #666; margin: -8px 0 18px; font-style: italic; }
+
+  .priority-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
+  .pri { padding: 12px; border-radius: 8px; color: white; text-align: center; }
+  .pri h4 { color: white; margin: 0 0 4px; font-size: 13px; }
+  .pri p  { margin: 0; font-size: 11.5px; opacity: 0.95; }
+  .pri.p1 { background: linear-gradient(135deg, #c62828, #d32f2f); }
+  .pri.p2 { background: linear-gradient(135deg, #ef6c00, #f57c00); }
+  .pri.p3 { background: linear-gradient(135deg, #f9a825, #fbc02d); color: #333; }
+  .pri.p3 h4 { color: #333; }
+  .pri.p4 { background: linear-gradient(135deg, #2e7d32, #388e3c); }
+
+  .footer { text-align: center; padding: 30px; color: #999; font-size: 12px; }
+  .nav-link { display: inline-block; margin-top: 16px; color: #1a237e; text-decoration: none; font-weight: 600; }
+
+  @media print {
+    body { background: white; }
+    .section { box-shadow: none; border: 1px solid #ddd; page-break-inside: avoid; }
+    .mock { box-shadow: none; border: 1px solid #444; }
+  }
+  @media (max-width: 760px) {
+    .channels { grid-template-columns: 1fr; }
+    .priority-grid { grid-template-columns: repeat(2, 1fr); }
+    .toc { columns: 1; }
+    .header { padding: 32px 24px; }
+    .meta-bar { padding: 16px 24px; gap: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📘 Customer Quick Guide</h1>
+  <div class="subtitle">How to log an issue, request a service, and chat with the AI assistant</div>
+  <span class="badge">VGC-ITSM • Self-Service Portal • v3.28</span>
+</div>
+
+<div class="meta-bar">
+  <div class="item"><span class="label">Audience</span><span class="value">End Users / Customers</span></div>
+  <div class="item"><span class="label">Reading Time</span><span class="value">~5 minutes</span></div>
+  <div class="item"><span class="label">Portal URL</span><span class="value">https://vgc-itsm1-app.azurewebsites.net</span></div>
+  <div class="item"><span class="label">Support Hours</span><span class="value">24 × 7 (AI) • 9–6 (Human)</span></div>
+</div>
+
+<div class="container">
+
+  <!-- TOC -->
+  <div class="section">
+    <h2>Contents</h2>
+    <div class="toc">
+      <a href="#welcome">1. Welcome — what this portal does for you</a>
+      <a href="#login">2. Signing in</a>
+      <a href="#tour">3. A 60-second tour of the portal</a>
+      <a href="#choose">4. Choose the right channel</a>
+      <a href="#report">5. Method A — “🎫 Report an Issue” button</a>
+      <a href="#request">6. Method B — “📋 Submit a Request” (Service Catalog)</a>
+      <a href="#chat">7. Method C — “💬 Chat with Support” (AI assistant)</a>
+      <a href="#tickets">8. Tracking your tickets</a>
+      <a href="#kb">9. Self-help — Knowledge Base</a>
+      <a href="#tips">10. Tips for faster resolution</a>
+      <a href="#priority">11. How priority is decided</a>
+      <a href="#csat">12. Closing the loop — your feedback</a>
+      <a href="#faq">13. FAQ</a>
+    </div>
+  </div>
+
+  <!-- 1. Welcome -->
+  <div class="section" id="welcome">
+    <h2>1. Welcome 👋</h2>
+    <p>This portal is your <b>one-stop window</b> for anything IT-related — broken laptop, password reset, new software, access request, or just a question. You don't need to know any technical jargon. The portal (and our AI assistant) will guide you, ask the right questions, and route your ticket to the correct engineer.</p>
+    <div class="tip"><b>In plain language:</b> Think of it like ordering food online — you describe what you need, click a button, and you can track the status until it's "delivered" (resolved).</div>
+  </div>
+
+  <!-- 2. Sign in -->
+  <div class="section" id="login">
+    <h2>2. Signing in</h2>
+    <ol>
+      <li>Open your browser and go to <code>https://vgc-itsm1-app.azurewebsites.net</code></li>
+      <li>Click <b>“Sign in with Microsoft”</b> (single sign-on with your work account).</li>
+      <li>If this is your first visit you may be asked to confirm your name, email and department — these prefill on every ticket so you don't have to retype them.</li>
+    </ol>
+    <div class="info"><b>Tip:</b> Bookmark the page. On a phone you can also <b>“Add to Home Screen”</b> so it behaves like an app (works offline for browsing your past tickets).</div>
+  </div>
+
+  <!-- 3. Tour -->
+  <div class="section" id="tour">
+    <h2>3. A 60-second tour</h2>
+    <p>After signing in you land on the <b>Self-Service Portal</b>. Here's what you'll see:</p>
+
+    <div class="mock">
+      <div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url">https://vgc-itsm1-app.azurewebsites.net</span></div>
+      <svg viewBox="0 0 1000 540" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="hdr" x1="0" x2="1"><stop offset="0" stop-color="#1a237e"/><stop offset="1" stop-color="#1565c0"/></linearGradient>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ff1744"/></marker>
+        </defs>
+        <!-- App background -->
+        <rect width="1000" height="540" fill="#0f1419"/>
+        <!-- Top app header -->
+        <rect x="0" y="0" width="1000" height="56" fill="url(#hdr)"/>
+        <circle cx="34" cy="28" r="14" fill="#FFD700"/>
+        <text x="56" y="34" fill="#fff" font-family="Segoe UI" font-size="16" font-weight="700">VGC-ITSM</text>
+        <text x="930" y="34" fill="#fff" font-family="Segoe UI" font-size="12" text-anchor="end">👤 Jane Doe ▾</text>
+
+        <!-- Hero "My Portal" -->
+        <rect x="24" y="80" width="952" height="86" rx="10" fill="#1a1f2e" stroke="#2a3142"/>
+        <text x="44" y="118" fill="#E8ECF4" font-family="Segoe UI" font-size="22" font-weight="700">Welcome back, Jane 👋</text>
+        <text x="44" y="142" fill="#8B92A8" font-family="Segoe UI" font-size="13">2 open tickets · 5 resolved · Avg response: 18 min</text>
+
+        <!-- Two big buttons -->
+        <rect id="btn-report" x="610" y="100" width="170" height="44" rx="8" fill="#FF6B6B"/>
+        <text x="695" y="128" fill="#fff" font-family="Segoe UI" font-size="13" font-weight="700" text-anchor="middle">🎫 Report an Issue</text>
+
+        <rect x="790" y="100" width="170" height="44" rx="8" fill="#6366F1"/>
+        <text x="875" y="128" fill="#fff" font-family="Segoe UI" font-size="13" font-weight="700" text-anchor="middle">📋 Submit a Request</text>
+
+        <!-- Tabs row -->
+        <g font-family="Segoe UI" font-size="12">
+          <rect x="24" y="186" width="952" height="42" rx="8" fill="#181d27" stroke="#2a3142"/>
+          <text x="60"  y="212" fill="#E8ECF4">🎫 My Tickets (2)</text>
+          <text x="200" y="212" fill="#8B92A8">📋 My Requests</text>
+          <text x="320" y="212" fill="#8B92A8">📚 Knowledge Base</text>
+          <text x="470" y="212" fill="#8B92A8">🛍️ Service Catalog</text>
+          <text x="620" y="212" fill="#fff" font-weight="700">💬 Chat with Support</text>
+          <rect x="610" y="200" width="160" height="20" rx="10" fill="none" stroke="#22C55E" stroke-width="2" stroke-dasharray="4 3"/>
+        </g>
+
+        <!-- Body content placeholder -->
+        <rect x="24" y="248" width="640" height="270" rx="10" fill="#181d27" stroke="#2a3142"/>
+        <text x="44" y="278" fill="#E8ECF4" font-size="13" font-weight="700" font-family="Segoe UI">Your Open Tickets</text>
+        <rect x="44" y="296" width="600" height="48" rx="6" fill="#1f2533"/>
+        <circle cx="62" cy="320" r="6" fill="#ef6c00"/>
+        <text x="78" y="316" fill="#E8ECF4" font-size="12" font-family="Segoe UI">INC-1042 — Outlook keeps crashing</text>
+        <text x="78" y="332" fill="#8B92A8" font-size="11" font-family="Segoe UI">Status: In Progress · Engineer: Alex K. · Updated 12 min ago</text>
+
+        <rect x="44" y="354" width="600" height="48" rx="6" fill="#1f2533"/>
+        <circle cx="62" cy="378" r="6" fill="#fbc02d"/>
+        <text x="78" y="374" fill="#E8ECF4" font-size="12" font-family="Segoe UI">REQ-308 — New monitor request</text>
+        <text x="78" y="390" fill="#8B92A8" font-size="11" font-family="Segoe UI">Status: Pending Approval · Manager: J. Lee</text>
+
+        <!-- Right panel: AI promo -->
+        <rect x="684" y="248" width="292" height="270" rx="10" fill="#1a1830" stroke="#3a2f5e"/>
+        <text x="700" y="278" fill="#E8ECF4" font-size="13" font-weight="700" font-family="Segoe UI">🤖 AI Assistant</text>
+        <text x="700" y="300" fill="#8B92A8" font-size="11" font-family="Segoe UI">Ask in plain English. The bot</text>
+        <text x="700" y="316" fill="#8B92A8" font-size="11" font-family="Segoe UI">searches the knowledge base,</text>
+        <text x="700" y="332" fill="#8B92A8" font-size="11" font-family="Segoe UI">checks your tickets, and can</text>
+        <text x="700" y="348" fill="#8B92A8" font-size="11" font-family="Segoe UI">create one for you in seconds.</text>
+
+        <rect x="700" y="370" width="260" height="36" rx="18" fill="#2a2350" stroke="#5b4cc4"/>
+        <text x="716" y="393" fill="#cfc8ff" font-size="12" font-family="Segoe UI">"My VPN keeps disconnecting…"</text>
+
+        <!-- Annotations -->
+        <!-- (1) Report an Issue arrow -->
+        <circle cx="695" cy="122" r="22" fill="none" stroke="#ff1744" stroke-width="3"/>
+        <text x="540" y="64" fill="#ff1744" font-size="14" font-weight="700" font-family="Segoe UI">① Report an Issue</text>
+        <line x1="600" y1="68" x2="675" y2="108" stroke="#ff1744" stroke-width="2.5" marker-end="url(#arr)"/>
+
+        <!-- (2) Submit a Request -->
+        <circle cx="875" cy="122" r="22" fill="none" stroke="#ff1744" stroke-width="3"/>
+        <text x="930" y="64" fill="#ff1744" font-size="14" font-weight="700" font-family="Segoe UI" text-anchor="end">② Submit a Request</text>
+        <line x1="900" y1="68" x2="892" y2="108" stroke="#ff1744" stroke-width="2.5" marker-end="url(#arr)"/>
+
+        <!-- (3) Chat with support -->
+        <text x="540" y="246" fill="#22C55E" font-size="14" font-weight="700" font-family="Segoe UI">③ Chat with Support (AI)</text>
+        <line x1="640" y1="240" x2="685" y2="218" stroke="#22C55E" stroke-width="2.5" marker-end="url(#arr)"/>
+
+        <!-- (4) Track tickets -->
+        <text x="44" y="252" fill="#FFB300" font-size="13" font-weight="700" font-family="Segoe UI">④ Track your open tickets here</text>
+      </svg>
+    </div>
+    <p class="caption">Annotated portal home — three ways to get help (red circles) and your live ticket list (yellow).</p>
+  </div>
+
+  <!-- 4. Choose channel -->
+  <div class="section" id="choose">
+    <h2>4. Choose the right channel</h2>
+    <p>You have <b>three ways</b> to reach IT. Pick whichever feels easiest — they all create the same kind of ticket on our side.</p>
+    <div class="channels">
+      <div class="channel">
+        <div class="icon">🎫</div>
+        <h4>Report an Issue</h4>
+        <p>Best when <b>something is broken</b> (laptop won't start, email error). Quick form — done in 30 seconds.</p>
+      </div>
+      <div class="channel">
+        <div class="icon">📋</div>
+        <h4>Submit a Request</h4>
+        <p>Best when you <b>need something new</b> (laptop, software license, access to a system). Pick from a catalog like a shop.</p>
+      </div>
+      <div class="channel recommended">
+        <div class="icon">💬</div>
+        <h4>Chat with Support <span class="pill">RECOMMENDED</span></h4>
+        <p>Best when you're <b>not sure what's wrong</b>. The AI asks, looks up answers, and can solve it on the spot — or open a ticket for you.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Report an Issue -->
+  <div class="section" id="report">
+    <h2>5. Method A — 🎫 Report an Issue</h2>
+    <p>Use this for anything that <b>used to work and now doesn't</b>: app crashes, slow PC, printer offline, "blue screen", etc.</p>
+
+    <div class="steps">
+      <div class="step"><div class="num">1</div><div class="body"><h4>Click the red “🎫 Report an Issue” button</h4><p>Top-right of the portal home page.</p></div></div>
+      <div class="step"><div class="num">2</div><div class="body"><h4>The Quick Issue Report form opens</h4><p>It pre-fills your name and email — you only fill in the issue.</p></div></div>
+      <div class="step"><div class="num">3</div><div class="body"><h4>Fill 5 simple fields</h4><p>Title · Description · Category · Urgency · Best contact method.</p></div></div>
+      <div class="step"><div class="num">4</div><div class="body"><h4>Click <b>Submit</b></h4><p>A ticket ID (e.g. <code>INC-1043</code>) is created instantly. AI auto-routes it to the right team in &lt;2 seconds.</p></div></div>
+      <div class="step"><div class="num">5</div><div class="body"><h4>You're done!</h4><p>Track progress under the <b>My Tickets</b> tab. You'll get email + in-app notifications on every update.</p></div></div>
+    </div>
+
+    <h3>The form, annotated</h3>
+    <div class="mock">
+      <div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url">… /portal — Quick Issue Report</span></div>
+      <svg viewBox="0 0 900 560" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ff1744"/></marker>
+        </defs>
+        <rect width="900" height="560" fill="#0f1419"/>
+        <!-- Form card -->
+        <rect x="40" y="30" width="600" height="500" rx="12" fill="#181d27" stroke="#2a3142"/>
+        <text x="64" y="64" fill="#E8ECF4" font-family="Segoe UI" font-size="18" font-weight="700">📝 Quick Issue Report</text>
+        <text x="64" y="84" fill="#8B92A8" font-family="Segoe UI" font-size="12">We'll route this to the right engineer automatically.</text>
+
+        <!-- Fields -->
+        <text x="64" y="120" fill="#A3AED1" font-size="11" font-family="Segoe UI">TITLE *</text>
+        <rect x="64" y="128" width="552" height="34" rx="6" fill="#0f1419" stroke="#3a4257"/>
+        <text x="76" y="150" fill="#E8ECF4" font-size="12" font-family="Segoe UI">Outlook crashes when I open a meeting invite</text>
+
+        <text x="64" y="180" fill="#A3AED1" font-size="11" font-family="Segoe UI">DESCRIPTION *</text>
+        <rect x="64" y="188" width="552" height="84" rx="6" fill="#0f1419" stroke="#3a4257"/>
+        <text x="76" y="210" fill="#E8ECF4" font-size="12" font-family="Segoe UI">Started today after restart. Error popup says "Outlook</text>
+        <text x="76" y="226" fill="#E8ECF4" font-size="12" font-family="Segoe UI">cannot start (0x80004005)". Restart didn't help.</text>
+
+        <text x="64" y="296" fill="#A3AED1" font-size="11" font-family="Segoe UI">CATEGORY</text>
+        <rect x="64" y="304" width="266" height="34" rx="6" fill="#0f1419" stroke="#3a4257"/>
+        <text x="76" y="326" fill="#E8ECF4" font-size="12" font-family="Segoe UI">Email / Outlook ▾</text>
+
+        <text x="350" y="296" fill="#A3AED1" font-size="11" font-family="Segoe UI">URGENCY</text>
+        <rect x="350" y="304" width="266" height="34" rx="6" fill="#0f1419" stroke="#3a4257"/>
+        <text x="362" y="326" fill="#E8ECF4" font-size="12" font-family="Segoe UI">High — I cannot work ▾</text>
+
+        <text x="64" y="362" fill="#A3AED1" font-size="11" font-family="Segoe UI">BEST CONTACT METHOD</text>
+        <rect x="64"  y="370" width="86" height="30" rx="15" fill="#1565c0"/>
+        <text x="107" y="390" fill="#fff" font-size="11" font-family="Segoe UI" text-anchor="middle">📧 Email</text>
+        <rect x="158" y="370" width="86" height="30" rx="15" fill="#0f1419" stroke="#3a4257"/>
+        <text x="201" y="390" fill="#A3AED1" font-size="11" font-family="Segoe UI" text-anchor="middle">📞 Phone</text>
+        <rect x="252" y="370" width="86" height="30" rx="15" fill="#0f1419" stroke="#3a4257"/>
+        <text x="295" y="390" fill="#A3AED1" font-size="11" font-family="Segoe UI" text-anchor="middle">💬 Teams</text>
+
+        <text x="64" y="430" fill="#A3AED1" font-size="11" font-family="Segoe UI">📎 Attach screenshot (optional, drop file here)</text>
+        <rect x="64" y="438" width="552" height="44" rx="6" fill="#0f1419" stroke="#3a4257" stroke-dasharray="4 3"/>
+
+        <!-- Submit -->
+        <rect x="64"  y="498" width="120" height="36" rx="8" fill="#333"/>
+        <text x="124" y="521" fill="#E8ECF4" font-size="12" font-family="Segoe UI" text-anchor="middle">Cancel</text>
+        <rect x="496" y="498" width="120" height="36" rx="8" fill="#22C55E"/>
+        <text x="556" y="521" fill="#fff" font-size="12" font-family="Segoe UI" font-weight="700" text-anchor="middle">✓ Submit Ticket</text>
+
+        <!-- Right side panel: live AI hint -->
+        <rect x="660" y="30" width="200" height="500" rx="12" fill="#1a1830" stroke="#3a2f5e"/>
+        <text x="676" y="58" fill="#cfc8ff" font-family="Segoe UI" font-size="12" font-weight="700">🤖 AI Suggestion</text>
+        <text x="676" y="86" fill="#8B92A8" font-size="10.5" font-family="Segoe UI">Based on your description,</text>
+        <text x="676" y="100" fill="#8B92A8" font-size="10.5" font-family="Segoe UI">try this KB article first:</text>
+        <rect x="676" y="112" width="172" height="50" rx="6" fill="#241d3f"/>
+        <text x="684" y="130" fill="#E8ECF4" font-size="11" font-family="Segoe UI">📄 Outlook 0x80004005</text>
+        <text x="684" y="146" fill="#8B92A8" font-size="10" font-family="Segoe UI">3-step fix · 2 min</text>
+
+        <!-- Annotations -->
+        <circle cx="124" cy="180" r="22" fill="none" stroke="#ff1744" stroke-width="3"/>
+        <text x="700" y="200" fill="#ff1744" font-size="13" font-weight="700" font-family="Segoe UI" text-anchor="end">① Be specific — error code helps a lot</text>
+        <line x1="500" y1="206" x2="156" y2="200" stroke="#ff1744" stroke-width="2" marker-end="url(#arr2)"/>
+
+        <circle cx="483" cy="321" r="22" fill="none" stroke="#ff1744" stroke-width="3"/>
+        <text x="20" y="290" fill="#ff1744" font-size="13" font-weight="700" font-family="Segoe UI">② Urgency = how it affects YOUR work</text>
+        <line x1="180" y1="298" x2="466" y2="316" stroke="#ff1744" stroke-width="2" marker-end="url(#arr2)"/>
+
+        <circle cx="556" cy="516" r="28" fill="none" stroke="#22C55E" stroke-width="3"/>
+        <text x="20" y="540" fill="#22C55E" font-size="13" font-weight="700" font-family="Segoe UI">③ Click Submit — done!</text>
+        <line x1="180" y1="534" x2="528" y2="520" stroke="#22C55E" stroke-width="2" marker-end="url(#arr2)"/>
+      </svg>
+    </div>
+    <p class="caption">Quick Issue Report — only Title + Description are mandatory.</p>
+
+    <div class="tip"><b>Pro tip:</b> Paste error messages <i>verbatim</i> (copy-paste, don't retype). The AI uses them to find matching solutions in seconds.</div>
+  </div>
+
+  <!-- 6. Submit a Request -->
+  <div class="section" id="request">
+    <h2>6. Method B — 📋 Submit a Request</h2>
+    <p>Use this when you need <b>something new</b> rather than fixing something broken. The Service Catalog is a list of pre-approved items — like an internal shop.</p>
+
+    <h3>What you'll find in the catalog</h3>
+    <table>
+      <tr><th>Category</th><th>Examples</th><th>Typical wait</th></tr>
+      <tr><td>💻 Hardware</td><td>Laptop, monitor, headset, keyboard, dock</td><td>2–5 business days</td></tr>
+      <tr><td>📦 Software</td><td>Adobe, Visio, Power BI Pro, dev tools</td><td>1 business day (after manager approval)</td></tr>
+      <tr><td>🔐 Access</td><td>SharePoint site, shared mailbox, VPN, GitHub repo</td><td>Same day (auto-approved for low risk)</td></tr>
+      <tr><td>👤 Account</td><td>New starter onboarding, password reset, MFA reset</td><td>30 min – 4 hours</td></tr>
+      <tr><td>🏢 Facilities</td><td>Desk move, meeting-room AV, printer setup</td><td>1–2 business days</td></tr>
+    </table>
+
+    <h3>How it works</h3>
+    <div class="steps">
+      <div class="step"><div class="num">1</div><div class="body"><h4>Click <b>📋 Submit a Request</b></h4><p>Or open the <b>🛍️ Service Catalog</b> tab.</p></div></div>
+      <div class="step"><div class="num">2</div><div class="body"><h4>Browse or search</h4><p>Type "monitor" or "Power BI" — items appear as cards.</p></div></div>
+      <div class="step"><div class="num">3</div><div class="body"><h4>Click an item → fill its short form</h4><p>Each item has only the fields it needs (e.g. monitor size, delivery location).</p></div></div>
+      <div class="step"><div class="num">4</div><div class="body"><h4>Submit</h4><p>If approval is needed, your manager receives a one-click approve/reject email. You'll see status under <b>My Requests</b>.</p></div></div>
+    </div>
+
+    <div class="info"><b>Approval:</b> Items above your spending limit auto-route to your manager and finance. You don't need to chase — the system reminds them daily.</div>
+  </div>
+
+  <!-- 7. Chat with AI -->
+  <div class="section" id="chat">
+    <h2>7. Method C — 💬 Chat with Support (AI Assistant)</h2>
+    <p>The AI assistant is the <b>fastest way to get an answer</b>. It's available 24×7, in plain English, and can do three things for you:</p>
+    <ol>
+      <li><b>Answer your question instantly</b> from our knowledge base (e.g. "How do I connect to VPN from home?").</li>
+      <li><b>Diagnose your issue</b> by asking follow-up questions and giving step-by-step fixes.</li>
+      <li><b>Open a ticket for you</b> if it can't fix it — pre-filled from the conversation, no form to type.</li>
+    </ol>
+
+    <h3>What a typical conversation looks like</h3>
+    <div class="mock">
+      <div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url">… /portal — Chat with Support</span></div>
+      <svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ff1744"/></marker>
+        </defs>
+        <rect width="900" height="600" fill="#0f1419"/>
+        <!-- Chat container -->
+        <rect x="30" y="20" width="840" height="560" rx="12" fill="#181d27" stroke="#2a3142"/>
+        <!-- Header -->
+        <rect x="30" y="20" width="840" height="50" rx="12" fill="#1a1830"/>
+        <circle cx="60" cy="45" r="14" fill="#5b4cc4"/>
+        <text x="60" y="50" font-size="14" font-family="Segoe UI" text-anchor="middle">🤖</text>
+        <text x="86" y="42" fill="#E8ECF4" font-size="13" font-weight="700" font-family="Segoe UI">VGC AI Assistant</text>
+        <text x="86" y="58" fill="#22C55E" font-size="10" font-family="Segoe UI">● Online · Avg response 1.2s</text>
+
+        <!-- Bot greeting -->
+        <rect x="60" y="90" width="380" height="50" rx="14" fill="#241d3f"/>
+        <text x="76" y="112" fill="#E8ECF4" font-size="12" font-family="Segoe UI">Hi Jane! I can answer questions, fix common</text>
+        <text x="76" y="130" fill="#E8ECF4" font-size="12" font-family="Segoe UI">issues, or open a ticket for you. What's up?</text>
+
+        <!-- User msg -->
+        <rect x="450" y="160" width="400" height="40" rx="14" fill="#1565c0"/>
+        <text x="466" y="184" fill="#fff" font-size="12" font-family="Segoe UI">My VPN keeps disconnecting every few minutes 😣</text>
+
+        <!-- Bot reply with KB suggestion -->
+        <rect x="60" y="220" width="500" height="120" rx="14" fill="#241d3f"/>
+        <text x="76" y="242" fill="#E8ECF4" font-size="12" font-family="Segoe UI">I found 2 likely causes. The most common fix:</text>
+        <text x="76" y="262" fill="#E8ECF4" font-size="12" font-family="Segoe UI">1. Open Cisco AnyConnect → Settings</text>
+        <text x="76" y="278" fill="#E8ECF4" font-size="12" font-family="Segoe UI">2. Enable "Reconnect on idle"</text>
+        <text x="76" y="294" fill="#E8ECF4" font-size="12" font-family="Segoe UI">3. Restart the VPN client</text>
+        <rect x="76" y="306" width="220" height="24" rx="4" fill="#1f1834" stroke="#5b4cc4"/>
+        <text x="86" y="322" fill="#cfc8ff" font-size="11" font-family="Segoe UI">📄 KB-204 · VPN drops · 4 min read</text>
+
+        <!-- Action chips -->
+        <rect x="60" y="360" width="120" height="28" rx="14" fill="#0f3320" stroke="#22C55E"/>
+        <text x="120" y="378" fill="#22C55E" font-size="11" font-family="Segoe UI" text-anchor="middle">✓ This worked</text>
+        <rect x="190" y="360" width="160" height="28" rx="14" fill="#3a1f1f" stroke="#ef6c00"/>
+        <text x="270" y="378" fill="#ffb74d" font-size="11" font-family="Segoe UI" text-anchor="middle">✗ Still broken — open ticket</text>
+        <rect x="360" y="360" width="120" height="28" rx="14" fill="#1a2330" stroke="#3a4257"/>
+        <text x="420" y="378" fill="#A3AED1" font-size="11" font-family="Segoe UI" text-anchor="middle">💬 Talk to human</text>
+
+        <!-- User clicks "Still broken" -->
+        <rect x="600" y="410" width="250" height="40" rx="14" fill="#1565c0"/>
+        <text x="616" y="434" fill="#fff" font-size="12" font-family="Segoe UI">Still broken — open a ticket please</text>
+
+        <!-- Bot creates ticket -->
+        <rect x="60" y="470" width="500" height="80" rx="14" fill="#0f3320" stroke="#22C55E"/>
+        <text x="76" y="492" fill="#E8ECF4" font-size="12" font-family="Segoe UI" font-weight="700">✅ Ticket INC-1044 created</text>
+        <text x="76" y="510" fill="#E8ECF4" font-size="11" font-family="Segoe UI">Priority: P2 · Assigned to: Network Team · ETA: 2 hours</text>
+        <text x="76" y="528" fill="#8B92A8" font-size="11" font-family="Segoe UI">I attached our chat as context. Track it under My Tickets.</text>
+
+        <!-- Input bar -->
+        <rect x="60" y="565" width="660" height="0" fill="none"/>
+
+        <!-- Annotations -->
+        <text x="700" y="240" fill="#ff1744" font-size="13" font-weight="700" font-family="Segoe UI" text-anchor="end">① AI gives an instant fix</text>
+        <line x1="540" y1="248" x2="566" y2="266" stroke="#ff1744" stroke-width="2" marker-end="url(#arr3)"/>
+
+        <circle cx="270" cy="374" r="20" fill="none" stroke="#22C55E" stroke-width="3"/>
+        <text x="700" y="392" fill="#22C55E" font-size="13" font-weight="700" font-family="Segoe UI" text-anchor="end">② You decide what happens next</text>
+        <line x1="500" y1="388" x2="296" y2="378" stroke="#22C55E" stroke-width="2" marker-end="url(#arr3)"/>
+
+        <circle cx="180" cy="490" r="22" fill="none" stroke="#FFB300" stroke-width="3"/>
+        <text x="700" y="500" fill="#FFB300" font-size="13" font-weight="700" font-family="Segoe UI" text-anchor="end">③ Ticket auto-created if needed</text>
+        <line x1="500" y1="500" x2="206" y2="490" stroke="#FFB300" stroke-width="2" marker-end="url(#arr3)"/>
+      </svg>
+    </div>
+    <p class="caption">A real conversation: ask → AI answers → if not fixed, AI opens the ticket for you.</p>
+
+    <h3>What you can ask the AI</h3>
+    <div class="quote">
+      💬 <b>"How do I reset my password?"</b><br>
+      💬 <b>"My printer says offline — fix it."</b><br>
+      💬 <b>"I need access to the Finance SharePoint site."</b><br>
+      💬 <b>"What's the status of INC-1042?"</b><br>
+      💬 <b>"Translate this error: 0x80070005"</b><br>
+      💬 <b>"Show me all my open tickets."</b>
+    </div>
+
+    <h3>Attaching files</h3>
+    <p>Click the 📎 icon to attach <b>screenshots, log files, or PDFs</b>. The AI can read them and give a much more accurate answer (e.g. read your error screenshot or analyse a log).</p>
+
+    <div class="warn"><b>Heads-up — privacy:</b> Don't paste passwords, credit-card numbers, or personal IDs into chat. The AI automatically redacts most of this, but it's safest not to share it at all.</div>
+  </div>
+
+  <!-- 8. Tracking tickets -->
+  <div class="section" id="tickets">
+    <h2>8. Tracking your tickets</h2>
+    <p>Open the <b>🎫 My Tickets</b> tab. Each ticket shows:</p>
+    <ul>
+      <li><b>Status dot</b> 🟢 New · 🟡 Assigned · 🟠 In Progress · 🔵 Pending You · ✅ Resolved · ⚫ Closed</li>
+      <li><b>SLA timer</b> — when the engineer is committed to respond / fix it.</li>
+      <li><b>Assigned engineer</b> + their photo.</li>
+      <li><b>Updates timeline</b> — every reply, status change, and AI suggestion is logged.</li>
+    </ul>
+
+    <h3>Replying to your engineer</h3>
+    <p>Click any ticket → scroll to the <b>comment box</b> at the bottom → type your reply or attach a file. The engineer is notified immediately.</p>
+
+    <div class="info"><b>Stuck waiting?</b> If the status shows <b>“Pending You”</b>, the engineer needs information from you. Reply in the comment box — the SLA clock pauses while it's on you.</div>
+  </div>
+
+  <!-- 9. Knowledge Base -->
+  <div class="section" id="kb">
+    <h2>9. Self-help — Knowledge Base 📚</h2>
+    <p>Before opening a ticket, search the <b>Knowledge Base</b> tab. Most "how do I…" questions have a 2-minute answer here.</p>
+    <ul>
+      <li>Type a question in the search box at the top — try natural language: <i>"how to install Microsoft Teams"</i>.</li>
+      <li>Articles are tagged with read-time (e.g. <b>3 min</b>) and freshness (<b>Updated today</b>).</li>
+      <li>The 🤖 <b>Ask AI</b> box at the top of the KB summarises multiple articles into a single answer with citations.</li>
+    </ul>
+    <div class="tip"><b>Why use it:</b> Self-served answers are instant — no waiting for an engineer.</div>
+  </div>
+
+  <!-- 10. Tips -->
+  <div class="section" id="tips">
+    <h2>10. Tips for faster resolution ⚡</h2>
+    <ol>
+      <li><b>Be specific.</b> "Outlook crashes every time I open a meeting" is 10× better than "email broken".</li>
+      <li><b>Include exact error messages</b> (copy-paste). Codes like <code>0x80004005</code> point straight at a known fix.</li>
+      <li><b>Attach a screenshot.</b> A 2-second screenshot saves a 5-minute back-and-forth.</li>
+      <li><b>Pick the right urgency.</b> Don't mark everything P1 — see the table below.</li>
+      <li><b>Reply quickly</b> when status is <b>“Pending You”</b>. The clock is paused, but your day isn't.</li>
+      <li><b>Use chat first</b> for "how do I…" questions — instant answer, no ticket needed.</li>
+    </ol>
+  </div>
+
+  <!-- 11. Priority -->
+  <div class="section" id="priority">
+    <h2>11. How priority is decided</h2>
+    <p>You pick an <b>Urgency</b>; the AI combines it with <b>Impact</b> (how many people are affected) to set the final <b>Priority</b>.</p>
+    <div class="priority-grid">
+      <div class="pri p1"><h4>P1 — Critical</h4><p>Whole team / site down. Response in 15 min, fix in 4 h.</p></div>
+      <div class="pri p2"><h4>P2 — High</h4><p>You can't work, others can. Response 30 min, fix 8 h.</p></div>
+      <div class="pri p3"><h4>P3 — Medium</h4><p>Annoying but you can work around it. Response 2 h, fix 2 days.</p></div>
+      <div class="pri p4"><h4>P4 — Low</h4><p>Cosmetic / future request. Response next business day.</p></div>
+    </div>
+    <p class="caption">SLA times shown are typical — your contract may differ.</p>
+  </div>
+
+  <!-- 12. CSAT -->
+  <div class="section" id="csat">
+    <h2>12. Closing the loop — your feedback 💛</h2>
+    <p>When a ticket is resolved you'll get a one-question survey email:</p>
+    <div class="quote">"How was your experience? &nbsp; ⭐ ⭐ ⭐ ⭐ ⭐"</div>
+    <p>It takes 5 seconds and genuinely helps us improve. You can also <b>re-open the ticket</b> from the survey if the fix didn't actually work — no need to start a new one.</p>
+  </div>
+
+  <!-- 13. FAQ -->
+  <div class="section" id="faq">
+    <h2>13. Frequently Asked Questions</h2>
+
+    <h3>Q. Is the AI a real person?</h3>
+    <p>No — it's an AI assistant trained on our internal IT knowledge. But every ticket it creates is reviewed by a real engineer.</p>
+
+    <h3>Q. Will my chat be read by humans?</h3>
+    <p>Engineers can see the chat <b>only if a ticket is opened</b>, so they have context. Otherwise it stays between you and the AI. Sensitive data (IDs, card numbers) is automatically redacted.</p>
+
+    <h3>Q. Can I use the portal on my phone?</h3>
+    <p>Yes — it's mobile-friendly. You can also "Add to Home Screen" for an app-like icon, and browse your past tickets even when offline.</p>
+
+    <h3>Q. What if the AI gets it wrong?</h3>
+    <p>Click <b>“✗ Still broken — open ticket”</b> in the chat, or use the 👎 button on any answer. A human engineer takes over and the AI learns from the correction.</p>
+
+    <h3>Q. I urgently need help — should I still chat first?</h3>
+    <p>For genuine <b>P1 emergencies</b> (site down, security incident), use <b>🎫 Report an Issue</b> and set Urgency = "Critical". For everything else, chat is fastest.</p>
+
+    <h3>Q. Can I CC my manager?</h3>
+    <p>Yes — open the ticket, click <b>“Add watcher”</b> and search their name. They get every update by email.</p>
+
+    <h3>Q. How do I cancel a request?</h3>
+    <p>Open it in <b>My Requests</b> → click <b>Cancel</b>. If it's already approved/in fulfilment, add a comment and the engineer will close it.</p>
+
+    <h3>Q. Where can I see service outages?</h3>
+    <p>The portal home shows a banner if any major service (email, VPN, network) is degraded — no need to log a ticket if it's a known outage.</p>
+  </div>
+
+  <!-- Help -->
+  <div class="section">
+    <h2>Need more help?</h2>
+    <ul>
+      <li>📧 Email: <code>itsupport@vgc.local</code></li>
+      <li>📞 Hotline: <b>x-2222</b> (24×7, P1 only)</li>
+      <li>💬 Chat: any time inside the portal</li>
+      <li>📚 Full <a href="User-Guide.html" class="nav-link" style="margin-top:0">User Guide →</a></li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    © 2026 VGC-ITSM · Customer Quick Guide v3.28 · Generated May 2026
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,5 @@
+<step title="Incoming Request" date="2026-05-01T03:46:12.922" instance="d74bf2" url="/logstream" method="GET" type="request" pid="831,1,14" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="identity" Authorization="Bas..." x-ms-client-request-id="49747140-4510-11f1-8adc-6045bd2161f1" X-ARR-LOG-ID="49747140-4510-11f1-8adc-6045bd2161f1" CLIENT-IP="4.193.130.137:1920" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app__fa8e" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/logstream" X-Client-IP="4.193.130.137" X-Client-Port="1920" >
+  <step title="LogStreamHandlerMiddleware.Invoke" date="2026-05-01T03:46:12.953" /><!-- duration: 132ms -->
+  <step title="Error occurred" date="2026-05-01T03:51:13.088" type="error" text="LogStreamManager: ProcessRequest end" /><!-- duration: 3ms -->
+  <step title="Outgoing response" date="2026-05-01T03:51:13.099" type="response" statusCode="200" statusText="OK" /><!-- duration: 3ms -->
+</step><!-- duration: 300183ms -->

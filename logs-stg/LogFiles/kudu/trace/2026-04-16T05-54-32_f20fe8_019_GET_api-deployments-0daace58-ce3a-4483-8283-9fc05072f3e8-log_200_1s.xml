@@ -1,0 +1,7 @@
+<step title="Incoming Request" date="2026-04-16T05:54:32.425" instance="f20fe8" url="/api/deployments/0daace58-ce3a-4483-8283-9fc05072f3e8/log" method="GET" type="request" pid="834,1,7" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="python/3.13.11 (Windows-11-10.0.26200-SP0) AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." x-ms-client-request-id="400d41d5-da88-41f6-9f1d-6574aeff4c81" CommandName="rest" ParameterSetName="--method --url --resource -o --query" X-ARR-LOG-ID="400d41d5-da88-41f6-9f1d-6574aeff4c81" CLIENT-IP="4.193.130.137:1154" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/deployments/0daace58-ce3a-4483-8283-9fc05072f3e8/log" X-Client-IP="4.193.130.137" X-Client-Port="1154" >
+  <step title="Cleanup Xml Logs" date="2026-04-16T05:54:32.436" /><!-- duration: 118ms -->
+  <step title="DeploymentService.GetLogEntry" date="2026-04-16T05:54:32.795" >
+    <step title="DeploymentManager.GetLogEntries(id:0daace58-ce3a-4483-8283-9fc05072f3e8)" date="2026-04-16T05:54:32.868" /><!-- duration: 302ms -->
+  </step><!-- duration: 453ms -->
+  <step title="Outgoing response" date="2026-04-16T05:54:33.258" type="response" statusCode="200" statusText="OK" /><!-- duration: 11ms -->
+</step><!-- duration: 923ms -->

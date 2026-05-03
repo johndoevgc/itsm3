@@ -1,0 +1,16 @@
+<step title="Incoming Request" date="2026-04-17T04:35:58.022" instance="f20fe8" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="837,1,5" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30; ARRAffinitySameSite=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30" Content-Length="298709" x-ms-client-request-id="e9c3c140-3a16-11f1-ad8a-6045bd2161f1" x-ms-artifact-checksum="d37eb33467aa1f628ade8e83bd00b1a3dbf6cac99c88481538ca205a58304a5f" X-ARR-LOG-ID="e9c3c140-3a16-11f1-ad8a-6045bd2161f1" CLIENT-IP="4.193.130.137:1154" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="4.193.130.137" X-Client-Port="1154" >
+  <step title="OneDeploy" date="2026-04-17T04:35:58.092" >
+    <step title="None repository commit" date="2026-04-17T04:35:58.104" >
+      <step title="Commit id: 09fe9415-a5b2-44e5-9610-016ca3acd98e" date="2026-04-17T04:35:58.108" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 4ms -->
+    </step><!-- duration: 13ms -->
+    <step title="Starting PushDeployAsync" date="2026-04-17T04:35:58.120" /><!-- duration: 3ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/4c39d1b5-fe40-452a-8fad-d8021043dc6c.zip" date="2026-04-17T04:35:58.142" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/4c39d1b5-fe40-452a-8fad-d8021043dc6c.zip" date="2026-04-17T04:35:58.146" /><!-- duration: 12ms -->
+    </step><!-- duration: 139ms -->
+    <step title="Start deployment in the background" date="2026-04-17T04:35:58.391" >
+      <step title="Acquiring Deployment Lock" date="2026-04-17T04:35:58.506" /><!-- duration: 8ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-17T04:35:58.564" /><!-- duration: 3ms -->
+    </step><!-- duration: 258ms -->
+  </step><!-- duration: 563ms -->
+  <step title="Outgoing response" date="2026-04-17T04:35:58.665" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 650ms -->

@@ -1,0 +1,2 @@
+2026-04-27T06:04:33  Startup Request, url: /api/command, method: POST, type: request, pid: 831,1,60, ScmType: LocalGit, SCM_DO_BUILD_DURING_DEPLOYMENT: false
+2026-04-27T06:04:33    Outgoing response, type: response, statusCode: 400, statusText: BadRequest

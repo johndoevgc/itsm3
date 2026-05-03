@@ -59,7 +59,7 @@ function detectLang(text) {
 
 const I18N = {
   greetingTemplate: {
-    en: (n) => `Hi ${n}, I'm VGC AI Assist. I'm here to help you resolve your IT issue quickly. Please tap the category that best describes your problem — or type your question below.`,
+    en: (n) => `Hi ${n} 👋 I'm VGC AI Assist. Tap a category below to log a ticket in 30 seconds — or just type what's wrong and I'll figure it out.`,
     zh: (n) => `${n} 您好，我是 VGC AI 智能助理。我会协助您快速解决 IT 问题。请点选最符合您问题的类别 — 或在下方输入您的问题。`,
     ms: (n) => `Hai ${n}, saya VGC AI Assist. Saya di sini untuk membantu menyelesaikan masalah IT anda dengan cepat. Sila pilih kategori yang paling sesuai dengan masalah anda — atau taip soalan anda di bawah.`,
     hi: (n) => `नमस्ते ${n}, मैं VGC AI Assist हूँ। मैं आपकी IT समस्या को जल्दी सुलझाने में मदद करने के लिए यहाँ हूँ। कृपया अपनी समस्या से मेल खाने वाली श्रेणी पर टैप करें — या नीचे अपना प्रश्न लिखें।`,
@@ -263,15 +263,15 @@ const PRIORITY_OPTIONS = [
   { value: "Low – no rush",          label: "Low – no rush",          icon: "🟢" },
 ];
 
+// VGC AI Assist intake — kept intentionally short (4 questions, mostly
+// 1-tap) so customers can log a ticket in under 30 seconds. Detail beyond
+// title/description is captured later by the engineer or auto-extracted by
+// AI triage from the description text.
 const INTAKE_FIELDS = [
-  { key: "title",       prompt: "In one sentence, what is the main problem you are experiencing?" },
-  { key: "description", prompt: "Please describe what happened in more detail. What were you doing when this started?" },
-  { key: "errorMsg",    prompt: "Do you see any error message on screen? If yes, please describe it. (Type 'no' or 'skip' if none.)" },
-  { key: "devices",     prompt: "Which device or system is affected? (e.g. laptop, desktop, mobile, server)" },
-  { key: "impact",      prompt: "How is this affecting your work right now?", card: "impact" },
-  { key: "priority",    prompt: "How urgently do you need this resolved?", card: "priority" },
-  { key: "startedAt",   prompt: "Roughly when did this issue first occur?" },
-  { key: "triedSteps",  prompt: "Have you already tried anything to fix this? What happened? (Type 'no' if nothing tried.)" },
+  { key: "title",       prompt: "In one short sentence, what's wrong? (e.g. \"Outlook keeps crashing\")" },
+  { key: "description", prompt: "Briefly tell me what happened — paste any error message you see. (Or tap Skip if the title says it all.)", optional: true },
+  { key: "impact",      prompt: "How is this affecting your work?", card: "impact" },
+  { key: "priority",    prompt: "How urgently do you need this fixed?", card: "priority" },
 ];
 
 const SLA_BY_SEVERITY = { P1: "1 hour", P2: "4 hours", P3: "8 hours", P4: "Next business day" };
@@ -443,17 +443,34 @@ function advanceIntake(session, action, customerName) {
       if (idx < 0) return null;
       const fieldKey = INTAKE_FIELDS[idx].key;
       intake.fields[fieldKey] = String(value || "").slice(0, 2000);
+      // Smart split: if the customer typed a long initial title, treat the
+      // tail as description so we don't have to ask the next question.
+      if (fieldKey === "title" && intake.fields.title.length > 80 && !intake.fields.description) {
+        intake.fields.description = intake.fields.title;
+        intake.fields.title = intake.fields.title.split(/[.!?\n]/)[0].slice(0, 80);
+      }
       const next = nextFieldStage(intake.stage);
       intake.stage = next;
       if (next === "confirm") {
         return buildAssistantMessage({
-          text: "Thanks for that detail. Here's a quick summary — please review and confirm so I can log your ticket.",
+          text: "Got it. Here's a quick summary — tap to confirm and I'll log your ticket.",
           cards: [summaryCard(intake)],
         });
       }
       const ack = (I18N.acks[intake.lang || "en"] || I18N.acks.en)[idx % 4];
       const promptMsg = promptForStage(next);
-      if (promptMsg) promptMsg.text = `${ack} ${promptMsg.text}`;
+      if (promptMsg) {
+        promptMsg.text = `${ack} ${promptMsg.text}`;
+        // Add a Skip chip on optional fields so customer can fast-forward.
+        const nextIdx = findFieldIndex(next);
+        if (nextIdx >= 0 && INTAKE_FIELDS[nextIdx].optional) {
+          promptMsg.cards = (promptMsg.cards || []).concat([{
+            type: "quick-reply",
+            kind: "skip-field",
+            options: [{ value: "skip", label: "⏭️ Skip — create now", icon: null }],
+          }]);
+        }
+      }
       return promptMsg;
     }
     case "pick-impact": {

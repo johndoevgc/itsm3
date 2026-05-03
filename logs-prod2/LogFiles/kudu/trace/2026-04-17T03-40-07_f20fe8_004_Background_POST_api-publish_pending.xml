@@ -1,0 +1,21 @@
+<step title="BackgroundTrace" date="2026-04-17T03:40:07.577" instance="f20fe8" url="/api/publish" method="POST" >
+  <step title="Cleanup Xml Logs" date="2026-04-17T03:40:07.587" >
+    <step title="Cleanup Infos" date="2026-04-17T03:40:07.596" totalFiles="276" totalCleanup="116" /><!-- duration: 5ms -->
+  </step><!-- duration: 21ms -->
+  <step title="Creating temporary deployment - FetchDeploymentManager" date="2026-04-17T03:40:07.725" /><!-- duration: 3ms -->
+  <step title="Creating temporary deployment" date="2026-04-17T03:40:07.731" /><!-- duration: 65ms -->
+  <step title="Performing fetch based deployment" date="2026-04-17T03:40:07.886" >
+    <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/ba148bac-06c6-4775-9d9f-d42f30533773.zip (29.32 MB) to /tmp/zipdeploy/extracted" date="2026-04-17T03:40:09.072" >
+      <step title="ChmodRecursive Process exited with total time taken in ms: 380" date="2026-04-17T03:40:19.568" /><!-- duration: 11ms -->
+    </step><!-- duration: 10511ms -->
+    <step title="Deployment timer started" date="2026-04-17T03:40:21.605" >
+      <step title="DeploymentManager.Deploy(id:6d2ab209-2d7e-47a9-b9c6-05181b2d6060)" date="2026-04-17T03:40:21.652" >
+        <step title="Collecting changeset information" date="2026-04-17T03:40:21.705" /><!-- duration: 128ms -->
+        <step title="Updating submodules" date="2026-04-17T03:40:21.846" /><!-- duration: 1231ms -->
+        <step title="Determining deployment builder" date="2026-04-17T03:40:23.372" >
+          <step title="Builder is OneDeployBuilder" date="2026-04-17T03:40:23.398" /><!-- duration: 3ms -->
+        </step><!-- duration: 34ms -->
+        <step title="PreDeployment: context.CleanOutputPath False" date="2026-04-17T03:40:23.476" >
+          <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-04-17T03:40:23.649" >
+            <step title="Building" date="2026-04-17T03:40:23.815" >
+              <step title="Executing external process" date="2026-04-17T03:40:24.897" type="process" path="starter.sh" arguments="/opt/Kudu/Scripts/parallel_rsync.sh /tmp/zipdeploy/extracted /home/site/wwwroot 8 /tmp/ False False  " 

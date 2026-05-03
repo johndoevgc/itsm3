@@ -1,0 +1,2 @@
+2026-04-26T11:12:18  Startup Request, url: /api/vfs/site/wwwroot/dist/?recursive=true, method: DELETE, type: request, pid: 831,1,88, SCM_DO_BUILD_DURING_DEPLOYMENT: false, ScmType: LocalGit
+2026-04-26T11:12:18    Outgoing response, type: response, statusCode: 404, statusText: NotFound

@@ -1,0 +1,5 @@
+<step title="Startup Request" date="2026-04-17T10:46:36.144" instance="f20fe8" url="/api/deployments?warmup=true" method="GET" type="request" pid="831,1,15" ScmType="LocalGit" SCM_DO_BUILD_DURING_DEPLOYMENT="false" >
+  <step title="Cleanup Xml Logs" date="2026-04-17T10:46:36.150" >
+    <step title="Cleanup Infos" date="2026-04-17T10:46:36.166" totalFiles="573" totalCleanup="413" /><!-- duration: 7ms -->
+  </step><!-- duration: 28ms -->
+</step><!-- duration: 37ms -->

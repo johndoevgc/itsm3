@@ -1,0 +1,17 @@
+<step title="Incoming Request" date="2026-04-20T05:01:07.267" instance="f20fe8" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="835,1,34" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="383184" x-ms-client-request-id="ee0f5edd-3c75-11f1-9ce3-6045bd2161f1" x-ms-artifact-checksum="66ec29148e1101aa8a33ab568492ae72800fa4cad50ed8996ae18299826e2c86" X-ARR-LOG-ID="ee0f5edd-3c75-11f1-9ce3-6045bd2161f1" CLIENT-IP="4.193.130.137:1984" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="4.193.130.137" X-Client-Port="1984" >
+  <step title="Cleanup Xml Logs" date="2026-04-20T05:01:07.272" >
+    <step title="Cleanup Infos" date="2026-04-20T05:01:07.287" totalFiles="700" totalCleanup="540" /><!-- duration: 9ms -->
+  </step><!-- duration: 27ms -->
+  <step title="ZipPushDeploy" date="2026-04-20T05:01:07.411" >
+    <step title="ZipDeploy. Extract zip." date="2026-04-20T05:01:07.416" /><!-- duration: 3ms -->
+    <step title="Starting PushDeployAsync" date="2026-04-20T05:01:07.423" /><!-- duration: 3ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/342823b5-f757-4cf5-a8b4-7bddc3849792.zip" date="2026-04-20T05:01:07.435" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/342823b5-f757-4cf5-a8b4-7bddc3849792.zip" date="2026-04-20T05:01:07.438" /><!-- duration: 14ms -->
+    </step><!-- duration: 41ms -->
+    <step title="Start deployment in the background" date="2026-04-20T05:01:07.503" >
+      <step title="Acquiring Deployment Lock" date="2026-04-20T05:01:07.529" /><!-- duration: 3ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-20T05:01:07.572" /><!-- duration: 3ms -->
+    </step><!-- duration: 146ms -->
+  </step><!-- duration: 243ms -->
+  <step title="Outgoing response" date="2026-04-20T05:01:07.657" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 396ms -->

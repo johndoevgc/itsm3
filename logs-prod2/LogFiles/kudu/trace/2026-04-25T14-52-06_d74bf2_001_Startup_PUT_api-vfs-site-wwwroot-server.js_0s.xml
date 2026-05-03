@@ -1,0 +1,5 @@
+<step title="Startup Request" date="2026-04-25T14:52:06.281" instance="d74bf2" url="/api/vfs/site/wwwroot/server.js" method="PUT" type="request" pid="831,1,16" SCM_DO_BUILD_DURING_DEPLOYMENT="false" ScmType="LocalGit" >
+  <step title="Cleanup Xml Logs" date="2026-04-25T14:52:06.286" >
+    <step title="Cleanup Infos" date="2026-04-25T14:52:06.319" totalFiles="787" totalCleanup="627" /><!-- duration: 7ms -->
+  </step><!-- duration: 45ms -->
+</step><!-- duration: 54ms -->

@@ -1,0 +1,11 @@
+<step title="Incoming Request" date="2026-04-19T16:53:07.921" instance="f20fe8" url="/api/deployments/latest" method="GET" type="request" pid="835,1,15" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." x-ms-client-request-id="35df6235-3c10-11f1-80fc-6045bd2161f1" X-ARR-LOG-ID="35df6235-3c10-11f1-80fc-6045bd2161f1" CLIENT-IP="4.193.130.137:1987" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/deployments/latest" X-Client-IP="4.193.130.137" X-Client-Port="1987" >
+  <step title="Cleanup Xml Logs" date="2026-04-19T16:53:07.923" >
+    <step title="Cleanup Infos" date="2026-04-19T16:53:07.940" totalFiles="671" totalCleanup="511" /><!-- duration: 5ms -->
+  </step><!-- duration: 24ms -->
+  <step title="DeploymentService.GetResult" date="2026-04-19T16:53:07.998" >
+    <step title="DeploymentService.GetLatestDeployment" date="2026-04-19T16:53:08.001" >
+      <step title="DeploymentManager.GetResults" date="2026-04-19T16:53:08.004" /><!-- duration: 668ms -->
+    </step><!-- duration: 701ms -->
+  </step><!-- duration: 712ms -->
+  <step title="Outgoing response" date="2026-04-19T16:53:08.790" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 876ms -->

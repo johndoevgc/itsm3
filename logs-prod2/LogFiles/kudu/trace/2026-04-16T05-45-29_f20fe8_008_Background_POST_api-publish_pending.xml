@@ -1,0 +1,18 @@
+<step title="BackgroundTrace" date="2026-04-16T05:45:29.266" instance="f20fe8" url="/api/publish" method="POST" >
+  <step title="Cleanup Xml Logs" date="2026-04-16T05:45:29.278" /><!-- duration: 37ms -->
+  <step title="Creating temporary deployment - FetchDeploymentManager" date="2026-04-16T05:45:29.754" /><!-- duration: 19ms -->
+  <step title="Creating temporary deployment" date="2026-04-16T05:45:29.803" /><!-- duration: 191ms -->
+  <step title="Performing fetch based deployment" date="2026-04-16T05:45:30.553" >
+    <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/db61a125-678e-4873-a736-272241f3c0a4.zip (29.30 MB) to /tmp/zipdeploy/extracted" date="2026-04-16T05:45:32.857" >
+      <step title="ChmodRecursive Process exited with total time taken in ms: 600" date="2026-04-16T05:47:13.589" /><!-- duration: 62ms -->
+    </step><!-- duration: 100896ms -->
+    <step title="Deployment timer started" date="2026-04-16T05:47:16.132" >
+      <step title="DeploymentManager.Deploy(id:0e2e7dd9-7587-4a07-9021-367e5253cb22)" date="2026-04-16T05:47:16.575" >
+        <step title="Collecting changeset information" date="2026-04-16T05:47:16.897" /><!-- duration: 491ms -->
+        <step title="Updating submodules" date="2026-04-16T05:47:17.489" /><!-- duration: 2214ms -->
+        <step title="Determining deployment builder" date="2026-04-16T05:47:21.321" >
+          <step title="Builder is OneDeployBuilder" date="2026-04-16T05:47:21.381" /><!-- duration: 79ms -->
+        </step><!-- duration: 160ms -->
+        <step title="PreDeployment: context.CleanOutputPath False" date="2026-04-16T05:47:21.741" >
+          <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-04-16T05:47:22.225" >
+            <step title="Building" date="2026-04-16T05:47:22.597" 

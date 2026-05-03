@@ -97,6 +97,12 @@ if ($Build) {
   if (Test-Path "deploy") { Remove-Item "deploy" -Recurse -Force }
   New-Item -ItemType Directory deploy | Out-Null
   Copy-Item "dist/*" "deploy/" -Recurse -Force
+  # Customer-facing HTML guides (docs/Customer-Quick-Guide.html etc.) are
+  # served at /docs/* by server.js — ship them alongside dist.
+  if (Test-Path "docs") {
+    New-Item -ItemType Directory "deploy/docs" -Force | Out-Null
+    Copy-Item "docs/*" "deploy/docs/" -Recurse -Force
+  }
   Ok "Build complete."
 }
 

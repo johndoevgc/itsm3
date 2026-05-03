@@ -1,0 +1,11 @@
+<step title="Incoming Request" date="2026-04-17T03:40:58.014" instance="f20fe8" url="/api/deployments/latest" method="GET" type="request" pid="833,1,7" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="python/3.13.11 (Windows-11-10.0.26200-SP0) AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." x-ms-client-request-id="fbdf9955-5444-4734-bd5f-e702c8b1d586" CommandName="rest" ParameterSetName="--method --url --resource --query -o" X-ARR-LOG-ID="fbdf9955-5444-4734-bd5f-e702c8b1d586" CLIENT-IP="4.193.130.137:1152" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/deployments/latest" X-Client-IP="4.193.130.137" X-Client-Port="1152" >
+  <step title="Cleanup Xml Logs" date="2026-04-17T03:40:58.044" >
+    <step title="Cleanup Infos" date="2026-04-17T03:40:58.135" totalFiles="285" totalCleanup="125" /><!-- duration: 60ms -->
+  </step><!-- duration: 170ms -->
+  <step title="DeploymentService.GetResult" date="2026-04-17T03:40:58.276" >
+    <step title="DeploymentService.GetLatestDeployment" date="2026-04-17T03:40:58.306" >
+      <step title="DeploymentManager.GetResults" date="2026-04-17T03:40:58.366" /><!-- duration: 1326ms -->
+    </step><!-- duration: 1394ms -->
+  </step><!-- duration: 1428ms -->
+  <step title="Outgoing response" date="2026-04-17T03:40:59.710" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 5ms -->
+</step><!-- duration: 1705ms -->

@@ -1,0 +1,5 @@
+<step title="Startup Request" date="2026-04-26T06:28:18.287" instance="d74bf2" url="/api/vfs/site/wwwroot/cacheLayer.js" method="PUT" type="request" pid="832,1,16" SCM_DO_BUILD_DURING_DEPLOYMENT="false" ScmType="LocalGit" >
+  <step title="Cleanup Xml Logs" date="2026-04-26T06:28:18.290" >
+    <step title="Cleanup Infos" date="2026-04-26T06:28:18.311" totalFiles="812" totalCleanup="652" /><!-- duration: 6ms -->
+  </step><!-- duration: 31ms -->
+</step><!-- duration: 41ms -->

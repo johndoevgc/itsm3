@@ -1,0 +1,18 @@
+<step title="Incoming Request" date="2026-04-16T11:32:49.115" instance="f20fe8" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="835,1,15" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30; ARRAffinitySameSite=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30" Content-Length="600123" x-ms-client-request-id="fb15180a-3987-11f1-b93f-6045bd2161f1" x-ms-artifact-checksum="9facce4c904c5b061cfaff103486b48dbda85067c581c5550072a3dda1357f8e" X-ARR-LOG-ID="fb15180a-3987-11f1-b93f-6045bd2161f1" CLIENT-IP="4.193.130.137:1154" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="4.193.130.137" X-Client-Port="1154" >
+  <step title="OneDeploy" date="2026-04-16T11:32:49.346" >
+    <step title="None repository commit" date="2026-04-16T11:32:49.407" >
+      <step title="Commit id: ee972d69-869e-4344-8a9b-54daea79dd33" date="2026-04-16T11:32:49.427" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 10ms -->
+    </step><!-- duration: 39ms -->
+    <step title="Starting PushDeployAsync" date="2026-04-16T11:32:49.466" /><!-- duration: 3ms -->
+    <step title="Removing _del_node_modules symlink" date="2026-04-16T11:32:49.567" >
+      <step title="Writing artifact to /tmp/zipdeploy/856e616a-9e48-491f-9c6d-1a14b6ce3938.zip" date="2026-04-16T11:32:49.729" >
+        <step title="Writing multipart request body to /tmp/zipdeploy/856e616a-9e48-491f-9c6d-1a14b6ce3938.zip" date="2026-04-16T11:32:49.747" /><!-- duration: 10ms -->
+      </step><!-- duration: 321ms -->
+      <step title="Start deployment in the background" date="2026-04-16T11:32:50.081" >
+        <step title="Acquiring Deployment Lock" date="2026-04-16T11:32:50.240" /><!-- duration: 9ms -->
+        <step title="Cannot Acquire Deployment Lock already held" date="2026-04-16T11:32:50.262" /><!-- duration: 38ms -->
+      </step><!-- duration: 380ms -->
+      <step title="There is a deployment currently in progress. Please try again when it completes." date="2026-04-16T11:32:50.491" /><!-- duration: 12ms -->
+    </step><!-- duration: 946ms -->
+    <step title="Outgoing response" date="2026-04-16T11:32:50.562" type="response" statusCode="409" statusText="Conflict" /><!-- duration: 9ms -->
+  </step><!-- duration: 1266ms -->

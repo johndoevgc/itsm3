@@ -1,0 +1,184 @@
+<step title="BackgroundTrace" date="2026-04-16T05:51:15.331" instance="f20fe8" url="/api/publish" method="POST" >
+  <step title="Creating temporary deployment - FetchDeploymentManager" date="2026-04-16T05:51:15.423" /><!-- duration: 2ms -->
+  <step title="Creating temporary deployment" date="2026-04-16T05:51:15.428" /><!-- duration: 79ms -->
+  <step title="Performing fetch based deployment" date="2026-04-16T05:51:15.552" >
+    <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/669468f7-4a97-4155-a697-6a730a5bbdae.zip (0.26 MB) to /tmp/zipdeploy/extracted" date="2026-04-16T05:51:16.754" >
+      <step title="ChmodRecursive Process exited with total time taken in ms: 98" date="2026-04-16T05:51:16.935" /><!-- duration: 10ms -->
+    </step><!-- duration: 200ms -->
+    <step title="Deployment timer started" date="2026-04-16T05:51:19.159" >
+      <step title="DeploymentManager.Deploy(id:0daace58-ce3a-4483-8283-9fc05072f3e8)" date="2026-04-16T05:51:19.180" >
+        <step title="Collecting changeset information" date="2026-04-16T05:51:19.215" /><!-- duration: 376ms -->
+        <step title="Updating submodules" date="2026-04-16T05:51:19.596" /><!-- duration: 1157ms -->
+        <step title="Determining deployment builder" date="2026-04-16T05:51:21.041" >
+          <step title="Builder is OryxBuilder" date="2026-04-16T05:51:21.080" /><!-- duration: 3ms -->
+        </step><!-- duration: 57ms -->
+        <step title="PreDeployment: context.CleanOutputPath False" date="2026-04-16T05:51:21.152" >
+          <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-04-16T05:51:21.297" >
+            <step title="Building" date="2026-04-16T05:51:21.437" >
+              <step title="Executing external process" date="2026-04-16T05:51:21.762" type="process" path="bash" arguments="-c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform nodejs --platform-version 20 -p virtualenv_name= --log-file /tmp/build-debug.log  -i /tmp/8de9b7c2fa898e4 -p compress_node_modules=tar-gz | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" >
+                <step title="Cpu: npm install(979,17.370s)+build.sh(885,0.060s)+oryx(862,9.490s)+tee(863,0.000s)+bash(861,0.000s)=total(26.920s)" date="2026-04-16T05:52:54.043" /><!-- duration: 49ms -->
+                <step title="bash: no io activity for 60s, prev-cpu=-1.000s, current-cpu=26.920s" date="2026-04-16T05:52:54.135" /><!-- duration: 20ms -->
+                <step title="Process dump" date="2026-04-16T05:54:15.793" exitCode="1" type="processOutput" /><!-- duration: 19ms -->
+              </step><!-- duration: 174056ms -->
+              <step title="Error occurred" date="2026-04-16T05:54:15.858" type="error" text="npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm notice
+npm notice New major version of npm available! 10.8.2 -&gt; 11.12.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.12.1
+npm notice To update run: npm install -g npm@11.12.1
+npm notice
+✗ Build failed in 884ms
+error during build:
+Build failed with 1 error:
+
+[31m[UNRESOLVED_ENTRY] Error:[0m Cannot resolve entry module index.html.
+
+    at aggregateBindingErrorsIntoJsError (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:48:18)
+    at unwrapBindingResult (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:18:128)
+    at #build (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/rolldown-build-DtGk-m96.mjs:3313:34)
+    at async buildEnvironment (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:32954:64)
+    at async Object.build (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33376:19)
+    at async Object.buildApp (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33373:153)
+    at async CAC.&lt;anonymous&gt; (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/cli.js:778:3) {
+  errors: [Getter/Setter]
+}
+/bin/bash -c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform nodejs --platform-version 20 -p virtualenv_name= --log-file /tmp/build-debug.log  -i /tmp/8de9b7c2fa898e4 -p compress_node_modules=tar-gz | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" stackTrace="   at Kudu.Core.Infrastructure.Executable.ExecuteInternal(ITracer tracer, Func`2 onWriteOutput, Func`2 onWriteError, CancellationToken token, Encoding encoding, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 239
+   at Kudu.Core.Infrastructure.Executable.ExecuteWithProgressWriter(ILogger logger, ITracer tracer, CancellationToken token, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 118
+   at Kudu.Core.Deployment.Generator.ExternalCommandBuilder.RunCommand(DeploymentContext context, String command, Boolean ignoreManifest, CancellationToken token, String message) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/ExternalCommandBuilder.cs:line 135" /><!-- duration: 26ms -->
+              <step title="Error occurred" date="2026-04-16T05:54:15.894" type="error" text="npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm notice
+npm notice New major version of npm available! 10.8.2 -&gt; 11.12.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.12.1
+npm notice To update run: npm install -g npm@11.12.1
+npm notice
+✗ Build failed in 884ms
+error during build:
+Build failed with 1 error:
+
+[31m[UNRESOLVED_ENTRY] Error:[0m Cannot resolve entry module index.html.
+
+    at aggregateBindingErrorsIntoJsError (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:48:18)
+    at unwrapBindingResult (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:18:128)
+    at #build (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/rolldown-build-DtGk-m96.mjs:3313:34)
+    at async buildEnvironment (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:32954:64)
+    at async Object.build (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33376:19)
+    at async Object.buildApp (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33373:153)
+    at async CAC.&lt;anonymous&gt; (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/cli.js:778:3) {
+  errors: [Getter/Setter]
+}
+/bin/bash -c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform nodejs --platform-version 20 -p virtualenv_name= --log-file /tmp/build-debug.log  -i /tmp/8de9b7c2fa898e4 -p compress_node_modules=tar-gz | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" stackTrace="   at Kudu.Core.Infrastructure.Executable.ExecuteInternal(ITracer tracer, Func`2 onWriteOutput, Func`2 onWriteError, CancellationToken token, Encoding encoding, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 239
+   at Kudu.Core.Infrastructure.Executable.ExecuteWithProgressWriter(ILogger logger, ITracer tracer, CancellationToken token, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 118
+   at Kudu.Core.Deployment.Generator.ExternalCommandBuilder.RunCommand(DeploymentContext context, String command, Boolean ignoreManifest, CancellationToken token, String message) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/ExternalCommandBuilder.cs:line 135
+   at Kudu.Core.Deployment.Generator.OryxBuilder.RunBuildCommand(IOryxArguments args, DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 295
+   at Kudu.Core.Deployment.Generator.OryxBuilder.Build(DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 136
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 771" /><!-- duration: 3ms -->
+              <step title="Using GenericDeploymentLogParser" date="2026-04-16T05:54:16.142" /><!-- duration: 4ms -->
+              <step title="Purge deployment items" date="2026-04-16T05:54:17.987" >
+                <step title="Remove temp-6b5a, Pending, received at 04/16/2026 05:51:15" date="2026-04-16T05:54:18.103" /><!-- duration: 3ms -->
+                <step title="Remove temp-c31e, Failed, received at 04/16/2026 05:45:29" date="2026-04-16T05:54:18.187" /><!-- duration: 17ms -->
+                <step title="Remove temp-f99c, Failed, received at 04/16/2026 05:38:28" date="2026-04-16T05:54:18.438" /><!-- duration: 3ms -->
+              </step><!-- duration: 457ms -->
+            </step><!-- duration: 177010ms -->
+          </step><!-- duration: 177154ms -->
+          <step title="Error occurred" date="2026-04-16T05:54:18.454" type="error" text="npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm notice
+npm notice New major version of npm available! 10.8.2 -&gt; 11.12.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.12.1
+npm notice To update run: npm install -g npm@11.12.1
+npm notice
+✗ Build failed in 884ms
+error during build:
+Build failed with 1 error:
+
+[31m[UNRESOLVED_ENTRY] Error:[0m Cannot resolve entry module index.html.
+
+    at aggregateBindingErrorsIntoJsError (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:48:18)
+    at unwrapBindingResult (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:18:128)
+    at #build (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/rolldown-build-DtGk-m96.mjs:3313:34)
+    at async buildEnvironment (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:32954:64)
+    at async Object.build (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33376:19)
+    at async Object.buildApp (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33373:153)
+    at async CAC.&lt;anonymous&gt; (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/cli.js:778:3) {
+  errors: [Getter/Setter]
+}
+/bin/bash -c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform nodejs --platform-version 20 -p virtualenv_name= --log-file /tmp/build-debug.log  -i /tmp/8de9b7c2fa898e4 -p compress_node_modules=tar-gz | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" stackTrace="   at Kudu.Core.Infrastructure.Executable.ExecuteInternal(ITracer tracer, Func`2 onWriteOutput, Func`2 onWriteError, CancellationToken token, Encoding encoding, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 239
+   at Kudu.Core.Infrastructure.Executable.ExecuteWithProgressWriter(ILogger logger, ITracer tracer, CancellationToken token, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 118
+   at Kudu.Core.Deployment.Generator.ExternalCommandBuilder.RunCommand(DeploymentContext context, String command, Boolean ignoreManifest, CancellationToken token, String message) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/ExternalCommandBuilder.cs:line 135
+   at Kudu.Core.Deployment.Generator.OryxBuilder.RunBuildCommand(IOryxArguments args, DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 295
+   at Kudu.Core.Deployment.Generator.OryxBuilder.Build(DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 136
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 771
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 840" /><!-- duration: 6ms -->
+          <step title="Cleaning up temp files" date="2026-04-16T05:54:18.532" /><!-- duration: 3085ms -->
+          <step title="Cleaning up temp files" date="2026-04-16T05:54:21.646" /><!-- duration: 523ms -->
+          <step title="Error occurred" date="2026-04-16T05:54:22.248" type="error" text="npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm notice
+npm notice New major version of npm available! 10.8.2 -&gt; 11.12.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.12.1
+npm notice To update run: npm install -g npm@11.12.1
+npm notice
+✗ Build failed in 884ms
+error during build:
+Build failed with 1 error:
+
+[31m[UNRESOLVED_ENTRY] Error:[0m Cannot resolve entry module index.html.
+
+    at aggregateBindingErrorsIntoJsError (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:48:18)
+    at unwrapBindingResult (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:18:128)
+    at #build (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/rolldown-build-DtGk-m96.mjs:3313:34)
+    at async buildEnvironment (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:32954:64)
+    at async Object.build (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33376:19)
+    at async Object.buildApp (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33373:153)
+    at async CAC.&lt;anonymous&gt; (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/cli.js:778:3) {
+  errors: [Getter/Setter]
+}
+/bin/bash -c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform nodejs --platform-version 20 -p virtualenv_name= --log-file /tmp/build-debug.log  -i /tmp/8de9b7c2fa898e4 -p compress_node_modules=tar-gz | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" stackTrace="   at Kudu.Core.Infrastructure.Executable.ExecuteInternal(ITracer tracer, Func`2 onWriteOutput, Func`2 onWriteError, CancellationToken token, Encoding encoding, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 239
+   at Kudu.Core.Infrastructure.Executable.ExecuteWithProgressWriter(ILogger logger, ITracer tracer, CancellationToken token, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 118
+   at Kudu.Core.Deployment.Generator.ExternalCommandBuilder.RunCommand(DeploymentContext context, String command, Boolean ignoreManifest, CancellationToken token, String message) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/ExternalCommandBuilder.cs:line 135
+   at Kudu.Core.Deployment.Generator.OryxBuilder.RunBuildCommand(IOryxArguments args, DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 295
+   at Kudu.Core.Deployment.Generator.OryxBuilder.Build(DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 136
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 771
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 840
+   at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 266" /><!-- duration: 11ms -->
+        </step><!-- duration: 181128ms -->
+        <step title="Reloading status file with latest updates" date="2026-04-16T05:54:22.389" >
+          <step title="WebHooksManager.PublishEventAsync: PostDeployment" date="2026-04-16T05:54:22.408" /><!-- duration: 572ms -->
+        </step><!-- duration: 611ms -->
+        <step title="Error occurred" date="2026-04-16T05:54:23.023" type="error" text="npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm notice
+npm notice New major version of npm available! 10.8.2 -&gt; 11.12.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.12.1
+npm notice To update run: npm install -g npm@11.12.1
+npm notice
+✗ Build failed in 884ms
+error during build:
+Build failed with 1 error:
+
+[31m[UNRESOLVED_ENTRY] Error:[0m Cannot resolve entry module index.html.
+
+    at aggregateBindingErrorsIntoJsError (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:48:18)
+    at unwrapBindingResult (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/error-w0u7biK-.mjs:18:128)
+    at #build (file:///tmp/8de9b7c2fa898e4/node_modules/rolldown/dist/shared/rolldown-build-DtGk-m96.mjs:3313:34)
+    at async buildEnvironment (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:32954:64)
+    at async Object.build (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33376:19)
+    at async Object.buildApp (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/chunks/node.js:33373:153)
+    at async CAC.&lt;anonymous&gt; (file:///tmp/8de9b7c2fa898e4/node_modules/vite/dist/node/cli.js:778:3) {
+  errors: [Getter/Setter]
+}
+/bin/bash -c &quot;oryx build /tmp/zipdeploy/extracted -o /home/site/wwwroot --platform nodejs --platform-version 20 -p virtualenv_name= --log-file /tmp/build-debug.log  -i /tmp/8de9b7c2fa898e4 -p compress_node_modules=tar-gz | tee /tmp/oryx-build.log ; exit $PIPESTATUS &quot;" stackTrace="   at Kudu.Core.Infrastructure.Executable.ExecuteInternal(ITracer tracer, Func`2 onWriteOutput, Func`2 onWriteError, CancellationToken token, Encoding encoding, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 239
+   at Kudu.Core.Infrastructure.Executable.ExecuteWithProgressWriter(ILogger logger, ITracer tracer, CancellationToken token, String arguments, Object[] args) in /tmp/KuduLite/Kudu.Core/Infrastructure/Executable.cs:line 118
+   at Kudu.Core.Deployment.Generator.ExternalCommandBuilder.RunCommand(DeploymentContext context, String command, Boolean ignoreManifest, CancellationToken token, String message) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/ExternalCommandBuilder.cs:line 135
+   at Kudu.Core.Deployment.Generator.OryxBuilder.RunBuildCommand(IOryxArguments args, DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 295
+   at Kudu.Core.Deployment.Generator.OryxBuilder.Build(DeploymentContext context, CancellationToken token) in /tmp/KuduLite/Kudu.Core/Deployment/Generator/OryxBuilder.cs:line 136
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 771
+   at Kudu.Core.Deployment.DeploymentManager.Build(ChangeSet changeSet, ITracer tracer, IDisposable deployStep, IRepository repository, DeploymentInfoBase deploymentInfo, DeploymentAnalytics deploymentAnalytics, Boolean fullBuildByDefault, CancellationToken cancellationToken) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 840
+   at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 266" /><!-- duration: 18ms -->
+        <step title="Could not find status file to mark the deployment failed" date="2026-04-16T05:54:23.243" /><!-- duration: 12ms -->
+      </step><!-- duration: 184144ms -->
+      <step title="Error occurred" date="2026-04-16T05:54:23.493" type="error" text="One or more errors occurred. (Deployment failed)" stackTrace="   at System.Threading.Tasks.Task.ThrowIfExceptional(Boolean includeTaskCanceledExceptions)
+   at System.Threading.Tasks.Task.Wait(Int32 millisecondsTimeout, CancellationToken cancellationToken)
+   at System.Threading.Tasks.Task.Wait()
+   at Kudu.Core.Deployment.FetchDeploymentManager.&lt;&gt;c__DisplayClass22_1.&lt;PerformBackgroundDeployment&gt;b__3() in /tmp/KuduLite/Kudu.Core/Deployment/FetchDeploymentManager.cs:line 414
+   at Kudu.Contracts.Infrastructure.LockExtensions.TryLockOperation(IOperationLock lockObj, Action operation, String operationName, TimeSpan timeout) in /tmp/KuduLite/Kudu.Contracts/Infrastructure/LockExtensions.cs:line 34
+   at Kudu.Contracts.Infrastructure.LockExtensions.LockOperation(IOperationLock lockObj, Action operation, String operationName, TimeSpan timeout) in /tmp/KuduLite/Kudu.Contracts/Infrastructure/LockExtensions.cs:line 46
+   at Kudu.Core.Deployment.FetchDeploymentManager.&lt;&gt;c__DisplayClass22_0.&lt;PerformBackgroundDeployment&gt;b__1() in /tmp/KuduLite/Kudu.Core/Deployment/FetchDeploymentManager.cs:line 393" innerText="Deployment failed" innerStackTrace="   at Kudu.Core.Deployment.DeploymentManager.DeployAsync(IRepository repository, ChangeSet changeSet, String deployer, Boolean clean, DeploymentInfoBase deploymentInfo, Boolean needFileUpdate, Boolean fullBuildByDefault) in /tmp/KuduLite/Kudu.Core/Deployment/DeploymentManager.cs:line 307
+   at Kudu.Core.Deployment.FetchDeploymentManager.PerformDeployment(DeploymentInfoBase deploymentInfo, IDisposable tempDeployment, ChangeSet tempChangeSet, DeployStatusApiResult updateStatusObj) in /tmp/KuduLite/Kudu.Core/Deployment/FetchDeploymentManager.cs:line 230" /><!-- duration: 19ms -->
+    </step><!-- duration: 184407ms -->

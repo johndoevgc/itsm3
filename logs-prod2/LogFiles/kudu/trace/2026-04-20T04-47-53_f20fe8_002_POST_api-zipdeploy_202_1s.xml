@@ -1,0 +1,20 @@
+<step title="Incoming Request" date="2026-04-20T04:47:53.647" instance="f20fe8" url="/api/zipdeploy?isAsync=true" method="POST" type="request" pid="835,1,41" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Content-Length="382863" x-ms-client-request-id="14ef5a02-3c74-11f1-9f75-6045bd2161f1" x-ms-artifact-checksum="6a900efa6539ce32e340dd19e142ceaa52c7205418d5e8a4045e93d32cf7dfee" X-ARR-LOG-ID="14ef5a02-3c74-11f1-9f75-6045bd2161f1" CLIENT-IP="4.193.130.137:1985" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/zipdeploy?isAsync=true" X-Client-IP="4.193.130.137" X-Client-Port="1985" >
+  <step title="Cleanup Xml Logs" date="2026-04-20T04:47:53.653" >
+    <step title="Cleanup Infos" date="2026-04-20T04:47:53.674" totalFiles="690" totalCleanup="530" /><!-- duration: 10ms -->
+  </step><!-- duration: 40ms -->
+  <step title="ZipPushDeploy" date="2026-04-20T04:47:53.894" >
+    <step title="ZipDeploy. Extract zip." date="2026-04-20T04:47:53.907" /><!-- duration: 8ms -->
+    <step title="None repository commit" date="2026-04-20T04:47:53.938" >
+      <step title="Commit id: 377dc6fb-ffa2-4307-90c7-968dff0a8b88" date="2026-04-20T04:47:53.940" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 3ms -->
+    </step><!-- duration: 8ms -->
+    <step title="Starting PushDeployAsync" date="2026-04-20T04:47:53.950" /><!-- duration: 5ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/1b7a6e32-659f-43b1-af33-abcdd99d5d56.zip" date="2026-04-20T04:47:54.015" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/1b7a6e32-659f-43b1-af33-abcdd99d5d56.zip" date="2026-04-20T04:47:54.035" /><!-- duration: 22ms -->
+    </step><!-- duration: 142ms -->
+    <step title="Start deployment in the background" date="2026-04-20T04:47:54.207" >
+      <step title="Acquiring Deployment Lock" date="2026-04-20T04:47:54.246" /><!-- duration: 3ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-20T04:47:54.324" /><!-- duration: 13ms -->
+    </step><!-- duration: 309ms -->
+  </step><!-- duration: 641ms -->
+  <step title="Outgoing response" date="2026-04-20T04:47:54.541" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 942ms -->

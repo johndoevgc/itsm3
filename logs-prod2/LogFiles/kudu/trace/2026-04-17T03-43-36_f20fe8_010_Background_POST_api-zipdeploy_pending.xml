@@ -1,0 +1,30 @@
+<step title="BackgroundTrace" date="2026-04-17T03:43:36.802" instance="f20fe8" url="/api/zipdeploy" method="POST" >
+  <step title="Cleanup Xml Logs" date="2026-04-17T03:43:36.833" >
+    <step title="Cleanup Infos" date="2026-04-17T03:43:36.994" totalFiles="304" totalCleanup="144" /><!-- duration: 90ms -->
+  </step><!-- duration: 282ms -->
+  <step title="Creating temporary deployment - FetchDeploymentManager" date="2026-04-17T03:43:37.397" /><!-- duration: 68ms -->
+  <step title="Creating temporary deployment" date="2026-04-17T03:43:37.497" /><!-- duration: 283ms -->
+  <step title="Performing fetch based deployment" date="2026-04-17T03:43:37.878" >
+    <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/d2038754-e566-4bff-9add-86d60ca1a936.zip (29.32 MB) to /tmp/zipdeploy/extracted" date="2026-04-17T03:43:39.467" >
+      <step title="ChmodRecursive Process exited with total time taken in ms: 3" date="2026-04-17T03:44:40.681" /><!-- duration: 39ms -->
+    </step><!-- duration: 61293ms -->
+    <step title="Deployment timer started" date="2026-04-17T03:44:42.980" >
+      <step title="DeploymentManager.Deploy(id:5e5552a5-c9e2-4b1a-8c39-84126455c4d4)" date="2026-04-17T03:44:43.031" >
+        <step title="Collecting changeset information" date="2026-04-17T03:44:43.121" /><!-- duration: 291ms -->
+        <step title="Updating submodules" date="2026-04-17T03:44:43.453" /><!-- duration: 1324ms -->
+        <step title="Determining deployment builder" date="2026-04-17T03:44:47.267" >
+          <step title="Builder is BasicBuilder" date="2026-04-17T03:44:47.437" /><!-- duration: 32ms -->
+        </step><!-- duration: 233ms -->
+        <step title="PreDeployment: context.CleanOutputPath False" date="2026-04-17T03:44:47.791" >
+          <step title="PreDeployment: context.OutputPath /home/site/wwwroot" date="2026-04-17T03:44:48.189" >
+            <step title="Building" date="2026-04-17T03:44:48.582" >
+              <step title="Executing external process" date="2026-04-17T03:44:49.906" type="process" path="starter.sh" arguments="/opt/Kudu/Scripts/parallel_rsync.sh /tmp/zipdeploy/extracted /home/site/wwwroot 8 /tmp/ False True  " >
+                <step title="Error occurred" date="2026-04-17T03:50:29.387" type="error" text="Log() at /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextLogger.cs:70: Could not find a part of the path &apos;/home/site/deployments/5e5552a5-c9e2-4b1a-8c39-84126455c4d4/log.log&apos;." stackTrace="   at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64&amp; fileLength, UnixFileMode&amp; filePermissions, Boolean failForSymlink, Boolean&amp; wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.Abstractions.FileWrapper.Open(String path, FileMode mode, FileAccess access, FileShare share)
+   at Kudu.Core.Infrastructure.FileSystemHelpers.AppendAllTextToFile(String path, String content) in /tmp/KuduLite/Kudu.Core/Infrastructure/FileSystemHelpers.cs:line 194
+   at Kudu.Core.Deployment.StructuredTextDocument`1.Write(T value, Int32 depth) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextDocument.cs:line 69
+   at Kudu.Core.Deployment.StructuredTextLogger.Log(String value, LogEntryType type) in /tmp/KuduLite/Kudu.Core/Deployment/StructuredTextLogger.cs:line 60" /><!-- duration: 6ms -->
+                <step title="Cpu: rsync(1039,0.000s)+rsync(1037,0.020s)+rsync(1036,0.590s)+bash(909,0.010s)+rsync(1006,0.000s)+rsync(1005,0.000s)+rsync(1004,0.730s)+bash(910,0.000s)+rsync(1033,0.000s)+rsync(1032,0.010s)+rsync(1031,0.760s)+bash(912,0.000s)+rsync(1028,0.000s)+rsync(1024,0.000s)+rsync(1023,0.860s)+bash(914,0.000s)+rsync(1022,0.000s)+rsync(1021,0.020s)+rsync(1020,0.760s)+bash(916,0.020s)+rsync(1019,0.000s)+rsync(1018,0.020s)+rsync(1017,0.610s)+bash(917,0.010s)+xargs(908,0.010s)+parallel_rsync.sh(900,0.040s)=total(4.470s)" date="2026-04-17T03:51:29.367" /><!-- duration: 70ms -->
+                <step title="starter.sh: no io activity for 61s, prev-cpu=-1.000s, current-cpu=4.470s" date="2026-04-17T03:51:29.477" /><!-- duration: 12ms -->

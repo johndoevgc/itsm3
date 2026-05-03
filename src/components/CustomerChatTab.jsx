@@ -491,17 +491,33 @@ export function CustomerChatTab({ currentUser, showToast }) {
             💬 VGC AI Assist
           </div>
           <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>
-            Your guided IT support assistant. Tap a card or type below.
+            Tap a card to log a ticket in 30 sec, or type what's wrong.
           </div>
         </div>
-        {ticketId && (
-          <div style={{
-            background: "#1E2130", border: "1px solid #6366F1", borderRadius: 6,
-            padding: "4px 10px", fontSize: 11, color: "#A5B4FC", fontWeight: 600,
-          }}>
-            🎫 {ticketId}
-          </div>
-        )}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {ticketId && (
+            <div style={{
+              background: "#1E2130", border: "1px solid #6366F1", borderRadius: 6,
+              padding: "4px 10px", fontSize: 11, color: "#A5B4FC", fontWeight: 600,
+            }}>
+              🎫 {ticketId}
+            </div>
+          )}
+          <a
+            href="/docs/Customer-Quick-Guide.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open Customer Quick Guide (How to log an issue & chat with AI)"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              background: "#1E2130", border: "1px solid #2A2F44", borderRadius: 6,
+              padding: "4px 10px", fontSize: 11, color: "#A8B0C4", fontWeight: 600,
+              textDecoration: "none", cursor: "pointer",
+            }}
+          >
+            ❔ Help
+          </a>
+        </div>
       </div>
 
       <div ref={scrollRef} style={{

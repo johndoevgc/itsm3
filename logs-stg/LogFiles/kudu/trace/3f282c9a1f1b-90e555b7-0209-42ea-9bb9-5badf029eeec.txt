@@ -1,0 +1,1 @@
+2026-04-25T10:57:20  Startup Request, url: /api/vfs/site/wwwroot/authMiddleware.js, method: PUT, type: request, pid: 830,1,37, ScmType: LocalGit, SCM_DO_BUILD_DURING_DEPLOYMENT: false

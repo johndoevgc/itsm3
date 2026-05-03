@@ -1,0 +1,5 @@
+<step title="Startup Request" date="2026-04-25T10:57:20.802" instance="d74bf2" url="/api/vfs/site/wwwroot/authMiddleware.js" method="PUT" type="request" pid="830,1,37" ScmType="LocalGit" SCM_DO_BUILD_DURING_DEPLOYMENT="false" >
+  <step title="Cleanup Xml Logs" date="2026-04-25T10:57:20.805" >
+    <step title="Cleanup Infos" date="2026-04-25T10:57:20.824" totalFiles="780" totalCleanup="620" /><!-- duration: 5ms -->
+  </step><!-- duration: 29ms -->
+</step><!-- duration: 35ms -->

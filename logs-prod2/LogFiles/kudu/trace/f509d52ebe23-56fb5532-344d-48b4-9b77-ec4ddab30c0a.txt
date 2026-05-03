@@ -1,0 +1,1 @@
+2026-04-26T12:17:51  Startup Request, url: /api/vfs/site/wwwroot/assets/, method: GET, type: request, pid: 831,1,41, ScmType: LocalGit, SCM_DO_BUILD_DURING_DEPLOYMENT: false

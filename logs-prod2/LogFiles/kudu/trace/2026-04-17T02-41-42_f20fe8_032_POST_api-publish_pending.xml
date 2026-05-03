@@ -1,0 +1,15 @@
+<step title="Incoming Request" date="2026-04-17T02:41:42.162" instance="f20fe8" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="835,1,27" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30; ARRAffinitySameSite=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30" Content-Length="217559" x-ms-client-request-id="f178ba1e-3a06-11f1-b1fe-6045bd2161f1" x-ms-artifact-checksum="c48ad067cc162e33febe9e820ad907719f40d8928b5c596753daaa38914ebb76" X-ARR-LOG-ID="f178ba1e-3a06-11f1-b1fe-6045bd2161f1" CLIENT-IP="4.193.130.137:1154" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="4.193.130.137" X-Client-Port="1154" >
+  <step title="OneDeploy" date="2026-04-17T02:41:42.202" >
+    <step title="Starting PushDeployAsync" date="2026-04-17T02:41:42.218" /><!-- duration: 3ms -->
+    <step title="Removing _del_node_modules symlink" date="2026-04-17T02:41:42.287" >
+      <step title="Writing artifact to /tmp/zipdeploy/9325e874-8439-4ce5-9254-1b59356a5be2.zip" date="2026-04-17T02:41:42.364" >
+        <step title="Writing multipart request body to /tmp/zipdeploy/9325e874-8439-4ce5-9254-1b59356a5be2.zip" date="2026-04-17T02:41:42.367" /><!-- duration: 10ms -->
+      </step><!-- duration: 65ms -->
+      <step title="Removing previous build artifact&apos;s manifest file" date="2026-04-17T02:41:42.437" >
+        <step title="Start deployment in the background" date="2026-04-17T02:41:42.449" >
+          <step title="Acquiring Deployment Lock" date="2026-04-17T02:41:42.460" /><!-- duration: 11ms -->
+          <step title="Acquired Deployment Lock" date="2026-04-17T02:41:42.518" /><!-- duration: 4ms -->
+        </step><!-- duration: 162ms -->
+      </step><!-- duration: 196ms -->
+      <step title="Outgoing response" date="2026-04-17T02:41:42.637" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+    </step><!-- duration: 359ms -->

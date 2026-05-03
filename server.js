@@ -2598,7 +2598,11 @@ const server = http.createServer(async (req, res) => {
   // ─── Static File Serving ──────────────────────────────────────────────
   const distDir = path.join(__dirname, "dist");
   const hasDistDir = fs.existsSync(distDir);
-  const serveRoot = hasDistDir ? distDir : __dirname;
+  // /docs/* is always served from the repo root (deploy ships dist/* only,
+  // but customer-facing HTML guides live under docs/). Falls through to the
+  // SPA fallback if a docs file is missing.
+  const isDocsAsset = pathname.startsWith("/docs/");
+  const serveRoot = (hasDistDir && !isDocsAsset) ? distDir : __dirname;
   let filePath = path.resolve(serveRoot, (pathname === "/" ? "index.html" : pathname).replace(/^[/]+/, ""));
   const ext = path.extname(filePath).toLowerCase();
   // Security: prevent directory traversal

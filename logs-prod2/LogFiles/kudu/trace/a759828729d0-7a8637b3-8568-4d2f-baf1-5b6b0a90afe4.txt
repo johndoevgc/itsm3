@@ -1,0 +1,2 @@
+2026-04-27T15:08:48  Startup Request, url: /api/vfs/site/wwwroot/assets/index-8RUivhoR.js, method: DELETE, type: request, pid: 831,1,24, SCM_DO_BUILD_DURING_DEPLOYMENT: false, ScmType: LocalGit
+2026-04-27T15:08:49    Outgoing response, type: response, statusCode: 404, statusText: NotFound

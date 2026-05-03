@@ -1,0 +1,13 @@
+<step title="Incoming Request" date="2026-04-16T11:34:32.272" instance="f20fe8" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="835,1,20" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30; ARRAffinitySameSite=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30" Content-Length="217512" x-ms-client-request-id="3898da6a-3988-11f1-8b30-6045bd2161f1" x-ms-artifact-checksum="4e8b28be51932951a45f048ec03c9b89f84101771df2ec7087d357c2da675371" X-ARR-LOG-ID="3898da6a-3988-11f1-8b30-6045bd2161f1" CLIENT-IP="4.193.130.137:1156" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="4.193.130.137" X-Client-Port="1156" >
+  <step title="OneDeploy" date="2026-04-16T11:34:32.283" >
+    <step title="Starting PushDeployAsync" date="2026-04-16T11:34:32.290" /><!-- duration: 3ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/18e91fe3-9c35-4d98-b380-f13512b3f332.zip" date="2026-04-16T11:34:32.308" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/18e91fe3-9c35-4d98-b380-f13512b3f332.zip" date="2026-04-16T11:34:32.311" /><!-- duration: 6ms -->
+    </step><!-- duration: 48ms -->
+    <step title="Start deployment in the background" date="2026-04-16T11:34:32.363" >
+      <step title="Acquiring Deployment Lock" date="2026-04-16T11:34:32.378" /><!-- duration: 3ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-16T11:34:32.404" /><!-- duration: 3ms -->
+    </step><!-- duration: 96ms -->
+  </step><!-- duration: 180ms -->
+  <step title="Outgoing response" date="2026-04-16T11:34:32.466" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 200ms -->

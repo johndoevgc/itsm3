@@ -1,0 +1,7 @@
+<step title="Incoming Request" date="2026-04-26T14:45:52.868" instance="d74bf2" url="/api/command" method="POST" type="request" pid="831,1,16" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="curl/8.18.0" Authorization="Bas..." Content-Type="application/json" Content-Length="121" X-ARR-LOG-ID="7285b702-630a-4f64-9543-c5957044a6cd" CLIENT-IP="4.193.130.137:1989" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/command" X-Client-IP="4.193.130.137" X-Client-Port="1989" >
+  <step title="Cleanup Xml Logs" date="2026-04-26T14:45:52.870" >
+    <step title="Cleanup Infos" date="2026-04-26T14:45:52.890" totalFiles="892" totalCleanup="732" /><!-- duration: 5ms -->
+  </step><!-- duration: 28ms -->
+  <step title="Executing user command. " date="2026-04-26T14:45:53.052" CWD="/home" /><!-- duration: 45ms -->
+  <step title="Outgoing response" date="2026-04-26T14:45:53.116" type="response" statusCode="200" statusText="OK" /><!-- duration: 3ms -->
+</step><!-- duration: 254ms -->

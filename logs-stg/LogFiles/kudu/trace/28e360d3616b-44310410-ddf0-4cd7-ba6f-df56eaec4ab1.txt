@@ -1,0 +1,1 @@
+2026-04-22T06:38:19  Startup Request, url: /api/vfs/site/wwwroot/index.html, method: PUT, type: request, pid: 835,1,58, SCM_DO_BUILD_DURING_DEPLOYMENT: false, ScmType: LocalGit

@@ -1,0 +1,13 @@
+<step title="Incoming Request" date="2026-04-17T11:17:48.059" instance="f20fe8" url="/api/publish?type=zip&amp;async=True" method="POST" type="request" pid="831,1,26" Accept="*/*" Host="vgc-itsm1-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.84.0 (MSI)" Accept-Encoding="gzip, deflate" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30; ARRAffinitySameSite=f20fe810224d364e4279d1d97f3c452458e8d39011dcabb935046bd36e0b8b30" Content-Length="319283" x-ms-client-request-id="0bccd6a1-3a4f-11f1-9cdf-6045bd2161f1" x-ms-artifact-checksum="59b264c32965067501941661a455a7bec5f83a49cba7b2ecea7d50738804cec9" X-ARR-LOG-ID="0bccd6a1-3a4f-11f1-9cdf-6045bd2161f1" CLIENT-IP="4.193.130.137:1153" X-SITE-DEPLOYMENT-ID="vgc-itsm1-app" WAS-DEFAULT-HOSTNAME="vgc-itsm1-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=True" X-Client-IP="4.193.130.137" X-Client-Port="1153" >
+  <step title="OneDeploy" date="2026-04-17T11:17:48.076" >
+    <step title="Starting PushDeployAsync" date="2026-04-17T11:17:48.083" /><!-- duration: 3ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/63ba7e6e-51ac-4afc-b08f-dce5574cb15b.zip" date="2026-04-17T11:17:48.105" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/63ba7e6e-51ac-4afc-b08f-dce5574cb15b.zip" date="2026-04-17T11:17:48.108" /><!-- duration: 5ms -->
+    </step><!-- duration: 41ms -->
+    <step title="Start deployment in the background" date="2026-04-17T11:17:48.156" >
+      <step title="Acquiring Deployment Lock" date="2026-04-17T11:17:48.180" /><!-- duration: 9ms -->
+      <step title="Acquired Deployment Lock" date="2026-04-17T11:17:48.218" /><!-- duration: 5ms -->
+    </step><!-- duration: 131ms -->
+  </step><!-- duration: 217ms -->
+  <step title="Outgoing response" date="2026-04-17T11:17:48.296" type="response" statusCode="202" statusText="Accepted" /><!-- duration: 3ms -->
+</step><!-- duration: 244ms -->

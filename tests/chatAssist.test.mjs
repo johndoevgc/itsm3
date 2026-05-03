@@ -477,20 +477,14 @@ describe("VGC AI Assist intake state machine", () => {
     const s = freshSession();
     advanceIntake(s, { kind: "start-greeting" }, "Alice");
     advanceIntake(s, { kind: "select-category", value: "Device & Hardware" });
-    // title, description, errorMsg, devices
+    // VGC AI Assist v3.28.4 — short intake: title, description, impact, priority
     advanceIntake(s, { kind: "answer-field", value: "Laptop won't start" });
+    expect(s.intake.stage).toBe("field:description");
     advanceIntake(s, { kind: "answer-field", value: "Just won't power on" });
-    advanceIntake(s, { kind: "answer-field", value: "no" });
-    advanceIntake(s, { kind: "answer-field", value: "Lenovo X1" });
     expect(s.intake.stage).toBe("field:impact");
     advanceIntake(s, { kind: "pick-impact", value: "Completely blocked" });
     expect(s.intake.stage).toBe("field:priority");
-    const afterPriority = advanceIntake(s, { kind: "pick-priority", value: "Critical – need it now" });
-    // Two more fields to go: startedAt, triedSteps
-    expect(s.intake.stage).toBe("field:startedAt");
-    expect(afterPriority).toBeTruthy();
-    advanceIntake(s, { kind: "answer-field", value: "10 minutes ago" });
-    const last = advanceIntake(s, { kind: "answer-field", value: "Tried holding power button" });
+    const last = advanceIntake(s, { kind: "pick-priority", value: "Critical – need it now" });
     expect(s.intake.stage).toBe("confirm");
     expect(last.cards[0].type).toBe("intake-summary");
     expect(last.cards[0].fields.title).toBe("Laptop won't start");
@@ -613,12 +607,8 @@ describe("VGC AI Assist /create-ticket endpoint", () => {
     };
     await sendMsg("Internet is down");          // title
     await sendMsg("Whole office offline");      // description
-    await sendMsg("no error message");          // errorMsg
-    await sendMsg("All workstations");          // devices
     await act("pick-impact", "Completely blocked");
     await act("pick-priority", "Critical – need it now");
-    await sendMsg("Started 30 min ago");        // startedAt
-    await sendMsg("Restarted the router");      // triedSteps
     return { handle, db, sessionId };
   }
 

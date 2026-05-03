@@ -1,0 +1,1 @@
+2026-04-26T11:47:32  Startup Request, url: /api/vfs/site/wwwroot/assets/index-DuqEQiFl.js, method: DELETE, type: request, pid: 831,1,22, ScmType: LocalGit, SCM_DO_BUILD_DURING_DEPLOYMENT: false
