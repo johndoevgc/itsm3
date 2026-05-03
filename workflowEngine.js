@@ -710,7 +710,7 @@ class WorkflowEngine {
   async runScheduledTasks() {
     if (!this._scheduledTasks || this._scheduledTasks.size === 0) return;
     const now = Date.now();
-    for (const [taskId, task] of this._scheduledTasks) {
+    for (const [, task] of this._scheduledTasks) {
       if (!task.enabled || now < task.nextRun) continue;
       try {
         await task.handler(this);

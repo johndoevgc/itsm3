@@ -229,7 +229,6 @@ class WebSocketServer {
   // ─── Proactive AI Card Push — send interactive cards to chat panels ───
   broadcastCards(cardPayload, targetEmail) {
     // cardPayload: { text, cards, suggestions, toast, toastType }
-    const data = { collection: "ai_cards", data: cardPayload };
     if (targetEmail) {
       this.sendToUser(targetEmail, "ai_cards", cardPayload);
     } else {
