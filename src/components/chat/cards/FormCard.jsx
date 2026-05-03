@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { cardBase, cardColors, actionButton } from './CardStyles';
 
 export default function FormCard({ data, onAction }) {

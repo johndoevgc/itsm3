@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardBase, cardColors, priorityColors, CardBadge, CardActions } from './CardStyles';
 
 export default function SlaAlertCard({ data, actions, onAction }) {

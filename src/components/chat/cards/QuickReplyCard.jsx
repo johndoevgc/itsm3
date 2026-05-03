@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardColors } from './CardStyles';
 
 export default function QuickReplyCard({ data, onAction }) {

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Modal } from "../components/SharedComponents.jsx";
 import { genId } from "../utils/slaHelpers.js";
 

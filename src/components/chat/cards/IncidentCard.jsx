@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardBase, cardColors, priorityColors, statusColors, CardBadge, CardActions } from './CardStyles';
 
 export default function IncidentCard({ data, actions, onAction }) {

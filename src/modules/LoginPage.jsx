@@ -1,4 +1,3 @@
-import React from "react";
 import { USERS } from "../constants/rbac.js";
 import { APP_VERSION } from "../constants/version.js";
 import { allLoginScopes } from "../../msalConfig.js";

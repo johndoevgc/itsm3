@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardBase, cardColors, actionButton } from './CardStyles';
 
 export default function BriefingCard({ data, onAction }) {

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import {
   COLORS, PRIORITY_COLORS, STATUS_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";

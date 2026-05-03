@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { cardBase, cardColors, priorityColors, CardBadge, actionButton } from './CardStyles';
 
 export default function ApprovalCard({ data, actions, onAction }) {

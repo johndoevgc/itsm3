@@ -1,8 +1,6 @@
 // ─── Chat UX Styles — WhatsApp-style message bubbles & animations ─────
 // Provides CSS-in-JS styles for the chat panel with smooth transitions,
 // message slide-in animations, and modern bubble styling.
-import React from "react";
-
 export const chatUxStyles = {
   // ─── Message Bubble Animations ───
   messageSlideIn: {

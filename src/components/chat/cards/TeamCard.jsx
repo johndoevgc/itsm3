@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardBase, cardColors } from './CardStyles';
 
 export default function TeamCard({ data, onAction }) {

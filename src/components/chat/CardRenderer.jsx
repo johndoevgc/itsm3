@@ -1,4 +1,3 @@
-import React from 'react';
 import { CARD_TYPES } from '../../utils/chatCards';
 import {
   QuickReplyCard, IncidentCard, FormCard, ConfirmCard, ApprovalCard,

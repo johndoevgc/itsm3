@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { cardBase, cardColors, CardActions } from './CardStyles';
 
 export default function CarouselCard({ data, actions, onAction }) {

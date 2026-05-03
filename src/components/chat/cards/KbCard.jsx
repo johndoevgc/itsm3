@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardBase, cardColors, CardActions } from './CardStyles';
 
 export default function KbCard({ data, actions, onAction }) {

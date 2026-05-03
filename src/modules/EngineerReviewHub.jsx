@@ -1,4 +1,3 @@
-import React from "react";
 import {
   COLORS, PRIORITY_COLORS, STATUS_COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";

@@ -1,5 +1,3 @@
-import React from 'react';
-
 // ─── Shared card styling constants ──────────────────────────────────────────
 export const cardColors = {
   bg: '#0F1117',

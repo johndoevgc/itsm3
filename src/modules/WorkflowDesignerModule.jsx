@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 
 const NODE_TYPES = [
   { type: "trigger", label: "Trigger", icon: "⚡", color: "#F59E0B", desc: "Event that starts the workflow" },

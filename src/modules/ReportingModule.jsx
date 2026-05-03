@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RBAC_PERMISSIONS } from "../constants/rbac.js";
 import { btnStyle, inputStyle } from "../constants/theme.js";
 import { Modal, FormField, SearchBar } from "../components/SharedComponents.jsx";

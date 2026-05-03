@@ -1,4 +1,3 @@
-import React from 'react';
 import { cardBase, cardColors } from './CardStyles';
 
 export default function StatusCard({ data, onAction }) {

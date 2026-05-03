@@ -134,6 +134,14 @@ function buildTrustedWeatherAlert({ twoHour, twentyFour, checkedAt = new Date().
 module.exports = function createCoreRoutes(ctx) {
   return async function handleCoreRoutes(req, res, pathname, auth, authResult, urlObj) {
     const { db, json, readBody, parseBody, sendText, callAI, extractAIText, cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex, buildEmailTemplate, normalizeCategory, graphSendMail, featureFlags, VALID_COLLECTIONS, AI_THRESHOLDS, AI_MODELS, getAIModel, scheduleCsatSurvey, isHighSeverity, safeRecipient, queueOrSendCustomerEmail, redactForAI, logAICall, piiRedact, generateKBDraft, notifyTeamsMajorIncident, processInboundEmails, cachedGetAll, cachedGetOne, APP_VERSION, shadowMode, graphAppCall, graphAppCallBinary, getOrgName, purgeStatus, PORTAL_URL, ORG_SHORT_NAME, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, SOLARWINDS_API_KEY, SOLARWINDS_API_HOST, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL, LOCAL_USERS, EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, MAIL_FROM, INTERNAL_DOMAINS, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, senderFor, FEATURE_PDPA, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD, AI_AUTONOMY_LEVEL, AI_MONTHLY_BUDGET_USD, zdLastSyncTime, zdAutoSyncInterval, checkPermission, PROD_TEST_MODE, APP_DISPLAY_NAME } = ctx;
+    // ─── auditLog(action, req, detail) — thin wrapper over db.audit for system-level events
+    async function auditLog(action, reqObj, detail = {}) {
+      try {
+        const user = reqObj?.userEmail || authResult?.user?.email || "system";
+        const recordId = `${action}-${Date.now().toString(36)}`;
+        await db.audit("system_events", recordId, action, JSON.stringify(detail), user);
+      } catch (e) { console.warn("[auditLog]", action, e.message); }
+    }
     // ─── SLA, Workflow, Notifications, CRUD, Approvals, CMDB, Audit, Auth, Email, Health ───
   // ─── SLA Engine API ────────────────────────────────────────────────
   if (pathname === "/api/sla/status" && req.method === "GET") {
