@@ -900,7 +900,7 @@ return (
         outline: 2px solid #6366F1; outline-offset: 2px; border-radius: 4px;
       }
       .vgc-dash [role="listitem"]:focus-visible { outline: 2px solid #6366F1; outline-offset: 1px; }
-      @media (prefers-reduced-motion: reduce) { .vgc-dash * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+      @media (prefers-reduced-motion: reduce) { body.vgc-reduce-motion .vgc-dash * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
     `}</style>
     {/* ═══ VGC HELPDESK CONTACT — Always Visible ═══ */}
     <div style={{

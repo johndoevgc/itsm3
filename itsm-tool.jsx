@@ -5055,9 +5055,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           .vgc-kpi-grid-5 { grid-template-columns: 1fr !important; }
           .vgc-donut-grid { grid-template-columns: repeat(2, 1fr) !important; }
         }
-        /* Respect user preference to reduce motion (accessibility) */
+        /* Respect user preference to reduce motion (accessibility) — opt-in via body.vgc-reduce-motion.
+           Default keeps decorative animations (logo, headers, AI glow, etc.) enabled even when the OS
+           reports prefers-reduced-motion, because users explicitly asked for the visual identity to remain.
+           Add the class to <body> from Admin → Accessibility settings to honor OS preference. */
         @media (prefers-reduced-motion: reduce) {
-          *, *::before, *::after {
+          body.vgc-reduce-motion *, body.vgc-reduce-motion *::before, body.vgc-reduce-motion *::after {
             animation-duration: 0.01ms !important;
             animation-iteration-count: 1 !important;
             transition-duration: 0.01ms !important;
