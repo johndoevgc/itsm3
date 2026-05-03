@@ -100,9 +100,9 @@ module.exports = function createAIRoutes(ctx) {
 - Top at-risk assignees: ${summary.topAtRiskAssignees.map(c => `${c.name}(${c.count})`).join(", ") || "none"}
 Worst offenders:
 ${top || "none"}`;
-        const aiRes = await callAI(sys, user, { tier: "secondary", maxTokens: 800, timeout: 25000 });
+        const aiRes = await callAI(sys, user, { tier: "primary", maxTokens: 800, timeout: 25000 });
         aiModel = aiRes && (aiRes.model || aiRes.modelId) || null;
-        const text = extractAIText(aiRes) || "";
+        const text = (aiRes && aiRes.text) || extractAIText(aiRes) || "";
         const m = text.match(/\{[\s\S]*\}$/);
         if (m) {
           try {
@@ -118,9 +118,11 @@ ${top || "none"}`;
       }
 
       const payload = { summary, aiRecommendations, aiModel };
+      // Short TTL (30s) when AI failed so we retry soon; 5min on success.
+      const ttlMs = (aiModel && Array.isArray(aiRecommendations?.actions) && aiRecommendations.actions.length > 0) ? 5 * 60 * 1000 : 30 * 1000;
       try {
         await db.upsert("ai_runtime", cacheKey, JSON.stringify({
-          expiresAt: Date.now() + 5 * 60 * 1000,
+          expiresAt: Date.now() + ttlMs,
           payload,
         }));
       } catch { /* ignore cache write failure */ }
