@@ -3232,6 +3232,10 @@ export default function ITSMApp() {
             if (msg.collection === "dashboard" && msg.action === "anomaly") {
               try { window.dispatchEvent(new CustomEvent("vgc-anomaly-detected", { detail: msg.data || null })); } catch { /* ignore */ }
             }
+            // ─── v3.32.0 (Phase 2): AI Summary live-refresh on worklog change ───
+            if (msg.collection === "worklog" && msg.incidentId) {
+              try { window.dispatchEvent(new CustomEvent("vgc-worklog-updated", { detail: { incidentId: msg.incidentId } })); } catch { /* ignore */ }
+            }
             if (msg.action === "delete" || msg.action === "upsert" || msg.action === "update" || msg.action === "bulk_upsert" || msg.action === "bulk_update" || msg.action === "merge") {
               scheduleRefresh(msg.collection);
             }

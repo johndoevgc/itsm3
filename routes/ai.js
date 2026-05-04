@@ -5,6 +5,22 @@
 const https = require("https");
 const http = require("http");
 
+// v3.32.0 (Phase 2) — in-memory cache for ticket summaries.
+// Key: `${ticketId}::${lastUpdate}` → { summary, openQuestions, suggestedNextStep, generatedAt }.
+// Bounded to 200 entries (FIFO) to cap memory.
+const _ticketSummaryCache = new Map();
+const _TICKET_SUMMARY_CACHE_MAX = 200;
+function _ticketSummaryCacheGet(key) {
+  return _ticketSummaryCache.get(key) || null;
+}
+function _ticketSummaryCacheSet(key, value) {
+  if (_ticketSummaryCache.size >= _TICKET_SUMMARY_CACHE_MAX) {
+    const firstKey = _ticketSummaryCache.keys().next().value;
+    if (firstKey) _ticketSummaryCache.delete(firstKey);
+  }
+  _ticketSummaryCache.set(key, value);
+}
+
 module.exports = function createAIRoutes(ctx) {
   return async function handleAIRoutes(req, res, pathname, auth, authResult, urlObj) {
     const { db, json, readBody: _readBody, parseBody, sendText: _sendText, callAI, extractAIText, wsServer, slaEngine, normalizeCategory, graphSendMail, AI_THRESHOLDS, AI_MODELS, getAIModel, shouldSkipAction, trackNewAction, getAiActionsDedupState, getSlaMap, getSlaDescription, getBusinessHoursElapsed, getManagedIdentityToken, getOrgName, PORT, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, AI_AUTONOMY_LEVEL, PROD_TEST_MODE, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP } = ctx;
@@ -4957,6 +4973,101 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       return json(res, 200, { count: suggestions.length, suggestions: suggestions.slice(0, 50) });
     } catch (err) {
       return json(res, 500, { error: "reassign-suggestions failed", details: err.message });
+    }
+  }
+
+  // ─── v3.32.0 (Phase 2): POST /api/ai/ticket-summary ───────────────────
+  // Engineer Productivity Copilot — given a ticketId, returns:
+  //   { summary, openQuestions[], suggestedNextStep, ticketId, generatedAt, cached, model }
+  // Uses secondary (cheap) model. Cache key = ticketId + last-update fingerprint;
+  // changes to incident OR worklog count invalidate naturally.
+  if (pathname === "/api/ai/ticket-summary" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const ticketId = String(body && body.ticketId || "").trim();
+      const force = !!(body && body.force);
+      if (!ticketId) return json(res, 400, { error: "ticketId required" });
+
+      const incRow = await db.getOne("incidents", ticketId);
+      if (!incRow) return json(res, 404, { error: "Ticket not found" });
+      const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+
+      // Gather worklogs for this ticket (sorted oldest→newest, last 30).
+      let worklogs = [];
+      try {
+        const wlRows = await db.getAll("worklogs");
+        worklogs = wlRows
+          .map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+          .filter(w => w && w.incidentId === ticketId)
+          .sort((a, b) => new Date(a.loggedAt || 0) - new Date(b.loggedAt || 0));
+      } catch { /* worklogs optional */ }
+      const recentLogs = worklogs.slice(-30);
+
+      // Fingerprint for cache key — incident lastModified + worklog count + last worklog ts.
+      const lastWlAt = recentLogs.length ? (recentLogs[recentLogs.length - 1].loggedAt || "") : "";
+      const fingerprint = `${inc.lastModified || inc.updatedAt || inc.createdAt || ""}::${worklogs.length}::${lastWlAt}`;
+      const cacheKey = `${ticketId}::${fingerprint}`;
+      if (!force) {
+        const hit = _ticketSummaryCacheGet(cacheKey);
+        if (hit) return json(res, 200, { ...hit, ticketId, cached: true });
+      }
+
+      // Build prompt context — keep tight; secondary model.
+      const ticketBlock = [
+        `Ticket: ${inc.id}`,
+        `Title: ${inc.title || inc.subject || "(no title)"}`,
+        `Status: ${inc.status || "Open"}`,
+        `Priority: ${inc.priority || "Medium"}`,
+        `Category: ${inc.category || "Uncategorized"}`,
+        `Assignee: ${inc.assignee || inc.assignedTo || "Unassigned"}`,
+        `Reporter: ${inc.reporterName || inc.reporter || inc.reporterEmail || "Unknown"}`,
+        `Created: ${inc.createdAt || inc.created || "?"}`,
+        `Description: ${String(inc.description || inc.body || "").slice(0, 1500)}`,
+      ].join("\n");
+      const wlBlock = recentLogs.length
+        ? recentLogs.map(w => `[${(w.loggedAt || "").slice(0, 19)}] ${w.user || "?"} (${w.category || "note"}): ${String(w.description || "").slice(0, 400)}`).join("\n")
+        : "(no work-log entries yet)";
+
+      const systemPrompt = "You are an IT service-desk copilot. Read the ticket and its work-log activity, then return ONLY a JSON object with these exact keys: " +
+        "{\"summary\": <string, 2-3 sentences plain English overview of issue + status>, " +
+        "\"openQuestions\": <array of up to 3 short concrete questions still unanswered>, " +
+        "\"suggestedNextStep\": <single string, the one most useful next action the engineer should take>}. " +
+        "Be concise. Do not include any text outside the JSON. If activity is sparse, base it on description alone.";
+      const userPrompt = `${ticketBlock}\n\n=== Work-log activity ===\n${wlBlock}`;
+
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 400 });
+      const raw = (aiResult && aiResult.text || "").replace(/```json\n?|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch {
+        // Salvage attempt — find first { … } block.
+        const m = raw.match(/\{[\s\S]*\}/);
+        if (m) { try { parsed = JSON.parse(m[0]); } catch { /* fall-through */ } }
+      }
+      if (!parsed || typeof parsed !== "object") {
+        return json(res, 502, { error: "AI returned non-JSON summary", raw: raw.slice(0, 400) });
+      }
+      const payload = {
+        summary: String(parsed.summary || "").slice(0, 1200),
+        openQuestions: Array.isArray(parsed.openQuestions) ? parsed.openQuestions.slice(0, 3).map(s => String(s).slice(0, 240)) : [],
+        suggestedNextStep: String(parsed.suggestedNextStep || "").slice(0, 400),
+        generatedAt: new Date().toISOString(),
+        model: (aiResult && aiResult.model) || "secondary",
+        cached: false,
+      };
+      _ticketSummaryCacheSet(cacheKey, payload);
+
+      // Audit row (best-effort, don't fail request on audit error).
+      try {
+        const audId = `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        await db.upsert("ai_audit_log", audId, JSON.stringify({
+          id: audId, type: "ai.ticket.summary", ticketId, by: (auth && auth.name) || "System",
+          at: payload.generatedAt, model: payload.model,
+        }));
+      } catch { /* ignore audit failure */ }
+
+      return json(res, 200, { ticketId, ...payload });
+    } catch (err) {
+      return json(res, 500, { error: "ticket-summary failed", details: err && err.message });
     }
   }
 

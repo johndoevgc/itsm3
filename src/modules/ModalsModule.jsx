@@ -15,6 +15,101 @@ import { lazyWithRetry } from "../utils/lazyWithRetry.js";
 const LazyChatAssistTab = lazyWithRetry(() => import("../components/ChatAssistTab.jsx")
   .then(m => ({ default: m.ChatAssistTab || m.default })));
 
+/* ─── v3.32.0 (Phase 2) — AI Summary header for incident detail ─── */
+function AiSummaryHeader({ inc }) {
+  const [open, setOpen] = React.useState(true);
+  const [data, setData] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  const load = React.useCallback(async (force = false) => {
+    if (!inc || !inc.id) return;
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch("/api/ai/ticket-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ ticketId: inc.id, force }),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`HTTP ${r.status} ${txt.slice(0, 120)}`);
+      }
+      const d = await r.json();
+      setData(d);
+    } catch (e) {
+      setError(e.message || "Failed to load AI summary");
+    } finally {
+      setLoading(false);
+    }
+  }, [inc]);
+
+  // Auto-load on first open and whenever ticket id changes.
+  React.useEffect(() => { load(false); }, [load]);
+
+  // Refresh on WS worklog event for this incident.
+  React.useEffect(() => {
+    if (!inc || !inc.id) return;
+    const handler = (ev) => {
+      const d = ev && ev.detail;
+      if (d && d.incidentId === inc.id) load(false);
+    };
+    if (typeof window !== "undefined" && window.addEventListener) {
+      window.addEventListener("vgc-worklog-updated", handler);
+    }
+    return () => {
+      if (typeof window !== "undefined" && window.removeEventListener) {
+        window.removeEventListener("vgc-worklog-updated", handler);
+      }
+    };
+  }, [inc, load]);
+
+  if (!inc) return null;
+  return (
+    <div role="region" aria-label="AI Summary" style={{ background: "#0F1117", border: "1px solid #6366F133", borderRadius: 10, padding: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", color: "#E8ECF4", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>
+          <span style={{ fontSize: 16 }}>🤖</span>
+          AI Summary
+          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: "#6366F122", color: "#A5B4FC", fontWeight: 600 }}>v3.32 · {data?.cached ? "cached" : "live"}</span>
+          <span style={{ marginLeft: 4, color: "#5A6178", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+        </button>
+        <button onClick={() => load(true)} disabled={loading} aria-label="Refresh AI summary" style={{ padding: "5px 12px", borderRadius: 6, background: "#6366F118", border: "1px solid #6366F133", color: "#A5B4FC", cursor: loading ? "wait" : "pointer", fontSize: 10, fontWeight: 600 }}>
+          {loading ? "…" : "↻ Refresh"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          {error && <div style={{ color: "#FF6B6B", fontSize: 11, padding: "6px 0" }}>⚠ {error}</div>}
+          {!error && loading && !data && <div style={{ color: "#5A6178", fontSize: 11, padding: "6px 0" }}>Generating summary…</div>}
+          {data && data.summary && (
+            <div style={{ fontSize: 12, color: "#C4CAD6", lineHeight: 1.55, marginBottom: 8 }}>{data.summary}</div>
+          )}
+          {data && Array.isArray(data.openQuestions) && data.openQuestions.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Open questions</div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: "#A5B4FC", fontSize: 11.5, lineHeight: 1.5 }}>
+                {data.openQuestions.map((q, i) => <li key={i}>{q}</li>)}
+              </ul>
+            </div>
+          )}
+          {data && data.suggestedNextStep && (
+            <div style={{ background: "#0A0C14", border: "1px solid #6366F122", borderRadius: 6, padding: "8px 10px" }}>
+              <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>Suggested next step</div>
+              <div style={{ fontSize: 12, color: "#6EE7B7", fontWeight: 600 }}>{data.suggestedNextStep}</div>
+            </div>
+          )}
+          {data && data.generatedAt && (
+            <div style={{ marginTop: 6, fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>generated {new Date(data.generatedAt).toLocaleString()}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Sub-component: AI Resolution Tab (hooks-safe) ─── */
 function AiResolveTab({ inc, addActivity, showToast }) {
   const [aiSuggestions, setAiSuggestions] = React.useState(null);
@@ -809,6 +904,8 @@ const IncidentDetailModal = () => {
         <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
           {detailTab === "details" && (
             <>
+              {/* v3.32.0 (Phase 2) — AI Summary header */}
+              <AiSummaryHeader inc={inc} />
               {/* Core Fields */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
                 <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[inc.status]}>{inc.status}</Badge></div>
