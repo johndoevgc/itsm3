@@ -82,12 +82,14 @@ export function RunbookActionsTab({ currentUser, showToast }) {
   const [actions, setActions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [executions, setExecutions] = useState([]);
+  const [stats, setStats] = useState({ days: 7, actions: [] });
   const [selectedId, setSelectedId] = useState(null);
   const [paramValues, setParamValues] = useState({});
   const [running, setRunning] = useState(false);
   const [lastResult, setLastResult] = useState(null);
 
   const isAdmin = ["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(currentUser?.rbacRole);
+  const statsById = (id) => stats.actions.find(s => s.actionId === id) || null;
 
   const loadActions = useCallback(async () => {
     setLoading(true);
@@ -113,10 +115,21 @@ export function RunbookActionsTab({ currentUser, showToast }) {
     } catch { /* non-fatal */ }
   }, [isAdmin]);
 
+  const loadStats = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const r = await fetch("/api/runbook/action/stats?days=7");
+      if (!r.ok) return;
+      const d = await r.json();
+      setStats({ days: d.days || 7, actions: Array.isArray(d.actions) ? d.actions : [] });
+    } catch { /* non-fatal */ }
+  }, [isAdmin]);
+
   useEffect(() => {
     loadActions();
     loadExecutions();
-  }, [loadActions, loadExecutions]);
+    loadStats();
+  }, [loadActions, loadExecutions, loadStats]);
 
   const selected = actions.find(a => a.id === selectedId) || null;
 
@@ -131,11 +144,21 @@ export function RunbookActionsTab({ currentUser, showToast }) {
     setLastResult(null);
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runShadow = async () => {
+  const runAction = async () => {
     if (!isAdmin || !selected) return;
     if (!selected.flag?.enabled) {
       showToast?.(`Flag self_healing.${selected.id} is disabled — toggle it on in Feature Flags first.`);
       return;
+    }
+    // Server-side flag.payload.shadowOnly drives mode. The button label reflects what
+    // WILL happen; for REAL runs we add a confirm() — there is no UI override.
+    const willBeReal = selected.flag?.payload?.shadowOnly === false;
+    if (willBeReal) {
+      // eslint-disable-next-line no-alert
+      const ok = typeof window !== "undefined" && window.confirm
+        ? window.confirm(`⚠️ This will run ${selected.id} for REAL on the target system.\n\nProceed?`)
+        : true;
+      if (!ok) return;
     }
     setRunning(true);
     setLastResult(null);
@@ -154,9 +177,9 @@ export function RunbookActionsTab({ currentUser, showToast }) {
       });
       const d = await r.json().catch(() => ({}));
       setLastResult({ status: r.status, body: d });
-      if (r.ok) showToast?.(`Shadow run completed (${d.mode}).`);
+      if (r.ok) showToast?.(`Run completed (${d.mode}).`);
       else showToast?.(`Run failed: ${d.error || `HTTP ${r.status}`}`);
-      await loadExecutions();
+      await Promise.all([loadExecutions(), loadStats()]);
     } catch (e) {
       showToast?.(`Run error: ${e.message}`);
       setLastResult({ status: 0, body: { error: e.message } });
@@ -182,13 +205,16 @@ export function RunbookActionsTab({ currentUser, showToast }) {
             <h3 style={sectionTitle}>🛠️ Runbook Action Registry</h3>
             <p style={subText}>Phase 4.1 · shadow-only · per-action flag-gated · daily-capped · audited</p>
           </div>
-          <button style={btn("ghost")} onClick={() => { loadActions(); loadExecutions(); }} disabled={loading}>
+          <button style={btn("ghost")} onClick={() => { loadActions(); loadExecutions(); loadStats(); }} disabled={loading}>
             {loading ? "Loading…" : "Refresh"}
           </button>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 16 }}>
-          {actions.map(a => (
+          {actions.map(a => {
+            const s = statsById(a.id);
+            const totalRuns = s ? (s.shadowRuns + s.realRuns) : 0;
+            return (
             <div
               key={a.id}
               onClick={() => setSelectedId(a.id)}
@@ -210,7 +236,7 @@ export function RunbookActionsTab({ currentUser, showToast }) {
                 </div>
               </div>
               <div style={{ fontSize: 11, color: "#A8B0C4", marginTop: 4 }}>{a.description}</div>
-              <div style={{ display: "flex", gap: 8, marginTop: 8, fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>
+              <div style={{ display: "flex", gap: 8, marginTop: 8, fontSize: 10, fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap" }}>
                 <span style={{ color: a.flag?.enabled ? "#10B981" : "#5A6178" }}>
                   {a.flag?.enabled ? "● flag ON" : "○ flag OFF"}
                 </span>
@@ -220,19 +246,41 @@ export function RunbookActionsTab({ currentUser, showToast }) {
                 <span style={{ color: "#5A6178" }}>cap={a.flag?.payload?.dailyCap ?? "—"}</span>
                 {a.idempotent && <span style={{ color: "#5A6178" }}>idempotent</span>}
               </div>
+              {/* v3.34.2 promotion-readiness pill */}
+              <div style={{ marginTop: 6, fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: "#5A6178" }}>
+                {s ? (
+                  <>
+                    <span style={{ color: s.errors === 0 ? "#10B981" : "#EF4444" }}>
+                      {totalRuns}{"\u00A0"}runs / {s.errors}{"\u00A0"}err
+                    </span>
+                    {s.p95LatencyMs != null && <> · p95 {s.p95LatencyMs}ms</>}
+                    {s.promotionReady && <span style={{ color: "#10B981", marginLeft: 6 }}>✓ ready to promote</span>}
+                    {!s.promotionReady && totalRuns > 0 && (
+                      <span style={{ marginLeft: 6 }}>· {Math.max(0, 20 - totalRuns)} more for promo</span>
+                    )}
+                  </>
+                ) : <>no telemetry yet ({stats.days}d window)</>}
+              </div>
             </div>
-          ))}
+            );
+          })}
           {actions.length === 0 && !loading && (
             <div style={{ ...subText, gridColumn: "span 2" }}>No actions registered.</div>
           )}
         </div>
       </div>
 
-      {selected && (
+      {selected && (() => {
+        const willBeReal = selected.flag?.payload?.shadowOnly === false;
+        return (
         <div style={card}>
-          <h3 style={sectionTitle}>Run shadow · {selected.name || selected.id}</h3>
+          <h3 style={sectionTitle}>
+            {willBeReal ? "⚠️ Run REAL" : "Run shadow"} · {selected.name || selected.id}
+          </h3>
           <p style={subText}>
-            Simulation only. Real exec() is stubbed pending v3.34.1+ security sign-off.
+            {willBeReal
+              ? "Real privileged action — flag payload.shadowOnly is FALSE. A confirmation dialog will appear before submit."
+              : "Simulation only. Flag payload.shadowOnly stays true until security sign-off promotes this action."}
           </p>
 
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
@@ -255,8 +303,15 @@ export function RunbookActionsTab({ currentUser, showToast }) {
           </div>
 
           <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
-            <button style={btn("primary")} onClick={runShadow} disabled={running || !selected.flag?.enabled}>
-              {running ? "Running…" : "Run shadow"}
+            <button
+              style={{
+                ...btn("primary"),
+                ...(willBeReal ? { background: "#EF4444", borderColor: "#EF4444", color: "#fff" } : {}),
+              }}
+              onClick={runAction}
+              disabled={running || !selected.flag?.enabled}
+            >
+              {running ? "Running…" : (willBeReal ? "⚠️ Run REAL" : "Run shadow")}
             </button>
             {!selected.flag?.enabled && (
               <span style={{ ...subText, color: "#F59E0B" }}>
@@ -271,7 +326,8 @@ export function RunbookActionsTab({ currentUser, showToast }) {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       <div style={card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

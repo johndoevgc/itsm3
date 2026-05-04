@@ -1894,7 +1894,10 @@ function getManagedIdentityToken(resource = "https://graph.microsoft.com") {
 }
 
 // Server-side Graph API call using client credentials (app-only) — supports cert or secret
-function graphAppCall(endpoint, extraHeaders) {
+// Signature kept backward-compatible: graphAppCall(endpoint, extraHeaders?)
+// Optional 3rd/4th args allow non-GET writes used by self-healing runbook actions
+// (Phase 4.2+): graphAppCall(endpoint, extraHeaders, method, body)
+function graphAppCall(endpoint, extraHeaders, method, body) {
   return new Promise((resolve, reject) => {
     // Build token request body — prefer cert, fall back to client secret
     let tokenBody;
@@ -1906,6 +1909,9 @@ function graphAppCall(endpoint, extraHeaders) {
     } else {
       return reject(new Error("No client secret or certificate configured"));
     }
+    const httpMethod = (method || "GET").toUpperCase();
+    const writeBody = (body == null || httpMethod === "GET") ? null
+      : (typeof body === "string" ? body : JSON.stringify(body));
     const tokenReq = https.request({
       hostname: "login.microsoftonline.com", path: `/${ENTRA_TENANT_ID}/oauth2/v2.0/token`,
       method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(tokenBody) },
@@ -1916,17 +1922,35 @@ function graphAppCall(endpoint, extraHeaders) {
         try {
           const token = JSON.parse(data);
           if (!token.access_token) return reject(new Error(token.error_description || "Token failed"));
+          const graphHeaders = {
+            Authorization: `Bearer ${token.access_token}`,
+            ...(writeBody ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(writeBody) } : {}),
+            ...(extraHeaders || {}),
+          };
           const graphReq = https.request({
             hostname: "graph.microsoft.com", path: `/v1.0${endpoint}`,
-            method: "GET", headers: { Authorization: `Bearer ${token.access_token}`, ...(extraHeaders || {}) },
+            method: httpMethod, headers: graphHeaders,
           }, graphRes => {
             let gData = "";
             graphRes.on("data", c => gData += c);
             graphRes.on("end", () => {
-              try { resolve(JSON.parse(gData)); } catch { reject(new Error("Invalid JSON")); }
+              // Graph returns 204 No Content for many POST/DELETE/PATCH writes (e.g. revokeSignInSessions).
+              if (graphRes.statusCode === 204 || gData.length === 0) {
+                return resolve({ ok: true, status: graphRes.statusCode });
+              }
+              let parsed;
+              try { parsed = JSON.parse(gData); }
+              catch { return reject(new Error("Invalid JSON")); }
+              if (graphRes.statusCode >= 400) {
+                const msg = (parsed && parsed.error && parsed.error.message)
+                  || `Graph ${httpMethod} ${endpoint} failed: ${graphRes.statusCode}`;
+                return reject(new Error(msg));
+              }
+              resolve(parsed);
             });
           });
           graphReq.on("error", reject);
+          if (writeBody) graphReq.write(writeBody);
           graphReq.end();
         } catch { reject(new Error("Token parse failed")); }
       });

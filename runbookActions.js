@@ -270,7 +270,41 @@ function _registerBuiltins() {
       return { ok: true, simulated: true, message: `Would force VPN re-auth for ${p.upn}`,
                steps: [`Revoke refresh tokens`, `Notify user to reconnect`, `Verify new sign-in within 5 min`] };
     },
-    exec: _stubExec("forceVpnReauth"),
+    // v3.34.2 Phase 4.2 — first real exec(). Idempotent (Graph revokeSignInSessions is no-op
+    // when no sessions exist) and read-then-write (no destructive side-effects beyond
+    // forcing the user to sign in again). Requires Graph app permission `User.RevokeSessions.All`
+    // (admin-consented). Flag `self_healing.forceVpnReauth.payload.shadowOnly` MUST be flipped
+    // to false in production only after a 1-week clean shadow run + security sign-off.
+    async exec(p, ctx) {
+      const graph = ctx && ctx.graphAppCall;
+      if (typeof graph !== "function") {
+        return { ok: false, error: "graphAppCall unavailable in ctx" };
+      }
+      const upn = String(p.upn || "").trim();
+      if (!upn) return { ok: false, error: "upn required" };
+      // 1. Resolve the user (also confirms the UPN exists before we attempt the write).
+      let user;
+      try {
+        user = await graph(`/users/${encodeURIComponent(upn)}?$select=id,userPrincipalName,accountEnabled`);
+      } catch (err) {
+        return { ok: false, error: `user lookup failed: ${err && err.message ? err.message : String(err)}` };
+      }
+      if (!user || !user.id) return { ok: false, error: `user not found: ${upn}` };
+      if (user.accountEnabled === false) {
+        return { ok: false, error: `account disabled: ${upn}` };
+      }
+      // 2. Revoke. Graph returns 204 No Content (graphAppCall normalises to {ok:true,status:204}).
+      try {
+        await graph(`/users/${encodeURIComponent(user.id)}/revokeSignInSessions`, null, "POST");
+      } catch (err) {
+        return { ok: false, error: `revoke failed: ${err && err.message ? err.message : String(err)}` };
+      }
+      return {
+        ok: true, simulated: false,
+        userId: user.id, upn: user.userPrincipalName,
+        message: `Revoked active sessions for ${user.userPrincipalName}. User must re-authenticate on next VPN attempt.`,
+      };
+    },
   });
 
   register({

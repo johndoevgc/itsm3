@@ -196,9 +196,86 @@ describe("built-in shadow surface", () => {
       expect(Array.isArray(r.steps)).toBe(true);
       expect(r.steps.length).toBeGreaterThan(0);
     });
+    // forceVpnReauth has a real exec() shipped in v3.34.2 (Phase 4.2) — covered separately below.
+    if (id === "forceVpnReauth") continue;
     it(`${id}: real exec throws not-implemented`, async () => {
       const a = runbookActions.get(id);
       await expect(a.exec({}, {})).rejects.toThrow(/exec-not-implemented/);
     });
   }
+});
+
+describe("forceVpnReauth real exec (v3.34.2 Phase 4.2)", () => {
+  it("calls Graph user lookup then revokeSignInSessions and returns ok:true", async () => {
+    const calls = [];
+    const graphAppCall = async (endpoint, _hdrs, method) => {
+      calls.push({ endpoint, method: method || "GET" });
+      if (endpoint.startsWith("/users/") && endpoint.includes("?$select=")) {
+        return { id: "USER-OID-1", userPrincipalName: "alice@vgc.com", accountEnabled: true };
+      }
+      if (endpoint.endsWith("/revokeSignInSessions")) return { ok: true, status: 204 };
+      throw new Error(`unexpected graph call: ${endpoint}`);
+    };
+    const a = runbookActions.get("forceVpnReauth");
+    const r = await a.exec({ upn: "alice@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(true);
+    expect(r.simulated).toBe(false);
+    expect(r.userId).toBe("USER-OID-1");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].method).toBe("GET");
+    expect(calls[1].method).toBe("POST");
+    expect(calls[1].endpoint).toBe("/users/USER-OID-1/revokeSignInSessions");
+  });
+
+  it("returns ok:false when graphAppCall is missing from ctx", async () => {
+    const a = runbookActions.get("forceVpnReauth");
+    const r = await a.exec({ upn: "alice@vgc.com" }, {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/graphAppCall unavailable/);
+  });
+
+  it("returns ok:false when user lookup fails", async () => {
+    const graphAppCall = async () => { throw new Error("404 Not Found"); };
+    const a = runbookActions.get("forceVpnReauth");
+    const r = await a.exec({ upn: "ghost@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/user lookup failed/);
+  });
+
+  it("returns ok:false when account is disabled", async () => {
+    const graphAppCall = async () => ({ id: "U", userPrincipalName: "x@vgc.com", accountEnabled: false });
+    const a = runbookActions.get("forceVpnReauth");
+    const r = await a.exec({ upn: "x@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/account disabled/);
+  });
+
+  it("returns ok:false when revoke POST fails", async () => {
+    const graphAppCall = async (endpoint, _h, method) => {
+      if (!method || method === "GET") return { id: "U", userPrincipalName: "x@vgc.com", accountEnabled: true };
+      throw new Error("Forbidden");
+    };
+    const a = runbookActions.get("forceVpnReauth");
+    const r = await a.exec({ upn: "x@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/revoke failed/);
+  });
+
+  it("end-to-end execute() with shadowOnly:false records mode='real' and audits success", async () => {
+    const db = makeMockDb();
+    const graphAppCall = async (endpoint, _h, method) => {
+      if (!method || method === "GET") return { id: "U", userPrincipalName: "alice@vgc.com", accountEnabled: true };
+      return { ok: true, status: 204 };
+    };
+    const r = await runbookActions.execute({
+      actionId: "forceVpnReauth", params: { upn: "alice@vgc.com" },
+      ctx: { db, graphAppCall }, executedBy: "admin@vgc.com",
+      flagPayload: { shadowOnly: false, dailyCap: 5 },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.mode).toBe("real");
+    expect(r.result.simulated).toBe(false);
+    const auditActions = db._audits.map(a => a.action);
+    expect(auditActions).toContain("runbook.action.real");
+  });
 });

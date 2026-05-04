@@ -1302,6 +1302,75 @@ module.exports = function createCoreRoutes(ctx) {
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
+  // v3.34.2 Phase 4.2 — promotion-readiness telemetry. Aggregates the last `days`
+  // of `runbook_action_executions` per action so admins can decide when to flip
+  // a flag's `shadowOnly` from true → false. Read-only; admin-gated.
+  if (pathname === "/api/runbook/action/stats" && req.method === "GET") {
+    try {
+      if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") {
+        return json(res, 403, { error: "Admin role required" });
+      }
+      const days = Math.max(1, Math.min(90, Number(urlObj.searchParams.get("days")) || 7));
+      const cutoff = Date.now() - days * 86400000;
+      const rows = await db.getAll(runbookActions.EXEC_COLLECTION);
+      const records = rows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; }
+        catch { return null; }
+      }).filter(d => d && d.startedAt && new Date(d.startedAt).getTime() >= cutoff);
+
+      const byAction = {};
+      const allActions = runbookActions.list();
+      for (const a of allActions) {
+        byAction[a.id] = {
+          actionId: a.id, riskTier: a.riskTier,
+          shadowRuns: 0, realRuns: 0, cachedRuns: 0,
+          errors: 0, lastRun: null, lastError: null,
+          latenciesMs: [],
+        };
+      }
+      for (const rec of records) {
+        const slot = byAction[rec.actionId];
+        if (!slot) continue;
+        if (rec.mode === "real") slot.realRuns++;
+        else if (rec.mode === "cached") slot.cachedRuns++;
+        else slot.shadowRuns++;
+        if (!rec.ok) {
+          slot.errors++;
+          if (!slot.lastError || (rec.startedAt > slot.lastError.at)) {
+            slot.lastError = { at: rec.startedAt, error: rec.error || "(unspecified)" };
+          }
+        }
+        if (!slot.lastRun || rec.startedAt > slot.lastRun) slot.lastRun = rec.startedAt;
+        if (rec.startedAt && rec.completedAt) {
+          const ms = new Date(rec.completedAt).getTime() - new Date(rec.startedAt).getTime();
+          if (Number.isFinite(ms) && ms >= 0) slot.latenciesMs.push(ms);
+        }
+      }
+      // Compute p50/p95 + promotion-readiness flag (per-action heuristic only —
+      // the actual flip still requires human security sign-off).
+      const PROMOTION_THRESHOLD = { minRuns: 20, minDays: 7, maxErrors: 0 };
+      const summary = Object.values(byAction).map(s => {
+        const sorted = s.latenciesMs.slice().sort((a, b) => a - b);
+        const pct = (q) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] : null;
+        const totalRuns = s.shadowRuns + s.realRuns;
+        return {
+          actionId: s.actionId, riskTier: s.riskTier,
+          shadowRuns: s.shadowRuns, realRuns: s.realRuns, cachedRuns: s.cachedRuns,
+          errors: s.errors, lastRun: s.lastRun, lastError: s.lastError,
+          p50LatencyMs: pct(0.5), p95LatencyMs: pct(0.95),
+          promotionReady: totalRuns >= PROMOTION_THRESHOLD.minRuns
+            && s.errors <= PROMOTION_THRESHOLD.maxErrors
+            && days >= PROMOTION_THRESHOLD.minDays,
+        };
+      });
+      return json(res, 200, {
+        days, generatedAt: new Date().toISOString(),
+        threshold: PROMOTION_THRESHOLD,
+        actions: summary,
+      });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
   // ─── Scheduled Report API ────────────────────────────────────────────
   if (pathname === "/api/reports/schedules" && req.method === "GET") {
     try {
