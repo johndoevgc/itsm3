@@ -145,7 +145,7 @@ $backendFiles = @(
   "workflowEngine.js","slaEngine.js","notificationEngine.js","analyticsEngine.js",
   "authMiddleware.js","cacheLayer.js","graphService.js","wsServer.js","msalConfig.js",
   "featureFlags.js","shadowMode.js","shadowWorkflow.js","piiRedact.js",
-  "incidentIndex.js","cluster.js"
+  "incidentIndex.js","cluster.js","emailParseAI.js"
 ) | Where-Object { Test-Path $_ }
 foreach ($bf in $backendFiles) {
   Info "Uploading $bf"

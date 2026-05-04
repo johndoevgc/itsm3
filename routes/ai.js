@@ -6,6 +6,7 @@ const https = require("https");
 const http = require("http");
 const chatAssistInternal = require("./chatAssist").__internal || {};
 const _gatherKbGrounding = chatAssistInternal.gatherKbGrounding || (async () => []);
+const { aiParseInboundEmail } = require("../emailParseAI");
 
 // v3.32.0 (Phase 2) — in-memory cache for ticket summaries.
 // Key: `${ticketId}::${lastUpdate}` → { summary, openQuestions, suggestedNextStep, generatedAt }.
@@ -5216,6 +5217,24 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       return json(res, 200, payload);
     } catch (err) {
       return json(res, 500, { error: "draft-resolution failed", details: err && err.message });
+    }
+  }
+
+  // ─── v3.33.0 — POST /api/ai/parse-email (Phase 3 step 1) ─────────────
+  // Body: { subject, body }. Returns { symptom, category, priority, suggestedFormKey, fields, confidence } or 422 on no parse.
+  // Useful for Admin "Test Email Parse" UI + future SMS/Teams adapters that want the same triage helper.
+  if (pathname === "/api/ai/parse-email" && req.method === "POST") {
+    if (!auth.authenticated) return json(res, 401, { error: "Authentication required" });
+    try {
+      const body = await parseBody(req);
+      const subject = String(body && body.subject || "").trim();
+      const emailBody = String(body && body.body || "").trim();
+      if (!subject && !emailBody) return json(res, 400, { error: "subject or body required" });
+      const parsed = await aiParseInboundEmail(subject, emailBody, callAI);
+      if (!parsed) return json(res, 422, { error: "AI parse returned nothing", subject, body: emailBody.slice(0, 200) });
+      return json(res, 200, { ...parsed, parsedAt: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "parse-email failed", details: err && err.message });
     }
   }
 

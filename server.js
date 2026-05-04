@@ -17,6 +17,7 @@ const featureFlags = require("./featureFlags");
 const shadowMode = require("./shadowMode");
 const shadowWorkflow = require("./shadowWorkflow");
 const piiRedact = require("./piiRedact");
+const { aiParseInboundEmail } = require("./emailParseAI");
 
 const PORT = process.env.PORT || 8080;
 
@@ -2342,33 +2343,48 @@ async function processInboundEmails() {
         const rawBody = (msg.body?.content || msg.bodyPreview || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
         const description = rawBody.substring(0, 2000);
 
+        // v3.33.0 — AI parse for symptom/category/priority/form prefill.
+        // On any failure, returns null and we keep the legacy defaults.
+        let aiParse = null;
+        try { aiParse = await aiParseInboundEmail(subject, description, callAI); }
+        catch (e) { console.warn("[Email-to-Ticket] AI parse failed:", e.message); }
+
         // Create incident
         const incId = `INC-EMAIL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const slaMap = getSlaMap();
+        const _category = (aiParse && aiParse.category) || "General";
+        const _priority = (aiParse && aiParse.priority) || "Sev-C";
         const incident = {
           id: incId,
           title: subject.substring(0, 200),
           description,
           status: "New",
-          priority: "Sev-C",
-          category: "General",
+          priority: _priority,
+          category: _category,
           source: "email",
           reporterName: msg.from?.emailAddress?.name || fromAddr,
           reporterEmail: fromAddr,
           assignedTeam: "Service Desk",
           created: 0,
-          slaTarget: slaMap["Sev-C"] || 9,
+          slaTarget: slaMap[_priority] || 9,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           emailMessageId: msg.id,
           conversationId: msg.conversationId || null,
           rfcMessageId: rfcMessageId || null,
+          aiParsed: aiParse ? {
+            symptom: aiParse.symptom,
+            suggestedFormKey: aiParse.suggestedFormKey,
+            fields: aiParse.fields,
+            confidence: aiParse.confidence,
+            parsedAt: new Date().toISOString(),
+          } : null,
           activityLog: [{
             id: `AL-EMAIL-${Date.now()}`,
             type: "created",
             user: "Email-to-Ticket Pipeline",
             time: new Date().toISOString(),
-            detail: `Auto-created from email: "${subject.substring(0, 100)}" from ${fromAddr}`,
+            detail: `Auto-created from email: "${subject.substring(0, 100)}" from ${fromAddr}` + (aiParse ? ` — AI parsed as ${_category}/${_priority}${aiParse.symptom ? "/" + aiParse.symptom : ""} (conf ${aiParse.confidence.toFixed(2)})` : ""),
           }],
         };
 
