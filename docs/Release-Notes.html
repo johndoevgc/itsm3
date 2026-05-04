@@ -40,18 +40,19 @@
   .stat .lbl { font-size: 11px; color: #888; text-transform: uppercase; }
 </style>
 </head>
-<body data-version="3.20" data-doc="release-notes">
+<body data-version="3.34.1" data-doc="release-notes">
 
 <div class="header">
   <h1>Release Notes</h1>
   <div class="subtitle">VGC-ITSM — All Phases Changelog</div>
-  <span class="badge">Version 3.20</span>
+  <span class="badge">Version 3.34.1</span>
 </div>
 
 <div class="meta-bar">
-  <div class="item"><span class="label">Period</span><span class="value">April 2026</span></div>
-  <div class="item"><span class="label">Total Steps</span><span class="value">52 + 5 Productization Phases</span></div>
-  <div class="item"><span class="label">E2E Tests</span><span class="value">359 Passing</span></div>
+  <div class="item"><span class="label">Period</span><span class="value">April – May 2026</span></div>
+  <div class="item"><span class="label">Total Steps</span><span class="value">70 + 5 Productization Phases</span></div>
+  <div class="item"><span class="label">E2E Tests</span><span class="value">372 Passing</span></div>
+  <div class="item"><span class="label">Unit Tests</span><span class="value">530 Passing</span></div>
 </div>
 
 <div class="container">
@@ -59,12 +60,36 @@
   <div class="section">
     <h2>Summary</h2>
     <div class="stats">
-      <div class="stat"><div class="num">10</div><div class="lbl">Phases</div></div>
-      <div class="stat"><div class="num">52+</div><div class="lbl">Feature Steps</div></div>
-      <div class="stat"><div class="num">359</div><div class="lbl">E2E Tests</div></div>
+      <div class="stat"><div class="num">13</div><div class="lbl">Phases</div></div>
+      <div class="stat"><div class="num">70</div><div class="lbl">Feature Steps</div></div>
+      <div class="stat"><div class="num">372</div><div class="lbl">E2E Tests</div></div>
+      <div class="stat"><div class="num">530</div><div class="lbl">Unit Tests</div></div>
       <div class="stat"><div class="num">300+</div><div class="lbl">API Endpoints</div></div>
       <div class="stat"><div class="num">74</div><div class="lbl">Collections</div></div>
     </div>
+  </div>
+
+  <!-- v3.21 – v3.34.1 (May 2026) -->
+  <div class="section">
+    <h2>v3.21 – v3.34.1 — May 2026 Increment</h2>
+    <p>Hardening, observability, AI quality, omnichannel, and Phase 4 self-healing backbone shipped over 14 minor releases since v3.20.</p>
+    <ul class="step-list">
+      <li><b>v3.21 / v3.21.1</b> — Audit observability (<code>/api/health.audit</code>, <code>/api/status.components.audit_log</code>, configurable retention 30/90d), local-admin retired, lint sweep.</li>
+      <li><b>v3.22 – v3.22.3</b> — Stale-chunk recovery (<code>lazyWithRetry</code>), AI Front SLA Defense panel, hardened <code>callAI</code> with dead-tier tracking + safe fallbacks, AOAI key rotation.</li>
+      <li><b>v3.23.0 – v3.23.2</b> — Centralised Zendesk→ITSM sync, SLA pause tracking for Pending+On Hold, Zendesk business-hour metrics adopted by SLA engine.</li>
+      <li><b>v3.24.0 (Phase A)</b> — Persisted breach dedup, v2 SLA (worst-of) becomes default, APAC holiday seed.</li>
+      <li><b>v3.25.0 (Phase B)</b> — SLA-pct escalation tiers, quiet-hours notification filter.</li>
+      <li><b>v3.26.0 (Phase C+D)</b> — SLA forensics, forecast-accuracy, extend-candidates, reassign-suggestions endpoints.</li>
+      <li><b>v3.27.0 (Phase D UI)</b> — Breach Forensics, Reassign Suggestions (with Apply), Extension Candidates ops panels; prediction loop tracking.</li>
+      <li><b>v3.28.0 – v3.28.5</b> — KB auto-attach (B8), dashboard reassign widget, MySQL 8 migration fix, motion-preference fix, AI Assist intake streamlining (8→4 questions), Customer Quick Guide.</li>
+      <li><b>v3.29.0</b> — AI Assist 50+ conversational cards (30 quick-symptoms + 10 self-help guides + 10 agent action chips).</li>
+      <li><b>v3.30.0</b> — AI Assist conversational forms (5 templates), customer history-aware persona, chained next-actions.</li>
+      <li><b>v3.31.0 / v3.31.1 (Phase 1)</b> — Proactive AI: recurring-pattern card, major-incident piggyback, frustration detection, anomaly summary endpoint, dashboard AnomalyAlertWidget + WS push.</li>
+      <li><b>v3.32.0 – v3.32.2 (Phase 2)</b> — AI Summary header, suggested-replies / draft-resolution endpoints + UI, bulk-action preview/apply, queue-rebalance suggestions, AI Ops admin tab.</li>
+      <li><b>v3.33.0 – v3.33.2 (Phase 3)</b> — Email→ticket AI parse, Teams bot adapter, ACS SMS webhook, voice mic input.</li>
+      <li><b>v3.34.0 (Phase 4 backbone)</b> — Self-healing runbook action registry: 6 shadow-only stubs, per-action feature flag, daily-cap, idempotency, audited execution log; real <code>exec()</code> stubbed pending security sign-off.</li>
+      <li><b>v3.34.1 (Phase 4.1)</b> — Admin UI for the runbook registry: risk-tier badges, schema-driven shadow-run form, executions log under DATA &amp; OPS → <i>Runbook Actions</i>.</li>
+    </ul>
   </div>
 
   <!-- Phase 1 -->
@@ -246,7 +271,7 @@
   </div>
 
   <a href="index.html" class="nav-link">← Back to Documentation Portal</a>
-  <div class="footer">VGC-ITSM Release Notes · Version 3.20 · April 2026</div>
+  <div class="footer">VGC-ITSM Release Notes · Version 3.34.1 · May 2026</div>
 </div>
 </body>
 </html>
