@@ -483,6 +483,7 @@ async function loadCustomerHistory(db, customerEmail, limit = 5) {
             title: t.title || t.summary || "(no title)",
             status: t.status || "Open",
             severity: t.severity || t.priority || null,
+            category: t.category || null,
             createdAt: t.createdAt || t.created || t.timestamp || null,
             resolvedAt: t.resolvedAt || null,
           });
@@ -494,6 +495,96 @@ async function loadCustomerHistory(db, customerEmail, limit = 5) {
   } catch (err) {
     console.warn("[ChatAssist] loadCustomerHistory failed:", err.message);
     return [];
+  }
+}
+
+// ─── Recurring-pattern detection (v3.31.0 — Phase 1) ─────────────────────
+// Detects when the customer has logged ≥3 tickets in the same category
+// within the past `windowDays`. Used to surface a "want me to flag this
+// for a hardware/account check?" card BEFORE we attempt yet another fix
+// for the same recurring issue.
+// within the past `windowDays`. Used to surface a "want me to flag this
+// for a hardware/account check?" card BEFORE we attempt yet another fix
+// for the same recurring issue.
+function detectRecurringPattern(history, windowDays = 30) {
+  if (!Array.isArray(history) || history.length < 3) return null;
+  const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+  const buckets = new Map();
+  for (const t of history) {
+    if (!t || !t.category) continue;
+    const ts = Date.parse(t.createdAt || "");
+    if (!Number.isFinite(ts) || ts < cutoff) continue;
+    const key = String(t.category);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(t);
+  }
+  let best = null;
+  for (const [category, tickets] of buckets) {
+    if (tickets.length >= 3 && (!best || tickets.length > best.count)) {
+      best = { category, count: tickets.length, tickets };
+    }
+  }
+  return best;
+}
+
+// ─── Frustration detection (v3.31.0 — Phase 1) ───────────────────────────
+// Conservative regex heuristic on customer chat text. Designed for low FP:
+// requires either explicit frustration words, repeat-attempt language, or
+// strong tone signals (multiple !! / ALL-CAPS run / profanity stems).
+const FRUSTRATION_PATTERNS = [
+  /\b(ridiculous|unacceptable|frustrat\w+|fed up|sick of|wast(ing|ed) (my )?time)\b/i,
+  /\b(\d+(rd|nd|th|st)? (time|day|week)|again and again|over and over|keeps happening)\b/i,
+  /\b(this is (a )?(joke|terrible|awful|broken))\b/i,
+  /!{2,}/,
+  /\b[A-Z]{6,}\b/, // ≥6-char ALL-CAPS run, e.g. "PLEASE FIX"
+];
+function detectFrustration(text) {
+  if (typeof text !== "string" || text.length < 4) return false;
+  let score = 0;
+  for (const re of FRUSTRATION_PATTERNS) {
+    if (re.test(text)) score += 1;
+    if (score >= 1) return true; // any single signal is enough; conservative trigger.
+  }
+  return false;
+}
+
+// ─── Active major-incident lookup (v3.31.0 — Phase 1) ────────────────────
+// Returns the parent INC id if ≥5 OPEN tickets exist in `category` within
+// the last 10 minutes. Used by /intake-action pick-symptom to suppress
+// duplicate ticket creation during outages.
+async function findActiveMajorIncident(db, category, opts = {}) {
+  if (!db || !category) return null;
+  const windowMs = (opts.windowMin || 10) * 60 * 1000;
+  const minClusterSize = opts.minClusterSize || 5;
+  try {
+    const rows = await db.getAll("incidents");
+    const cutoff = Date.now() - windowMs;
+    const matches = [];
+    for (const r of rows) {
+      try {
+        const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+        if (!t) continue;
+        const ts = Date.parse(t.createdAt || t.created_at || "");
+        if (!Number.isFinite(ts) || ts < cutoff) continue;
+        if (t.category !== category) continue;
+        if (["Resolved", "Closed", "Cancelled"].includes(t.status)) continue;
+        matches.push(t);
+      } catch { /* skip */ }
+    }
+    if (matches.length < minClusterSize) return null;
+    const parent = matches.find(t => t.majorIncident === true || (Array.isArray(t.tags) && t.tags.includes("major-incident")))
+      || matches.sort((a, b) => Date.parse(a.createdAt || "") - Date.parse(b.createdAt || ""))[0];
+    return {
+      id: parent.id,
+      title: parent.title || null,
+      category: parent.category || category,
+      affectedCount: matches.length,
+      startedAt: parent.createdAt || null,
+      eta: parent.estimatedResolution || parent.eta || null,
+    };
+  } catch (err) {
+    console.warn("[ChatAssist] findActiveMajorIncident failed:", err.message);
+    return null;
   }
 }
 
@@ -688,6 +779,22 @@ function advanceIntake(session, action, customerName) {
         greeting = t("greetingTemplate", lang, firstName(customerName));
       }
       const cards = [];
+      // v3.31.0 (Phase 1) — recurring-pattern detection. If the customer
+      // has logged ≥3 tickets in the same category in the past 30 days,
+      // surface a problem-record offer BEFORE the symptom grid. Avoids
+      // looping the customer through yet another fix for a recurring issue.
+      const recurring = detectRecurringPattern(history, 30);
+      if (recurring) {
+        cards.push({
+          type: "recurring-pattern",
+          kind: "flag-recurring",
+          category: recurring.category,
+          count: recurring.count,
+          tickets: recurring.tickets.slice(0, 3).map(t => ({ id: t.id, title: t.title, status: t.status })),
+          flagLabel: "🚩 Yes — flag for root-cause review",
+          continueLabel: "🔁 No, just help me with today's issue",
+        });
+      }
       // History card first when relevant.
       if (history.length) {
         cards.push({
@@ -725,6 +832,51 @@ function advanceIntake(session, action, customerName) {
       session.ticketId = value;
       return buildAssistantMessage({
         text: `Got it — I'll continue with ${value}. Tell me what's happening now and I'll suggest next steps based on what we've already tried.`,
+      });
+    }
+    case "flag-recurring": {
+      // v3.31.0 — customer accepted "yes, flag this recurring issue".
+      // Set a hint on the session so /create-ticket attaches a
+      // `problemRecord:true` flag and bumps priority. Continue to
+      // symptom selection so we still capture today's specifics.
+      if (value === "continue") {
+        return buildAssistantMessage({
+          text: "No problem — let's tackle today's issue first. Tap the symptom that fits best:",
+          cards: [
+            { type: "category-grid", kind: "pick-symptom",    options: SYMPTOM_OPTIONS },
+            { type: "category-grid", kind: "select-category", options: CATEGORY_OPTIONS, sectionLabel: "Or pick a broad category" },
+          ],
+        });
+      }
+      intake.flags = intake.flags || {};
+      intake.flags.problemRecord = true;
+      intake.flags.recurringCategory = value || intake.flags.recurringCategory || null;
+      return buildAssistantMessage({
+        text: "Got it — I've flagged this for our engineers to investigate as a recurring issue. They'll look at the root cause (hardware/account/service) instead of just the symptom. Now, tap the symptom that matches today so we can log this ticket:",
+        cards: [
+          { type: "category-grid", kind: "pick-symptom",    options: SYMPTOM_OPTIONS },
+          { type: "category-grid", kind: "select-category", options: CATEGORY_OPTIONS, sectionLabel: "Or pick a broad category" },
+        ],
+      });
+    }
+    case "link-major-incident": {
+      // v3.31.0 — customer's symptom matched an active major incident.
+      // Skip ticket creation entirely; bind session to the parent so
+      // status updates flow back automatically.
+      if (value === "new" || !value) {
+        return buildAssistantMessage({
+          text: "Understood — we'll log this as your own ticket. Tap the symptom that matches:",
+          cards: [
+            { type: "category-grid", kind: "pick-symptom",    options: SYMPTOM_OPTIONS },
+            { type: "category-grid", kind: "select-category", options: CATEGORY_OPTIONS, sectionLabel: "Or pick a broad category" },
+          ],
+        });
+      }
+      intake.ticketId = value;
+      intake.stage = "solution";
+      session.ticketId = value;
+      return buildAssistantMessage({
+        text: `Linked to major incident ${value}. Our team is already on it — I'll send you a notification the moment it's resolved. Anything else I can help with in the meantime?`,
       });
     }
     case "pick-symptom": {
@@ -1136,6 +1288,18 @@ module.exports = function createChatAssistRoutes(ctx) {
         // the answer to the current field — no AI call. The state machine
         // owns the conversation flow until we reach the SOLUTION stage.
         if (session.channel === "customer" && session.intake) {
+          // v3.31.0 (Phase 1) — frustration detection. Once flagged, the
+          // session stays in apologetic mode and AI replies prepend a
+          // "talk-to-engineer" chip so the customer always has a clear
+          // path out of self-service.
+          if (!session.frustrationFlag && detectFrustration(text)) {
+            session.frustrationFlag = true;
+            try {
+              await db.audit(SESSION_COLLECTION, session.id, "sentiment.escalated",
+                JSON.stringify({ trigger: "frustration-regex", textSample: String(text).slice(0, 120) }),
+                session.createdBy);
+            } catch { /* non-fatal */ }
+          }
           // Language detection on the first user message (best effort).
           if (!session.intake.lang || session.intake.lang === "en") {
             const detected = detectLang(text);
@@ -1173,7 +1337,13 @@ module.exports = function createChatAssistRoutes(ctx) {
 
         // AI call — keep options minimal (no temperature; GPT-5.4 rejects it)
         const lang = session.intake?.lang || "en";
-        const histCtx = session.channel === "customer" ? summarizeHistoryForPrompt(session.history) : "";
+        let histCtx = session.channel === "customer" ? summarizeHistoryForPrompt(session.history) : "";
+        // v3.31.0 — frustrated customer? Prepend an apologetic-tone hint
+        // so the AI acknowledges before suggesting steps.
+        if (session.frustrationFlag && session.channel === "customer") {
+          const frustrationCue = "TONE OVERRIDE — the customer is visibly frustrated. Open your reply by acknowledging the frustration ('I'm really sorry this has been so painful'), avoid jargon, and explicitly offer a human engineer at the end. Keep it short.";
+          histCtx = histCtx ? `${histCtx}\n\n${frustrationCue}` : frustrationCue;
+        }
         const sysPrompt = buildSystemPrompt(session.channel, lang, histCtx);
         const userPrompt = buildUserPrompt(session, kbContext, redacted);
         let replyText = "";
@@ -1238,6 +1408,18 @@ module.exports = function createChatAssistRoutes(ctx) {
               screenshotUrl: mediaHit.screenshotUrl || null,
               videoUrl: mediaHit.videoUrl || null,
               caption: `From [${mediaHit.id}] ${mediaHit.title}`,
+            });
+          }
+        }
+        // v3.31.0 — frustrated session: ALWAYS surface a talk-to-engineer
+        // chip so the customer has a one-tap escape from self-service.
+        if (session.frustrationFlag && session.channel === "customer" && aiOk) {
+          assistantMsg.cards = assistantMsg.cards || [];
+          if (!assistantMsg.cards.some(c => c.kind === "request-agent")) {
+            assistantMsg.cards.push({
+              type: "quick-reply",
+              kind: "request-agent",
+              options: [{ value: "agent", label: "👤 Connect me to a human engineer" }],
             });
           }
         }
@@ -1408,6 +1590,41 @@ module.exports = function createChatAssistRoutes(ctx) {
         if (!session) return json(res, 404, { error: "session not found" });
         if (session.channel !== "customer") {
           return json(res, 400, { error: "intake-action is customer-channel only" });
+        }
+        // v3.31.0 (Phase 1) — major-incident piggyback. Before letting the
+        // state machine create yet another duplicate ticket for an active
+        // outage, see if ≥5 OPEN tickets exist in the same category in the
+        // last 10 min. If so, return a "link to MAJ-* parent?" card instead.
+        if (kind === "pick-symptom") {
+          try {
+            const sym = SYMPTOM_OPTIONS.find(s => s.value === value);
+            if (sym && !session.intake?.bypassMajorCheck) {
+              const major = await findActiveMajorIncident(db, sym.category);
+              if (major) {
+                const card = {
+                  type: "major-incident",
+                  kind: "link-major-incident",
+                  majorIncidentId: major.id,
+                  category: major.category,
+                  affectedCount: major.affectedCount,
+                  startedAt: major.startedAt,
+                  eta: major.eta,
+                  linkLabel: `📡 Yes — link me to ${major.id}`,
+                  newLabel: "🆕 No, log my own ticket",
+                };
+                const text = `Heads-up — we're already aware of a ${major.category} issue affecting ${major.affectedCount} other people right now (${major.id}). Would you like me to link you to that incident so you get notified when it's fixed, or log your own?`;
+                const msg = buildAssistantMessage({ text, cards: [card] });
+                session.messages = session.messages || [];
+                session.messages.push(msg);
+                recordFunnelEvent(db, session, "pick-symptom", "major-incident-prompt", { value, majorId: major.id });
+                await saveSession(db, session);
+                return json(res, 200, { sessionId: session.id, message: msg, intakeStage: session.intake?.stage });
+              }
+            }
+          } catch (err) {
+            console.warn("[ChatAssist] major-incident check failed:", err.message);
+            // Non-fatal — continue with normal flow.
+          }
         }
         const reply = advanceIntake(
           session,
@@ -1825,6 +2042,9 @@ module.exports.__internal = {
   SYMPTOM_FORM_MAP,
   loadCustomerHistory,
   summarizeHistoryForPrompt,
+  detectRecurringPattern,
+  detectFrustration,
+  findActiveMajorIncident,
   SLA_BY_SEVERITY,
   VGC_CUSTOMER_PERSONA,
   // i18n

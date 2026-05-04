@@ -5666,6 +5666,114 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
+  // ─── v3.31.0 (Phase 1) — Major-Incident Link ──────────────────────────
+  // Given a customer's symptom + category, look for an active "major"
+  // incident already on file (≥5 tickets in same category in past 10 min).
+  // Used by chatAssist to skip duplicate ticket creation and bind the new
+  // session to the parent so status updates flow back automatically.
+  if (pathname === "/api/ai/major-incident-link" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const category = String(body.category || "").trim();
+      const symptom  = String(body.symptom || "").trim();
+      if (!category && !symptom) return json(res, 400, { error: "category or symptom required" });
+
+      const windowMs = 10 * 60 * 1000; // 10 minutes
+      const minClusterSize = Number(body.minClusterSize) || 5;
+      const cutoff = Date.now() - windowMs;
+      const allInc = await db.getAll("incidents");
+      const recent = [];
+      for (const r of allInc) {
+        try {
+          const i = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!i) continue;
+          const ts = Date.parse(i.createdAt || i.created_at || "");
+          if (!Number.isFinite(ts) || ts < cutoff) continue;
+          if (category && i.category !== category) continue;
+          if (["Resolved", "Closed", "Cancelled"].includes(i.status)) continue;
+          recent.push(i);
+        } catch { /* skip */ }
+      }
+      if (recent.length < minClusterSize) {
+        return json(res, 200, { match: false, affectedCount: recent.length, threshold: minClusterSize });
+      }
+      // Pick the parent: existing major-flagged ticket, else the oldest.
+      const parent = recent.find(i => i.majorIncident === true || (i.tags || []).includes("major-incident"))
+        || recent.sort((a, b) => Date.parse(a.createdAt || "") - Date.parse(b.createdAt || ""))[0];
+      const eta = parent.estimatedResolution || parent.eta || null;
+      return json(res, 200, {
+        match: true,
+        majorIncidentId: parent.id,
+        title: parent.title || null,
+        category: parent.category || category,
+        affectedCount: recent.length,
+        eta,
+        startedAt: parent.createdAt || null,
+      });
+    } catch (err) {
+      console.error("[AI] major-incident-link error:", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
+  // ─── v3.31.0 (Phase 1) — Anomaly Summary for Engineer Dashboard ───────
+  // Returns lightweight rolling-window deltas vs. 7-day baseline so the
+  // dashboard can show "P2 volume +45% vs avg" cards. Read-only; no AI.
+  if (pathname === "/api/ai/anomaly-summary" && req.method === "GET") {
+    try {
+      const allInc = await db.getAll("incidents");
+      const now = Date.now();
+      const day = 24 * 60 * 60 * 1000;
+      const today  = []; const last7d = [];
+      for (const r of allInc) {
+        try {
+          const i = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!i) continue;
+          const ts = Date.parse(i.createdAt || i.created_at || "");
+          if (!Number.isFinite(ts)) continue;
+          if (now - ts < day) today.push(i);
+          if (now - ts < 7 * day) last7d.push(i);
+        } catch { /* skip */ }
+      }
+      const baseline = last7d.length / 7;
+      const todayCount = today.length;
+      const pct = (n) => baseline > 0 ? Math.round(((n - baseline) / baseline) * 100) : 0;
+      const byPriority = (list, p) => list.filter(i => i.priority === p || i.severity === p).length;
+      const byCategory = (list) => {
+        const map = {};
+        for (const i of list) { const k = i.category || "Other"; map[k] = (map[k] || 0) + 1; }
+        return map;
+      };
+      const todayByCat   = byCategory(today);
+      const last7ByCat   = byCategory(last7d);
+      const categorySpikes = [];
+      for (const [cat, count] of Object.entries(todayByCat)) {
+        const avg = (last7ByCat[cat] || 0) / 7;
+        if (avg >= 1 && count > avg * 1.5 && count >= 3) {
+          categorySpikes.push({ category: cat, today: count, weeklyAvg: Math.round(avg * 10) / 10, deltaPct: pct(count) });
+        }
+      }
+      // SLA breach trend (very rough — count tickets currently past resolveBy)
+      const breachedNow = last7d.filter(i => i.slaBreached === true || (i.resolveBy && Date.parse(i.resolveBy) < now && !["Resolved", "Closed", "Cancelled"].includes(i.status))).length;
+      return json(res, 200, {
+        windowDays: 7,
+        today: { total: todayCount, p1: byPriority(today, "P1"), p2: byPriority(today, "P2") },
+        baseline: { dailyAvg: Math.round(baseline * 10) / 10 },
+        deltas: {
+          totalPct: pct(todayCount),
+          p1Pct: pct(byPriority(today, "P1")) ,
+          p2Pct: pct(byPriority(today, "P2")),
+        },
+        categorySpikes,
+        slaBreachActive: breachedNow,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[AI] anomaly-summary error:", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
   // ─── Step 6: AI Change Risk Assessment ────────────────────────────────
   if (pathname === "/api/ai/change-risk" && req.method === "POST") {
     const body = await parseBody(req);

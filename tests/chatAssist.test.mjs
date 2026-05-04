@@ -719,6 +719,164 @@ describe("v3.30.0 history → system prompt context", () => {
   });
 });
 
+// ─── v3.31.0 — Phase 1: Proactive & Predictive AI ─────────────────────────
+describe("v3.31.0 detectRecurringPattern", () => {
+  const { detectRecurringPattern } = createChatAssistRoutes.__internal;
+  const now = new Date();
+  const daysAgo = (n) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+  it("returns null with <3 same-category tickets", () => {
+    const h = [
+      { id: "A", category: "VPN", createdAt: daysAgo(1) },
+      { id: "B", category: "VPN", createdAt: daysAgo(2) },
+      { id: "C", category: "Email", createdAt: daysAgo(3) },
+    ];
+    expect(detectRecurringPattern(h, 30)).toBeNull();
+  });
+  it("returns the dominant category when ≥3 same-category tickets in window", () => {
+    const h = [
+      { id: "A", category: "VPN", createdAt: daysAgo(1) },
+      { id: "B", category: "VPN", createdAt: daysAgo(5) },
+      { id: "C", category: "VPN", createdAt: daysAgo(10) },
+      { id: "D", category: "Email", createdAt: daysAgo(2) },
+    ];
+    const r = detectRecurringPattern(h, 30);
+    expect(r).not.toBeNull();
+    expect(r.category).toBe("VPN");
+    expect(r.count).toBe(3);
+  });
+  it("ignores tickets outside the window", () => {
+    const h = [
+      { id: "A", category: "VPN", createdAt: daysAgo(1) },
+      { id: "B", category: "VPN", createdAt: daysAgo(40) },
+      { id: "C", category: "VPN", createdAt: daysAgo(50) },
+    ];
+    expect(detectRecurringPattern(h, 30)).toBeNull();
+  });
+});
+
+describe("v3.31.0 detectFrustration", () => {
+  const { detectFrustration } = createChatAssistRoutes.__internal;
+  it("returns false for normal text", () => {
+    expect(detectFrustration("hi, my outlook is slow")).toBe(false);
+    expect(detectFrustration("can you help me?")).toBe(false);
+  });
+  it("fires on explicit frustration words", () => {
+    expect(detectFrustration("this is ridiculous")).toBe(true);
+    expect(detectFrustration("I am fed up with this")).toBe(true);
+  });
+  it("fires on repeat-attempt language", () => {
+    expect(detectFrustration("This is the 3rd time this week")).toBe(true);
+    expect(detectFrustration("This keeps happening over and over")).toBe(true);
+  });
+  it("fires on multiple exclamations or all-caps run", () => {
+    expect(detectFrustration("PLEASE FIX")).toBe(true);
+    expect(detectFrustration("come on!!")).toBe(true);
+  });
+  it("does not fire on short text", () => {
+    expect(detectFrustration("hi")).toBe(false);
+  });
+});
+
+describe("v3.31.0 recurring-pattern card in greeting", () => {
+  function fresh(history) {
+    return { id: "s_r", channel: "customer", messages: [], intake: defaultIntake(), history };
+  }
+  const now = new Date();
+  const daysAgo = (n) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+  it("prepends a recurring-pattern card when ≥3 same-category in 30d", () => {
+    const h = [
+      { id: "A", title: "VPN drop", status: "Resolved", category: "Network & Connectivity", createdAt: daysAgo(2) },
+      { id: "B", title: "VPN drop", status: "Resolved", category: "Network & Connectivity", createdAt: daysAgo(7) },
+      { id: "C", title: "VPN drop", status: "Open",     category: "Network & Connectivity", createdAt: daysAgo(15) },
+    ];
+    const s = fresh(h);
+    const m = advanceIntake(s, { kind: "start-greeting" }, "Alice");
+    expect(m.cards[0].type).toBe("recurring-pattern");
+    expect(m.cards[0].count).toBe(3);
+    expect(m.cards[0].category).toBe("Network & Connectivity");
+  });
+  it("flag-recurring 'continue' value goes back to symptom selection", () => {
+    const s = fresh([]);
+    s.intake.flags = {};
+    const m = advanceIntake(s, { kind: "flag-recurring", value: "continue" });
+    expect(m.cards.some(c => c.kind === "pick-symptom")).toBe(true);
+    expect(s.intake.flags.problemRecord).toBeUndefined();
+  });
+  it("flag-recurring with category sets problemRecord flag", () => {
+    const s = fresh([]);
+    const m = advanceIntake(s, { kind: "flag-recurring", value: "Network & Connectivity" });
+    expect(s.intake.flags.problemRecord).toBe(true);
+    expect(s.intake.flags.recurringCategory).toBe("Network & Connectivity");
+    expect(m.cards.some(c => c.kind === "pick-symptom")).toBe(true);
+  });
+});
+
+describe("v3.31.0 link-major-incident", () => {
+  function fresh() {
+    return { id: "s_m", channel: "customer", messages: [], intake: defaultIntake() };
+  }
+  it("'new' value returns customer to symptom selection", () => {
+    const s = fresh();
+    const m = advanceIntake(s, { kind: "link-major-incident", value: "new" });
+    expect(m.cards.some(c => c.kind === "pick-symptom")).toBe(true);
+  });
+  it("with parent id binds the session and pivots to solution stage", () => {
+    const s = fresh();
+    advanceIntake(s, { kind: "start-greeting" }, "Bob");
+    const m = advanceIntake(s, { kind: "link-major-incident", value: "INC-MAJ-001" });
+    expect(s.intake.stage).toBe("solution");
+    expect(s.intake.ticketId).toBe("INC-MAJ-001");
+    expect(s.ticketId).toBe("INC-MAJ-001");
+    expect(m.text).toMatch(/INC-MAJ-001/);
+  });
+});
+
+describe("v3.31.0 findActiveMajorIncident", () => {
+  const { findActiveMajorIncident } = createChatAssistRoutes.__internal;
+  function makeDb(rows) {
+    return { getAll: async () => rows.map(r => ({ data: JSON.stringify(r) })) };
+  }
+  const now = new Date();
+  const minAgo = (n) => new Date(now.getTime() - n * 60 * 1000).toISOString();
+  it("returns null when fewer than threshold tickets exist", async () => {
+    const db = makeDb([
+      { id: "I1", category: "Network & Connectivity", status: "Open", createdAt: minAgo(2) },
+      { id: "I2", category: "Network & Connectivity", status: "Open", createdAt: minAgo(3) },
+    ]);
+    const r = await findActiveMajorIncident(db, "Network & Connectivity");
+    expect(r).toBeNull();
+  });
+  it("returns parent id when ≥5 open tickets in window", async () => {
+    const rows = Array.from({ length: 6 }, (_, i) => ({
+      id: `INC-${i}`, category: "Network & Connectivity", status: "Open", createdAt: minAgo(i + 1),
+    }));
+    const db = makeDb(rows);
+    const r = await findActiveMajorIncident(db, "Network & Connectivity");
+    expect(r).not.toBeNull();
+    expect(r.affectedCount).toBe(6);
+    expect(r.id).toBeTruthy();
+  });
+  it("ignores resolved tickets", async () => {
+    const rows = Array.from({ length: 6 }, (_, i) => ({
+      id: `INC-${i}`, category: "Email & Outlook", status: "Resolved", createdAt: minAgo(i + 1),
+    }));
+    const db = makeDb(rows);
+    const r = await findActiveMajorIncident(db, "Email & Outlook");
+    expect(r).toBeNull();
+  });
+  it("prefers explicitly flagged majorIncident as parent", async () => {
+    const rows = [
+      { id: "INC-PARENT", category: "X", status: "Open", createdAt: minAgo(2), majorIncident: true },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `INC-${i}`, category: "X", status: "Open", createdAt: minAgo(i + 1),
+      })),
+    ];
+    const db = makeDb(rows);
+    const r = await findActiveMajorIncident(db, "X");
+    expect(r.id).toBe("INC-PARENT");
+  });
+});
+
 describe("VGC AI Assist /create-ticket endpoint", () => {
   async function setupCustomer() {
     await featureFlags.init({

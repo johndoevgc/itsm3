@@ -284,6 +284,20 @@ function MessageCards({ cards, onAction, disabled }) {
             initialValues={c.initialValues} submitLabel={c.submitLabel}
             disabled={disabled} onSubmit={vals => onAction({ kind: c.kind, value: { formKey: c.formKey, fields: vals } })} />;
         }
+        if (c.type === "recurring-pattern") {
+          return <RecurringPatternCard key={i} category={c.category} count={c.count}
+            tickets={c.tickets} flagLabel={c.flagLabel} continueLabel={c.continueLabel}
+            disabled={disabled}
+            onAction={(action) => onAction({ kind: c.kind, value: action === "flag" ? c.category : "continue" })} />;
+        }
+        if (c.type === "major-incident") {
+          return <MajorIncidentCard key={i}
+            majorIncidentId={c.majorIncidentId} category={c.category}
+            affectedCount={c.affectedCount} startedAt={c.startedAt} eta={c.eta}
+            linkLabel={c.linkLabel} newLabel={c.newLabel}
+            disabled={disabled}
+            onAction={(action) => onAction({ kind: c.kind, value: action === "link" ? c.majorIncidentId : "new" })} />;
+        }
         return null;
       })}
     </div>
@@ -335,6 +349,90 @@ function RecentTicketsCard({ tickets, newIssueLabel, onAction, disabled }) {
           cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
         }}
       >{newIssueLabel || "🆕 No, this is a new issue"}</button>
+    </div>
+  );
+}
+
+// ─── v3.31.0 (Phase 1) cards ──────────────────────────────────────────────
+
+function RecurringPatternCard({ category, count, tickets, flagLabel, continueLabel, onAction, disabled }) {
+  return (
+    <div style={{
+      background: "#1A0F0A", border: "1px solid #7C2D12", borderRadius: 8,
+      padding: 12, marginTop: 8,
+    }}>
+      <div style={{ fontSize: 11, color: "#FCA5A5", marginBottom: 6, fontWeight: 700 }}>
+        🔁 Recurring pattern detected
+      </div>
+      <div style={{ fontSize: 11, color: "#E8ECF4", marginBottom: 8 }}>
+        This is your <b>{count}{count === 3 ? "rd" : "th"} {category}</b> ticket in the past 30 days. Want me to flag this for engineers to investigate the root cause (hardware, account, or service) instead of patching the symptom again?
+      </div>
+      {Array.isArray(tickets) && tickets.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {tickets.map(t => (
+            <div key={t.id} style={{ fontSize: 10, color: "#A8B0C4", marginBottom: 2 }}>
+              · {t.id} — {t.title} ({t.status})
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          disabled={disabled}
+          onClick={() => onAction("flag")}
+          style={{
+            flex: 1, background: "#DC2626", border: "none", borderRadius: 6,
+            color: "#fff", padding: "8px 10px", fontSize: 11, fontWeight: 700,
+            cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+          }}
+        >{flagLabel || "🚩 Yes — flag for root-cause review"}</button>
+        <button
+          disabled={disabled}
+          onClick={() => onAction("continue")}
+          style={{
+            flex: 1, background: "#1E2130", border: "1px solid #2A2F44", borderRadius: 6,
+            color: "#E8ECF4", padding: "8px 10px", fontSize: 11, fontWeight: 600,
+            cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+          }}
+        >{continueLabel || "🔁 No, just help with today's"}</button>
+      </div>
+    </div>
+  );
+}
+
+function MajorIncidentCard({ majorIncidentId, category, affectedCount, startedAt, eta, linkLabel, newLabel, onAction, disabled }) {
+  const startedTxt = startedAt ? new Date(startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+  return (
+    <div style={{
+      background: "#0E1A2C", border: "1px solid #1E40AF", borderRadius: 8,
+      padding: 12, marginTop: 8,
+    }}>
+      <div style={{ fontSize: 11, color: "#93C5FD", marginBottom: 6, fontWeight: 700 }}>
+        📡 Major incident in progress — {majorIncidentId}
+      </div>
+      <div style={{ fontSize: 11, color: "#E8ECF4", marginBottom: 8 }}>
+        We're aware of a <b>{category}</b> issue affecting <b>{affectedCount}</b> people right now{startedTxt ? ` (started ~${startedTxt})` : ""}. Engineers are already on it{eta ? `, ETA ${eta}` : ""}.
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          disabled={disabled}
+          onClick={() => onAction("link")}
+          style={{
+            flex: 1, background: "#1D4ED8", border: "none", borderRadius: 6,
+            color: "#fff", padding: "8px 10px", fontSize: 11, fontWeight: 700,
+            cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+          }}
+        >{linkLabel || `📡 Link me to ${majorIncidentId}`}</button>
+        <button
+          disabled={disabled}
+          onClick={() => onAction("new")}
+          style={{
+            flex: 1, background: "#1E2130", border: "1px solid #2A2F44", borderRadius: 6,
+            color: "#E8ECF4", padding: "8px 10px", fontSize: 11, fontWeight: 600,
+            cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+          }}
+        >{newLabel || "🆕 No, log my own ticket"}</button>
+      </div>
     </div>
   );
 }
