@@ -93,6 +93,20 @@ const DEFAULTS = {
   // start with relevant context. Off by default in prod; enable per-slot.
   // payload.topK = max articles to attach (default 3).
   kb_auto_attach:      { enabled: false, scope: "staging", payload: { topK: 3 } },
+
+  // ─── Phase 4 v3.34.0 — Self-healing runbook actions ─────────────────
+  // Each action has its own kill-switch. payload.shadowOnly defaults to TRUE
+  // until v3.34.1 lands real exec() implementations after security sign-off.
+  // payload.dailyCap bounds blast radius (per-action, per-UTC-day).
+  // RISK: real exec() of these actions performs privileged Graph/Intune
+  // operations. Never flip shadowOnly:false without runbook actions registry
+  // exec() being implemented AND security review of the specific action.
+  "self_healing.unlockAccount":         { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 10 } },
+  "self_healing.resetMfa":              { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 5 } },
+  "self_healing.clearPrintQueue":       { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 20 } },
+  "self_healing.extendMailboxQuota":    { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 5 } },
+  "self_healing.forceVpnReauth":        { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 20 } },
+  "self_healing.restartSpoolerOnDevice":{ enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 10 } },
 };
 
 let _db = null;

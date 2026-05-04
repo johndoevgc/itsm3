@@ -6,6 +6,7 @@ const https = require("https");
 const crypto = require("crypto");
 const { validate } = require("../src/server/validation");
 const { normalizePriority, priorityToPCode } = require("../src/utils/priorityNormalize.cjs");
+const runbookActions = require("../runbookActions");
 
 function parseStoredRecord(row) {
   if (!row) return null;
@@ -1224,6 +1225,80 @@ module.exports = function createCoreRoutes(ctx) {
       const data = dbParseAll(await cachedGetAll("runbook_executions"));
       const filtered = incidentId ? data.filter(e => e.incidentId === incidentId) : data;
       return json(res, 200, { data: filtered, count: filtered.length });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── Runbook Action Registry (Phase 4 v3.34.0) ────────────────────────
+  // Safe-action allow-list. Real exec() is stubbed pending v3.34.1+ security
+  // sign-off. All actions are flag-gated and shadow-only by default.
+  if (pathname === "/api/runbook/actions" && req.method === "GET") {
+    try {
+      const items = runbookActions.list().map(a => {
+        const flagName = `self_healing.${a.id}`;
+        const enabled = featureFlags && featureFlags.isEnabled
+          ? featureFlags.isEnabled(flagName) : false;
+        const flagPayload = featureFlags && featureFlags.payload
+          ? featureFlags.payload(flagName) : null;
+        return { ...a, flag: { name: flagName, enabled, payload: flagPayload || {} } };
+      });
+      return json(res, 200, { count: items.length, actions: items });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  if (pathname === "/api/runbook/action/execute" && req.method === "POST") {
+    try {
+      // Admin-only — no customer-initiated privileged actions in v3.34.0.
+      if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") {
+        return json(res, 403, { error: "Admin role required" });
+      }
+      const body = await readBody(req);
+      const { actionId, params, incidentId } = body || {};
+      if (!actionId) return json(res, 400, { error: "Missing actionId" });
+
+      const action = runbookActions.get(actionId);
+      if (!action) return json(res, 404, { error: "Unknown action", actionId });
+
+      // Per-action feature flag MUST be enabled.
+      const flagName = `self_healing.${actionId}`;
+      const enabled = featureFlags && featureFlags.isEnabled && featureFlags.isEnabled(flagName);
+      if (!enabled) {
+        return json(res, 503, { error: "action disabled", actionId, flag: flagName });
+      }
+      const flagPayload = (featureFlags && featureFlags.payload && featureFlags.payload(flagName)) || {};
+
+      const executedBy = (authResult.user && authResult.user.email) || authResult.name || "admin";
+      const result = await runbookActions.execute({
+        actionId, params: params || {},
+        ctx: { db, graphAppCall, featureFlags },
+        executedBy, incidentId: incidentId || null,
+        flagPayload,
+      });
+
+      if (cacheLayer) cacheLayer.invalidatePrefix(runbookActions.EXEC_COLLECTION);
+      const status = result.ok ? 200 : (result.capped ? 429 : (result.error === "invalid params" ? 400 : 500));
+      return json(res, status, result);
+    } catch (err) {
+      return json(res, 500, { error: "Internal server error", message: err.message });
+    }
+  }
+
+  if (pathname === "/api/runbook/action/executions" && req.method === "GET") {
+    try {
+      if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") {
+        return json(res, 403, { error: "Admin role required" });
+      }
+      const actionId = urlObj.searchParams.get("actionId");
+      const incidentId = urlObj.searchParams.get("incidentId");
+      const rows = await db.getAll(runbookActions.EXEC_COLLECTION);
+      const data = rows.map(r => {
+        try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; }
+        catch { return null; }
+      }).filter(Boolean);
+      const filtered = data.filter(d =>
+        (!actionId || d.actionId === actionId) &&
+        (!incidentId || d.incidentId === incidentId));
+      filtered.sort((a, b) => (b.startedAt || "").localeCompare(a.startedAt || ""));
+      return json(res, 200, { count: filtered.length, data: filtered.slice(0, 200) });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
