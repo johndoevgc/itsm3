@@ -646,6 +646,12 @@ const IncidentDetailModal = () => {
   const [aiDraftTone, setAiDraftTone] = useState("professional");
   const [aiDraftLoading, setAiDraftLoading] = useState(false);
   const [aiDraftResult, setAiDraftResult] = useState("");
+  // v3.32.1 (Phase 2) — suggested replies + draft resolution.
+  const [suggestedRepliesPanel, setSuggestedRepliesPanel] = useState(false);
+  const [suggestedRepliesLoading, setSuggestedRepliesLoading] = useState(false);
+  const [suggestedRepliesData, setSuggestedRepliesData] = useState(null);
+  const [draftResolutionLoading, setDraftResolutionLoading] = useState(false);
+  const [draftResolutionData, setDraftResolutionData] = useState(null);
   const fileInputRef = useRef(null);
   // ─── Live SLA Countdown Tick ───
   const [slaTick, setSlaTick] = useState(0);
@@ -1088,6 +1094,50 @@ const IncidentDetailModal = () => {
                   {inc.closureCode && <div style={{ marginTop: 6, fontSize: 10, color: "#5A6178" }}>Closure Code: <span style={{ color: "#81C784" }}>{inc.closureCode}</span></div>}
                 </div>
               )}
+              {/* v3.32.1 (Phase 2) — Draft Resolution Notes panel (when empty) */}
+              {!inc.resolutionNotes && !["Closed", "Cancelled"].includes(inc.status) && (
+                <div style={{ background: "#0F1117", borderRadius: 8, padding: 12, border: "1px solid #6EE7B744", marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: draftResolutionData ? 10 : 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 14 }}>📝</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#6EE7B7", fontFamily: "'JetBrains Mono', monospace" }}>DRAFT RESOLUTION NOTES</span>
+                      <span style={{ fontSize: 9, color: "#5A6178" }}>v3.32 · from worklog history</span>
+                    </div>
+                    <button disabled={draftResolutionLoading} onClick={async () => {
+                      setDraftResolutionLoading(true);
+                      try {
+                        const r = await fetch("/api/ai/draft-resolution", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ ticketId: inc.id }) });
+                        if (r.ok) setDraftResolutionData(await r.json());
+                        else setDraftResolutionData({ error: `HTTP ${r.status}` });
+                      } catch (e) { setDraftResolutionData({ error: e.message }); }
+                      setDraftResolutionLoading(false);
+                    }} style={{ ...btnStyle("#6EE7B7"), padding: "5px 12px", fontSize: 10, opacity: draftResolutionLoading ? 0.6 : 1 }}>
+                      {draftResolutionLoading ? "Drafting…" : draftResolutionData ? "↻ Re-draft" : "✨ Generate"}
+                    </button>
+                  </div>
+                  {draftResolutionData && draftResolutionData.error && <div style={{ color: "#FF6B6B", fontSize: 11, marginTop: 8 }}>⚠ {draftResolutionData.error}</div>}
+                  {draftResolutionData && draftResolutionData.resolutionDraft && (
+                    <>
+                      <textarea defaultValue={draftResolutionData.resolutionDraft}
+                        onChange={e => setDraftResolutionData(d => ({ ...d, resolutionDraft: e.target.value }))}
+                        style={{ width: "100%", minHeight: 110, padding: 10, background: "#0A0C14", color: "#C4CAD6", border: "1px solid #6EE7B722", borderRadius: 6, fontSize: 12, lineHeight: 1.55, fontFamily: "inherit", resize: "vertical" }} />
+                      {draftResolutionData.rootCause && <div style={{ marginTop: 8, fontSize: 11, color: "#C4CAD6" }}><strong style={{ color: "#FBBF24" }}>Root cause:</strong> {draftResolutionData.rootCause}</div>}
+                      {draftResolutionData.preventiveTip && <div style={{ marginTop: 4, fontSize: 11, color: "#C4CAD6" }}><strong style={{ color: "#A5B4FC" }}>Tip for customer:</strong> {draftResolutionData.preventiveTip}</div>}
+                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                        <button onClick={() => {
+                          const updated = { ...inc, resolutionNotes: draftResolutionData.resolutionDraft };
+                          setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                          setDetailItem(updated);
+                          addActivity("ai_resolution", `AI-drafted resolution notes posted (${draftResolutionData.resolutionDraft.length} chars).`);
+                          showToast("✅ Resolution notes posted", "success");
+                          setDraftResolutionData(null);
+                        }} style={{ ...btnStyle("#4CAF50"), padding: "6px 14px", fontSize: 11 }}>✅ Post as Resolution</button>
+                        <button onClick={() => setDraftResolutionData(null)} style={{ ...btnStyle("#333"), color: "#A0AEC0", padding: "6px 14px", fontSize: 11 }}>Cancel</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {inc.linkedProblem && (
                 <div style={{ background: "#1A0A2D", borderRadius: 6, padding: 12, border: "1px solid #CE93D822", marginBottom: 16, cursor: "pointer" }}
                   onClick={() => { const prb = problems.find(p => p.id === inc.linkedProblem); if (prb) { setDetailItem(prb); setModal("problemDetail"); } }}
@@ -1124,6 +1174,20 @@ const IncidentDetailModal = () => {
               {/* Reply Buttons */}
               <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
                 <button style={btnStyle("#3B82F6")} onClick={() => { setReplyMode("external"); setReplySubject(`RE: ${inc.id} — ${inc.title}`); }}>📧 Reply to Reporter</button>
+                <button style={{ ...btnStyle("#06B6D4"), display: "flex", alignItems: "center", gap: 4 }} onClick={async () => {
+                  setReplyMode("external");
+                  setReplySubject(`RE: ${inc.id} — ${inc.title}`);
+                  setSuggestedRepliesPanel(true);
+                  if (!suggestedRepliesData) {
+                    setSuggestedRepliesLoading(true);
+                    try {
+                      const r = await fetch("/api/ai/suggested-replies", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ ticketId: inc.id }) });
+                      if (r.ok) setSuggestedRepliesData(await r.json());
+                      else setSuggestedRepliesData({ error: `HTTP ${r.status}` });
+                    } catch (e) { setSuggestedRepliesData({ error: e.message }); }
+                    setSuggestedRepliesLoading(false);
+                  }
+                }}>💡 Quick Replies</button>
                 <button style={btnStyle("#6366F1")} onClick={() => setReplyMode("internal")}>📝 Add Internal Note</button>
                 <button style={{ ...btnStyle("#8B5CF6"), display: "flex", alignItems: "center", gap: 4 }} onClick={() => { setReplyMode("external"); setReplySubject(`RE: ${inc.id} — ${inc.title}`); setAiDraftPanel(true); }}>✨ AI Compose</button>
               </div>
@@ -1168,6 +1232,48 @@ const IncidentDetailModal = () => {
                           <button onClick={() => setEmailAttachments(prev => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "#FF6B6B", cursor: "pointer", fontSize: 10, padding: 0, marginLeft: 2 }}>✕</button>
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {/* v3.32.1 (Phase 2) — Suggested Replies Panel */}
+                  {suggestedRepliesPanel && replyMode === "external" && (
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid #06B6D444", background: "#06B6D408" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 12 }}>💡</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>QUICK REPLIES</span>
+                          <span style={{ fontSize: 9, color: "#5A6178" }}>v3.32 · grounded by KB</span>
+                        </div>
+                        <button onClick={() => setSuggestedRepliesPanel(false)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 12 }}>✕</button>
+                      </div>
+                      {suggestedRepliesLoading && <div style={{ color: "#5A6178", fontSize: 11, padding: "6px 0" }}>Generating 3 drafts…</div>}
+                      {suggestedRepliesData && suggestedRepliesData.error && <div style={{ color: "#FF6B6B", fontSize: 11, padding: "6px 0" }}>⚠ {suggestedRepliesData.error}</div>}
+                      {suggestedRepliesData && Array.isArray(suggestedRepliesData.replies) && (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {suggestedRepliesData.replies.map((rep, i) => {
+                            const toneAccent = rep.tone === "diagnostic" ? "#FBBF24" : rep.tone === "kb-link" ? "#A5B4FC" : "#6EE7B7";
+                            const toneLabel = rep.tone === "diagnostic" ? "Diagnostic" : rep.tone === "kb-link" ? "KB Walk-through" : "Closing";
+                            return (
+                              <div key={i} style={{ background: "#0A0C14", borderRadius: 6, border: `1px solid ${toneAccent}33`, padding: 10 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                  <span style={{ fontSize: 9, fontWeight: 700, color: toneAccent, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{toneLabel}</span>
+                                  <button onClick={() => {
+                                    const editor = document.getElementById("reply-editor");
+                                    const html = String(rep.text).replace(/\n/g, "<br>");
+                                    if (editor) { editor.innerHTML = html; setReplyBody(html); }
+                                    setSuggestedRepliesPanel(false);
+                                  }} style={{ ...btnStyle("#06B6D4"), padding: "4px 10px", fontSize: 10 }}>Use</button>
+                                </div>
+                                <div style={{ fontSize: 12, color: "#C4CAD6", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{rep.text}</div>
+                              </div>
+                            );
+                          })}
+                          {suggestedRepliesData.kbCited && suggestedRepliesData.kbCited.length > 0 && (
+                            <div style={{ fontSize: 9, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
+                              KB grounding: {suggestedRepliesData.kbCited.map(k => `[${k.id}]`).join(" ")}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   {/* AI Email Draft Panel */}

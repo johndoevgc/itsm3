@@ -4,6 +4,8 @@
  */
 const https = require("https");
 const http = require("http");
+const chatAssistInternal = require("./chatAssist").__internal || {};
+const _gatherKbGrounding = chatAssistInternal.gatherKbGrounding || (async () => []);
 
 // v3.32.0 (Phase 2) — in-memory cache for ticket summaries.
 // Key: `${ticketId}::${lastUpdate}` → { summary, openQuestions, suggestedNextStep, generatedAt }.
@@ -5068,6 +5070,152 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       return json(res, 200, { ticketId, ...payload });
     } catch (err) {
       return json(res, 500, { error: "ticket-summary failed", details: err && err.message });
+    }
+  }
+
+  // ─── v3.32.1 (Phase 2): POST /api/ai/suggested-replies ────────────────
+  // Returns 3 draft replies tagged { tone: "diagnostic" | "kb-link" | "closing" }.
+  // Body: { ticketId }. Pulls top-3 KB grounding from chatAssist's gatherKbGrounding
+  // so suggestions can cite KB IDs. Engineer click-inserts; never auto-sends.
+  if (pathname === "/api/ai/suggested-replies" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const ticketId = String(body && body.ticketId || "").trim();
+      if (!ticketId) return json(res, 400, { error: "ticketId required" });
+      const incRow = await db.getOne("incidents", ticketId);
+      if (!incRow) return json(res, 404, { error: "Ticket not found" });
+      const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+
+      // KB grounding (top 3) — query = title + first 200 chars of description.
+      const query = `${inc.title || ""} ${String(inc.description || inc.body || "").slice(0, 200)}`.trim();
+      let kb = [];
+      try { kb = await _gatherKbGrounding(db, query, 3); } catch { /* tolerate missing */ }
+      const kbBlock = kb.length
+        ? kb.map(k => `[${k.id}] ${k.title}: ${String(k.snippet || "").slice(0, 220)}`).join("\n")
+        : "(no KB matches)";
+
+      const ticketBlock = [
+        `Ticket: ${inc.id}`,
+        `Title: ${inc.title || "(no title)"}`,
+        `Status: ${inc.status || "Open"}`,
+        `Priority: ${inc.priority || "Medium"}`,
+        `Reporter: ${inc.reporterName || inc.reporter || inc.reporterEmail || "Customer"}`,
+        `Description: ${String(inc.description || inc.body || "").slice(0, 1200)}`,
+      ].join("\n");
+
+      const systemPrompt = "You are an IT service-desk reply drafter for VGC Technology. Write three short reply drafts the engineer can send to the customer, " +
+        "each with a different intent. Return ONLY a JSON object: " +
+        "{\"replies\": [{\"tone\": \"diagnostic\", \"text\": <string>}, {\"tone\": \"kb-link\", \"text\": <string>}, {\"tone\": \"closing\", \"text\": <string>}]}. " +
+        "diagnostic = ask 1-2 specific clarifying/diagnostic questions; kb-link = walk through 2-3 numbered fix steps and cite KB IDs in [BRACKETS] when grounded; " +
+        "closing = polite resolution-confirmation message asking the customer to confirm the issue is resolved. Each reply ≤ 100 words, plain English, warm professional Singapore-business tone, no salutations or signatures (the engineer will add those). Do not invent data.";
+      const userPrompt = `${ticketBlock}\n\n=== KB candidates ===\n${kbBlock}`;
+
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 700 });
+      const raw = (aiResult && aiResult.text || "").replace(/```json\n?|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch {
+        const m = raw.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]); } catch { /* fall-through */ } }
+      }
+      if (!parsed || !Array.isArray(parsed.replies)) {
+        return json(res, 502, { error: "AI returned non-JSON suggested replies", raw: raw.slice(0, 400) });
+      }
+      const allowedTones = new Set(["diagnostic", "kb-link", "closing"]);
+      const replies = parsed.replies
+        .filter(r => r && r.text)
+        .map(r => ({
+          tone: allowedTones.has(String(r.tone)) ? String(r.tone) : "diagnostic",
+          text: String(r.text).slice(0, 1500),
+        }))
+        .slice(0, 3);
+
+      try {
+        const audId = `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        await db.upsert("ai_audit_log", audId, JSON.stringify({
+          id: audId, type: "ai.reply.suggested", ticketId, by: (auth && auth.name) || "System",
+          at: new Date().toISOString(), kbCited: kb.map(k => k.id), count: replies.length,
+        }));
+      } catch { /* ignore */ }
+
+      return json(res, 200, {
+        ticketId, replies,
+        kbCited: kb.map(k => ({ id: k.id, title: k.title })),
+        generatedAt: new Date().toISOString(),
+        model: (aiResult && aiResult.model) || "secondary",
+      });
+    } catch (err) {
+      return json(res, 500, { error: "suggested-replies failed", details: err && err.message });
+    }
+  }
+
+  // ─── v3.32.1 (Phase 2): POST /api/ai/draft-resolution ─────────────────
+  // Drafts resolution-notes for a ticket about to flip to Resolved with empty
+  // resolutionNotes. Engineer reviews & posts. Body: { ticketId }. Returns
+  // { ticketId, resolutionDraft, rootCause, preventiveTip, generatedAt }.
+  if (pathname === "/api/ai/draft-resolution" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const ticketId = String(body && body.ticketId || "").trim();
+      if (!ticketId) return json(res, 400, { error: "ticketId required" });
+      const incRow = await db.getOne("incidents", ticketId);
+      if (!incRow) return json(res, 404, { error: "Ticket not found" });
+      const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+
+      // Pull worklogs (oldest→newest, last 30) so the draft reflects what was done.
+      let worklogs = [];
+      try {
+        const wlRows = await db.getAll("worklogs");
+        worklogs = wlRows
+          .map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+          .filter(w => w && w.incidentId === ticketId)
+          .sort((a, b) => new Date(a.loggedAt || 0) - new Date(b.loggedAt || 0));
+      } catch { /* ignore */ }
+      const recentLogs = worklogs.slice(-30);
+
+      const ticketBlock = [
+        `Ticket: ${inc.id}`,
+        `Title: ${inc.title || "(no title)"}`,
+        `Category: ${inc.category || "Uncategorized"}`,
+        `Priority: ${inc.priority || "Medium"}`,
+        `Description: ${String(inc.description || inc.body || "").slice(0, 1200)}`,
+      ].join("\n");
+      const wlBlock = recentLogs.length
+        ? recentLogs.map(w => `[${(w.loggedAt || "").slice(0, 19)}] ${w.user || "?"} (${w.category || "note"}): ${String(w.description || "").slice(0, 400)}`).join("\n")
+        : "(no work-log entries)";
+
+      const systemPrompt = "You are an IT service-desk resolution-notes drafter. Read the ticket and its work-log activity and return ONLY a JSON object: " +
+        "{\"resolutionDraft\": <string, 4-6 sentences describing what was done and final state, written for the engineer to post as resolution notes>, " +
+        "\"rootCause\": <string, single sentence root cause as best determined>, " +
+        "\"preventiveTip\": <string, single short tip the customer can apply to avoid recurrence>}. " +
+        "Plain English, factual tone. If activity is sparse, say so honestly inside resolutionDraft and avoid invention. No salutations/signatures.";
+      const userPrompt = `${ticketBlock}\n\n=== Work-log activity ===\n${wlBlock}`;
+
+      const aiResult = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 500 });
+      const raw = (aiResult && aiResult.text || "").replace(/```json\n?|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch {
+        const m = raw.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]); } catch { /* fall-through */ } }
+      }
+      if (!parsed || typeof parsed !== "object") {
+        return json(res, 502, { error: "AI returned non-JSON draft-resolution", raw: raw.slice(0, 400) });
+      }
+      const payload = {
+        ticketId,
+        resolutionDraft: String(parsed.resolutionDraft || "").slice(0, 2500),
+        rootCause: String(parsed.rootCause || "").slice(0, 400),
+        preventiveTip: String(parsed.preventiveTip || "").slice(0, 400),
+        generatedAt: new Date().toISOString(),
+        model: (aiResult && aiResult.model) || "secondary",
+      };
+      try {
+        const audId = `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        await db.upsert("ai_audit_log", audId, JSON.stringify({
+          id: audId, type: "ai.resolution.drafted", ticketId,
+          by: (auth && auth.name) || "System", at: payload.generatedAt, model: payload.model,
+        }));
+      } catch { /* ignore */ }
+      return json(res, 200, payload);
+    } catch (err) {
+      return json(res, 500, { error: "draft-resolution failed", details: err && err.message });
     }
   }
 
