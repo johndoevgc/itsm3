@@ -17,6 +17,7 @@ import {
   EmailWhitelistTab, DataMaintenanceTab, ZdCleanupTab,
 } from "../components/ExtractedTabs.jsx";
 import { DataHygieneTab } from "../components/DataHygieneTab.jsx";
+import { RunbookActionsTab } from "../components/RunbookActionsTab.jsx";
 import { ChatAssistTab } from "../components/ChatAssistTab.jsx";
 import { KbReviewTab } from "../components/KbReviewTab.jsx";
 
@@ -82,8 +83,8 @@ export default function AdminSettingsModule({ ctx }) {
   const [generalSettings, setGeneralSettings] = useState({ siteName: "VGC ITSM", language: "en", timezone: "Asia/Singapore", dateFormat: "DD/MM/YYYY", theme: "dark" });
   const [brandingSettings, setBrandingSettings] = useState({ logo: "", primaryColor: "#64B5F6", accentColor: "#81C784" });
   const [smtpConfig, setSmtpConfig] = useState({ host: "", port: 587, user: "", pass: "", from: "", secure: true });
-  const [pdpaConfig, setPdpaConfig] = useState({ enabled: false, retentionDays: 365, autoAnonymize: false });
-  const [infraConfig, _setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90 });
+  const [pdpaConfig, setPdpaConfig] = useState({ enabled: false, retentionDays: 365, autoAnonymize: false, retentionPolicies: [], auditLog: [] });
+  const [infraConfig, _setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90, cost: { total: 0, alerts: [], appService: { name: "App Service", monthly: 0 }, mysql: { name: "MySQL", monthly: 0, storage: 0, note: "" } } });
   const [infraLive, _setInfraLive] = useState(null);
   const [infraLoading, _setInfraLoading] = useState(false);
   const [swConfig, setSwConfig] = useState({});
@@ -94,7 +95,7 @@ export default function AdminSettingsModule({ ctx }) {
   const [showInviteUser, setShowInviteUser] = useState(false);
   const [editingUserId, setEditingUserId] = useState(null);
   const [showEntraImport, setShowEntraImport] = useState(false);
-  const [entraIdConfig, setEntraIdConfig] = useState({ tenantId: "", clientId: "", enabled: false });
+  const [entraIdConfig, setEntraIdConfig] = useState({ tenantId: "", clientId: "", enabled: false, groupMappings: [] });
   const [entraGroups, setEntraGroups] = useState([]);
   const [entraSelectedGroup, setEntraSelectedGroup] = useState(null);
   const [entraGroupMembers, setEntraGroupMembers] = useState([]);
@@ -179,6 +180,7 @@ const allTabs = [
   { id: "migration", label: "Import", icon: "📦", devOnly: true },
   { id: "dataMaintenance", label: "Maintenance", icon: "🧹", devOnly: true },
   { id: "dataHygiene", label: "Data Hygiene", icon: "🧬", devOnly: true },
+  { id: "runbookActions", label: "Runbook Actions", icon: "🛠️", devOnly: true },
   { id: "chatAssist", label: "Chat Assist", icon: "💬" },
   { id: "kbReview", label: "AI KB Review", icon: "📚" },
   { id: "zdCleanup", label: "ZD Cleanup", icon: "🧽", devOnly: true },
@@ -5170,6 +5172,11 @@ return (
     {/* Data Hygiene — surfaces orphaned AI rows + priority drift, with dry-run cleanup */}
     {activeTab === "dataHygiene" && (
       <DataHygieneTab currentUser={currentUser} showToast={showToast} />
+    )}
+
+    {/* Runbook Actions — Phase 4.1 self-healing registry, shadow-only */}
+    {activeTab === "runbookActions" && (
+      <RunbookActionsTab currentUser={currentUser} showToast={showToast} />
     )}
 
     {/* Chat Assist — agent-side AI co-pilot. KB-grounded, audited. */}
