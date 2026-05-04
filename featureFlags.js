@@ -73,6 +73,12 @@ const DEFAULTS = {
                                     customerWidgetEnabled: false, kbGroundingTopK: 5,
                                     rateLimitPerMin: 20 } },
 
+  // v3.33.1 — Omnichannel intake: Microsoft Teams bot adapter. Off by default;
+  // enable on staging once Teams app manifest is registered in Partner Center.
+  // payload.maxReplyChars caps Adaptive Card text body (default 2800).
+  omnichannel_teams:   { enabled: false, scope: "staging",
+                         payload: { maxReplyChars: 280, requireSecret: true } },
+
   // Phase B8 — Auto-attach top-K published KB articles to a new incident at
   // create time, based on title/category keyword overlap. Helps the assignee
   // start with relevant context. Off by default in prod; enable per-slot.

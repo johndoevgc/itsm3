@@ -222,7 +222,11 @@ const VGC_CUSTOMER_PERSONA = [
 ].join(" ");
 
 function buildSystemPrompt(channel, lang, historyContext) {
-  const base = channel === "customer" ? VGC_CUSTOMER_PERSONA : [
+  // v3.33.1 — Teams channel reuses the customer persona but with a tighter
+  // length cap suitable for chat readability inside the Teams app shell.
+  const base = channel === "customer" ? VGC_CUSTOMER_PERSONA
+    : channel === "teams" ? (VGC_CUSTOMER_PERSONA + " CHANNEL CONTEXT — you are responding inside Microsoft Teams. Keep replies under 280 characters per turn so the message renders cleanly in the chat pane. Prefer numbered steps over paragraphs.")
+    : [
     "You are an IT service-desk co-pilot helping the on-call agent.",
     "Suggest the next best response or remediation step.",
     "Cite KB IDs in square brackets (e.g. [KB0010]) when grounded.",
@@ -1197,7 +1201,12 @@ module.exports = function createChatAssistRoutes(ctx) {
       if (!flag) return json(res, 503, { error: "chat_assist disabled" });
       try {
         const body = await parseBody(req);
-        const channel = body.channel === "customer" ? "customer" : "agent";
+        // v3.33.1 — accept channel:"teams" alongside customer/agent. Teams
+        // sessions are typically created server-side by routes/teamsBot.js;
+        // exposing it here lets test harnesses & admin tooling create one too.
+        const channel = body.channel === "customer" ? "customer"
+          : body.channel === "teams" ? "teams"
+          : "agent";
         if (channel === "customer" && flag.customerWidgetEnabled === false) {
           return json(res, 503, { error: "customer chat widget disabled" });
         }
@@ -1337,7 +1346,7 @@ module.exports = function createChatAssistRoutes(ctx) {
 
         // AI call — keep options minimal (no temperature; GPT-5.4 rejects it)
         const lang = session.intake?.lang || "en";
-        let histCtx = session.channel === "customer" ? summarizeHistoryForPrompt(session.history) : "";
+        let histCtx = (session.channel === "customer" || session.channel === "teams") ? summarizeHistoryForPrompt(session.history) : "";
         // v3.31.0 — frustrated customer? Prepend an apologetic-tone hint
         // so the AI acknowledges before suggesting steps.
         if (session.frustrationFlag && session.channel === "customer") {

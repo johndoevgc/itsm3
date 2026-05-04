@@ -235,6 +235,8 @@ const PUBLIC_ROUTES = new Set([
   "/api/csat/submit",
   "/api/status/public",
   "/api/weather/disaster-alert",
+  "/api/teams/messages",  // v3.33.1 Bot Framework webhook (validated via X-Teams-Bot-Secret)
+  "/api/teams/health",
 ]);
 const PUBLIC_PREFIXES = [
   "/api/zendesk/webhook", // Zendesk sends webhooks without our auth
