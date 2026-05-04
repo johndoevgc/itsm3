@@ -115,6 +115,14 @@ export default function AdminSettingsModule({ ctx }) {
   const [aiRoleSuggestions, setAiRoleSuggestions] = useState(null);
   const [aiRuleSuggestions, setAiRuleSuggestions] = useState(null);
   const [aiGovData, setAiGovData] = useState(null);
+  // v3.32.2 — Bulk Actions + Queue Rebalance state
+  const [bulkFilter, setBulkFilter] = useState({ status: "Open", priority: "", ageDaysGte: "", noReplyDaysGte: "" });
+  const [bulkAction, setBulkAction] = useState({ type: "close", value: "", comment: "" });
+  const [bulkPreview, setBulkPreview] = useState(null);
+  const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
+  const [bulkApplyLoading, setBulkApplyLoading] = useState(false);
+  const [queueRebalance, setQueueRebalance] = useState(null);
+  const [queueRebalanceLoading, setQueueRebalanceLoading] = useState(false);
   const [surveyTemplates, setSurveyTemplates] = useState([]);
   const [surveyDrafts, setSurveyDrafts] = useState([]);
   const [historicalCloseRunning, setHistoricalCloseRunning] = useState(false);
@@ -183,6 +191,7 @@ const allTabs = [
   { id: "billing", label: "Billing", icon: "💳", devOnly: true },
   { id: "aiGovernance", label: "AI Governance", icon: "🧠" },
   { id: "aiDecisions", label: "AI Decisions", icon: "🤖" },
+  { id: "aiOps", label: "AI Ops (Bulk + Queue)", icon: "⚙️" },
   { id: "emailAudit", label: "Email & Sync Audit", icon: "🔇" },
   { id: "featureFlags", label: "Feature Flags", icon: "🚩" },
   { id: "compliance", label: "Compliance", icon: "📜" },
@@ -4111,6 +4120,182 @@ return (
 
     {/* Phase I1 — AI Decisions */}
     {activeTab === "aiDecisions" && <AIDecisionsTab currentUser={currentUser} />}
+
+    {/* v3.32.2 — AI Ops: Bulk Actions + Queue Rebalance */}
+    {activeTab === "aiOps" && (
+      <div>
+        {/* Bulk Actions */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 14px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⚙️ Bulk Actions — Preview &amp; Apply</h3>
+          <div style={{ fontSize: 11, color: "#5A6178", marginBottom: 14 }}>Filter incidents, preview the match, then apply close / reassign / set priority / add tag.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Status</div>
+              <select value={bulkFilter.status} onChange={(e) => setBulkFilter({ ...bulkFilter, status: e.target.value })} style={inputStyle}>
+                <option value="">— any —</option>
+                <option>Open</option><option>In Progress</option><option>Pending</option><option>On Hold</option><option>Resolved</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Priority</div>
+              <select value={bulkFilter.priority} onChange={(e) => setBulkFilter({ ...bulkFilter, priority: e.target.value })} style={inputStyle}>
+                <option value="">— any —</option>
+                <option>P1</option><option>P2</option><option>P3</option><option>P4</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Age ≥ (days)</div>
+              <input type="number" value={bulkFilter.ageDaysGte} onChange={(e) => setBulkFilter({ ...bulkFilter, ageDaysGte: e.target.value })} placeholder="0" style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>No reply ≥ (days)</div>
+              <input type="number" value={bulkFilter.noReplyDaysGte} onChange={(e) => setBulkFilter({ ...bulkFilter, noReplyDaysGte: e.target.value })} placeholder="0" style={inputStyle} />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Action</div>
+              <select value={bulkAction.type} onChange={(e) => setBulkAction({ ...bulkAction, type: e.target.value, value: "" })} style={inputStyle}>
+                <option value="close">Close</option>
+                <option value="reassign">Reassign</option>
+                <option value="setPriority">Set Priority</option>
+                <option value="addTag">Add Tag</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>{bulkAction.type === "close" ? "(no value)" : "Value"}</div>
+              <input value={bulkAction.value} disabled={bulkAction.type === "close"} onChange={(e) => setBulkAction({ ...bulkAction, value: e.target.value })} placeholder={bulkAction.type === "reassign" ? "engineer name" : bulkAction.type === "setPriority" ? "P1/P2/P3/P4" : bulkAction.type === "addTag" ? "tag name" : ""} style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Comment (optional, close only)</div>
+              <input value={bulkAction.comment} onChange={(e) => setBulkAction({ ...bulkAction, comment: e.target.value })} placeholder="auto-closed by admin" style={inputStyle} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={async () => {
+              setBulkPreviewLoading(true);
+              try {
+                const filter = {};
+                if (bulkFilter.status) filter.status = bulkFilter.status;
+                if (bulkFilter.priority) filter.priority = bulkFilter.priority;
+                if (bulkFilter.ageDaysGte) filter.ageDaysGte = Number(bulkFilter.ageDaysGte);
+                if (bulkFilter.noReplyDaysGte) filter.noReplyDaysGte = Number(bulkFilter.noReplyDaysGte);
+                const r = await fetch("/api/admin/bulk-action-preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filter, action: bulkAction }) });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || "preview failed");
+                setBulkPreview(d);
+              } catch (e) { showToast("Preview failed: " + e.message); } finally { setBulkPreviewLoading(false); }
+            }} disabled={bulkPreviewLoading} style={{ ...btnStyle, background: "#06B6D4", color: "#fff" }}>{bulkPreviewLoading ? "Previewing..." : "🔍 Preview Match"}</button>
+
+            {bulkPreview && bulkPreview.matchCount > 0 && (
+              <button onClick={async () => {
+                if (!window.confirm(`Apply ${bulkAction.type} to ${bulkPreview.matchCount} incident(s)? This cannot be undone.`)) return;
+                setBulkApplyLoading(true);
+                try {
+                  // Re-preview to get full ID list (sample is capped at 25)
+                  const filter = {};
+                  if (bulkFilter.status) filter.status = bulkFilter.status;
+                  if (bulkFilter.priority) filter.priority = bulkFilter.priority;
+                  if (bulkFilter.ageDaysGte) filter.ageDaysGte = Number(bulkFilter.ageDaysGte);
+                  if (bulkFilter.noReplyDaysGte) filter.noReplyDaysGte = Number(bulkFilter.noReplyDaysGte);
+                  // Cap at 200 per backend limit
+                  const ids = bulkPreview.sample.map(s => s.id);
+                  if (bulkPreview.matchCount > ids.length) {
+                    showToast(`Applying to first ${ids.length} of ${bulkPreview.matchCount}; refresh preview after.`);
+                  }
+                  const r = await fetch("/api/admin/bulk-action-apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, action: bulkAction }) });
+                  const d = await r.json();
+                  if (!r.ok) throw new Error(d.error || "apply failed");
+                  showToast(`Applied: ${d.applied}, failed: ${d.failed}`);
+                  setBulkPreview(null);
+                } catch (e) { showToast("Apply failed: " + e.message); } finally { setBulkApplyLoading(false); }
+              }} disabled={bulkApplyLoading} style={{ ...btnStyle, background: "#DC2626", color: "#fff" }}>{bulkApplyLoading ? "Applying..." : `⚡ Apply to ${bulkPreview.matchCount}`}</button>
+            )}
+          </div>
+          {bulkPreview && (
+            <div style={{ marginTop: 16, background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, padding: 12 }}>
+              <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 6 }}>Match: {bulkPreview.matchCount} incident(s) — showing first {bulkPreview.sample.length}</div>
+              <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                {bulkPreview.sample.map(s => (
+                  <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 6px", borderBottom: "1px solid #1E213044", fontSize: 11, color: "#C4CAD6" }}>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#06B6D4", minWidth: 80 }}>{s.id}</span>
+                    <span style={{ flex: 1, marginLeft: 8 }}>{s.title}</span>
+                    <span style={{ minWidth: 50, color: "#FBBF24" }}>{s.priority}</span>
+                    <span style={{ minWidth: 90, color: "#5A6178" }}>{s.assignee}</span>
+                    <span style={{ minWidth: 50, color: "#5A6178" }}>{s.ageDays}d old</span>
+                  </div>
+                ))}
+                {bulkPreview.sample.length === 0 && <div style={{ color: "#5A6178", fontSize: 11, textAlign: "center", padding: 14 }}>No matches.</div>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Queue Rebalance */}
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <h3 style={{ margin: 0, fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>⚖️ Queue Rebalance Suggestions</h3>
+            <button onClick={async () => {
+              setQueueRebalanceLoading(true);
+              try {
+                const r = await fetch("/api/admin/queue-rebalance-suggest");
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || "fetch failed");
+                setQueueRebalance(d);
+              } catch (e) { showToast("Fetch failed: " + e.message); } finally { setQueueRebalanceLoading(false); }
+            }} disabled={queueRebalanceLoading} style={{ ...btnStyle, background: "#6366F1", color: "#fff" }}>{queueRebalanceLoading ? "Analyzing..." : "🔄 Analyze Load"}</button>
+          </div>
+          {!queueRebalance && <div style={{ color: "#5A6178", fontSize: 12, textAlign: "center", padding: 24 }}>Click "Analyze Load" to see engineer load and rebalance suggestions.</div>}
+          {queueRebalance && (
+            <>
+              <div style={{ background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, padding: 12, marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 8 }}>Engineer Load (avg: {queueRebalance.avgLoad?.toFixed(1) || 0})</div>
+                {queueRebalance.engineers.map(e => {
+                  const ratio = queueRebalance.avgLoad ? e.load / queueRebalance.avgLoad : 1;
+                  const color = ratio > 1.4 ? "#EF4444" : ratio < 0.7 ? "#4CAF50" : "#FBBF24";
+                  return (
+                    <div key={e.name} style={{ display: "flex", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #1E213044", fontSize: 11 }}>
+                      <span style={{ minWidth: 140, color: "#C4CAD6" }}>{e.name}</span>
+                      <div style={{ flex: 1, height: 6, background: "#1E2130", borderRadius: 3, marginRight: 10, position: "relative" }}>
+                        <div style={{ height: "100%", borderRadius: 3, background: color, width: `${Math.min(100, ratio * 50)}%` }} />
+                      </div>
+                      <span style={{ color, fontFamily: "'JetBrains Mono', monospace", minWidth: 60 }}>load {e.load}</span>
+                      <span style={{ color: "#5A6178", minWidth: 90 }}>{e.openCount} open ({e.p1Count}P1/{e.p2Count}P2)</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, padding: 12 }}>
+                <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 8 }}>Reassignment Suggestions ({queueRebalance.suggestions.length})</div>
+                {queueRebalance.suggestions.length === 0 && <div style={{ color: "#5A6178", fontSize: 11, padding: 8 }}>Queue is balanced — no suggestions.</div>}
+                {queueRebalance.suggestions.map((s, i) => (
+                  <div key={i} style={{ background: "#0F1117", border: "1px solid #1E2130", borderRadius: 4, padding: 10, marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", color: "#06B6D4" }}>{s.incidentId}</span>
+                      <button onClick={async () => {
+                        try {
+                          const r = await fetch("/api/admin/bulk-action-apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [s.incidentId], action: { type: "reassign", value: s.suggestedAssignee } }) });
+                          const d = await r.json();
+                          if (!r.ok) throw new Error(d.error || "apply failed");
+                          showToast(`${s.incidentId} reassigned to ${s.suggestedAssignee}`);
+                          // Remove from list locally
+                          setQueueRebalance(prev => ({ ...prev, suggestions: prev.suggestions.filter((_, idx) => idx !== i) }));
+                        } catch (e) { showToast("Reassign failed: " + e.message); }
+                      }} style={{ ...btnStyle, padding: "3px 10px", background: "#4CAF50", color: "#fff", fontSize: 10 }}>✓ Apply</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#C4CAD6", marginBottom: 3 }}>{s.title}</div>
+                    <div style={{ fontSize: 10, color: "#5A6178" }}>
+                      <span style={{ color: "#EF4444" }}>{s.currentAssignee}</span> → <span style={{ color: "#4CAF50" }}>{s.suggestedAssignee}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4, fontStyle: "italic" }}>{s.reason}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )}
 
     {/* Phase J3 — Compliance */}
     {activeTab === "compliance" && <ComplianceTab />}

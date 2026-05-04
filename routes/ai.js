@@ -5219,6 +5219,192 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
     }
   }
 
+  // ─── v3.32.2 — POST /api/admin/bulk-action-preview ──────────────────
+  // Body: { filter: { status?, priority?, ageDaysGte?, noReplyDaysGte?, assignee?, category? }, action: { type: "reassign"|"close"|"setPriority"|"addTag", value?, comment? } }
+  // Returns: { matchCount, sample:[{id,title,priority,status,assignee,ageDays,lastReplyDays}], action }
+  // Pure preview — DOES NOT mutate.
+  if (pathname === "/api/admin/bulk-action-preview" && req.method === "POST") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    try {
+      const body = await parseBody(req);
+      const filter = (body && typeof body.filter === "object" && body.filter) || {};
+      const action = (body && typeof body.action === "object" && body.action) || {};
+      const allowedActionTypes = ["reassign", "close", "setPriority", "addTag"];
+      if (!allowedActionTypes.includes(action.type)) {
+        return json(res, 400, { error: "action.type must be one of " + allowedActionTypes.join(", ") });
+      }
+      const rows = await db.getAll("incidents");
+      const now = Date.now();
+      const matched = [];
+      for (const r of rows) {
+        let inc;
+        try { inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { continue; }
+        if (!inc || !inc.id) continue;
+        if (filter.status && inc.status !== filter.status) continue;
+        if (filter.priority && inc.priority !== filter.priority) continue;
+        if (filter.assignee && inc.assignee !== filter.assignee) continue;
+        if (filter.category && inc.category !== filter.category) continue;
+        const created = inc.createdAt ? new Date(inc.createdAt).getTime() : now;
+        const ageDays = Math.floor((now - created) / 86400000);
+        if (typeof filter.ageDaysGte === "number" && ageDays < filter.ageDaysGte) continue;
+        const lastWl = Array.isArray(inc.worklogs) && inc.worklogs.length
+          ? new Date(inc.worklogs[inc.worklogs.length - 1].loggedAt || inc.worklogs[inc.worklogs.length - 1].at || created).getTime()
+          : created;
+        const lastReplyDays = Math.floor((now - lastWl) / 86400000);
+        if (typeof filter.noReplyDaysGte === "number" && lastReplyDays < filter.noReplyDaysGte) continue;
+        matched.push({
+          id: inc.id, title: inc.title || "", priority: inc.priority || "", status: inc.status || "",
+          assignee: inc.assignee || "Unassigned", ageDays, lastReplyDays,
+        });
+      }
+      const sample = matched.slice(0, 25);
+      return json(res, 200, {
+        matchCount: matched.length,
+        sample,
+        action,
+        filter,
+        previewedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      return json(res, 500, { error: "bulk-action-preview failed", details: err && err.message });
+    }
+  }
+
+  // ─── v3.32.2 — POST /api/admin/bulk-action-apply ────────────────────
+  // Body: { ids: string[], action: { type, value?, comment? } }
+  // Applies the chosen action to each incident; returns { applied, failed, errors }
+  if (pathname === "/api/admin/bulk-action-apply" && req.method === "POST") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    try {
+      const body = await parseBody(req);
+      const ids = Array.isArray(body && body.ids) ? body.ids.filter(x => typeof x === "string") : [];
+      const action = (body && typeof body.action === "object" && body.action) || {};
+      const allowedActionTypes = ["reassign", "close", "setPriority", "addTag"];
+      if (!allowedActionTypes.includes(action.type)) {
+        return json(res, 400, { error: "action.type must be one of " + allowedActionTypes.join(", ") });
+      }
+      if (ids.length === 0) return json(res, 400, { error: "ids[] required" });
+      if (ids.length > 200) return json(res, 400, { error: "max 200 ids per call" });
+      const actor = (auth && (auth.name || auth.email)) || "admin";
+      const nowIso = new Date().toISOString();
+      let applied = 0, failed = 0;
+      const errors = [];
+      for (const id of ids) {
+        try {
+          const row = await db.getOne("incidents", id);
+          if (!row) { failed++; errors.push({ id, error: "not found" }); continue; }
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (action.type === "reassign") {
+            if (!action.value) { failed++; errors.push({ id, error: "value (assignee) required" }); continue; }
+            inc.assignee = action.value;
+          } else if (action.type === "close") {
+            inc.status = "Closed";
+            inc.closedAt = nowIso;
+            if (action.comment) inc.resolutionNotes = (inc.resolutionNotes || "") + "\n[bulk-close] " + action.comment;
+          } else if (action.type === "setPriority") {
+            if (!action.value) { failed++; errors.push({ id, error: "value (priority) required" }); continue; }
+            inc.priority = action.value;
+          } else if (action.type === "addTag") {
+            if (!action.value) { failed++; errors.push({ id, error: "value (tag) required" }); continue; }
+            inc.tags = Array.isArray(inc.tags) ? Array.from(new Set([...inc.tags, action.value])) : [action.value];
+          }
+          inc.lastModified = nowIso;
+          await db.upsert("incidents", id, JSON.stringify(inc));
+          applied++;
+        } catch (e) {
+          failed++; errors.push({ id, error: (e && e.message) || "unknown" });
+        }
+      }
+      try {
+        const audId = `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        await db.upsert("ai_audit_log", audId, JSON.stringify({
+          id: audId, type: "admin.bulk.applied", actor, at: nowIso,
+          actionType: action.type, count: applied, failed, idCount: ids.length,
+        }));
+      } catch { /* ignore */ }
+      return json(res, 200, { applied, failed, errors: errors.slice(0, 50), appliedAt: nowIso });
+    } catch (err) {
+      return json(res, 500, { error: "bulk-action-apply failed", details: err && err.message });
+    }
+  }
+
+  // ─── v3.32.2 — GET /api/admin/queue-rebalance-suggest ───────────────
+  // Inspects open/in-progress incidents per assignee, identifies overloaded engineers,
+  // and suggests reassignments to under-loaded peers in the same skill cluster.
+  // Returns: { engineers:[{name, openCount, p1Count, p2Count, load}], suggestions:[{incidentId, title, currentAssignee, suggestedAssignee, reason}], generatedAt }
+  if (pathname === "/api/admin/queue-rebalance-suggest" && req.method === "GET") {
+    if (!auth.authenticated || !auth.role || !["admin", "super_admin"].includes(auth.role)) {
+      return json(res, 403, { error: "Admin access required" });
+    }
+    try {
+      const rows = await db.getAll("incidents");
+      const openStatuses = new Set(["Open", "In Progress", "Pending", "On Hold", "Assigned"]);
+      const byEngineer = new Map(); // name -> { openCount, p1, p2, p3, p4, categories:Map<cat, count>, incidents:[] }
+      for (const r of rows) {
+        let inc;
+        try { inc = typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { continue; }
+        if (!inc || !inc.id) continue;
+        if (!openStatuses.has(inc.status)) continue;
+        const a = inc.assignee || "Unassigned";
+        if (!byEngineer.has(a)) byEngineer.set(a, { name: a, openCount: 0, p1Count: 0, p2Count: 0, categories: new Map(), incidents: [] });
+        const e = byEngineer.get(a);
+        e.openCount++;
+        if (inc.priority === "P1" || inc.priority === "Critical") e.p1Count++;
+        if (inc.priority === "P2" || inc.priority === "High") e.p2Count++;
+        const cat = inc.category || "General";
+        e.categories.set(cat, (e.categories.get(cat) || 0) + 1);
+        e.incidents.push({ id: inc.id, title: inc.title || "", priority: inc.priority || "", category: cat });
+      }
+      const engineers = Array.from(byEngineer.values())
+        .filter(e => e.name !== "Unassigned")
+        .map(e => ({ name: e.name, openCount: e.openCount, p1Count: e.p1Count, p2Count: e.p2Count, load: e.p1Count * 4 + e.p2Count * 2 + e.openCount }))
+        .sort((a, b) => b.load - a.load);
+
+      const suggestions = [];
+      if (engineers.length >= 2) {
+        const avgLoad = engineers.reduce((s, e) => s + e.load, 0) / engineers.length;
+        const overloaded = engineers.filter(e => e.load > avgLoad * 1.4);
+        const underloaded = engineers.filter(e => e.load < avgLoad * 0.7);
+        for (const over of overloaded) {
+          const overData = byEngineer.get(over.name);
+          // Pull lowest-priority incidents from overloaded engineer
+          const movable = overData.incidents
+            .filter(i => i.priority !== "P1" && i.priority !== "Critical")
+            .slice(0, 3);
+          for (const inc of movable) {
+            // Find under-loaded engineer who has handled this category before
+            let target = underloaded.find(u => {
+              const uData = byEngineer.get(u.name);
+              return uData && uData.categories.has(inc.category);
+            });
+            if (!target && underloaded.length > 0) target = underloaded[0];
+            if (target) {
+              suggestions.push({
+                incidentId: inc.id, title: inc.title,
+                currentAssignee: over.name, suggestedAssignee: target.name,
+                reason: `${over.name} is at load ${over.load} (avg ${avgLoad.toFixed(1)}); ${target.name} has handled ${inc.category} before and load is ${target.load}.`,
+              });
+              if (suggestions.length >= 12) break;
+            }
+          }
+          if (suggestions.length >= 12) break;
+        }
+      }
+      return json(res, 200, {
+        engineers,
+        suggestions,
+        avgLoad: engineers.length ? engineers.reduce((s, e) => s + e.load, 0) / engineers.length : 0,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      return json(res, 500, { error: "queue-rebalance-suggest failed", details: err && err.message });
+    }
+  }
+
     return false;
   };
 };
