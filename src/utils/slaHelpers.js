@@ -130,7 +130,24 @@ export const computeMTTR = (resolvedIncidents) => {
 // ─── Utility Functions ──────────────────────────────────────────────────
 export const genId = (prefix) => `${prefix}${String(Math.floor(Math.random() * 9000) + 1000)}`;
 
-export const timeAgo = (h) => {
+export const timeAgo = (input) => {
+  // Accepts either:
+  //   - a number of hours since the event (legacy)
+  //   - a Date / ISO string / millisecond timestamp (most callers)
+  // Returns "—" for missing/invalid input instead of "NaNd ago"
+  // (was producing "NaNd" on Zendesk-synced tickets like INC-ZD8245
+  //  whose `created` is an ISO string, never a number of hours).
+  let h;
+  if (input == null || input === "") return "—";
+  if (typeof input === "number" && isFinite(input)) {
+    h = input;
+  } else {
+    const t = (input instanceof Date) ? input.getTime() : new Date(input).getTime();
+    if (!isFinite(t)) return "—";
+    h = (Date.now() - t) / 3600000;
+  }
+  if (!isFinite(h)) return "—";
+  if (h < 0) h = 0;
   if (h < 1) return `${Math.round(h * 60)}m ago`;
   if (h < 24) return `${Math.round(h)}h ago`;
   return `${Math.round(h / 24)}d ago`;

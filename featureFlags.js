@@ -73,11 +73,20 @@ const DEFAULTS = {
                                     customerWidgetEnabled: false, kbGroundingTopK: 5,
                                     rateLimitPerMin: 20 } },
 
-  // v3.33.1 — Omnichannel intake: Microsoft Teams bot adapter. Off by default;
-  // enable on staging once Teams app manifest is registered in Partner Center.
-  // payload.maxReplyChars caps Adaptive Card text body (default 2800).
+  // v3.33.1 — Omnichannel intake: Microsoft Teams bot adapter.
   omnichannel_teams:   { enabled: false, scope: "staging",
                          payload: { maxReplyChars: 280, requireSecret: true } },
+
+  // v3.33.2 — Omnichannel intake: ACS SMS webhook adapter. Off by default.
+  // payload.dailyCapPerNumber caps inbound messages per phone per day to bound
+  // ACS billing exposure. payload.maxSmsLen caps outbound SMS body (~3 segs).
+  omnichannel_sms:     { enabled: false, scope: "staging",
+                         payload: { dailyCapPerNumber: 30, maxSmsLen: 480, requireSecret: true } },
+
+  // v3.33.2 — Browser voice input (Web Speech API) for self-service portal.
+  // payload.lang controls SpeechRecognition.lang. Off in prod until UX vetted.
+  omnichannel_voice:   { enabled: false, scope: "staging",
+                         payload: { lang: "en-SG", maxSeconds: 30, autoStop: true } },
 
   // Phase B8 — Auto-attach top-K published KB articles to a new incident at
   // create time, based on title/category keyword overlap. Helps the assignee

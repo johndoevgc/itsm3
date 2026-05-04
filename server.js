@@ -2549,7 +2549,7 @@ async function _markEmailRead(token, sender, messageId) {
 
 
 // ─── Phase 4: Route handler references (initialized in start()) ────
-let handleZendesk, handleAI, handleCore, handleChatAssist, handleTeamsBot;
+let handleZendesk, handleAI, handleCore, handleChatAssist, handleTeamsBot, handleSmsWebhook;
 // v3.33.1 — routes/teamsBot.js needs an in-process reference to handleChatAssist
 // so it can forward Teams activities into the existing chat-assist pipeline
 // without re-implementing AI grounding / PII / rate-limit logic.
@@ -2605,6 +2605,7 @@ const server = http.createServer(async (req, res) => {
     if (handleAI && await handleAI(req, res, pathname, auth, authResult, urlObj)) return;
     if (handleChatAssist && await handleChatAssist(req, res, pathname, auth, authResult, urlObj)) return;
     if (handleTeamsBot && await handleTeamsBot(req, res, pathname, auth, authResult, urlObj)) return;
+    if (handleSmsWebhook && await handleSmsWebhook(req, res, pathname, auth, authResult, urlObj)) return;
   } catch (handlerErr) {
     console.error(`[Route] ${req.method} ${pathname} crashed:`, handlerErr && handlerErr.stack || handlerErr);
     if (!res.headersSent) {
@@ -2894,7 +2895,8 @@ async function start() {
   handleChatAssistRef.fn = handleChatAssist;
   ctx.handleChatAssistRef = handleChatAssistRef;
   handleTeamsBot = require("./routes/teamsBot")(ctx);
-  console.log("[Phase 4] Route handlers initialized (core, zendesk, ai, chatAssist, teamsBot)");
+  handleSmsWebhook = require("./routes/smsWebhook")(ctx);
+  console.log("[Phase 4] Route handlers initialized (core, zendesk, ai, chatAssist, teamsBot, smsWebhook)");
 
   server.listen(PORT, async () => {
     const stats = {};

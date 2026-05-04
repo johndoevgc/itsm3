@@ -492,6 +492,41 @@ export function CustomerChatTab({ currentUser, showToast }) {
   const scrollRef = useRef(null);
   const greetingFiredRef = useRef(false);
 
+  // v3.33.2 — Browser voice input via the Web Speech API. Feature-detected
+  // at mount; if the browser lacks SpeechRecognition (Firefox, older Safari)
+  // the mic button stays hidden. No SDK dependency.
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  useEffect(() => {
+    const SR = typeof window !== "undefined" &&
+      (window.SpeechRecognition || window.webkitSpeechRecognition);
+    if (!SR) return;
+    setVoiceSupported(true);
+    const r = new SR();
+    r.continuous = false;
+    r.interimResults = true;
+    r.lang = navigator.language || "en-SG";
+    r.maxAlternatives = 1;
+    r.onresult = (ev) => {
+      let finalText = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        finalText += ev.results[i][0].transcript;
+      }
+      setInput((prev) => (prev ? prev + " " : "") + finalText.trim());
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    recognitionRef.current = r;
+    return () => { try { r.abort(); } catch { /* ignore */ } };
+  }, []);
+  const toggleVoice = () => {
+    const r = recognitionRef.current;
+    if (!r) return;
+    if (listening) { try { r.stop(); } catch { /* ignore */ } setListening(false); return; }
+    try { r.start(); setListening(true); } catch { setListening(false); }
+  };
+
   const startSession = useCallback(async () => {
     try {
       const r = await fetch("/api/chat-assist/session", {
@@ -846,6 +881,22 @@ export function CustomerChatTab({ currentUser, showToast }) {
             >
               Send
             </button>
+            {voiceSupported && (
+              <button
+                onClick={toggleVoice}
+                disabled={!session || sending}
+                title={listening ? "Stop listening" : "Speak your message"}
+                aria-label={listening ? "Stop voice input" : "Start voice input"}
+                style={{
+                  background: listening ? "#EF4444" : "#1E2130", color: "#fff",
+                  border: "1px solid " + (listening ? "#EF4444" : "#2A2F45"),
+                  borderRadius: 6, padding: "10px 12px", fontSize: 14, cursor: "pointer",
+                  opacity: (!session || sending) ? 0.5 : 1,
+                }}
+              >
+                {listening ? "⏹" : "🎤"}
+              </button>
+            )}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
             <div style={{ fontSize: 10, color: "#5A6178" }}>Enter to send · Shift+Enter for new line</div>
