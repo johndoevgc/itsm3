@@ -3228,6 +3228,10 @@ export default function ITSMApp() {
                 return fresh.length ? [...fresh, ...prev].slice(0, 50) : prev;
               });
             }
+            // ─── v3.31.1 (Phase 1): Anomaly live-refresh on dashboard ───
+            if (msg.collection === "dashboard" && msg.action === "anomaly") {
+              try { window.dispatchEvent(new CustomEvent("vgc-anomaly-detected", { detail: msg.data || null })); } catch { /* ignore */ }
+            }
             if (msg.action === "delete" || msg.action === "upsert" || msg.action === "update" || msg.action === "bulk_upsert" || msg.action === "bulk_update" || msg.action === "merge") {
               scheduleRefresh(msg.collection);
             }

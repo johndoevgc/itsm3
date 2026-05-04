@@ -450,6 +450,90 @@ function ReassignSuggestionsWidget({ setActiveModule }) {
   );
 }
 
+/* ─── v3.31.1 (Phase 1) — Anomaly Alert Widget ─────────────────────── */
+function AnomalyAlertWidget({ setActiveModule }) {
+  const [data, setData] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+
+  const load = React.useCallback(async () => {
+    try {
+      const r = await fetch("/api/ai/anomaly-summary", { credentials: "include" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setData(d);
+    } catch {
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    load();
+    // Live refresh on WS anomaly_detected event (best-effort; tolerate missing global).
+    const handler = () => load();
+    if (typeof window !== "undefined" && window.addEventListener) {
+      window.addEventListener("vgc-anomaly-detected", handler);
+    }
+    const poll = setInterval(load, 60000); // 60s safety net
+    return () => {
+      if (typeof window !== "undefined" && window.removeEventListener) {
+        window.removeEventListener("vgc-anomaly-detected", handler);
+      }
+      clearInterval(poll);
+    };
+  }, [load]);
+
+  if (loading || !data) return null;
+  const totalDelta = Number(data.deltas?.totalPct || 0);
+  const p1Delta = Number(data.deltas?.p1Pct || 0);
+  const p2Delta = Number(data.deltas?.p2Pct || 0);
+  const spikes = Array.isArray(data.categorySpikes) ? data.categorySpikes : [];
+  const slaBreach = Number(data.slaBreachActive || 0);
+  // Only render when SOMETHING is anomalous (avoid noise on quiet days).
+  const anomalous = totalDelta >= 25 || p1Delta >= 50 || p2Delta >= 50 || spikes.length > 0 || slaBreach >= 3;
+  if (!anomalous) return null;
+
+  const Tile = ({ label, value, suffix, accent }) => (
+    <div style={{ background: "#0A0C14", borderRadius: 8, padding: "10px 12px", border: `1px solid ${accent}33`, minWidth: 110 }}>
+      <div style={{ fontSize: 9, color: "#5A6178", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: accent, fontFamily: "'JetBrains Mono', monospace" }}>{value}{suffix || ""}</div>
+    </div>
+  );
+
+  return (
+    <div role="region" aria-label="Anomaly Alerts" style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #F59E0B44", padding: 16, marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16 }}>📊</span> Anomaly Alerts
+          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: "#F59E0B22", color: "#FBBF24", fontWeight: 600 }}>vs 7-day avg</span>
+        </h3>
+        <button onClick={() => setActiveModule && setActiveModule("incidents")} aria-label="Open incidents module" style={{ padding: "5px 12px", borderRadius: 6, background: "#F59E0B18", border: "1px solid #F59E0B44", color: "#FBBF24", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Drill down →</button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: spikes.length ? 10 : 0 }}>
+        <Tile label="Today vol" value={data.today?.total ?? 0} accent="#06B6D4" />
+        <Tile label="vs avg" value={(totalDelta >= 0 ? "+" : "") + totalDelta} suffix="%" accent={totalDelta >= 25 ? "#FF6B6B" : totalDelta <= -25 ? "#22C55E" : "#A5B4FC"} />
+        <Tile label="P1 today" value={data.today?.p1 ?? 0} accent={p1Delta >= 50 ? "#FF6B6B" : "#A5B4FC"} />
+        <Tile label="P2 today" value={data.today?.p2 ?? 0} accent={p2Delta >= 50 ? "#FBBF24" : "#A5B4FC"} />
+        <Tile label="SLA breach" value={slaBreach} accent={slaBreach >= 3 ? "#FF6B6B" : "#A5B4FC"} />
+      </div>
+      {spikes.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
+          {spikes.slice(0, 4).map(s => (
+            <div key={s.category} style={{ background: "#0A0C14", borderRadius: 8, padding: "8px 10px", border: "1px solid #F59E0B33" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#FBBF24" }}>📈 {s.category}</div>
+              <div style={{ fontSize: 10, color: "#C4CAD6", marginTop: 2 }}>
+                {s.today} today · avg {s.weeklyAvg}/day
+                <span style={{ marginLeft: 6, color: "#FF6B6B", fontWeight: 700 }}>{s.deltaPct >= 0 ? "+" : ""}{s.deltaPct}%</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Phase 11.2: Incident Heatmap ──────────────────────── */
 function IncidentHeatmapWidget({ incidents }) {
   const heatData = useMemo(() => {
@@ -2459,6 +2543,9 @@ return (
 
     {/* ═══ v3.28.0: Reassign Suggestions ═══ */}
     <ReassignSuggestionsWidget setActiveModule={setActiveModule} />
+
+    {/* ═══ v3.31.1 (Phase 1): Anomaly Alerts ═══ */}
+    <AnomalyAlertWidget setActiveModule={setActiveModule} />
 
     {/* ═══ Phase 11.2 & 11.3: INCIDENT HEATMAP + AI CONFIDENCE TRENDS ═══ */}
     {(cardVisibility.incidentHeatmap?.on || cardVisibility.aiConfTrend?.on) && (

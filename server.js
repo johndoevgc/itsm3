@@ -3457,6 +3457,49 @@ async function start() {
     _shutdownTimeouts.push(kbDigestStartTimer);
     console.log(`[KB Digest] Daily AI KB review digest enabled (threshold=${KB_DIGEST_THRESHOLD}, stale=${KB_DIGEST_STALE_DAYS}d, recipients=${KB_DIGEST_RECIPIENTS.length})`);
 
+    // ─── v3.31.1 (Phase 1): Anomaly Watcher ───────────────────────────
+    // Periodically polls the AI anomaly summary and broadcasts on the
+    // `dashboard` channel when an anomalous condition is detected, so the
+    // engineer dashboard's AnomalyAlertWidget refreshes live.
+    const ANOMALY_WATCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+    let _lastAnomalyBroadcastAt = 0;
+    const ANOMALY_BROADCAST_COOLDOWN = 10 * 60 * 1000; // at most every 10 min
+    const runAnomalyWatch = () => {
+      const sumReq = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/ai/anomaly-summary", method: "GET", headers: { "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN || "" } }, (res) => {
+        let d = ""; res.on("data", c => d += c);
+        res.on("end", () => {
+          try {
+            const sum = JSON.parse(d);
+            if (!sum || typeof sum !== "object") return;
+            const totalPct = Number(sum.deltas?.totalPct || 0);
+            const p1Pct = Number(sum.deltas?.p1Pct || 0);
+            const p2Pct = Number(sum.deltas?.p2Pct || 0);
+            const spikes = Array.isArray(sum.categorySpikes) ? sum.categorySpikes : [];
+            const slaBreach = Number(sum.slaBreachActive || 0);
+            const anomalous = totalPct >= 25 || p1Pct >= 50 || p2Pct >= 50 || spikes.length > 0 || slaBreach >= 3;
+            if (!anomalous) return;
+            const now = Date.now();
+            if (now - _lastAnomalyBroadcastAt < ANOMALY_BROADCAST_COOLDOWN) return;
+            _lastAnomalyBroadcastAt = now;
+            if (wsServer) {
+              wsServer.broadcast("dashboard", { action: "anomaly", totalPct, p1Pct, p2Pct, spikes: spikes.slice(0, 4), slaBreachActive: slaBreach, generatedAt: sum.generatedAt || new Date().toISOString() });
+            }
+            console.log(`[Anomaly Watch] Broadcast — totalΔ=${totalPct}% p1Δ=${p1Pct}% spikes=${spikes.length} slaBreach=${slaBreach}`);
+          } catch (e) { console.warn("[Anomaly Watch] Parse error:", e.message); }
+        });
+      });
+      sumReq.on("error", e => console.warn("[Anomaly Watch] Request error:", e.message));
+      sumReq.setTimeout(20000, () => sumReq.destroy());
+      sumReq.end();
+    };
+    const anomalyWatchStartTimer = setTimeout(() => {
+      runAnomalyWatch();
+      const anomalyWatchInterval = setInterval(runAnomalyWatch, ANOMALY_WATCH_INTERVAL);
+      _shutdownIntervals.push(anomalyWatchInterval);
+    }, 4 * 60 * 1000);
+    _shutdownTimeouts.push(anomalyWatchStartTimer);
+    console.log("[Anomaly Watch] v3.31.1 dashboard anomaly broadcaster enabled every 5 minutes (first run in 4 min)");
+
     // ─── v3.14 Layer 3: Adaptive Zendesk Incremental Sync ──────────
     // Cadence based on open severity load:
     //   60s  if any open Sev-A
