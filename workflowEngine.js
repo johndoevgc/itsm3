@@ -132,6 +132,9 @@ class WorkflowEngine {
       // ─── Phase 10.3: Skill-based auto-assignment ─────────────────────
       await this._autoAssignBySkill();
 
+      // ─── v3.35.0 Phase C: auto-apply reassign for Sev-A/B unassigned (flag-gated, shadow-first) ───
+      await this._autoApplyReassignSuggestions();
+
       // ─── Phase 10.4: Change approval pipeline ────────────────────────
       await this._processChangeApprovals();
 
@@ -865,6 +868,48 @@ class WorkflowEngine {
     this._log("action", "SKILL_ASSIGN", `Configured skill map for ${Object.keys(skillMap).length} categories`);
   }
 
+  // v3.35.0 — Pure picker reused by cycle + email-ingest inline path.
+  // Returns { name, load } or null.
+  pickSkillAssignee(category, workload, opts = {}) {
+    if (!this._skillMap || !category) return null;
+    const candidates = this._skillMap[category];
+    if (!candidates || candidates.length === 0) return null;
+    const exclude = opts.excludeName || null;
+    let best = null, bestLoad = Infinity;
+    for (const name of candidates) {
+      if (name === exclude) continue;
+      const load = workload[name] || 0;
+      if (load < bestLoad) { bestLoad = load; best = name; }
+    }
+    return best ? { name: best, load: bestLoad } : null;
+  }
+
+  // v3.35.0 — Service Desk roster fallback (round-robin by lowest workload).
+  // Roster persisted as `service_desk_roster.active.members:[name,...]`.
+  async getServiceDeskRoster() {
+    if (this._rosterCache && this._rosterCacheExpiry > Date.now()) return this._rosterCache;
+    try {
+      const row = await this.db.getOne("service_desk_roster", "active");
+      const data = row && (typeof row.data === "string" ? JSON.parse(row.data) : row.data);
+      const members = (data && Array.isArray(data.members)) ? data.members.filter(n => typeof n === "string" && n.trim()) : [];
+      this._rosterCache = members;
+      this._rosterCacheExpiry = Date.now() + 5 * 60 * 1000; // 5 min
+      return members;
+    } catch { return []; }
+  }
+
+  pickRoundRobinAgent(roster, workload, opts = {}) {
+    if (!Array.isArray(roster) || roster.length === 0) return null;
+    const exclude = opts.excludeName || null;
+    let best = null, bestLoad = Infinity;
+    for (const name of roster) {
+      if (name === exclude) continue;
+      const load = workload[name] || 0;
+      if (load < bestLoad) { bestLoad = load; best = name; }
+    }
+    return best ? { name: best, load: bestLoad } : null;
+  }
+
   async _autoAssignBySkill() {
     if (!this._skillMap || Object.keys(this._skillMap).length === 0) return;
     const incidents = this._cycleIncidents || [];
@@ -883,18 +928,10 @@ class WorkflowEngine {
         if (inc._skillAssignAttempted) continue; // already tried
 
         const cat = inc.category || "";
-        const candidates = this._skillMap[cat];
-        if (!candidates || candidates.length === 0) continue;
-
-        // Pick candidate with lowest workload
-        let bestCandidate = null;
-        let bestLoad = Infinity;
-        for (const name of candidates) {
-          const load = workload[name] || 0;
-          if (load < bestLoad) { bestLoad = load; bestCandidate = name; }
-        }
-
-        if (!bestCandidate) continue;
+        const pick = this.pickSkillAssignee(cat, workload);
+        if (!pick) continue;
+        const bestCandidate = pick.name;
+        const bestLoad = pick.load;
 
         inc.assignee = bestCandidate;
         inc.assignedBy = "SkillEngine";
@@ -918,6 +955,112 @@ class WorkflowEngine {
         }
       } catch (err) {
         this._log("error", "SKILL_ASSIGN", `${inc.id}: ${err.message}`);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // v3.35.0 Phase C — Auto-apply skill-based reassign for Sev-A/B unassigned
+  // Shadow-first via featureFlag `auto_reassign_sev_ab`. Mirrors v3.34.2 promotion gate.
+  // Sev-A: 24/7. Sev-B: business-hours only (Mon-Fri 09:00-18:00 SGT).
+  // ════════════════════════════════════════════════════════════════════════
+  async _autoApplyReassignSuggestions() {
+    let ff;
+    try { ff = require("./featureFlags"); } catch { return; }
+    if (typeof ff.isEnabled !== "function") return;
+    const enabled = ff.isEnabled("auto_reassign_sev_ab");
+    let payload = {};
+    try { payload = (typeof ff.payload === "function" && ff.payload("auto_reassign_sev_ab")) || {}; } catch { /* ignore */ }
+    const shadowOnly = payload.shadowOnly !== false; // default true
+    const dailyCap = Math.max(1, Math.min(500, parseInt(payload.dailyCap || 50, 10)));
+    const minAgeMin = Math.max(0, parseInt(payload.minAgeMinutes || 15, 10));
+    if (!enabled) return; // hard disabled (default state)
+
+    if (!this._skillMap || Object.keys(this._skillMap).length === 0) return;
+    const incidents = this._cycleIncidents || [];
+    if (incidents.length === 0) return;
+
+    // Daily cap check (UTC day) via auto_reassign_history count
+    const todayKey = new Date().toISOString().slice(0, 10);
+    let todayCount = 0;
+    try {
+      const histRows = await this.db.getAll("auto_reassign_history");
+      for (const r of histRows) {
+        try {
+          const h = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (h && h.day === todayKey) todayCount++;
+        } catch { /* ignore */ }
+      }
+    } catch { /* collection may not exist yet */ }
+    if (todayCount >= dailyCap) {
+      this._log("action", "AUTO_REASSIGN", `Daily cap reached (${todayCount}/${dailyCap}) — skipping`);
+      return;
+    }
+
+    // Business hours check for Sev-B (SGT)
+    const nowSGT = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Singapore" }));
+    const dow = nowSGT.getDay(); // 0=Sun, 6=Sat
+    const hourSGT = nowSGT.getHours();
+    const isBusinessHours = dow >= 1 && dow <= 5 && hourSGT >= 9 && hourSGT < 18;
+
+    // Build current workload
+    const workload = {};
+    for (const i of incidents) {
+      if (i.assignee && i.assignee !== "Unassigned") workload[i.assignee] = (workload[i.assignee] || 0) + 1;
+    }
+
+    const nowMs = Date.now();
+    let processed = 0;
+    for (const inc of incidents) {
+      if (todayCount + processed >= dailyCap) break;
+      try {
+        const isUnassigned = !inc.assignee || inc.assignee === "Unassigned";
+        if (!isUnassigned) continue;
+        if (!["Sev-A", "Sev-B"].includes(inc.priority)) continue;
+        if (inc.priority === "Sev-B" && !isBusinessHours) continue;
+        if (inc._autoReassignAttempted) continue;
+        const created = inc.createdAt ? new Date(inc.createdAt).getTime() : 0;
+        if (!created) continue;
+        const ageMin = (nowMs - created) / 60000;
+        if (ageMin < minAgeMin) continue;
+
+        const cat = inc.category || "";
+        const pick = this.pickSkillAssignee(cat, workload);
+        if (!pick) continue;
+
+        const histRec = {
+          id: `AR-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          incidentId: inc.id, priority: inc.priority, category: cat,
+          previousAssignee: inc.assignee || "Unassigned", suggestedAssignee: pick.name,
+          workload: pick.load, ageMinutes: Math.round(ageMin),
+          mode: shadowOnly ? "shadow" : "real",
+          day: todayKey, timestamp: new Date().toISOString(),
+        };
+
+        if (!shadowOnly) {
+          inc.assignee = pick.name;
+          inc.assignedBy = "AutoReassign-SevAB";
+          inc._autoReassignAttempted = true;
+          inc.lastModified = new Date().toISOString();
+          if (!inc.activityLog) inc.activityLog = [];
+          inc.activityLog.push({
+            id: `AL-AR-${Date.now()}`,
+            type: "auto_reassign",
+            user: "Workflow Engine (Auto-Reassign Sev-A/B)",
+            time: inc.lastModified,
+            detail: `Auto-reassigned to ${pick.name} (${cat}, ${inc.priority} unassigned ${Math.round(ageMin)}min, workload ${pick.load})`,
+          });
+          workload[pick.name] = (workload[pick.name] || 0) + 1;
+          await this.db.upsert("incidents", inc.id, JSON.stringify(inc));
+          if (this.wsServer) this.wsServer.broadcast("incidents", { action: "auto_reassign", id: inc.id, assignee: pick.name });
+        }
+
+        try { await this.db.upsert("auto_reassign_history", histRec.id, JSON.stringify(histRec)); } catch { /* ignore */ }
+        try { await this.db.audit("incidents", inc.id, shadowOnly ? "auto_reassign_shadow" : "auto_reassign", JSON.stringify(histRec), "WorkflowEngine"); } catch { /* ignore */ }
+        this._log("action", "AUTO_REASSIGN", `${inc.id} ${shadowOnly ? "[shadow]" : "→"} ${pick.name} (${inc.priority} ${cat}, age ${Math.round(ageMin)}min, load ${pick.load})`);
+        processed++;
+      } catch (err) {
+        this._log("error", "AUTO_REASSIGN", `${inc.id}: ${err.message}`);
       }
     }
   }

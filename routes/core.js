@@ -2810,6 +2810,106 @@ module.exports = function createCoreRoutes(ctx) {
     return json(res, 200, { thresholds: AI_THRESHOLDS, timestamp: new Date().toISOString() });
   }
 
+  // ─── GET /api/ops/queue-health — v3.35.0 Phase B operational backlog visibility ───
+  // Admin-gated. Returns unassigned-by-priority + AI backlog age buckets + routing latency + top assignees.
+  if (pathname === "/api/ops/queue-health" && req.method === "GET") {
+    if (!authResult || !authResult.authenticated) return json(res, 401, { error: "Authentication required" });
+    if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) {
+      return json(res, 403, { error: "Admin only" });
+    }
+    try {
+      const incRows = await db.getAll("incidents");
+      const incidents = [];
+      for (const r of incRows) {
+        try { const i = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (i && i.id) incidents.push(i); } catch { /* skip */ }
+      }
+      const openIncidents = incidents.filter(i => !["Resolved", "Closed", "Cancelled"].includes(i.status));
+
+      const unassignedByPriority = { "Sev-A": 0, "Sev-B": 0, "Sev-C": 0, "Sev-D": 0 };
+      const unassignedAgeMaxMin = { "Sev-A": 0, "Sev-B": 0, "Sev-C": 0, "Sev-D": 0 };
+      const nowMs = Date.now();
+      for (const i of openIncidents) {
+        const isUnassigned = !i.assignee || i.assignee === "Unassigned";
+        if (!isUnassigned) continue;
+        const p = unassignedByPriority[i.priority] !== undefined ? i.priority : "Sev-C";
+        unassignedByPriority[p] = (unassignedByPriority[p] || 0) + 1;
+        if (i.createdAt) {
+          const ageMin = (nowMs - new Date(i.createdAt).getTime()) / 60000;
+          if (ageMin > unassignedAgeMaxMin[p]) unassignedAgeMaxMin[p] = Math.round(ageMin);
+        }
+      }
+
+      // Email routing latency p50/p95 from routedAt - createdAt (only routed email tickets)
+      const routingLatenciesMs = [];
+      for (const i of incidents) {
+        if (i.source !== "email" || !i.routedAt || !i.createdAt) continue;
+        const lat = new Date(i.routedAt).getTime() - new Date(i.createdAt).getTime();
+        if (lat >= 0 && lat < 24 * 3600 * 1000) routingLatenciesMs.push(lat);
+      }
+      const sorted = routingLatenciesMs.slice().sort((a, b) => a - b);
+      const pct = (q) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] : null;
+
+      // AI actions backlog by age bucket
+      const actionRows = await db.getAll("ai_actions");
+      const buckets = { "<1h": 0, "1-4h": 0, "4-24h": 0, ">24h": 0 };
+      const byRiskTier = {};
+      let total = 0, oldestAgeHours = 0;
+      for (const r of actionRows) {
+        try {
+          const it = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!it || it.status !== "pending_approval") continue;
+          total++;
+          const created = it.createdAt ? new Date(it.createdAt).getTime() : nowMs;
+          const ageH = (nowMs - created) / 3600000;
+          if (ageH > oldestAgeHours) oldestAgeHours = ageH;
+          if (ageH < 1) buckets["<1h"]++;
+          else if (ageH < 4) buckets["1-4h"]++;
+          else if (ageH < 24) buckets["4-24h"]++;
+          else buckets[">24h"]++;
+          const rt = it.riskTier || it.tier || "untiered";
+          byRiskTier[rt] = (byRiskTier[rt] || 0) + 1;
+        } catch { /* skip */ }
+      }
+
+      // Top assignees by open workload
+      const workload = {};
+      for (const i of openIncidents) {
+        if (!i.assignee || i.assignee === "Unassigned") continue;
+        workload[i.assignee] = (workload[i.assignee] || 0) + 1;
+      }
+      const topAssigneesByLoad = Object.entries(workload)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([name, count]) => ({ name, openTickets: count }));
+
+      return json(res, 200, {
+        generatedAt: new Date().toISOString(),
+        unassignedByPriority,
+        unassignedAgeMaxMin,
+        emailRoutingLatency: {
+          samples: routingLatenciesMs.length,
+          p50Ms: pct(0.5),
+          p95Ms: pct(0.95),
+        },
+        aiActionsBacklog: {
+          total,
+          byAgeBucket: buckets,
+          byRiskTier,
+          oldestAgeHours: Math.round(oldestAgeHours * 10) / 10,
+          thresholds: {
+            warnH: AI_THRESHOLDS.pendingAgeHoursWarn,
+            criticalH: AI_THRESHOLDS.pendingAgeHoursCritical,
+            maxPendingPerIncident: AI_THRESHOLDS.maxPendingPerIncident,
+            maxPendingTotal: AI_THRESHOLDS.maxPendingTotal,
+          },
+        },
+        topAssigneesByLoad,
+      });
+    } catch (err) {
+      return json(res, 500, { error: "queue-health failed", details: err.message });
+    }
+  }
+
   // ─── POST /api/admin/audit-purge-now — Manual trigger for audit_log retention prune ───
   // SECURITY: Administrator / VGC Dev Admin / Tenant Admin only.
   if (pathname === "/api/admin/audit-purge-now" && req.method === "POST") {

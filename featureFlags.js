@@ -107,6 +107,12 @@ const DEFAULTS = {
   "self_healing.extendMailboxQuota":    { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 5 } },
   "self_healing.forceVpnReauth":        { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 20 } },
   "self_healing.restartSpoolerOnDevice":{ enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 10 } },
+
+  // v3.35.0 Phase C — auto-apply skill-based reassign for stuck Sev-A/B unassigned tickets.
+  // shadowOnly:true logs to auto_reassign_history without mutating incidents. Promotion criteria same
+  // as runbook actions: ≥1wk telemetry, ≥20 runs, 0 errors. Sev-A 24/7, Sev-B business-hours only.
+  // dailyCap bounds blast radius. minAgeMinutes = grace period before triggering (lets human triage win).
+  "auto_reassign_sev_ab": { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 50, minAgeMinutes: 15 } },
 };
 
 let _db = null;

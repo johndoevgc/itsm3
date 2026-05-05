@@ -328,6 +328,9 @@ const AI_THRESHOLDS = {
   maxPendingTotal: parseInt(process.env.AI_MAX_PENDING_TOTAL || "200", 10),
   staleDays: parseInt(process.env.AI_STALE_DAYS || "1", 10),
   monitorIntervalMin: parseInt(process.env.AI_MONITOR_INTERVAL_MIN || "15", 10),
+  // v3.35.0 (Phase B) — backlog SLA
+  pendingAgeHoursWarn: parseInt(process.env.AI_PENDING_AGE_WARN_H || "4", 10),
+  pendingAgeHoursCritical: parseInt(process.env.AI_PENDING_AGE_CRITICAL_H || "24", 10),
 };
 console.log("[AI Thresholds]", JSON.stringify(AI_THRESHOLDS));
 
@@ -1827,6 +1830,8 @@ const VALID_COLLECTIONS = new Set([
   "email_confirm_log",
   "workflow_rules_v2",
   "compliance_evidence",
+  "service_desk_roster",
+  "auto_reassign_history",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -2164,6 +2169,8 @@ async function processInboundEmails() {
     let _emailParsedIncidents = _emailIncRows.map(row => {
       try { return typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { return null; }
     }).filter(Boolean);
+    // v3.35.0 — lazy-built workload snapshot for inline auto-assign (Phase A)
+    let _emailBatchWorkload = null;
     const _emailMsgIdSet = new Set(_emailParsedIncidents.filter(i => i.emailMessageId).map(i => i.emailMessageId));
     // Dedup: conversationId → existing incident ID (for email-sourced open incidents)
     const _emailConvIdMap = new Map();
@@ -2422,6 +2429,48 @@ async function processInboundEmails() {
         if (wsServer) wsServer.broadcast("incidents", { action: "upsert", collection: "incidents", id: incId, summary: incident.title });
         createdIncidents.push(incId);
 
+        // ─── v3.35.0 (Phase A): Inline auto-assign — skill-pick first, round-robin Service Desk fallback ───
+        // Avoids waiting ~5-15min for next workflow cycle. Lazy-build batch workload snapshot once.
+        try {
+          if (!_emailBatchWorkload) {
+            _emailBatchWorkload = {};
+            for (const ix of _emailParsedIncidents) {
+              if (!ix || !ix.assignee || ix.assignee === "Unassigned") continue;
+              const st = (ix.status || "").toLowerCase();
+              if (["closed", "resolved", "cancelled"].includes(st)) continue;
+              _emailBatchWorkload[ix.assignee] = (_emailBatchWorkload[ix.assignee] || 0) + 1;
+            }
+          }
+          let pick = null, picker = null;
+          const conf = aiParse && typeof aiParse.confidence === "number" ? aiParse.confidence : 0;
+          if (workflowEngine && typeof workflowEngine.pickSkillAssignee === "function" && conf >= 0.5) {
+            pick = workflowEngine.pickSkillAssignee(_category, _emailBatchWorkload);
+            if (pick) picker = "EmailIngest-Skill";
+          }
+          if (!pick && workflowEngine && typeof workflowEngine.getServiceDeskRoster === "function") {
+            const roster = await workflowEngine.getServiceDeskRoster();
+            pick = workflowEngine.pickRoundRobinAgent(roster, _emailBatchWorkload);
+            if (pick) picker = "EmailIngest-Roster";
+          }
+          if (pick) {
+            incident.assignee = pick.name;
+            incident.assignedBy = picker;
+            incident.routedAt = new Date().toISOString();
+            incident._skillAssignAttempted = true;
+            incident.activityLog.push({
+              id: `AL-ROUTE-${Date.now()}`,
+              type: "auto_assign",
+              user: picker,
+              time: incident.routedAt,
+              detail: `Routed to ${pick.name} (${picker === "EmailIngest-Skill" ? `skill: ${_category}, conf ${conf.toFixed(2)}` : "round-robin"}, workload: ${pick.load})`,
+            });
+            _emailBatchWorkload[pick.name] = (_emailBatchWorkload[pick.name] || 0) + 1;
+            await db.upsert("incidents", incId, JSON.stringify(incident));
+            await db.audit("incidents", incId, "email_route", JSON.stringify({ assignee: pick.name, picker, category: _category, confidence: conf }), "email-pipeline");
+            console.log(`[Email-to-Ticket] ${incId} routed to ${pick.name} via ${picker} (load ${pick.load})`);
+          }
+        } catch (e) { console.warn(`[Email-to-Ticket] Inline assign failed for ${incId}:`, e.message); }
+
         // Mark email as read
         await _markEmailRead(token, sender, msg.id);
 
@@ -2447,8 +2496,8 @@ async function processInboundEmails() {
               <table style="border-collapse:collapse;width:100%;">
                 <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Incident ID</td><td style="padding:8px 12px;">${incId}</td></tr>
                 <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Subject</td><td style="padding:8px 12px;">${subject.substring(0, 100).replace(/</g, "&lt;")}</td></tr>
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:8px 12px;">Sev-C (Medium)</td></tr>
-                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Assigned Team</td><td style="padding:8px 12px;">Service Desk</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Priority</td><td style="padding:8px 12px;">${incident.priority || "Sev-C"}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold;color:#6B7280;">Assigned</td><td style="padding:8px 12px;">${incident.assignee || incident.assignedTeam || "Service Desk"}</td></tr>
               </table>
               <p style="color:#666;font-size:13px;margin-top:16px;">Our team will review your request and respond as soon as possible.</p>
               <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>
@@ -3648,15 +3697,64 @@ async function start() {
             cappedDel++;
           }
         }
-        const totalRemoved = deleted + cappedDel;
-        if (totalRemoved > 0) {
+        // v3.35.0 (Phase B) — retrospective per-incident cap (newest N kept per incidentId)
+        let perIncDel = 0;
+        const byInc = new Map();
+        for (const it of pendingItems) {
+          if (!it || !it.incidentId) continue;
+          if (!byInc.has(it.incidentId)) byInc.set(it.incidentId, []);
+          byInc.get(it.incidentId).push(it);
+        }
+        for (const [, items] of byInc) {
+          if (items.length <= AI_THRESHOLDS.maxPendingPerIncident) continue;
+          items.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")); // newest first
+          const excess = items.slice(AI_THRESHOLDS.maxPendingPerIncident);
+          for (const it of excess) {
+            try { await db.deleteOne("ai_actions", it.id); perIncDel++; } catch { /* ignore */ }
+          }
+        }
+        // v3.35.0 (Phase B) — critical-aging notify: pending_approval > N hours on Sev-A/B incidents
+        let criticalAged = 0;
+        try {
+          const criticalCutMs = Date.now() - AI_THRESHOLDS.pendingAgeHoursCritical * 3600000;
+          const incById = new Map();
+          for (const r of incRows) {
+            try { const ix = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (ix && ix.id) incById.set(ix.id, ix); } catch { /* ignore */ }
+          }
+          for (const it of pendingItems) {
+            if (!it.incidentId || !it.createdAt) continue;
+            const created = new Date(it.createdAt).getTime();
+            if (!created || created > criticalCutMs) continue;
+            if (it._criticalAgedNotified) continue;
+            const inc = incById.get(it.incidentId);
+            if (!inc || !["Sev-A", "Sev-B"].includes(inc.priority)) continue;
+            criticalAged++;
+            try {
+              if (notifyEngine && inc.assignee && inc.assignee !== "Unassigned") {
+                await notifyEngine.send({
+                  channel: "inapp", to: inc.assignee, severity: "high",
+                  subject: `AI action aged >${AI_THRESHOLDS.pendingAgeHoursCritical}h on ${inc.id}`,
+                  body: `Pending AI action ${it.id} (${it.type || "action"}) on ${inc.priority} incident ${inc.id} has been awaiting approval for >${AI_THRESHOLDS.pendingAgeHoursCritical} hours.`,
+                  meta: { incidentId: inc.id, actionId: it.id },
+                });
+              }
+            } catch { /* ignore notify */ }
+            try { await db.audit("ai_actions", it.id, "aged_critical", JSON.stringify({ incidentId: inc.id, priority: inc.priority, ageHours: Math.round((Date.now() - created) / 3600000) }), "queue-cleanup"); } catch { /* ignore */ }
+            try {
+              it._criticalAgedNotified = true;
+              await db.upsert("ai_actions", it.id, JSON.stringify(it));
+            } catch { /* ignore */ }
+          }
+        } catch (e) { console.warn("[Scheduled Cleanup] aging-notify error:", e.message); }
+        const totalRemoved = deleted + cappedDel + perIncDel;
+        if (totalRemoved > 0 || criticalAged > 0) {
           if (cacheLayer) cacheLayer.invalidatePrefix("ai_actions");
-          console.log(`[Scheduled Cleanup] Deleted ${deleted} stale + ${cappedDel} over-cap ai_actions (staleDays: ${maxAgeDays}, cap: ${AI_THRESHOLDS.maxPendingTotal}, resolved: ${resolvedIds.size})`);
+          console.log(`[Scheduled Cleanup] Deleted ${deleted} stale + ${cappedDel} over-cap + ${perIncDel} per-inc-cap; flagged ${criticalAged} critical-aged ai_actions (staleDays: ${maxAgeDays}, cap: ${AI_THRESHOLDS.maxPendingTotal}, perInc: ${AI_THRESHOLDS.maxPendingPerIncident}, agingH: ${AI_THRESHOLDS.pendingAgeHoursCritical}, resolved: ${resolvedIds.size})`);
         } else {
           console.log(`[Scheduled Cleanup] No stale items found`);
         }
         purgeStatus.queueCleanup.lastRun = new Date().toISOString();
-        purgeStatus.queueCleanup.lastResult = { deleted, cappedDel, resolvedIncidents: resolvedIds.size, remaining: pendingItems.length - cappedDel, durationMs: Date.now() - startTime };
+        purgeStatus.queueCleanup.lastResult = { deleted, cappedDel, perIncDel, criticalAged, resolvedIncidents: resolvedIds.size, remaining: pendingItems.length - cappedDel - perIncDel, durationMs: Date.now() - startTime };
         purgeStatus.queueCleanup.totalDismissed += totalRemoved;
         purgeStatus.queueCleanup.runCount++;
         purgeStatus.queueCleanup.nextRun = new Date(Date.now() + CLEANUP_INTERVAL).toISOString();
