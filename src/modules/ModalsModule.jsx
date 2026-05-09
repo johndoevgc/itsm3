@@ -9,6 +9,7 @@ import {
   RBAC_PERMISSIONS, USERS,
 } from "../constants/rbac.js";
 import { lazyWithRetry } from "../utils/lazyWithRetry.js";
+import M365ExpertPanel from "./M365ExpertPanel.jsx";
 
 // Lazy-loaded co-pilot tab. Heavy enough (chat history, AI calls) to defer
 // until an agent actually opens the "AI Co-Pilot" tab inside an incident.
@@ -897,7 +898,7 @@ const IncidentDetailModal = () => {
         )}
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
-          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolution", icon: "🤖" }, { id: "copilot", label: "AI Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
+          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolution", icon: "🤖" }, { id: "m365Expert", label: "M365/Azure Expert", icon: "🔷" }, { id: "copilot", label: "AI Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
             <button key={t.id} onClick={() => setDetailTab(t.id)}
               style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
               <span>{t.icon}</span> {t.label}
@@ -1466,6 +1467,7 @@ const IncidentDetailModal = () => {
 
           {/* ─── AI Resolution Suggestions Tab ─── */}
           {detailTab === "aiResolve" && <AiResolveTab inc={inc} addActivity={addActivity} showToast={showToast} />}
+          {detailTab === "m365Expert" && <M365ExpertPanel inc={inc} currentUser={currentUser} showToast={showToast} addActivity={addActivity} />}
           {detailTab === "copilot" && (
             <Suspense fallback={<div style={{ color: "#5A6178", fontSize: 12, padding: 20 }}>Loading AI Co-Pilot…</div>}>
               <LazyChatAssistTab

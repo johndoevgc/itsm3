@@ -14,6 +14,8 @@ function isOptEmail(v) { return v === undefined || v === null || v === "" || (is
 function isOptStrArray(v) { return v === undefined || v === null || (Array.isArray(v) && v.every(isStr)); }
 function isOptNum(v) { return v === undefined || v === null || typeof v === "number"; }
 function isOptBool(v) { return v === undefined || v === null || typeof v === "boolean"; }
+function isOptDomain(v) { return v === undefined || v === null || v === "" || (isStr(v) && v.length <= 253 && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(v)); }
+function isOptTenantId(v) { return v === undefined || v === null || v === "" || (isStr(v) && v.length <= 80 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)); }
 
 // ─── Shared enums ──────────────────────────────────────────────────────
 const PRIORITIES = ["Critical", "High", "Medium", "Low"];
@@ -108,6 +110,13 @@ function validateCustomer(d) {
   if (!isOptStr(d.company, 500)) errs.push("company: Max 500 chars");
   if (!isOptStr(d.phone, 50)) errs.push("phone: Max 50 chars");
   if (!isOptStr(d.department, 200)) errs.push("department: Max 200 chars");
+  if (!isOptTenantId(d.m365TenantId)) errs.push("m365TenantId: Invalid tenant ID");
+  if (!isOptDomain(d.primaryDomain)) errs.push("primaryDomain: Invalid domain");
+  if (!isOptStr(d.partnerCustomerId, 200)) errs.push("partnerCustomerId: Max 200 chars");
+  if (!isEnum(d.gdapStatus, ["unknown", "not_configured", "partial", "ready"])) errs.push("gdapStatus: Invalid");
+  if (!isOptBool(d.m365AgentEnabled)) errs.push("m365AgentEnabled: Must be boolean");
+  if (!isOptStrArray(d.allowedM365Actions)) errs.push("allowedM365Actions: Must be array of strings");
+  if (Array.isArray(d.allowedM365Actions) && d.allowedM365Actions.some(a => !["forceSignOut"].includes(a))) errs.push("allowedM365Actions: Unsupported action");
   return errs;
 }
 

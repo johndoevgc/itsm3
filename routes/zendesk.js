@@ -138,6 +138,10 @@ function buildZendeskSafeSolveDecision(input = {}) {
   };
 }
 
+function zendeskInternalComment(body) {
+  return { body, public: false };
+}
+
 function buildZendeskSafeSolveApplyPayload(decision, meta = {}) {
   const now = meta.now || new Date().toISOString();
   const requestedBy = meta.requestedBy || "AI Safe Solve";
@@ -157,7 +161,7 @@ function buildZendeskSafeSolveApplyPayload(decision, meta = {}) {
     `Applied at: ${now}`,
   ].join("\n");
   const ticket = {
-    comment: { body: note, public: false },
+    comment: zendeskInternalComment(note),
     status: decision.targetStatus,
   };
   if (["low", "normal", "high", "urgent"].includes(String(decision.priority || "").toLowerCase())) {
@@ -856,7 +860,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
 
         const updatePayload = {
           ticket: {
-            comment: { body: response, public: true },
+            comment: zendeskInternalComment(response),
             ...(priority ? { priority } : {}),
             ...(tags && tags.length > 0 ? { tags } : {}),
           }
@@ -866,7 +870,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         // Add internal note with approval audit trail
         const auditNote = `[AI Response — Approved by ${approvedBy}]\n${internalNote || "No additional analysis notes."}`;
         await zdRequest("PUT", `/tickets/${ticketId}.json`, {
-          ticket: { comment: { body: auditNote, public: false } }
+          ticket: { comment: zendeskInternalComment(auditNote) }
         }).catch(() => {});
 
         // Also send email via M365 Graph to the ticket requester
@@ -1021,7 +1025,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           return json(res, 200, { suppressed: true, reason: "flag_off:zd_push_back" });
         }
         const body = await parseBody(req);
-        const { zdTicketId, action, status, priority, comment, assignee, isInternal } = body;
+        const { zdTicketId, action, status, priority, comment, assignee } = body;
         if (!zdTicketId) return json(res, 400, { error: "zdTicketId required" });
 
         // Phase G3 — 60s duplicate-comment dedup (catches save→status→save bursts)
@@ -1048,7 +1052,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         if (status) ticketUpdate.ticket.status = statusMap[status] || status;
         if (priority) ticketUpdate.ticket.priority = priorityMap[priority] || priority;
         if (comment) {
-          ticketUpdate.ticket.comment = { body: `[ITSM Sync] ${comment}`, public: isInternal === true ? false : (isInternal === false ? true : false) };
+          ticketUpdate.ticket.comment = zendeskInternalComment(`[ITSM Sync] ${comment}`);
         }
 
         if (Object.keys(ticketUpdate.ticket).length === 0) {
@@ -1508,7 +1512,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                   if (now - updatedAt > STALE_PENDING_MS) {
                     // Close in Zendesk
                     await zdRequest("PUT", `/tickets/${t.id}.json`, {
-                      ticket: { status: "solved", comment: { body: "[Auto-Resolved] No customer reply received within 48 hours. This ticket has been automatically resolved by the AI support system. Please reopen if you still need assistance.", public: true } }
+                      ticket: { status: "solved", comment: zendeskInternalComment("[Auto-Resolved] No customer reply received within 48 hours. This ticket has been automatically resolved by the AI support system. Please reopen if you still need assistance.") }
                     }).catch(() => {});
                     // Update local DB
                     t.status = "solved";
@@ -2131,7 +2135,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         // Block outbound sync in Production Test Mode (one-way ZD→ITSM only)
         if (PROD_TEST_MODE) return json(res, 200, { skipped: true, reason: "Production Test Mode — one-way sync only (ZD→ITSM)" });
         const body = await parseBody(req);
-        const { incidentId, status, priority, comment, assignee, isPublic, user } = body;
+        const { incidentId, status, priority, comment, assignee, user } = body;
         if (!incidentId) return json(res, 400, { error: "incidentId required" });
 
         // Find the incident
@@ -2144,7 +2148,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           const priorityMap = { "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" };
           const newTicket = await zdRequest("POST", "/tickets.json", {
             ticket: {
-              subject: inc.title, comment: { body: inc.description || "Created from ITSM" },
+              subject: inc.title, comment: zendeskInternalComment(inc.description || "Created from ITSM"),
               priority: priorityMap[inc.priority] || "normal",
               tags: ["itsm-synced", inc.category?.toLowerCase() || "general"],
             }
@@ -2166,7 +2170,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         const ticketUpdate = { ticket: {} };
         if (status) ticketUpdate.ticket.status = statusMap[status] || status;
         if (priority) ticketUpdate.ticket.priority = priorityMap[priority] || priority;
-        if (comment) ticketUpdate.ticket.comment = { body: `[ITSM ${incidentId}] ${comment}`, public: isPublic !== false };
+        if (comment) ticketUpdate.ticket.comment = zendeskInternalComment(`[ITSM ${incidentId}] ${comment}`);
 
         if (Object.keys(ticketUpdate.ticket).length > 0) {
           await zdRequest("PUT", `/tickets/${inc.zdTicketId}.json`, ticketUpdate);
@@ -2341,5 +2345,6 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
 module.exports._internals = {
   buildZendeskSafeSolveDecision,
   buildZendeskSafeSolveApplyPayload,
+  zendeskInternalComment,
   collectSafeSolveRiskFlags,
 };

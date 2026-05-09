@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const createZendeskRoutes = require("../routes/zendesk.js");
-const { buildZendeskSafeSolveDecision, buildZendeskSafeSolveApplyPayload } = createZendeskRoutes._internals;
+const { buildZendeskSafeSolveDecision, buildZendeskSafeSolveApplyPayload, zendeskInternalComment } = createZendeskRoutes._internals;
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("Zendesk AI Safe Solve policy", () => {
   it("allows high-confidence routine Sev-C tickets", () => {
@@ -81,5 +85,15 @@ describe("Zendesk AI Safe Solve policy", () => {
     expect(payload.ticket.comment.public).toBe(false);
     expect(payload.ticket.comment.body).toContain("Customer contact: no public Zendesk comment");
     expect(payload.ticket.comment.body).toContain("johndoe@vgcsg.com");
+  });
+
+  it("builds all Zendesk comments as internal notes", () => {
+    expect(zendeskInternalComment("Agent-only update")).toEqual({ body: "Agent-only update", public: false });
+  });
+
+  it("does not contain public Zendesk comment write payloads", () => {
+    const source = readFileSync(resolve(__dirname, "../routes/zendesk.js"), "utf8");
+    expect(source).not.toMatch(/public:\s*true/);
+    expect(source).not.toMatch(/public:\s*isPublic\s*!==\s*false/);
   });
 });

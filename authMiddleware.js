@@ -142,6 +142,7 @@ const COLLECTION_TO_MODULE = {
   zendesk_tickets: "incidents", zendesk_users: "admin", zendesk_orgs: "customers",
   zendesk_sync_state: "admin", zendesk_comments: "incidents",
   ai_actions: "ai", ai_triage_history: "ai", ai_briefings: "ai", ai_patterns: "ai",
+  m365_agent_runs: "ai", m365_agent_actions: "ai",
   sla_calendars: "sla", notification_templates: "admin", i18n_packs: "admin",
 };
 

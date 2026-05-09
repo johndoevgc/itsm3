@@ -73,6 +73,12 @@ const DEFAULTS = {
                                     customerWidgetEnabled: false, kbGroundingTopK: 5,
                                     rateLimitPerMin: 20 } },
 
+  // M365/Azure Expert Agent V1 — ticket-linked Entra sign-in diagnostics.
+  // Read-only diagnostics are gated separately from real runbook actions;
+  // force sign-out remains controlled by self_healing.forceVpnReauth.
+  "m365_agent.enabled": { enabled: false, scope: "staging", payload: { pilotDomains: ["vgcsg.com"] } },
+  "m365_agent.entraDiagnostics": { enabled: false, scope: "staging", payload: { maxSignIns: 10 } },
+
   // v3.33.1 — Omnichannel intake: Microsoft Teams bot adapter.
   omnichannel_teams:   { enabled: false, scope: "staging",
                          payload: { maxReplyChars: 280, requireSecret: true } },

@@ -1761,6 +1761,7 @@ const VALID_COLLECTIONS = new Set([
   "zendesk_tickets", "zendesk_users", "zendesk_orgs",
   "zendesk_sync_state", "zendesk_comments",
   "ai_actions", "ai_triage_history", "ai_briefings", "ai_patterns",
+  "m365_agent_runs", "m365_agent_actions",
   "ai_resolve_queue", "ai_workflow_queue", "ai_knowledge",
   "sla_tracking", "sla_config",
   "notifications",
@@ -1943,6 +1944,68 @@ function graphAppCall(endpoint, extraHeaders, method, body) {
               if (graphRes.statusCode === 204 || gData.length === 0) {
                 return resolve({ ok: true, status: graphRes.statusCode });
               }
+              let parsed;
+              try { parsed = JSON.parse(gData); }
+              catch { return reject(new Error("Invalid JSON")); }
+              if (graphRes.statusCode >= 400) {
+                const msg = (parsed && parsed.error && parsed.error.message)
+                  || `Graph ${httpMethod} ${endpoint} failed: ${graphRes.statusCode}`;
+                return reject(new Error(msg));
+              }
+              resolve(parsed);
+            });
+          });
+          graphReq.on("error", reject);
+          if (writeBody) graphReq.write(writeBody);
+          graphReq.end();
+        } catch { reject(new Error("Token parse failed")); }
+      });
+    });
+    tokenReq.on("error", reject);
+    tokenReq.write(tokenBody);
+    tokenReq.end();
+  });
+}
+
+function graphAppCallForTenant(tenantId, endpoint, extraHeaders, method, body) {
+  const tenant = String(tenantId || "").trim();
+  if (!tenant) return Promise.reject(new Error("tenantId required"));
+  return new Promise((resolve, reject) => {
+    let tokenBody;
+    const assertion = buildClientAssertion();
+    if (assertion) {
+      tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_assertion_type=${encodeURIComponent("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")}&client_assertion=${encodeURIComponent(assertion)}&grant_type=client_credentials`;
+    } else if (ENTRA_CLIENT_SECRET) {
+      tokenBody = `client_id=${encodeURIComponent(ENTRA_CLIENT_ID)}&scope=${encodeURIComponent("https://graph.microsoft.com/.default")}&client_secret=${encodeURIComponent(ENTRA_CLIENT_SECRET)}&grant_type=client_credentials`;
+    } else {
+      return reject(new Error("No client secret or certificate configured"));
+    }
+    const httpMethod = (method || "GET").toUpperCase();
+    const writeBody = (body == null || httpMethod === "GET") ? null
+      : (typeof body === "string" ? body : JSON.stringify(body));
+    const tokenReq = https.request({
+      hostname: "login.microsoftonline.com", path: `/${encodeURIComponent(tenant)}/oauth2/v2.0/token`,
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(tokenBody) },
+    }, tokenRes => {
+      let data = "";
+      tokenRes.on("data", c => data += c);
+      tokenRes.on("end", () => {
+        try {
+          const token = JSON.parse(data);
+          if (!token.access_token) return reject(new Error(token.error_description || "Token failed"));
+          const graphHeaders = {
+            Authorization: `Bearer ${token.access_token}`,
+            ...(writeBody ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(writeBody) } : {}),
+            ...(extraHeaders || {}),
+          };
+          const graphReq = https.request({
+            hostname: "graph.microsoft.com", path: `/v1.0${endpoint}`,
+            method: httpMethod, headers: graphHeaders,
+          }, graphRes => {
+            let gData = "";
+            graphRes.on("data", c => gData += c);
+            graphRes.on("end", () => {
+              if (graphRes.statusCode === 204 || gData.length === 0) return resolve({ ok: true, status: graphRes.statusCode });
               let parsed;
               try { parsed = JSON.parse(gData); }
               catch { return reject(new Error("Invalid JSON")); }
@@ -2916,7 +2979,7 @@ async function start() {
     // Engines
     cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex,
     // Email & Graph
-    buildEmailTemplate, graphSendMail, graphAppCall, graphAppCallBinary, getManagedIdentityToken,
+    buildEmailTemplate, graphSendMail, graphAppCall, graphAppCallForTenant, graphAppCallBinary, getManagedIdentityToken,
     senderFor, MAIL_FROM, HELPDESK_MAILBOX, CUSTOMER_REDIRECT_TARGET,
     EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, INTERNAL_DOMAINS,
     // Feature flags & shadow mode

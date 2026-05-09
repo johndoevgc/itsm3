@@ -37,10 +37,11 @@ const filtered = customers.filter(c => {
 const adHocCount = customers.filter(c => c.category === "Ad-Hoc").length;
 const cspCount = customers.filter(c => c.category === "CSP").length;
 const activeCount = customers.filter(c => c.status === "Active").length;
-const resetForm = () => setCustomerForm({ name: "", category: "Ad-Hoc", contactPerson: "", email: "", phone: "", address: "", status: "Active", contractStart: "", contractEnd: "", services: [], notes: "" });
+const emailDomain = (email) => String(email || "").split("@")[1]?.toLowerCase() || "";
+const resetForm = () => setCustomerForm({ name: "", category: "Ad-Hoc", contactPerson: "", email: "", phone: "", address: "", status: "Active", contractStart: "", contractEnd: "", services: [], notes: "", m365AgentEnabled: false, primaryDomain: "", m365TenantId: "", partnerCustomerId: "", gdapStatus: "unknown", allowedM365Actions: [] });
 const openAdd = () => { resetForm(); setEditingCustomerId(null); setShowAddCustomer(true); };
 const openEdit = (cust) => {
-  setCustomerForm({ name: cust.name, category: cust.category, contactPerson: cust.contactPerson, email: cust.email, phone: cust.phone, address: cust.address, status: cust.status, contractStart: cust.contractStart || "", contractEnd: cust.contractEnd || "", services: cust.services || [], notes: cust.notes || "" });
+  setCustomerForm({ name: cust.name, category: cust.category, contactPerson: cust.contactPerson, email: cust.email, phone: cust.phone, address: cust.address, status: cust.status, contractStart: cust.contractStart || "", contractEnd: cust.contractEnd || "", services: cust.services || [], notes: cust.notes || "", m365AgentEnabled: cust.m365AgentEnabled === true, primaryDomain: cust.primaryDomain || emailDomain(cust.email), m365TenantId: cust.m365TenantId || cust.entraTenantId || "", partnerCustomerId: cust.partnerCustomerId || "", gdapStatus: cust.gdapStatus || "unknown", allowedM365Actions: cust.allowedM365Actions || [] });
   setEditingCustomerId(cust.id); setShowAddCustomer(true);
 };
 const handleSave = () => {
@@ -134,7 +135,7 @@ return (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid #1E2130" }}>
-              {["ID","Company Name","Category","Contact Person","Email","Phone","Status","Actions"].map(h => (
+              {["ID","Company Name","Category","Contact Person","Email","Phone","M365","Status","Actions"].map(h => (
                 <th key={h} style={{ padding: "10px 12px", textAlign: "left", color: "#5A6178", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
               ))}
             </tr>
@@ -154,6 +155,9 @@ return (
                 <td style={{ padding: "10px 12px", color: "#8B8FA3", fontSize: 11 }}>{sanitizeHTML(c.email)}</td>
                 <td style={{ padding: "10px 12px", color: "#8B8FA3", fontSize: 11 }}>{sanitizeHTML(c.phone)}</td>
                 <td style={{ padding: "10px 12px" }}>
+                  {c.m365AgentEnabled ? <span style={{ padding: "3px 8px", borderRadius: 10, fontSize: 9, background: "#06B6D422", color: "#06B6D4", fontWeight: 700 }}>READY</span> : <span style={{ color: "#5A6178", fontSize: 10 }}>—</span>}
+                </td>
+                <td style={{ padding: "10px 12px" }}>
                   <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: c.status === "Active" ? "#81C78422" : "#FF6B6B22", color: c.status === "Active" ? "#81C784" : "#FF6B6B" }}>{c.status}</span>
                 </td>
                 <td style={{ padding: "10px 12px" }}>
@@ -164,7 +168,7 @@ return (
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>No customers found</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={9} style={{ padding: 30, textAlign: "center", color: "#5A6178" }}>No customers found</td></tr>}
           </tbody>
         </table>
       </div>
@@ -184,6 +188,7 @@ return (
             <div style={{ fontSize: 11, color: "#8B8FA3", marginBottom: 4 }}>📧 {sanitizeHTML(c.email)}</div>
             <div style={{ fontSize: 11, color: "#8B8FA3", marginBottom: 4 }}>📞 {sanitizeHTML(c.phone)}</div>
             <div style={{ fontSize: 11, color: "#8B8FA3", marginBottom: 8 }}>📍 {sanitizeHTML(c.address)}</div>
+            {c.m365AgentEnabled && <div style={{ fontSize: 10, color: "#06B6D4", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>M365 {sanitizeHTML(c.primaryDomain || emailDomain(c.email))}</div>}
             {c.services && c.services.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
                 {c.services.map((s, i) => <span key={i} style={{ padding: "2px 8px", borderRadius: 10, fontSize: 9, background: "#6366F122", color: "#6366F1", border: "1px solid #6366F133" }}>{s}</span>)}
@@ -264,6 +269,38 @@ return (
         <FormField label="Notes">
           <textarea value={customerForm.notes} onChange={e => setCustomerForm(f => ({ ...f, notes: e.target.value }))} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Additional notes..." />
         </FormField>
+        <div style={{ borderTop: "1px solid #1E2130", marginTop: 8, paddingTop: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <h4 style={{ margin: 0, fontSize: 12, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>M365/Azure Expert</h4>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#C4CAD6", fontSize: 11, cursor: "pointer" }}>
+              <input type="checkbox" checked={customerForm.m365AgentEnabled === true} onChange={e => setCustomerForm(f => ({ ...f, m365AgentEnabled: e.target.checked }))} />
+              Enabled
+            </label>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+            <FormField label="Primary Domain">
+              <input value={customerForm.primaryDomain || ""} onChange={e => setCustomerForm(f => ({ ...f, primaryDomain: e.target.value.toLowerCase() }))} style={inputStyle} placeholder="vgcsg.com" />
+            </FormField>
+            <FormField label="GDAP Status">
+              <select value={customerForm.gdapStatus || "unknown"} onChange={e => setCustomerForm(f => ({ ...f, gdapStatus: e.target.value }))} style={inputStyle}>
+                <option value="unknown">Unknown</option>
+                <option value="not_configured">Not Configured</option>
+                <option value="partial">Partial</option>
+                <option value="ready">Ready</option>
+              </select>
+            </FormField>
+            <FormField label="M365 Tenant ID">
+              <input value={customerForm.m365TenantId || ""} onChange={e => setCustomerForm(f => ({ ...f, m365TenantId: e.target.value.trim() }))} style={inputStyle} placeholder="00000000-0000-0000-0000-000000000000" />
+            </FormField>
+            <FormField label="Partner Customer ID">
+              <input value={customerForm.partnerCustomerId || ""} onChange={e => setCustomerForm(f => ({ ...f, partnerCustomerId: e.target.value }))} style={inputStyle} placeholder="Partner Center customer ID" />
+            </FormField>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#C4CAD6", fontSize: 11, marginTop: 4, cursor: "pointer" }}>
+            <input type="checkbox" checked={(customerForm.allowedM365Actions || []).includes("forceSignOut")} onChange={e => setCustomerForm(f => ({ ...f, allowedM365Actions: e.target.checked ? [...new Set([...(f.allowedM365Actions || []), "forceSignOut"])] : (f.allowedM365Actions || []).filter(a => a !== "forceSignOut") }))} />
+            Allow force sign-out approval action
+          </label>
+        </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
           <button onClick={() => { setShowAddCustomer(false); resetForm(); setEditingCustomerId(null); }} style={{ ...btnStyle("#333"), color: "#8B8FA3" }}>Cancel</button>
           <button onClick={handleSave} style={btnStyle("#6366F1")}>{editingCustomerId ? "Save Changes" : "Add Customer"}</button>

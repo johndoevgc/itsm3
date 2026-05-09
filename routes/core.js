@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const { validate } = require("../src/server/validation");
 const { normalizePriority, priorityToPCode } = require("../src/utils/priorityNormalize.cjs");
 const runbookActions = require("../runbookActions");
+const m365Agent = require("../src/server/m365AgentService");
 
 function parseStoredRecord(row) {
   if (!row) return null;
@@ -134,7 +135,7 @@ function buildTrustedWeatherAlert({ twoHour, twentyFour, checkedAt = new Date().
 
 module.exports = function createCoreRoutes(ctx) {
   return async function handleCoreRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex, buildEmailTemplate, normalizeCategory, graphSendMail, featureFlags, VALID_COLLECTIONS, AI_THRESHOLDS, AI_MODELS, getAIModel, scheduleCsatSurvey, isHighSeverity, safeRecipient, queueOrSendCustomerEmail, redactForAI, logAICall, piiRedact, generateKBDraft, notifyTeamsMajorIncident, processInboundEmails, cachedGetAll, cachedGetOne, APP_VERSION, shadowMode, graphAppCall, graphAppCallBinary, getOrgName, purgeStatus, PORTAL_URL, ORG_SHORT_NAME, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, SOLARWINDS_API_KEY, SOLARWINDS_API_HOST, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL, LOCAL_USERS, EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, MAIL_FROM, INTERNAL_DOMAINS, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, senderFor, FEATURE_PDPA, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD, AI_AUTONOMY_LEVEL, AI_MONTHLY_BUDGET_USD, zdLastSyncTime, zdAutoSyncInterval, checkPermission, PROD_TEST_MODE, APP_DISPLAY_NAME } = ctx;
+    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex, buildEmailTemplate, normalizeCategory, graphSendMail, featureFlags, VALID_COLLECTIONS, AI_THRESHOLDS, AI_MODELS, getAIModel, scheduleCsatSurvey, isHighSeverity, safeRecipient, queueOrSendCustomerEmail, redactForAI, logAICall, piiRedact, generateKBDraft, notifyTeamsMajorIncident, processInboundEmails, cachedGetAll, cachedGetOne, APP_VERSION, shadowMode, graphAppCall, graphAppCallForTenant, graphAppCallBinary, getOrgName, purgeStatus, PORTAL_URL, ORG_SHORT_NAME, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, SOLARWINDS_API_KEY, SOLARWINDS_API_HOST, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL, LOCAL_USERS, EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, MAIL_FROM, INTERNAL_DOMAINS, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, senderFor, FEATURE_PDPA, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD, AI_AUTONOMY_LEVEL, AI_MONTHLY_BUDGET_USD, zdLastSyncTime, zdAutoSyncInterval, checkPermission, PROD_TEST_MODE, APP_DISPLAY_NAME } = ctx;
     // ─── auditLog(action, req, detail) — thin wrapper over db.audit for system-level events
     async function auditLog(action, reqObj, detail = {}) {
       try {
@@ -910,6 +911,136 @@ module.exports = function createCoreRoutes(ctx) {
   // ─── Helper: parse db row data ─────────────────────────────────────
   const dbParse = (row) => { if (!row) return null; try { return typeof row.data === "string" ? JSON.parse(row.data) : row; } catch { return null; } };
   const dbParseAll = (rows) => (Array.isArray(rows) ? rows : []).map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r; } catch { return null; } }).filter(Boolean);
+
+  async function getM365ActionProposal(proposalId) {
+    return dbParse(await db.getOne(m365Agent.ACTIONS_COLLECTION, proposalId));
+  }
+
+  function m365FlagEnabled(name) {
+    return !!(featureFlags && featureFlags.isEnabled && featureFlags.isEnabled(name));
+  }
+
+  function m365FlagPayload(name) {
+    return (featureFlags && featureFlags.payload && featureFlags.payload(name)) || {};
+  }
+
+  async function appendM365Activity(incident, detail, extra = {}) {
+    return m365Agent.appendIncidentActivity(db, incident, {
+      type: "m365_action",
+      user: (authResult.user && authResult.user.email) || authResult.name || "M365/Azure Expert",
+      detail,
+      extra,
+    });
+  }
+
+  if (pathname === "/api/m365/entra/diagnose" && req.method === "POST") {
+    try {
+      if (!authResult || !authResult.authenticated) return json(res, 401, { error: "Authentication required" });
+      if (!m365FlagEnabled("m365_agent.enabled") || !m365FlagEnabled("m365_agent.entraDiagnostics")) {
+        return json(res, 503, { error: "M365/Azure expert diagnostics disabled", flag: "m365_agent.entraDiagnostics" });
+      }
+      const body = await readBody(req);
+      const executedBy = (authResult.user && authResult.user.email) || authResult.name || body.executedBy || "system";
+      const result = await m365Agent.diagnoseEntraSignIn({
+        db,
+        incidentId: body.incidentId,
+        targetUpn: body.targetUpn,
+        graphAppCall,
+        graphAppCallForTenant,
+        currentTenantId: ENTRA_TENANT_ID,
+      });
+      const record = m365Agent.buildDiagnosticRecord({ ...result, incidentId: body.incidentId }, executedBy);
+      if (record.id) await db.upsert(m365Agent.RUNS_COLLECTION, record.id, JSON.stringify(record));
+      if (result.ok) {
+        await appendM365Activity(result.incident, `M365 Entra diagnostics completed for ${result.targetUpn}`, { runId: result.runId, findingCount: result.findings.length });
+      } else if (result.incident) {
+        await appendM365Activity(result.incident, `M365 Entra diagnostics blocked: ${result.error}`, { code: result.code });
+      }
+      await db.audit(m365Agent.RUNS_COLLECTION, record.id || body.incidentId || "unknown", result.ok ? "diagnose" : "diagnose_failed", JSON.stringify({ incidentId: body.incidentId, targetUpn: body.targetUpn, code: result.code || null }), executedBy);
+      if (cacheLayer) { cacheLayer.invalidatePrefix(m365Agent.RUNS_COLLECTION); cacheLayer.invalidatePrefix("incidents"); }
+      return json(res, result.ok ? 200 : (result.status || 400), result);
+    } catch (err) {
+      return json(res, 500, { error: "Internal server error", message: err.message });
+    }
+  }
+
+  if (pathname === "/api/m365/actions/propose" && req.method === "POST") {
+    try {
+      if (!authResult || !authResult.authenticated) return json(res, 401, { error: "Authentication required" });
+      if (!m365FlagEnabled("m365_agent.enabled")) return json(res, 503, { error: "M365/Azure expert disabled", flag: "m365_agent.enabled" });
+      const body = await readBody(req);
+      const actionId = body.actionId || m365Agent.ACTION_FORCE_SIGN_OUT;
+      if (actionId !== m365Agent.ACTION_FORCE_SIGN_OUT) return json(res, 400, { error: "Unsupported M365 action", actionId });
+      const ctxResult = await m365Agent.resolveContext({ db, incidentId: body.incidentId, targetUpn: body.targetUpn });
+      if (!ctxResult.ok) return json(res, ctxResult.status || 400, ctxResult);
+      if (!m365Agent.allowedActions(ctxResult.customer).includes(m365Agent.ACTION_FORCE_SIGN_OUT)) {
+        return json(res, 403, { error: "Force sign-out is not enabled for this customer" });
+      }
+      const requestedBy = (authResult.user && authResult.user.email) || authResult.name || body.requestedBy || "system";
+      const proposal = m365Agent.buildActionProposal({ incidentId: body.incidentId, targetUpn: ctxResult.targetUpn, customer: ctxResult.customer, diagnosticRunId: body.diagnosticRunId, requestedBy });
+      await db.upsert(m365Agent.ACTIONS_COLLECTION, proposal.id, JSON.stringify(proposal));
+      await appendM365Activity(ctxResult.incident, `M365 action pending approval: force sign-out for ${ctxResult.targetUpn}`, { proposalId: proposal.id, status: proposal.status });
+      await db.audit(m365Agent.ACTIONS_COLLECTION, proposal.id, "proposed", JSON.stringify({ incidentId: proposal.incidentId, targetUpn: proposal.targetUpn }), requestedBy);
+      if (cacheLayer) { cacheLayer.invalidatePrefix(m365Agent.ACTIONS_COLLECTION); cacheLayer.invalidatePrefix("incidents"); }
+      return json(res, 200, { ok: true, proposal });
+    } catch (err) {
+      return json(res, 500, { error: "Internal server error", message: err.message });
+    }
+  }
+
+  if (pathname === "/api/m365/actions/approve-execute" && req.method === "POST") {
+    try {
+      if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") return json(res, 403, { error: "Administrator approval required" });
+      if (!m365FlagEnabled("m365_agent.enabled")) return json(res, 503, { error: "M365/Azure expert disabled", flag: "m365_agent.enabled" });
+      const body = await readBody(req);
+      if (!body.proposalId) return json(res, 400, { error: "proposalId is required" });
+      const proposal = await getM365ActionProposal(body.proposalId);
+      if (!proposal) return json(res, 404, { error: "M365 action proposal not found" });
+      if (proposal.status !== "pending_approval") return json(res, 400, { error: "M365 action proposal is not pending approval", status: proposal.status });
+      if (proposal.actionId !== m365Agent.ACTION_FORCE_SIGN_OUT) return json(res, 400, { error: "Unsupported M365 action", actionId: proposal.actionId });
+
+      const ctxResult = await m365Agent.resolveContext({ db, incidentId: proposal.incidentId, targetUpn: proposal.targetUpn });
+      if (!ctxResult.ok) return json(res, ctxResult.status || 400, ctxResult);
+      const runbookFlag = `self_healing.${m365Agent.RUNBOOK_FORCE_REAUTH}`;
+      if (!m365FlagEnabled(runbookFlag)) return json(res, 503, { error: "action disabled", actionId: m365Agent.RUNBOOK_FORCE_REAUTH, flag: runbookFlag });
+      const approvedBy = (authResult.user && authResult.user.email) || authResult.name || body.approvedBy || "admin";
+      const tenantId = ctxResult.customer.m365TenantId || ctxResult.customer.entraTenantId;
+      const tenantGraph = graphAppCallForTenant
+        ? (endpoint, extraHeaders, method, graphBody) => graphAppCallForTenant(tenantId, endpoint, extraHeaders, method, graphBody)
+        : graphAppCall;
+      const result = await runbookActions.execute({
+        actionId: m365Agent.RUNBOOK_FORCE_REAUTH,
+        params: { upn: ctxResult.targetUpn },
+        ctx: { db, graphAppCall: tenantGraph, featureFlags },
+        executedBy: approvedBy,
+        incidentId: proposal.incidentId,
+        flagPayload: m365FlagPayload(runbookFlag),
+      });
+      proposal.status = result.ok ? (result.mode === "shadow" ? "simulated" : "executed") : "failed";
+      proposal.approvedBy = approvedBy;
+      proposal.approvedAt = new Date().toISOString();
+      proposal.completedAt = new Date().toISOString();
+      proposal.runbookResult = result;
+      await db.upsert(m365Agent.ACTIONS_COLLECTION, proposal.id, JSON.stringify(proposal));
+      await appendM365Activity(ctxResult.incident, `M365 force sign-out ${result.ok ? proposal.status : "failed"} for ${ctxResult.targetUpn}`, { proposalId: proposal.id, runbookMode: result.mode, runbookExecutionId: result.executionId, error: result.error || null });
+      await db.audit(m365Agent.ACTIONS_COLLECTION, proposal.id, proposal.status, JSON.stringify({ incidentId: proposal.incidentId, targetUpn: proposal.targetUpn, ok: result.ok, mode: result.mode, error: result.error || null }), approvedBy);
+      if (cacheLayer) { cacheLayer.invalidatePrefix(m365Agent.ACTIONS_COLLECTION); cacheLayer.invalidatePrefix(runbookActions.EXEC_COLLECTION); cacheLayer.invalidatePrefix("incidents"); }
+      return json(res, result.ok ? 200 : 500, { ok: result.ok, proposal, runbookResult: result });
+    } catch (err) {
+      return json(res, 500, { error: "Internal server error", message: err.message });
+    }
+  }
+
+  if (pathname === "/api/m365/actions" && req.method === "GET") {
+    try {
+      if (!authResult || !authResult.authenticated) return json(res, 401, { error: "Authentication required" });
+      const incidentId = urlObj.searchParams.get("incidentId");
+      const rows = await db.getAll(m365Agent.ACTIONS_COLLECTION);
+      const data = dbParseAll(rows).filter(item => !incidentId || item.incidentId === incidentId);
+      data.sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+      return json(res, 200, { count: data.length, data: data.slice(0, 100) });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
 
   // ─── Multi-Level Approval Chain API ───────────────────────────────────
   // Submit an item for approval — creates an approval_instance
