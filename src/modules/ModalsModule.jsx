@@ -6,7 +6,7 @@ import {
   STATUS, OPEN_STATUSES, PRIORITY,
 } from "../constants/status.js";
 import {
-  RBAC_PERMISSIONS, USERS,
+  RBAC_PERMISSIONS,
 } from "../constants/rbac.js";
 import { lazyWithRetry } from "../utils/lazyWithRetry.js";
 import M365ExpertPanel from "./M365ExpertPanel.jsx";
@@ -496,7 +496,7 @@ const NewIncidentModal = () => {
         <FormField label="Assignee">
           <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
             <option value="">AI Auto-assign</option>
-            {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role} ({u.team})</option>)}
+            {(users || []).filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role} ({u.team})</option>)}
           </select>
         </FormField>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 12 }}>
@@ -578,8 +578,8 @@ const NewIncidentModal = () => {
             if (!form.title || submitting) return;
             setSubmitting(true);
             const slaMap = { "Sev-A": 4, "Sev-B": 4, "Sev-C": 9, "Sev-D": 27 };
-            const reporterUser = USERS.find(u => u.name === currentUser.name) || currentUser;
-            const assigneeUser = form.assignee ? USERS.find(u => u.name === form.assignee) : null;
+            const reporterUser = (users || []).find(u => u.name === currentUser.name) || currentUser;
+            const assigneeUser = form.assignee ? (users || []).find(u => u.name === form.assignee) : null;
             const now = new Date();
             const newInc = {
               id: genId("INC"), title: form.title, priority: form.priority,
@@ -664,7 +664,7 @@ const IncidentDetailModal = () => {
   }, [inc?.status, inc]);
 
   if (!inc) return null;
-  const reporterUser = USERS.find(u => u.name === inc.reporter);
+  const reporterUser = (users || []).find(u => u.name === inc.reporter);
   const activities = inc.activityLog || [];
 
   const addActivity = (type, detail, extra = {}) => {
@@ -1259,7 +1259,7 @@ const IncidentDetailModal = () => {
                                   <span style={{ fontSize: 9, fontWeight: 700, color: toneAccent, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{toneLabel}</span>
                                   <button onClick={() => {
                                     const editor = document.getElementById("reply-editor");
-                                    const html = String(rep.text).replace(/\n/g, "<br>");
+                                    const html = sanitizeHTML(String(rep.text).replace(/\n/g, "<br>"));
                                     if (editor) { editor.innerHTML = html; setReplyBody(html); }
                                     setSuggestedRepliesPanel(false);
                                   }} style={{ ...btnStyle("#06B6D4"), padding: "4px 10px", fontSize: 10 }}>Use</button>
@@ -1311,7 +1311,8 @@ const IncidentDetailModal = () => {
                         {aiDraftResult && (
                           <button onClick={() => {
                             const editor = document.getElementById("reply-editor");
-                            if (editor) { editor.innerHTML = aiDraftResult.replace(/\n/g, "<br>"); setReplyBody(aiDraftResult.replace(/\n/g, "<br>")); }
+                            const _sanitized = sanitizeHTML(aiDraftResult.replace(/\n/g, "<br>"));
+                            if (editor) { editor.innerHTML = _sanitized; setReplyBody(_sanitized); }
                             setAiDraftPanel(false);
                           }} style={{ ...btnStyle("#4CAF50"), padding: "5px 14px", fontSize: 10 }}>✅ Use This Draft</button>
                         )}
@@ -1871,7 +1872,7 @@ const IncidentDetailModal = () => {
           {inc.status === "Reopened" && <button style={btnStyle("#3B82F6")} onClick={() => changeStatus("In Progress")}>▶ Start Working</button>}
           {/* Create Problem (always available if not closed and no linked problem) */}
           {!inc.linkedProblem && !["Closed"].includes(inc.status) && <button style={btnStyle("#8B5CF6")} onClick={() => {
-            const newPrb = { id: genId("PRB"), title: `Problem from ${inc.id}: ${inc.title}`, status: "Under Investigation", priority: inc.priority, category: inc.category, impact: inc.impact || "Individual", rootCause: "Pending analysis", linkedIncidents: [inc.id], assignee: inc.assignee, assignmentGroup: inc.assignmentGroup || "Service Desk", created: 0, affectedServices: inc.affectedService ? [inc.affectedService] : [], workaround: inc.workaround || "", knownErrorId: "" };
+            const newPrb = { id: genId("PRB"), title: `Problem from ${inc.id}: ${inc.title}`, status: "Under Investigation", priority: inc.priority, category: inc.category, impact: inc.impact || "Individual", rootCause: "Pending analysis", linkedIncidents: [inc.id], assignee: inc.assignee, assignmentGroup: inc.assignmentGroup || "Service Desk", created: 0, createdAt: new Date().toISOString(), affectedServices: inc.affectedService ? [inc.affectedService] : [], workaround: inc.workaround || "", knownErrorId: "" };
             setProblems(prev => [newPrb, ...prev]);
             const updated = { ...inc, linkedProblem: newPrb.id };
             setIncidents(prev => prev.map(i => i.id === inc.id ? { ...i, linkedProblem: newPrb.id } : i));
@@ -2297,7 +2298,7 @@ const NewProblemModal = () => {
         <FormField label="Assignee">
           <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
             <option value="">Select assignee</option>
-            {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role}</option>)}
+            {(users || []).filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role}</option>)}
           </select>
         </FormField>
       </div>
@@ -2332,7 +2333,7 @@ const NewProblemModal = () => {
           const newPrb = {
             id: genId("PRB"), title: form.title, status: "Under Investigation",
             priority: form.priority, rootCause: form.rootCause || "Pending analysis",
-            linkedIncidents: form.linkedIncidents, assignee: form.assignee || "Unassigned", created: 0
+            linkedIncidents: form.linkedIncidents, assignee: form.assignee || "Unassigned", created: 0, createdAt: new Date().toISOString()
           };
           setProblems(prev => [newPrb, ...prev]);
           if (form.linkedIncidents.length > 0) {
@@ -2348,7 +2349,7 @@ const NewProblemModal = () => {
 // ─── New Change Modal ─────────────────────────────────────────────────
 const NewChangeModal = () => {
   const [form, setForm] = useState({ title: "", type: "Normal", priority: "Sev-C", risk: "Low", description: "", assignee: "", scheduledStart: "", scheduledEnd: "", approvers: [] });
-  const managers = USERS.filter(u => u.role === "IT Manager" || u.role === "Change Manager");
+  const managers = (users || []).filter(u => u.role === "IT Manager" || u.role === "Change Manager");
   return (
     <Modal title="Create Change Request" onClose={() => setModal(null)} wide>
       <FormField label="Title">
@@ -2374,7 +2375,7 @@ const NewChangeModal = () => {
       <FormField label="Assignee">
         <select style={inputStyle} value={form.assignee} onChange={e => setForm({ ...form, assignee: e.target.value })}>
           <option value="">Select assignee</option>
-          {USERS.filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role}</option>)}
+          {(users || []).filter(u => u.role !== "End User").map(u => <option key={u.id} value={u.name}>{u.name} — {u.role}</option>)}
         </select>
       </FormField>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -2417,7 +2418,7 @@ const NewChangeModal = () => {
             priority: form.priority, risk: form.risk,
             assignee: form.assignee || "Unassigned",
             approvers: (form.approvers || []).map(name => ({ name, status: "Pending" })),
-            created: 0, scheduledStart: form.scheduledStart || "TBD",
+            created: 0, createdAt: new Date().toISOString(), scheduledStart: form.scheduledStart || "TBD",
             scheduledEnd: form.scheduledEnd || "TBD", description: form.description
           };
           setChanges(prev => [newChange, ...prev]);
@@ -2572,7 +2573,7 @@ const RequestDetailModal = () => {
 // ─── Catalog Request Modal ────────────────────────────────────────────
 const CatalogRequestModal = () => {
   const svc = detailItem;
-  const [form, setForm] = useState({ requester: "", priority: "Sev-C", notes: "" });
+  const [form, setForm] = useState({ requester: currentUser?.name || "", priority: "Sev-C", notes: "" });
   if (!svc) return null;
   return (
     <Modal title={`Request: ${svc.name}`} onClose={() => { setModal(null); setDetailItem(null); }}>
@@ -2586,7 +2587,7 @@ const CatalogRequestModal = () => {
       <FormField label="Requester">
         <select style={inputStyle} value={form.requester} onChange={e => setForm({ ...form, requester: e.target.value })}>
           <option value="">Select requester</option>
-          {USERS.map(u => <option key={u.id} value={u.name}>{u.name} — {u.team}</option>)}
+          {(users || []).map(u => <option key={u.id} value={u.name}>{u.name} — {u.team}</option>)}
         </select>
       </FormField>
       <FormField label="Priority">
@@ -2600,16 +2601,17 @@ const CatalogRequestModal = () => {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
         <button style={{ ...btnStyle("#333"), color: "#A0AEC0" }} onClick={() => { setModal(null); setDetailItem(null); }}>Cancel</button>
         <button style={btnStyle("#4CAF50")} onClick={() => {
-          const requesterUser = form.requester ? USERS.find(u => u.name === form.requester) : null;
+          const requesterUser = form.requester ? (users || []).find(u => u.name === form.requester) : null;
           const newReq = {
             id: genId("REQ"), service: svc.name, status: "Open",
-            requester: form.requester || "Current User",
-            requesterEmail: requesterUser?.email || "",
-            requesterRole: requesterUser?.rbacRole || "",
+            requester: form.requester || currentUser?.name || "Unknown",
+            requesterEmail: requesterUser?.email || currentUser?.email || "",
+            requesterRole: requesterUser?.rbacRole || currentUser?.rbacRole || "",
             assignee: null, assignmentGroup: "Service Desk",
-            created: 0, priority: form.priority,
+            createdAt: new Date().toISOString(), priority: form.priority,
             category: svc.category, notes: form.notes,
-            fulfillmentNotes: "", approver: ""
+            fulfillmentNotes: "", approver: "",
+            source: "service_catalog",
           };
           setRequests(prev => [newReq, ...prev]);
           setModal(null); setDetailItem(null);

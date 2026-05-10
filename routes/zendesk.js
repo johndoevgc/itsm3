@@ -187,7 +187,7 @@ function buildSafeSolveEmailBody({ decision, ticket, requester, requestedBy }) {
 
 module.exports = function createZendeskRoutes(ctx) {
   return async function handleZendeskRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, callAI, extractAIText, cacheLayer, wsServer, incidentIndex, normalizeCategory, graphSendMail, featureFlags, isHighSeverity, getAIModel, getSlaMap, getSlaDescription, cachedGetAll, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, MAIL_FROM, CUSTOMER_REDIRECT_TARGET, EMAIL_REDIRECT_MODE, _zdPushDedup, PROD_TEST_MODE, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET } = ctx;
+    const { db, json, readBody, parseBody, callAI, extractAIText, cacheLayer, wsServer, incidentIndex, normalizeCategory, graphSendMail, featureFlags, isHighSeverity, getAIModel, getSlaMap, getSlaDescription, cachedGetAll, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, MAIL_FROM, CUSTOMER_REDIRECT_TARGET, EMAIL_REDIRECT_MODE, PROD_TEST_MODE, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET } = ctx;
 
   if (!pathname.startsWith("/api/zendesk")) return false;
 
@@ -688,7 +688,7 @@ ${lastComment ? `\nLatest comment:\n${lastComment.substring(0, 1500)}` : ""}`;
           reporter: requesterName || "Zendesk", reporterEmail: requesterEmail || "",
           customer: requesterName || "", contactMethod: "Zendesk",
           description: description || "",
-          created: 0, slaTarget: slaMap[_slaPri] || 4,
+          created: 0, createdAt: new Date().toISOString(), slaTarget: slaMap[_slaPri] || 4,
           aiTriaged: true, aiConfidence: confidence || 75,
           zdTicketId: ticketId, workaround: "", linkedProblem: "",
           affectedAssets: [],
@@ -803,23 +803,28 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         }
 
         const appliedActions = [];
-        const applyPayload = buildZendeskSafeSolveApplyPayload(decision, { requestedBy });
-        const updateResult = await zdRequest("PUT", `/tickets/${ticketId}.json`, applyPayload);
-        appliedActions.push("internal_zendesk_note_added", `zendesk_status_${decision.targetStatus}`);
+        // v4.0.0: ZD push retired — skip zdRequest("PUT") to Zendesk ticket
+        appliedActions.push("zendesk_push_skipped_v4");
+        const updateResult = { skipped: true, reason: "v4.0.0 read-only mode" };
 
         let emailResult = null;
         if (decision.customerEmailPlanned && graphSendMail) {
-          try {
-            await graphSendMail({
-              to: decision.safeCustomerContact.customerEmailTarget,
-              subject: `AI Safe Solve: ${ticket.subject || `Ticket #${ticketId}`} [#${ticketId}]`,
-              body: buildSafeSolveEmailBody({ decision, ticket, requester, requestedBy }),
-              isCustomerEmail: true,
-            });
-            emailResult = { sent: true, to: decision.safeCustomerContact.customerEmailTarget };
-            appliedActions.push("customer_email_routed_to_safe_target");
-          } catch (emailErr) {
-            emailResult = { sent: false, error: emailErr.message, to: decision.safeCustomerContact.customerEmailTarget };
+          if (!featureFlags.isEnabled("auto_customer_email")) {
+            emailResult = { sent: false, reason: "auto_customer_email flag off" };
+            appliedActions.push("customer_email_skipped_flag_off");
+          } else {
+            try {
+              await graphSendMail({
+                to: decision.safeCustomerContact.customerEmailTarget,
+                subject: `AI Safe Solve: ${ticket.subject || `Ticket #${ticketId}`} [#${ticketId}]`,
+                body: buildSafeSolveEmailBody({ decision, ticket, requester, requestedBy }),
+                isCustomerEmail: true,
+              });
+              emailResult = { sent: true, to: decision.safeCustomerContact.customerEmailTarget };
+              appliedActions.push("customer_email_routed_to_safe_target");
+            } catch (emailErr) {
+              emailResult = { sent: false, error: emailErr.message, to: decision.safeCustomerContact.customerEmailTarget };
+            }
           }
         }
 
@@ -832,7 +837,6 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
             inc.resolution = decision.resolution || inc.resolution;
             inc.resolvedAt = decision.targetStatus === "solved" ? new Date().toISOString() : inc.resolvedAt;
             inc.aiSafeSolved = decision.targetStatus === "solved";
-            inc.skipZendeskSync = true;
             inc.updatedAt = new Date().toISOString();
             inc.activityLog = [...(inc.activityLog || []), { id: `AL-ZDSAFE-${Date.now()}`, type: "ai_solve", user: "AI Safe Solve", time: inc.updatedAt, detail: `AI Safe Solve applied to Zendesk #${ticketId}: ${decision.decision}, ${decision.confidence}% confidence. No public customer comment.` }];
             await db.upsert("incidents", inc.id, JSON.stringify(inc));
@@ -1012,56 +1016,9 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
         return json(res, 200, result);
       }
 
-      // POST /api/zendesk/sync-incident — sync an ITSM incident action to Zendesk
+      // POST /api/zendesk/sync-incident — v4.0.0: ZD push removed (read-only mode)
       if (pathname === "/api/zendesk/sync-incident" && req.method === "POST") {
-        // Block outbound sync in Production Test Mode (one-way ZD→ITSM only)
-        if (PROD_TEST_MODE) return json(res, 200, { skipped: true, reason: "Production Test Mode — one-way sync only (ZD→ITSM)" });
-        // Phase G1+G2 — zd_push_back flag gates ALL outbound pushes
-        if (!featureFlags.isEnabled("zd_push_back")) {
-          try {
-            const _b = await parseBody(req);
-            await db.audit("zendesk_sync", String(_b && _b.zdTicketId || "unknown"), "push_suppressed_flag", JSON.stringify({ action: _b && _b.action, status: _b && _b.status }), "system");
-          } catch { /* ignore */ }
-          return json(res, 200, { suppressed: true, reason: "flag_off:zd_push_back" });
-        }
-        const body = await parseBody(req);
-        const { zdTicketId, action, status, priority, comment, assignee } = body;
-        if (!zdTicketId) return json(res, 400, { error: "zdTicketId required" });
-
-        // Phase G3 — 60s duplicate-comment dedup (catches save→status→save bursts)
-        if (comment) {
-          const _key = `${zdTicketId}|${String(comment).trim().substring(0, 200)}`;
-          const _last = _zdPushDedup.get(_key);
-          if (_last && Date.now() - _last < 60_000) {
-            try { await db.audit("zendesk_sync", String(zdTicketId), "push_suppressed_dedup", JSON.stringify({ action, withinSec: Math.round((Date.now()-_last)/1000) }), "system"); } catch { /* ignore */ }
-            console.log(`[ZD Sync] Dedup-suppressed comment to #${zdTicketId} (within 60s)`);
-            return json(res, 200, { suppressed: true, reason: "dedup_60s" });
-          }
-          _zdPushDedup.set(_key, Date.now());
-          // GC old entries when map grows large
-          if (_zdPushDedup.size > 500) {
-            const cutoff = Date.now() - 120_000;
-            for (const [k, t] of _zdPushDedup) if (t < cutoff) _zdPushDedup.delete(k);
-          }
-        }
-
-        const priorityMap = { "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" };
-        const statusMap = { "New": "new", "Open": "open", "In Progress": "open", "Pending": "pending", "On Hold": "hold", "Resolved": "solved", "Closed": "closed", "Reopened": "open" };
-        const ticketUpdate = { ticket: {} };
-
-        if (status) ticketUpdate.ticket.status = statusMap[status] || status;
-        if (priority) ticketUpdate.ticket.priority = priorityMap[priority] || priority;
-        if (comment) {
-          ticketUpdate.ticket.comment = zendeskInternalComment(`[ITSM Sync] ${comment}`);
-        }
-
-        if (Object.keys(ticketUpdate.ticket).length === 0) {
-          return json(res, 400, { error: "No changes to sync" });
-        }
-
-        const result = await zdRequest("PUT", `/tickets/${zdTicketId}.json`, ticketUpdate);
-        console.log(`[ZD Sync] Ticket #${zdTicketId} updated — action: ${action}, status: ${status || '-'}, priority: ${priority || '-'}`);
-        return json(res, 200, { success: true, result });
+        return json(res, 410, { error: "Zendesk push has been retired in v4.0.0. ITSM operates in read-only import mode." });
       }
 
       // GET /api/zendesk/ticket-updates/:id — get latest ticket state for sync back to ITSM
@@ -1499,6 +1456,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
           } catch (staleErr) { console.warn("[ZD Incremental] Stale-check error:", staleErr.message); }
 
           // ── Auto-close pending tickets with no new replies after 48 hours ──
+          // v4.0.0: Only update local DB — no longer pushes status to Zendesk
           try {
             const allTickets = await db.getAll("zendesk_tickets");
             const now = Date.now();
@@ -1510,11 +1468,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                 if (t.status === "pending") {
                   const updatedAt = new Date(t.updated_at || t.updatedAt || t.created_at).getTime();
                   if (now - updatedAt > STALE_PENDING_MS) {
-                    // Close in Zendesk
-                    await zdRequest("PUT", `/tickets/${t.id}.json`, {
-                      ticket: { status: "solved", comment: zendeskInternalComment("[Auto-Resolved] No customer reply received within 48 hours. This ticket has been automatically resolved by the AI support system. Please reopen if you still need assistance.") }
-                    }).catch(() => {});
-                    // Update local DB
+                    // Update local DB only (ZD push retired in v4.0.0)
                     t.status = "solved";
                     t.updated_at = new Date().toISOString();
                     await db.upsert("zendesk_tickets", String(t.id), JSON.stringify(t));
@@ -1974,7 +1928,7 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
                     assignee: "Unassigned", assignmentGroup: "Service Desk",
                     reporter: "Zendesk Webhook", reporterEmail: "",
                     customer: "", contactMethod: "Zendesk",
-                    created: 0, slaTarget: slaMap[itsmPriority] || 9,
+                    created: 0, createdAt: new Date().toISOString(), slaTarget: slaMap[itsmPriority] || 9,
                     aiTriaged: false, aiConfidence: 0, zdTicketId: t.id,
                     zdLastSync: new Date().toISOString(),
                     workaround: "", linkedProblem: "", affectedAssets: [],
@@ -2129,61 +2083,10 @@ Allow auto_sendable only for routine IT support issues with a concrete, low-risk
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // PUSH ITSM → ZENDESK — Sync ITSM incident changes to Zendesk
+      // v4.0.0: ZD push retired — ITSM operates in read-only import mode
       // ═══════════════════════════════════════════════════════════════
       if (pathname === "/api/zendesk/push-to-zendesk" && req.method === "POST") {
-        // Block outbound sync in Production Test Mode (one-way ZD→ITSM only)
-        if (PROD_TEST_MODE) return json(res, 200, { skipped: true, reason: "Production Test Mode — one-way sync only (ZD→ITSM)" });
-        const body = await parseBody(req);
-        const { incidentId, status, priority, comment, assignee, user } = body;
-        if (!incidentId) return json(res, 400, { error: "incidentId required" });
-
-        // Find the incident
-        const incRow = await db.getOne("incidents", incidentId);
-        if (!incRow) return json(res, 404, { error: "Incident not found" });
-        const inc = JSON.parse(incRow.data);
-
-        // Create Zendesk ticket if none linked
-        if (!inc.zdTicketId) {
-          const priorityMap = { "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" };
-          const newTicket = await zdRequest("POST", "/tickets.json", {
-            ticket: {
-              subject: inc.title, comment: zendeskInternalComment(inc.description || "Created from ITSM"),
-              priority: priorityMap[inc.priority] || "normal",
-              tags: ["itsm-synced", inc.category?.toLowerCase() || "general"],
-            }
-          });
-          inc.zdTicketId = newTicket.ticket?.id;
-          inc.zdLastSync = new Date().toISOString();
-          inc.activityLog = [...(inc.activityLog || []), {
-            id: `AL-PUSH-${Date.now()}`, type: "sync", user: user || "System",
-            time: new Date().toISOString(),
-            detail: `Created Zendesk ticket #${inc.zdTicketId} from ITSM`,
-          }];
-          await db.upsert("incidents", inc.id, JSON.stringify(inc));
-          return json(res, 200, { success: true, action: "created", zdTicketId: inc.zdTicketId });
-        }
-
-        // Update existing Zendesk ticket
-        const priorityMap = { "Sev-A": "urgent", "Sev-B": "high", "Sev-C": "normal", "Sev-D": "low" };
-        const statusMap = { "New": "new", "Open": "open", "In Progress": "open", "Pending": "pending", "On Hold": "hold", "Resolved": "solved", "Closed": "closed", "Reopened": "open" };
-        const ticketUpdate = { ticket: {} };
-        if (status) ticketUpdate.ticket.status = statusMap[status] || status;
-        if (priority) ticketUpdate.ticket.priority = priorityMap[priority] || priority;
-        if (comment) ticketUpdate.ticket.comment = zendeskInternalComment(`[ITSM ${incidentId}] ${comment}`);
-
-        if (Object.keys(ticketUpdate.ticket).length > 0) {
-          await zdRequest("PUT", `/tickets/${inc.zdTicketId}.json`, ticketUpdate);
-          inc.zdLastSync = new Date().toISOString();
-          inc.activityLog = [...(inc.activityLog || []), {
-            id: `AL-PUSH-${Date.now()}`, type: "sync", user: user || "System",
-            time: new Date().toISOString(),
-            detail: `Pushed to Zendesk #${inc.zdTicketId}: ${[status && `status=${status}`, priority && `priority=${priority}`, comment && "comment added"].filter(Boolean).join(", ")}`,
-          }];
-          await db.upsert("incidents", inc.id, JSON.stringify(inc));
-        }
-
-        return json(res, 200, { success: true, action: "updated", zdTicketId: inc.zdTicketId });
+        return json(res, 410, { error: "Zendesk push has been retired in v4.0.0. ITSM operates in read-only import mode." });
       }
 
       // ═══════════════════════════════════════════════════════════════

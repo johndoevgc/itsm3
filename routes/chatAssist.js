@@ -208,6 +208,121 @@ async function gatherKbGrounding(db, query, topK) {
   }));
 }
 
+// ─── Live ITSM context gathering (v3.36.0) ───────────────────────────────
+// Queries incidents, approval_instances, and requests filtered by the
+// current user's email. Returns a compact text block for prompt injection.
+async function gatherLiveContext(db, cachedGetAll, userEmail, intent, limit = 5) {
+  if (!userEmail || !intent) return "";
+  const lines = [];
+  const getter = cachedGetAll || db.getAll.bind(db);
+
+  if (intent.specificId) {
+    // Targeted lookup for a specific INC- or REQ- ID
+    const collection = intent.specificId.startsWith("INC-") ? "incidents" : "requests";
+    try {
+      const rows = await getter(collection);
+      for (const r of rows) {
+        try {
+          const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (t && t.id && t.id.toUpperCase() === intent.specificId) {
+            lines.push(`Record ${t.id}: status=${t.status || "unknown"}, title="${(t.title || t.summary || "").slice(0, 100)}", severity=${t.severity || t.priority || "N/A"}, category=${t.category || "N/A"}, created=${t.createdAt || t.created || "N/A"}, assigned=${t.assignedTo || t.assignee || "unassigned"}`);
+            break;
+          }
+        } catch { /* skip bad row */ }
+      }
+    } catch { /* non-fatal */ }
+    if (lines.length) return "ITSM live data:\n" + lines.join("\n");
+  }
+
+  const emailLower = userEmail.toLowerCase();
+
+  if (intent.tickets) {
+    try {
+      const rows = await getter("incidents");
+      const mine = [];
+      for (const r of rows) {
+        try {
+          const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!t) continue;
+          const email = (t.requesterEmail || t.reportedByEmail || t.requestedBy || t.reportedBy || "").toLowerCase();
+          if (email === emailLower && !["Resolved", "Closed", "Cancelled"].includes(t.status)) {
+            mine.push(t);
+          }
+        } catch { /* skip */ }
+      }
+      mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      const top = mine.slice(0, limit);
+      if (top.length) {
+        lines.push(`Open incidents (${mine.length} total, showing ${top.length}):`);
+        for (const t of top) {
+          lines.push(`  - ${t.id} (${t.status}): "${(t.title || "").slice(0, 60)}" [${t.severity || t.priority || "N/A"}]`);
+        }
+      } else {
+        lines.push("No open incidents found for this user.");
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  if (intent.approvals) {
+    try {
+      const rows = await getter("approval_instances");
+      const mine = [];
+      for (const r of rows) {
+        try {
+          const a = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!a) continue;
+          const createdBy = (a.createdBy || "").toLowerCase();
+          const isApprover = Array.isArray(a.approvals) && a.approvals.some(ap => (ap.approverEmail || "").toLowerCase() === emailLower);
+          if ((createdBy === emailLower || isApprover) && a.status === "pending") {
+            mine.push(a);
+          }
+        } catch { /* skip */ }
+      }
+      if (mine.length) {
+        lines.push(`Pending approvals (${mine.length}):`);
+        for (const a of mine.slice(0, limit)) {
+          lines.push(`  - ${a.id || "(no id)"}: ${a.targetCollection || ""} ${a.targetId || ""}, level ${a.currentLevel || "?"}, status=${a.status}`);
+        }
+      } else {
+        lines.push("No pending approvals found for this user.");
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  if (intent.requests) {
+    try {
+      const rows = await getter("requests");
+      const mine = [];
+      for (const r of rows) {
+        try {
+          const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!t) continue;
+          const email = (t.requesterEmail || t.requestedBy || "").toLowerCase();
+          if (email === emailLower && !["Fulfilled", "Closed", "Cancelled"].includes(t.status)) {
+            mine.push(t);
+          }
+        } catch { /* skip */ }
+      }
+      mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      const top = mine.slice(0, limit);
+      if (top.length) {
+        lines.push(`Open service requests (${mine.length} total, showing ${top.length}):`);
+        for (const t of top) {
+          lines.push(`  - ${t.id} (${t.status}): "${(t.title || t.service || "").slice(0, 60)}" [${t.priority || "N/A"}]`);
+        }
+      } else {
+        lines.push("No open service requests found for this user.");
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  if (!lines.length) return "";
+  // Cap total output to ~800 chars for prompt budget
+  let result = "ITSM live data:\n" + lines.join("\n");
+  if (result.length > 800) result = result.slice(0, 797) + "...";
+  return result;
+}
+
 // VGC AI Assist — full customer persona (see /memories/session/plan.md and
 // the product spec). The state machine below owns greeting/intake/CSAT flow;
 // the model is only used to generate solution steps + layman re-explanations.
@@ -216,6 +331,7 @@ const VGC_CUSTOMER_PERSONA = [
   "Persona: calm, professional, approachable — like a senior IT support lead. Plain English, no unexplained jargon. Translate every technical step into layman instructions. Acknowledge frustration warmly when present. Reflect Singapore business culture: polite, efficient, solution-oriented.",
   "You are operating inside a guided conversational flow. The flow controls greeting, intake form, ticket creation, escalation, and CSAT — you do NOT need to ask those questions.",
   "Your job is: (1) generate clear, numbered, layman-friendly solution steps when asked; (2) re-explain a step in simpler terms when the customer is confused; (3) acknowledge customer messages warmly between steps.",
+  "You have read access to this customer's tickets, service requests, and approval status within VGC-ITSM. When ITSM live data is provided in the prompt, answer directly from it — never say you don't have access to their data.",
   "Rules: never invent ticket numbers, prices, or customer data. Never share other customers' information or internal credentials. Never request passwords or sensitive personal data beyond name/company/email. Never promise resolution times beyond stated SLA commitments.",
   "When citing a knowledge-base article, write the ID in square brackets, e.g. [KB0010]. Keep replies under 6 sentences unless walking through numbered solution steps.",
   "If the issue is outside your knowledge after a thorough KB check, say 'I'm checking further' or 'Let me connect you with an engineer' — never just 'I don't know'.",
@@ -227,11 +343,14 @@ function buildSystemPrompt(channel, lang, historyContext) {
   const base = channel === "customer" ? VGC_CUSTOMER_PERSONA
     : channel === "teams" ? (VGC_CUSTOMER_PERSONA + " CHANNEL CONTEXT — you are responding inside Microsoft Teams. Keep replies under 280 characters per turn so the message renders cleanly in the chat pane. Prefer numbered steps over paragraphs.")
     : [
-    "You are an IT service-desk co-pilot helping the on-call agent.",
-    "Suggest the next best response or remediation step.",
-    "Cite KB IDs in square brackets (e.g. [KB0010]) when grounded.",
-    "Flag low confidence explicitly. Do not fabricate ticket data.",
+    "You are VGC-ITSM Co-Pilot, an internal IT service-desk assistant for VGC Technology Pte Ltd.",
+    "CRITICAL: You must ONLY answer from the ITSM context provided — internal KB articles, live ticket/incident/request/approval data, and VGC operational knowledge. Do NOT use external or general knowledge to answer ITSM-related questions. If no relevant internal data is available, say so explicitly: 'I don't have matching data in the ITSM system for this query.'",
+    "You have read access to VGC-ITSM live data including incidents, service requests, change requests, approvals, and SLA statuses. When ITSM live data is provided in the prompt, answer operational queries directly from it — never say you lack access.",
+    "Your role: (1) triage and classify incidents, (2) suggest remediation steps grounded in KB, (3) draft customer replies, (4) flag SLA risks, (5) recommend escalation when warranted.",
+    "Cite KB article IDs in square brackets (e.g. [KB0010]) when grounded in KB content.",
+    "Flag low confidence explicitly. Do not fabricate ticket numbers, statuses, or data.",
     "Keep replies under 120 words. Use markdown bullets when listing steps.",
+    "Format actionable outputs clearly: numbered steps for diagnostics, bullet points for summaries, bold for key values like ticket IDs and priorities.",
   ].join(" ");
   const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "en";
   const langSuffix = useLang === "en" ? "" :
@@ -1122,7 +1241,7 @@ function advanceIntake(session, action, customerName) {
   }
 }
 
-function buildUserPrompt(session, kbContext, redactedQuery) {
+function buildUserPrompt(session, kbContext, redactedQuery, liveContext) {
   const lines = [];
   lines.push(`Channel: ${session.channel}`);
   if (session.ticketId) lines.push(`Linked ticket: ${session.ticketId}`);
@@ -1131,6 +1250,9 @@ function buildUserPrompt(session, kbContext, redactedQuery) {
     for (const k of kbContext) {
       lines.push(`- [${k.id}] ${k.title}: ${k.snippet.replace(/\s+/g, " ").trim()}`);
     }
+  }
+  if (liveContext) {
+    lines.push(`\n${liveContext}`);
   }
   // Recent dialog (last 6 turns) for short-term memory.
   const tail = (session.messages || []).slice(-6);
@@ -1156,8 +1278,52 @@ function estimateConfidence(replyText, kbContext) {
   return Math.max(0, Math.min(100, conf));
 }
 
+// ─── Operational intent detection (v3.36.0 — Live ITSM grounding) ────────
+// Regex classifier to identify when a user is asking about their own ITSM
+// data (tickets, approvals, requests). Returns flags for each data type
+// and an optional specificId for targeted lookup.
+const INTENT_PATTERNS = {
+  tickets: [
+    /\b(my|open|recent|pending|assigned)\s+(ticket|incident|issue)s?\b/i,
+    /\bstatus\s+of\s+INC-/i,
+    /\bINC-[\w-]+/i,
+    /\b(show|list|check|view|get)\s+(my\s+)?(ticket|incident)s?\b/i,
+    /\bwhere\s+is\s+(my\s+)?(ticket|incident|INC-)\b/i,
+    /\bticket\s+status\b/i,
+  ],
+  approvals: [
+    /\b(my|pending|outstanding|waiting)\s+approval(s?)\b/i,
+    /\bapproval\s+(status|queue|pending|list)\b/i,
+    /\b(show|list|check|view|get)\s+(my\s+)?approval(s?)\b/i,
+    /\bwhat.*need(s?)\s+(my\s+)?approv/i,
+    /\bapprove|reject\b/i,
+  ],
+  requests: [
+    /\b(my|open|pending|recent)\s+(service\s+)?request(s?)\b/i,
+    /\bstatus\s+of\s+REQ-/i,
+    /\bREQ-[\w-]+/i,
+    /\b(show|list|check|view|get)\s+(my\s+)?(service\s+)?request(s?)\b/i,
+    /\bwhere\s+is\s+(my\s+)?(request|REQ-)\b/i,
+  ],
+};
+
+function detectOperationalIntent(text) {
+  if (!text || typeof text !== "string") return null;
+  const result = { tickets: false, approvals: false, requests: false, specificId: null };
+  let hasIntent = false;
+  for (const [key, patterns] of Object.entries(INTENT_PATTERNS)) {
+    for (const re of patterns) {
+      if (re.test(text)) { result[key] = true; hasIntent = true; break; }
+    }
+  }
+  // Extract specific INC- or REQ- IDs
+  const idMatch = text.match(/\b(INC-[\w-]+|REQ-[\w-]+)/i);
+  if (idMatch) { result.specificId = idMatch[1].toUpperCase(); hasIntent = true; }
+  return hasIntent ? result : null;
+}
+
 module.exports = function createChatAssistRoutes(ctx) {
-  const { db, json, parseBody, callAI, extractAIText, wsServer } = ctx;
+  const { db, json, parseBody, callAI, extractAIText, wsServer, cachedGetAll } = ctx;
 
   // Per-IP rolling-window rate limiter for AI message calls.
   // Map<ip, { count, windowStart }>. Window = 60s.
@@ -1224,6 +1390,7 @@ module.exports = function createChatAssistRoutes(ctx) {
           customerName: body.customerName || null,
           customerCompany: body.customerCompany || null,
           customerEmail: body.customerEmail || null,
+          agentEmail: channel === "agent" ? (body.agentEmail || actorOf(authResult)) : null,
         };
         // v3.30.0 — history-aware persona: load past tickets for this
         // customer so the greeting and AI prompt can be personalized.
@@ -1344,6 +1511,23 @@ module.exports = function createChatAssistRoutes(ctx) {
         const topK = Number(flag.kbGroundingTopK) || 5;
         const kbContext = await gatherKbGrounding(db, redacted, topK);
 
+        // v3.36.0 — Live ITSM data grounding: detect operational intent
+        // and pull matching records for the current user.
+        let liveContext = "";
+        const operationalIntent = detectOperationalIntent(redacted);
+        if (operationalIntent) {
+          const userEmail = session.channel === "customer" || session.channel === "teams"
+            ? session.customerEmail
+            : session.agentEmail || session.createdBy;
+          if (userEmail) {
+            try {
+              liveContext = await gatherLiveContext(db, cachedGetAll, userEmail, operationalIntent, 5);
+            } catch (err) {
+              console.warn("[ChatAssist] gatherLiveContext failed:", err.message);
+            }
+          }
+        }
+
         // AI call — keep options minimal (no temperature; GPT-5.4 rejects it)
         const lang = session.intake?.lang || "en";
         let histCtx = (session.channel === "customer" || session.channel === "teams") ? summarizeHistoryForPrompt(session.history) : "";
@@ -1354,7 +1538,7 @@ module.exports = function createChatAssistRoutes(ctx) {
           histCtx = histCtx ? `${histCtx}\n\n${frustrationCue}` : frustrationCue;
         }
         const sysPrompt = buildSystemPrompt(session.channel, lang, histCtx);
-        const userPrompt = buildUserPrompt(session, kbContext, redacted);
+        const userPrompt = buildUserPrompt(session, kbContext, redacted, liveContext);
         let replyText = "";
         let aiOk = false;
         try {
@@ -1429,6 +1613,71 @@ module.exports = function createChatAssistRoutes(ctx) {
               type: "quick-reply",
               kind: "request-agent",
               options: [{ value: "agent", label: "👤 Connect me to a human engineer" }],
+            });
+          }
+        }
+        // v3.36.0 — Agent channel: attach actionable cards so engineers get
+        // rich conversational interactions (ticket lists, quick actions, KB refs).
+        if (session.channel === "agent" && aiOk) {
+          assistantMsg.cards = assistantMsg.cards || [];
+          const userLower = (text || "").toLowerCase();
+          // KB citation cards — when the reply references KB articles
+          if (kbContext.length > 0) {
+            assistantMsg.cards.push({
+              type: "kb-refs",
+              kind: "kb-citations",
+              articles: kbContext.slice(0, 3).map(k => ({
+                id: k.id, title: k.title, category: k.category || "General",
+              })),
+            });
+          }
+          // Operational intent cards — when live ITSM data was injected
+          if (operationalIntent && liveContext) {
+            if (operationalIntent.tickets) {
+              assistantMsg.cards.push({
+                type: "quick-reply",
+                kind: "ticket-actions",
+                options: [
+                  { value: "create", label: "➕ Create Incident", icon: null },
+                  { value: "queue",  label: "📋 View Queue",     icon: null },
+                  { value: "sla",    label: "⏱️ SLA Status",      icon: null },
+                ],
+              });
+            }
+            if (operationalIntent.approvals) {
+              assistantMsg.cards.push({
+                type: "quick-reply",
+                kind: "approval-actions",
+                options: [
+                  { value: "pending", label: "📋 Pending Approvals", icon: null },
+                  { value: "review",  label: "🔍 Review Changes",    icon: null },
+                ],
+              });
+            }
+          }
+          // Diagnostic / triage cards — when message looks like triage work
+          const triagePattern = /\b(diagnos|triage|troubleshoot|root\s*cause|check|investig)/i;
+          if (triagePattern.test(userLower)) {
+            assistantMsg.cards.push({
+              type: "quick-reply",
+              kind: "triage-actions",
+              options: [
+                { value: "similar",   label: "🔍 Similar Tickets",   icon: null },
+                { value: "escalate",  label: "⬆️ Escalate",          icon: null },
+                { value: "kb-search", label: "📚 Search KB",         icon: null },
+              ],
+            });
+          }
+          // Always add a follow-up action chip for agent convenience
+          if (assistantMsg.cards.length === 0) {
+            assistantMsg.cards.push({
+              type: "quick-reply",
+              kind: "agent-followup",
+              options: [
+                { value: "elaborate", label: "📝 Elaborate",        icon: null },
+                { value: "draft",     label: "✍️ Draft Reply",      icon: null },
+                { value: "kb-search", label: "📚 Search KB",        icon: null },
+              ],
             });
           }
         }
@@ -2054,6 +2303,8 @@ module.exports.__internal = {
   detectRecurringPattern,
   detectFrustration,
   findActiveMajorIncident,
+  detectOperationalIntent,
+  gatherLiveContext,
   SLA_BY_SEVERITY,
   VGC_CUSTOMER_PERSONA,
   // i18n

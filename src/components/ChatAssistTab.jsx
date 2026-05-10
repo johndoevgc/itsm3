@@ -53,7 +53,84 @@ const btnSecondary = {
   cursor: "pointer",
 };
 
-function MessageBubble({ msg, ticketId, onInsert, onPromote }) {
+function CardChip({ option, onAction }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onAction(option)}
+      style={{
+        background: "#0A0C14",
+        color: "#A8B0C4",
+        border: "1px solid #1E2130",
+        borderRadius: 14,
+        padding: "5px 12px",
+        fontSize: 11,
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontFamily: "'Space Grotesk', sans-serif",
+        transition: "border-color 0.15s",
+      }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = "#6366F1"}
+      onMouseLeave={e => e.currentTarget.style.borderColor = "#1E2130"}
+    >
+      {option.label}
+    </button>
+  );
+}
+
+function AssistantCards({ cards, onAction }) {
+  if (!cards || cards.length === 0) return null;
+  return (
+    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+      {cards.map((card, i) => {
+        if (card.type === "quick-reply" && card.options) {
+          return (
+            <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {card.options.map((opt, j) => (
+                <CardChip key={j} option={opt} onAction={onAction} />
+              ))}
+            </div>
+          );
+        }
+        if (card.type === "kb-refs" && card.articles) {
+          return (
+            <div key={i} style={{
+              background: "#0D0F18",
+              border: "1px solid #1E2130",
+              borderRadius: 6,
+              padding: "8px 10px",
+              fontSize: 11,
+            }}>
+              <div style={{ color: "#6366F1", fontSize: 10, fontWeight: 600, marginBottom: 4 }}>
+                Referenced KB Articles
+              </div>
+              {card.articles.map((a, j) => (
+                <div key={j} style={{ color: "#A8B0C4", display: "flex", gap: 4, marginBottom: 2 }}>
+                  <span style={{ color: "#6366F1" }}>[{a.id}]</span>
+                  <span>{a.title}</span>
+                  <span style={{ color: "#5A6178", fontSize: 10 }}>· {a.category}</span>
+                </div>
+              ))}
+            </div>
+          );
+        }
+        if (card.type === "media") {
+          return (
+            <div key={i} style={{ marginTop: 4 }}>
+              {card.screenshotUrl && <img src={card.screenshotUrl} alt={card.caption || ""} style={{ maxWidth: "100%", borderRadius: 6 }} />}
+              {card.caption && <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{card.caption}</div>}
+            </div>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+function MessageBubble({ msg, ticketId, onInsert, onPromote, onCardAction }) {
   const isUser = msg.role === "user";
   return (
     <div style={{
@@ -101,6 +178,9 @@ function MessageBubble({ msg, ticketId, onInsert, onPromote }) {
             )}
           </div>
         )}
+        {!isUser && msg.cards && msg.cards.length > 0 && (
+          <AssistantCards cards={msg.cards} onAction={onCardAction} />
+        )}
       </div>
     </div>
   );
@@ -118,7 +198,7 @@ export function ChatAssistTab({ currentUser, showToast, ticketId, compact }) {
       const r = await fetch("/api/chat-assist/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: "agent", ticketId: ticketId || null }),
+        body: JSON.stringify({ channel: "agent", ticketId: ticketId || null, agentEmail: currentUser?.email || null }),
       });
       if (!r.ok) {
         const txt = await r.text();
@@ -218,6 +298,27 @@ export function ChatAssistTab({ currentUser, showToast, ticketId, compact }) {
     }
   };
 
+  const handleCardAction = useCallback((option) => {
+    const actionMap = {
+      "create":    "/create incident",
+      "queue":     "Show my open tickets",
+      "sla":       "Show SLA at-risk tickets",
+      "pending":   "Show pending approvals",
+      "review":    "Review pending changes",
+      "similar":   "Find similar tickets",
+      "escalate":  "Should this be escalated?",
+      "kb-search": "Search KB for relevant articles",
+      "elaborate": "Can you elaborate on that?",
+      "draft":     "Draft a customer reply for this issue",
+    };
+    const prompt = actionMap[option.value] || option.label;
+    setInput(prompt);
+    setTimeout(() => {
+      const ta = document.querySelector("textarea[placeholder='Ask the AI co-pilot…']");
+      ta?.focus();
+    }, 0);
+  }, []);
+
   const requestHandoff = async () => {
     if (!session) return;
     try {
@@ -284,6 +385,7 @@ export function ChatAssistTab({ currentUser, showToast, ticketId, compact }) {
             ticketId={ticketId}
             onInsert={ticketId ? insertIntoTicket : null}
             onPromote={m.role === "assistant" ? promoteToKb : null}
+            onCardAction={handleCardAction}
           />
         ))}
         {sending && (

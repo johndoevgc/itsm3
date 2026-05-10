@@ -30,7 +30,10 @@ const INTENT_PATTERNS = [
   { intent: 'patterns',          patterns: [/pattern/i, /root.*cause/i, /trend/i, /recurring/i] },
   { intent: 'train_ai',          patterns: [/train/i, /teach/i, /correct/i, /improve.*ai/i] },
   { intent: 'password',          patterns: [/password/i, /mfa/i, /reset.*access/i, /locked.*out/i, /can.*t.*login/i, /account.*issue/i] },
-  { intent: 'security',          patterns: [/security/i, /threat/i, /vulnerability/i, /phishing/i, /malware/i] },
+  { intent: 'security',          patterns: [/security/i, /threat/i, /vulnerability/i, /phishing/i, /malware/i, /suspicious/i, /compromised/i] },
+  { intent: 'connectivity',       patterns: [/vpn/i, /wifi/i, /wi-fi/i, /internet/i, /network/i, /can.*t.*connect/i, /no.*connection/i, /slow.*network/i, /disconnect/i] },
+  { intent: 'software',           patterns: [/install/i, /software/i, /update/i, /upgrade/i, /app.*crash/i, /not.*working/i, /error.*message/i, /outlook/i, /teams/i, /excel/i, /word/i] },
+  { intent: 'hardware',           patterns: [/printer/i, /laptop/i, /monitor/i, /keyboard/i, /mouse/i, /headset/i, /docking/i, /charger/i, /hardware/i, /device/i, /screen/i, /display/i] },
   { intent: 'help',              patterns: [/^\/help$/i, /what.*can.*you.*do/i, /help.*me/i] },
 ];
 
@@ -45,7 +48,7 @@ function detectIntent(userMsg) {
 // ─── Card Builders Per Intent ───────────────────────────────────────────────
 
 function buildBriefingCards(ctx) {
-  const { incidents, changes, problems, requests, currentUser } = ctx;
+  const { incidents = [], changes = [], problems = [], requests = [], currentUser } = ctx;
   const now = new Date();
   const hour = now.getHours();
   const todayStr = now.toISOString().slice(0, 10);
@@ -98,7 +101,7 @@ function buildBriefingCards(ctx) {
 }
 
 function buildOpenTicketCards(ctx) {
-  const { incidents, currentUser } = ctx;
+  const { incidents = [], currentUser } = ctx;
   const open = incidents.filter(i => i.status === 'Open' || i.status === 'In Progress');
   const cards = [];
 
@@ -128,7 +131,7 @@ function buildOpenTicketCards(ctx) {
 }
 
 function buildSlaCards(ctx) {
-  const { incidents } = ctx;
+  const { incidents = [] } = ctx;
   const now = new Date();
   const open = incidents.filter(i => i.status === 'Open' || i.status === 'In Progress');
   const atRisk = open.filter(i => {
@@ -151,7 +154,7 @@ function buildSlaCards(ctx) {
 }
 
 function buildApprovalCards(ctx) {
-  const { changes } = ctx;
+  const { changes = [] } = ctx;
   const pending = changes.filter(c => c.status === 'Awaiting Approval');
   if (pending.length === 0) {
     return [makeStatusCard('Approvals', [{ icon: '✅', label: 'Pending Approvals', value: '0', color: '#22C55E' }])];
@@ -172,7 +175,7 @@ function buildCreateIncidentCards(ctx, tier) {
 }
 
 function buildReportsCards(ctx, tier) {
-  const { incidents } = ctx;
+  const { incidents = [] } = ctx;
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
   const open = incidents.filter(i => i.status === 'Open' || i.status === 'In Progress');
@@ -194,7 +197,7 @@ function buildReportsCards(ctx, tier) {
 }
 
 function buildKbCards(ctx) {
-  const { kbArticles } = ctx;
+  const { kbArticles = [] } = ctx;
   if (!kbArticles || kbArticles.length === 0) {
     return [makeQuickReplyCard([
       { label: 'Create KB Article', icon: '📝', action: 'How do I create a knowledge base article?' },
@@ -272,7 +275,7 @@ function buildNavigationCards(intent) {
 // ─── Management-Specific Flow Cards ─────────────────────────────────────────
 
 function buildManagementCards(intent, ctx) {
-  const { incidents, changes, problems, requests } = ctx;
+  const { incidents = [], changes = [], problems = [], requests = [] } = ctx;
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
   const open = incidents.filter(i => i.status === 'Open' || i.status === 'In Progress');
@@ -333,7 +336,7 @@ function buildManagementCards(intent, ctx) {
 // ─── Engineer-Specific Flow Cards ───────────────────────────────────────────
 
 function buildEngineerCards(intent, ctx) {
-  const { incidents, currentUser } = ctx;
+  const { incidents = [], currentUser } = ctx;
   const open = incidents.filter(i => i.status === 'Open' || i.status === 'In Progress');
   const cards = [];
 
@@ -392,8 +395,10 @@ function buildEngineerCards(intent, ctx) {
 // ─── Customer-Specific Flow Cards ───────────────────────────────────────────
 
 function buildCustomerCards(intent, ctx) {
-  const { incidents, requests, currentUser, kbArticles } = ctx;
+  const { incidents = [], requests = [], currentUser, kbArticles = [] } = ctx;
   const cards = [];
+  const userDomain = (currentUser?.email || '').split('@')[1] || '';
+  const firstName = (currentUser?.name || '').split(' ')[0] || 'there';
 
   if (intent === 'create_incident' || intent === 'create_request') {
     // Simple form for customers
@@ -406,14 +411,17 @@ function buildCustomerCards(intent, ctx) {
   if (intent === 'open_tickets') {
     // Show only customer's own tickets
     const myTickets = [...incidents, ...requests].filter(t =>
-      (t.requestedBy || t.requester || t.createdBy || '').toLowerCase() === (currentUser.email || currentUser.name || '').toLowerCase()
+      (t.requestedBy || t.requester || t.createdBy || t.requesterEmail || '').toLowerCase() === (currentUser.email || currentUser.name || '').toLowerCase()
     );
     if (myTickets.length === 0) {
       cards.push(makeStatusCard('Your Tickets', [
         { icon: '📭', label: 'Status', value: 'No open requests', color: '#6B7280' },
       ]));
+      cards.push(makeQuickReplyCard([
+        { label: '🎫 Create a ticket', icon: '🎫', action: 'I need to report an issue' },
+        { label: '📚 Browse help articles', icon: '📚', action: 'Search knowledge base' },
+      ]));
     } else {
-      // Simple status list for customers
       const statusList = myTickets.slice(0, 5).map(t => ({
         icon: t.status === 'Resolved' || t.status === 'Closed' ? '✅' : t.status === 'In Progress' ? '🔄' : '📋',
         title: t.title || t.subject || t.description?.substring(0, 50) || 'Request',
@@ -424,17 +432,16 @@ function buildCustomerCards(intent, ctx) {
   }
 
   if (intent === 'kb_search') {
-    // Suggest self-service articles
     if (kbArticles && kbArticles.length > 0) {
       kbArticles.slice(0, 3).forEach(kb => cards.push(makeKbCard(kb)));
     }
     cards.push(makeQuickReplyCard([
       { label: 'Still need help?', icon: '🙋', action: 'I still need help with my issue' },
+      { label: 'Create a ticket', icon: '🎫', action: 'Please create a ticket for my issue' },
     ]));
   }
 
   if (intent === 'password') {
-    // Self-service password/MFA guidance
     cards.push(makeProgressCard('Password Reset Steps', [
       { label: 'Go to portal.office.com', status: 'active' },
       { label: "Click 'Can't access account'", status: 'pending' },
@@ -445,6 +452,66 @@ function buildCustomerCards(intent, ctx) {
       { label: 'MFA not working', icon: '📱', action: 'My MFA is not working' },
       { label: 'Account locked', icon: '🔒', action: 'My account is locked out' },
       { label: 'Create ticket for me', icon: '🎫', action: 'Please create a ticket for password reset' },
+    ]));
+  }
+
+  if (intent === 'security') {
+    cards.push(makeQuickReplyCard([
+      { label: '🚨 Report phishing', icon: '🚨', action: 'I received a suspicious phishing email' },
+      { label: '🔒 Account compromised', icon: '🔒', action: 'I think my account has been compromised' },
+      { label: '🎫 Create security ticket', icon: '🎫', action: 'Create a security incident ticket' },
+    ]));
+  }
+
+  if (intent === 'connectivity') {
+    cards.push(makeProgressCard('Quick Connectivity Fix', [
+      { label: 'Restart your device', status: 'active' },
+      { label: 'Check WiFi/cable connection', status: 'pending' },
+      { label: 'Try disconnecting & reconnecting VPN', status: 'pending' },
+      { label: 'Clear browser cache (Ctrl+Shift+Del)', status: 'pending' },
+    ]));
+    cards.push(makeQuickReplyCard([
+      { label: '🌐 VPN issue', icon: '🌐', action: 'I cannot connect to VPN' },
+      { label: '📶 WiFi issue', icon: '📶', action: 'WiFi is not working' },
+      { label: '🎫 Still not working', icon: '🎫', action: 'Network still not working, please create a ticket' },
+    ]));
+  }
+
+  if (intent === 'software') {
+    cards.push(makeQuickReplyCard([
+      { label: '📧 Outlook issue', icon: '📧', action: 'I have an issue with Outlook email' },
+      { label: '💬 Teams issue', icon: '💬', action: 'Microsoft Teams is not working properly' },
+      { label: '📊 Office apps', icon: '📊', action: 'I need help with Excel/Word/PowerPoint' },
+      { label: '🎫 Create ticket', icon: '🎫', action: 'I need to report a software issue' },
+    ]));
+  }
+
+  if (intent === 'hardware') {
+    cards.push(makeQuickReplyCard([
+      { label: '🖨️ Printer issue', icon: '🖨️', action: 'My printer is not working' },
+      { label: '💻 Laptop issue', icon: '💻', action: 'I have a laptop hardware problem' },
+      { label: '🖥️ Monitor/display', icon: '🖥️', action: 'My monitor or display is not working' },
+      { label: '🎫 Request equipment', icon: '🎫', action: 'I need to request new equipment' },
+    ]));
+  }
+
+  if (intent === 'help') {
+    cards.push(makeListCard(`Hi ${firstName}! Here's what I can help with:`, [
+      { icon: '🎫', title: 'Report an issue', subtitle: 'Create a ticket for any IT problem' },
+      { icon: '🔑', title: 'Password & login help', subtitle: 'Reset password, unlock account, MFA issues' },
+      { icon: '📋', title: 'Check my tickets', subtitle: 'View status of your requests' },
+      { icon: '📚', title: 'Search help articles', subtitle: 'Find self-service solutions' },
+      { icon: '💻', title: 'Software & hardware help', subtitle: 'Get help with apps, devices, and equipment' },
+      { icon: '🌐', title: 'Network & connectivity', subtitle: 'WiFi, VPN, internet issues' },
+    ].map(item => ({ ...item, onClick: { type: ACTION_TYPES.CHAT_REPLY, payload: { text: item.title } } }))));
+  }
+
+  // If no specific cards but we have an intent, add a helpful suggestion
+  if (cards.length === 0 && intent) {
+    cards.push(makeQuickReplyCard([
+      { label: '🎫 Create a ticket', icon: '🎫', action: 'I need to report an issue' },
+      { label: '📚 Search help articles', icon: '📚', action: 'Search knowledge base for help' },
+      { label: '📋 Check my tickets', icon: '📋', action: 'Show my open tickets' },
     ]));
   }
 

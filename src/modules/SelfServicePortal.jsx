@@ -38,7 +38,7 @@ function KnowledgePortal({ kbArticles, portalSearch, setPortalSearch, setDetailI
 
   // Category counts
   const catCounts = useMemo(() => {
-    const counts = { all: kbArticles.length };
+    const counts = { all: (kbArticles || []).length };
     kbArticles.forEach(a => { const c = a.category || "General"; counts[c] = (counts[c] || 0) + 1; });
     return counts;
   }, [kbArticles]);
@@ -409,12 +409,28 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
   const [qf, setQf] = useState({ title: "", description: "", urgency: "Standard", contactMethod: "Portal" });
   const [qfSubmitting, setQfSubmitting] = useState(false);
   const userEmail = currentUser.email || currentUser.name;
-  const myIncidents = incidents.filter(i => i.reporterEmail === userEmail || i.reporter === currentUser.name);
-  const myRequests = requests.filter(r => r.requester === currentUser.name || r.requesterEmail === userEmail);
+  const myIncidents = (incidents || []).filter(i => i.reporterEmail === userEmail || i.reporter === currentUser.name);
+  const myRequests = (requests || []).filter(r => r.requester === currentUser.name || r.requesterEmail === userEmail);
   const openCount = myIncidents.filter(i => !["Resolved","Closed"].includes(i.status)).length + myRequests.filter(r => !["Fulfilled","Cancelled"].includes(r.status)).length;
   const resolvedCount = myIncidents.filter(i => i.status === "Resolved" || i.status === "Closed").length;
 
   const statusColor = (s) => ({ "New": "#64B5F6", "In Progress": "#FFB347", "Pending": "#FFB347", "Awaiting Info": "#EC4899", "Resolved": "#4CAF50", "Closed": "#5A6178", "Open": "#64B5F6", "Fulfilled": "#4CAF50", "Cancelled": "#FF6B6B" })[s] || "#5A6178";
+
+  // v3.36: SLA status badge for customer transparency
+  const slaStatusBadge = (inc) => {
+    if (["Resolved", "Closed"].includes(inc.status)) return null;
+    const target = inc.slaTarget || 24;
+    const created = inc.createdAt || inc.created_at;
+    if (!created) return null;
+    const hoursElapsed = (Date.now() - new Date(created).getTime()) / 3600000;
+    const pct = Math.min(Math.round((hoursElapsed / target) * 100), 999);
+    const remaining = Math.max(0, Math.round((target - hoursElapsed) * 10) / 10);
+    const slaPaused = inc.slaPaused;
+    if (slaPaused) return <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 6, background: "#6366F122", color: "#818CF8", fontWeight: 600 }} title="SLA clock paused">⏸ Paused</span>;
+    const color = pct >= 100 ? "#FF4444" : pct >= 80 ? "#FFB347" : "#4CAF50";
+    const label = pct >= 100 ? "Overdue" : `${remaining}h left`;
+    return <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 6, background: color + "18", color, fontWeight: 600 }} title={`SLA: ${pct}% used (${remaining}h remaining of ${target}h target)`}>{label}</span>;
+  };
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
@@ -432,7 +448,7 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
             <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: "0.5px" }}>Resolved</div>
           </div>
           <div style={{ background: "#0A0C14", borderRadius: 8, padding: "10px 16px", border: "1px solid #1E2130", flex: 1, textAlign: "center" }}>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#64B5F6", fontFamily: "'Space Grotesk', sans-serif" }}>{kbArticles.length}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#64B5F6", fontFamily: "'Space Grotesk', sans-serif" }}>{(kbArticles || []).length}</div>
             <div style={{ fontSize: 10, color: "#5A6178", textTransform: "uppercase", letterSpacing: "0.5px" }}>KB Articles</div>
           </div>
         </div>
@@ -493,21 +509,28 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
                 setQfSubmitting(true);
                 const urgencyToPriority = { Critical: "Sev-A", High: "Sev-B", Standard: "Sev-C", Low: "Sev-D" };
                 const urgencyToSla = { Critical: 4, High: 8, Standard: 24, Low: 48 };
+                const now = new Date().toISOString();
                 const newInc = {
-                  id: genId("INC"), title: qf.title, description: qf.description,
-                  category: "General", subcategory: "", priority: urgencyToPriority[qf.urgency] || "Sev-C",
-                  urgency: qf.urgency, impact: "Individual", status: "New",
-                  reporter: currentUser.name, reporterEmail: userEmail, contactMethod: qf.contactMethod,
-                  assignee: "", assignmentGroup: "Service Desk",
-                  created: 0, slaTarget: urgencyToSla[qf.urgency] || 24,
-                  firstResponseTime: null, aiTriaged: false, aiConfidence: 0,
-                  activityLog: [{ id: genId("AL"), type: "create", user: currentUser.name, time: new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore", hour12: false }).replace(",", ""), detail: "Created via Self-Service Portal (Quick Form)" }]
+                  title: qf.title, description: qf.description || qf.title,
+                  category: "General", priority: urgencyToPriority[qf.urgency] || "Sev-C",
+                  urgency: qf.urgency, impact: "Individual",
+                  createdBy: currentUser.name, requesterEmail: userEmail,
+                  contactMethod: qf.contactMethod, source: "self_service_portal",
                 };
-                if (setIncidents) setIncidents(prev => [newInc, ...prev]);
-                try { await fetch("/api/db/incidents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: newInc.id, data: newInc }) }); } catch { /* fire-and-forget */ }
-                // Trigger AI triage in background
-                try { fetch("/api/ai/triage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ incidentId: newInc.id }) }).catch(() => {}); } catch { /* fire-and-forget */ }
-                if (showToast) showToast(`✅ Issue "${qf.title}" submitted! We'll get back to you soon.`, "success");
+                let createdTicket = null;
+                try {
+                  const r = await fetch("/api/ai/chat/create-ticket", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(newInc) });
+                  if (r.ok) createdTicket = await r.json();
+                  else throw new Error(`HTTP ${r.status}`);
+                } catch (err) {
+                  if (showToast) showToast(`Failed to submit issue: ${err.message}`, "error");
+                  setQfSubmitting(false);
+                  return;
+                }
+                if (createdTicket && setIncidents) {
+                  setIncidents(prev => [{ ...newInc, id: createdTicket.id, status: "Open", createdAt: createdTicket.createdAt || now }, ...prev]);
+                }
+                if (showToast) showToast(`✅ Issue "${qf.title}" submitted as ${createdTicket.id}! We'll get back to you soon.`, "success");
                 setQf({ title: "", description: "", urgency: "Standard", contactMethod: "Portal" });
                 setShowQuickForm(false);
                 setQfSubmitting(false);
@@ -547,6 +570,7 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{inc.title}</div>
                     <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{inc.id} · {inc.category} · <span style={{ color: statusColor(inc.status) }}>{inc.status}</span></div>
                   </div>
+                  {slaStatusBadge(inc)}
                   <PriorityDot priority={inc.priority} />
                   <div style={{ fontSize: 10, color: "#5A6178" }}>{inc.createdAt ? new Date(inc.createdAt).toLocaleDateString() : "—"}</div>
                 </div>

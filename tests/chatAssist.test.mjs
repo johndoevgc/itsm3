@@ -5,7 +5,8 @@ const require = createRequire(import.meta.url);
 const createChatAssistRoutes = require("../routes/chatAssist.js");
 const { rankKbArticles, estimateConfidence, buildSystemPrompt, buildUserPrompt,
   defaultIntake, advanceIntake, assessSeverity, mapPriorityToSev,
-  newTicketId, findFieldIndex, nextFieldStage, INTAKE_FIELDS } =
+  newTicketId, findFieldIndex, nextFieldStage, INTAKE_FIELDS,
+  detectOperationalIntent, gatherLiveContext } =
   createChatAssistRoutes.__internal;
 const piiRedact = require("../piiRedact.js");
 const featureFlags = require("../featureFlags.js");
@@ -414,7 +415,7 @@ describe("VGC AI Assist persona prompt", () => {
   });
   it("keeps the agent prompt unchanged", () => {
     const p = buildSystemPrompt("agent");
-    expect(p).toMatch(/co-pilot/);
+    expect(p).toMatch(/Co-Pilot/i);
     expect(p).not.toMatch(/VGC AI Assist/);
   });
 });
@@ -1303,3 +1304,170 @@ describe("ChatAssist /analytics/funnel endpoint", () => {
   });
 });
 
+// ─── Operational intent detection (v3.36.0) ──────────────────────────────
+describe("detectOperationalIntent", () => {
+  it("returns null for non-operational queries", () => {
+    expect(detectOperationalIntent("how do I reset my password?")).toBeNull();
+    expect(detectOperationalIntent("what is VPN?")).toBeNull();
+    expect(detectOperationalIntent("")).toBeNull();
+    expect(detectOperationalIntent(null)).toBeNull();
+  });
+
+  it("detects ticket queries", () => {
+    const r = detectOperationalIntent("show my open tickets");
+    expect(r).not.toBeNull();
+    expect(r.tickets).toBe(true);
+    expect(r.approvals).toBe(false);
+  });
+
+  it("detects approval queries", () => {
+    const r = detectOperationalIntent("what pending approvals do I have?");
+    expect(r).not.toBeNull();
+    expect(r.approvals).toBe(true);
+  });
+
+  it("detects request queries", () => {
+    const r = detectOperationalIntent("where is my service request?");
+    expect(r).not.toBeNull();
+    expect(r.requests).toBe(true);
+  });
+
+  it("extracts specific INC- ID", () => {
+    const r = detectOperationalIntent("status of INC-20260509-0012");
+    expect(r).not.toBeNull();
+    expect(r.specificId).toBe("INC-20260509-0012");
+    expect(r.tickets).toBe(true);
+  });
+
+  it("extracts specific REQ- ID", () => {
+    const r = detectOperationalIntent("where is REQ-2026-001?");
+    expect(r).not.toBeNull();
+    expect(r.specificId).toBe("REQ-2026-001");
+    expect(r.requests).toBe(true);
+  });
+});
+
+// ─── Live ITSM context gathering (v3.36.0) ───────────────────────────────
+describe("gatherLiveContext", () => {
+  function makeLiveDb() {
+    const db = makeMockDb();
+    // Seed incidents
+    db._store.set("incidents::inc1", JSON.stringify({
+      id: "INC-20260509-0001", title: "Outlook crash", status: "Open",
+      requesterEmail: "alice@vgc.com", severity: "P2", category: "Email",
+      createdAt: "2026-05-09T10:00:00Z",
+    }));
+    db._store.set("incidents::inc2", JSON.stringify({
+      id: "INC-20260508-0002", title: "VPN timeout", status: "Open",
+      requesterEmail: "alice@vgc.com", severity: "P3", category: "Network",
+      createdAt: "2026-05-08T10:00:00Z",
+    }));
+    db._store.set("incidents::inc3", JSON.stringify({
+      id: "INC-20260507-0003", title: "Other user issue", status: "Open",
+      requesterEmail: "bob@vgc.com", severity: "P1", category: "Security",
+      createdAt: "2026-05-07T10:00:00Z",
+    }));
+    // Seed approvals
+    db._store.set("approval_instances::ap1", JSON.stringify({
+      id: "APR-001", targetCollection: "requests", targetId: "REQ-001",
+      currentLevel: 1, status: "pending", createdBy: "alice@vgc.com",
+      approvals: [],
+    }));
+    // Seed requests
+    db._store.set("requests::req1", JSON.stringify({
+      id: "REQ-001", title: "New laptop", status: "Pending",
+      requesterEmail: "alice@vgc.com", priority: "P3",
+      createdAt: "2026-05-09T08:00:00Z",
+    }));
+    return db;
+  }
+
+  it("returns empty string when no intent", async () => {
+    const db = makeLiveDb();
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", null);
+    expect(result).toBe("");
+  });
+
+  it("gathers open incidents for user", async () => {
+    const db = makeLiveDb();
+    const intent = { tickets: true, approvals: false, requests: false, specificId: null };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent);
+    expect(result).toContain("ITSM live data:");
+    expect(result).toContain("INC-20260509-0001");
+    expect(result).toContain("INC-20260508-0002");
+    expect(result).not.toContain("INC-20260507-0003"); // bob's ticket
+  });
+
+  it("gathers pending approvals for user", async () => {
+    const db = makeLiveDb();
+    const intent = { tickets: false, approvals: true, requests: false, specificId: null };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent);
+    expect(result).toContain("Pending approvals");
+    expect(result).toContain("APR-001");
+  });
+
+  it("gathers open requests for user", async () => {
+    const db = makeLiveDb();
+    const intent = { tickets: false, approvals: false, requests: true, specificId: null };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent);
+    expect(result).toContain("REQ-001");
+    expect(result).toContain("New laptop");
+  });
+
+  it("looks up specific incident by ID", async () => {
+    const db = makeLiveDb();
+    const intent = { tickets: true, approvals: false, requests: false, specificId: "INC-20260509-0001" };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent);
+    expect(result).toContain("INC-20260509-0001");
+    expect(result).toContain("status=Open");
+    expect(result).toContain("Outlook crash");
+  });
+
+  it("caps output to 800 chars", async () => {
+    const db = makeLiveDb();
+    // Seed many incidents
+    for (let i = 10; i < 50; i++) {
+      db._store.set(`incidents::inc${i}`, JSON.stringify({
+        id: `INC-20260509-${String(i).padStart(4, "0")}`,
+        title: "A very long incident title that takes up space for testing output cap",
+        status: "Open", requesterEmail: "alice@vgc.com", severity: "P3",
+        category: "Testing", createdAt: `2026-05-0${Math.min(9, i)}T10:00:00Z`,
+      }));
+    }
+    const intent = { tickets: true, approvals: true, requests: true, specificId: null };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent);
+    expect(result.length).toBeLessThanOrEqual(800);
+  });
+});
+
+// ─── buildUserPrompt with liveContext (v3.36.0) ──────────────────────────
+describe("buildUserPrompt with liveContext", () => {
+  it("includes ITSM live data section when provided", () => {
+    const session = {
+      channel: "agent", ticketId: null, messages: [],
+    };
+    const liveCtx = "ITSM live data:\nOpen incidents (2 total, showing 2):\n  - INC-001 (Open): \"Test\"";
+    const out = buildUserPrompt(session, [], "show my tickets", liveCtx);
+    expect(out).toContain("ITSM live data:");
+    expect(out).toContain("INC-001");
+  });
+
+  it("omits live data section when empty", () => {
+    const session = { channel: "agent", ticketId: null, messages: [] };
+    const out = buildUserPrompt(session, [], "how to reset password", "");
+    expect(out).not.toContain("ITSM live data:");
+  });
+});
+
+// ─── System prompts mention ITSM access (v3.36.0) ───────────────────────
+describe("System prompts with ITSM access", () => {
+  it("customer persona mentions ITSM access", () => {
+    const prompt = buildSystemPrompt("customer");
+    expect(prompt).toMatch(/read access.*tickets|ITSM/i);
+  });
+
+  it("agent prompt mentions ITSM live data", () => {
+    const prompt = buildSystemPrompt("agent");
+    expect(prompt).toMatch(/ITSM live data/i);
+  });
+});

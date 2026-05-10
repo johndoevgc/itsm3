@@ -45,7 +45,7 @@ export default function AdminSettingsModule({ ctx }) {
     auditLogs, auditFilter, setAuditFilter, auditLoading,
     versionHistory, uatResults, uatRunning, uatLastRun,
     setUatResults, setUatRunning, setUatLastRun,
-    tourStep, runtimeConfig: _runtimeConfig, profilePhoto: _profilePhoto, profilePhotoRef: _profilePhotoRef,
+    tourStep, runtimeConfig: _runtimeConfig, profilePhoto: _profilePhoto, profilePhotoRef: _profilePhotoRef, userPhotos = {},
     avatarConfig: _avatarConfig, notifPrefs: _notifPrefs, cardVisibility: _cardVisibility,
     wsConnected: _wsConnected, globalLastSync: _globalLastSync, globalSyncActive: _globalSyncActive, prodTestMode: _prodTestMode,
     aiPipelineStats: _aiPipelineStats, modal: _modal, setModal: _setModal, recycleBin: _recycleBin, setRecycleBin,
@@ -109,12 +109,12 @@ export default function AdminSettingsModule({ ctx }) {
   const [entraAiSuggestions, setEntraAiSuggestions] = useState(null);
   const [rbacViewMode, setRbacViewMode] = useState("list");
   const [rbacUserSearch, setRbacUserSearch] = useState("");
-  const [rbacRoleFilter, setRbacRoleFilter] = useState("All");
+  const [rbacRoleFilter, setRbacRoleFilter] = useState("all");
   const [permMatrixEditing, setPermMatrixEditing] = useState(false);
   const [permMatrixDraft, setPermMatrixDraft] = useState({});
-  const [customPermissions, setCustomPermissions] = useState({});
-  const [aiRoleSuggestions, setAiRoleSuggestions] = useState(null);
-  const [aiRuleSuggestions, setAiRuleSuggestions] = useState(null);
+  const [customPermissions, setCustomPermissions] = useState(() => JSON.parse(JSON.stringify(RBAC_PERMISSIONS)));
+  const [aiRoleSuggestions, setAiRoleSuggestions] = useState({});
+  const [aiRuleSuggestions, setAiRuleSuggestions] = useState([]);
   const [aiGovData, setAiGovData] = useState(null);
   // v3.32.2 — Bulk Actions + Queue Rebalance state
   const [bulkFilter, setBulkFilter] = useState({ status: "Open", priority: "", ageDaysGte: "", noReplyDaysGte: "" });
@@ -180,7 +180,7 @@ const allTabs = [
   { id: "migration", label: "Import", icon: "📦", devOnly: true },
   { id: "dataMaintenance", label: "Maintenance", icon: "🧹", devOnly: true },
   { id: "dataHygiene", label: "Data Hygiene", icon: "🧬", devOnly: true },
-  { id: "runbookActions", label: "Runbook Actions", icon: "🛠️", devOnly: true },
+  { id: "runbookActions", label: "Runbook Actions", icon: "🛠️" },
   { id: "chatAssist", label: "Chat Assist", icon: "💬" },
   { id: "kbReview", label: "AI KB Review", icon: "📚" },
   { id: "zdCleanup", label: "ZD Cleanup", icon: "🧽", devOnly: true },
@@ -1008,7 +1008,7 @@ return (
             {isEditAdmin && <span style={{ fontSize: 9, color: "#5A6178" }}>Click a row to edit response times</span>}
           </div>
           <div style={{ display: "grid", gap: 6 }}>
-            {Object.entries(slaPolicy.severities).map(([key, sev]) => (
+            {Object.entries(slaPolicy.severities || {}).map(([key, sev]) => (
               <div key={key} onClick={() => isEditAdmin && setSlaEditingSev(slaEditingSev === key ? null : key)} style={{ display: "grid", gridTemplateColumns: "90px 1fr 120px 120px 40px", alignItems: "center", gap: 10, padding: "10px 14px", background: slaEditingSev === key ? "#6366F10A" : "#0A0C14", borderRadius: 8, border: slaEditingSev === key ? "1px solid #6366F133" : "1px solid #1E213044", cursor: isEditAdmin ? "pointer" : "default", transition: "all 0.2s" }}>
                 <PriorityDot priority={key} />
                 <span style={{ color: "#C4CAD6", fontSize: 11 }}>{sev.definition}</span>
@@ -1258,7 +1258,7 @@ return (
           });
           const totalUsers = managedUsers.length;
           const activeAdmins = managedUsers.filter(u => ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(u.rbacRole)).length;
-          const engineersCount = managedUsers.filter(u => u.rbacRole.includes("Support") || u.rbacRole === "Network Engineer").length;
+          const engineersCount = managedUsers.filter(u => (u.rbacRole || "").includes("Support") || u.rbacRole === "Network Engineer").length;
           const endUsersCount = managedUsers.filter(u => u.rbacRole === "End User").length;
 
           const handleInviteUser = () => {
@@ -1639,7 +1639,7 @@ return (
                         </div>
 
                         {entraSelectedUsers.map(user => {
-                          const aiSuggestion = entraAiSuggestions[user.id];
+                          const aiSuggestion = entraAiSuggestions?.[user.id];
                           const currentRole = entraRoleMappings[user.id] || "End User";
                           return (
                             <div key={user.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, borderRadius: 8, background: "#0F1117", border: `1px solid ${aiSuggestion ? "#EC489922" : "#1E213044"}` }}>
@@ -1695,7 +1695,7 @@ return (
                   <div style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${euRole?.color || "#6366F1"}33`, padding: 24, marginBottom: 20, position: "relative" }}>
                     <button onClick={() => setEditingUserId(null)} style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
                     <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20 }}>
-                      <div style={{ width: 48, height: 48, borderRadius: 12, background: `linear-gradient(135deg, ${euRole?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16, fontWeight: 700 }}>{eu.avatar}</div>
+                      <div style={{ width: 48, height: 48, borderRadius: 12, background: userPhotos[eu.email] ? `url(${userPhotos[eu.email]}) center/cover no-repeat` : `linear-gradient(135deg, ${euRole?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16, fontWeight: 700, overflow: "hidden" }}>{!userPhotos[eu.email] && eu.avatar}</div>
                       <div>
                         <div style={{ fontSize: 16, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{eu.name}</div>
                         <div style={{ fontSize: 12, color: "#5A6178" }}>{eu.role} · {eu.department} · {eu.id}</div>
@@ -1813,7 +1813,7 @@ return (
                     columns={[
                       { label: "User", render: r => (
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ width: 32, height: 32, borderRadius: 8, background: `linear-gradient(135deg, ${RBAC_ROLES.find(rl => rl.id === r.rbacRole)?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700 }}>{r.avatar}</div>
+                          <div style={{ width: 32, height: 32, borderRadius: 8, background: userPhotos[r.email] ? `url(${userPhotos[r.email]}) center/cover no-repeat` : `linear-gradient(135deg, ${RBAC_ROLES.find(rl => rl.id === r.rbacRole)?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, overflow: "hidden" }}>{!userPhotos[r.email] && r.avatar}</div>
                           <div>
                             <span style={{ color: "#E8ECF4", display: "block", fontSize: 13, fontWeight: 600 }}>{r.name}</span>
                             <span style={{ color: "#5A617888", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{r.email}</span>
@@ -1873,7 +1873,7 @@ return (
                           onMouseEnter={e => { e.currentTarget.style.borderColor = (role?.color || "#1E2130") + "55"; e.currentTarget.style.transform = "translateY(-2px)"; }}
                           onMouseLeave={e => { e.currentTarget.style.borderColor = (role?.color || "#1E2130") + "22"; e.currentTarget.style.transform = "translateY(0)"; }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                            <div style={{ width: 44, height: 44, borderRadius: 12, background: `linear-gradient(135deg, ${role?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{u.avatar}</div>
+                            <div style={{ width: 44, height: 44, borderRadius: 12, background: userPhotos[u.email] ? `url(${userPhotos[u.email]}) center/cover no-repeat` : `linear-gradient(135deg, ${role?.color || "#6366F1"}, #06B6D4)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, fontWeight: 700, flexShrink: 0, overflow: "hidden" }}>{!userPhotos[u.email] && u.avatar}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.name}</div>
                               <div style={{ fontSize: 11, color: "#5A6178" }}>{u.role}</div>
@@ -3679,7 +3679,7 @@ return (
         {/* Email Templates */}
         <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
           <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Email Notification Templates</h3>
-          {Object.entries(smtpConfig.templates).map(([key, tpl]) => (
+          {Object.entries(smtpConfig.templates || {}).map(([key, tpl]) => (
             <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", marginBottom: 8 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
