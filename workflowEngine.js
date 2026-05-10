@@ -138,6 +138,12 @@ class WorkflowEngine {
       // ─── Phase 10.4: Change approval pipeline ────────────────────────
       await this._processChangeApprovals();
 
+      // ─── ITIL4: Check overdue PIR action items ────────────────────────
+      await this._checkPirDueActions();
+
+      // ─── ITIL4: CSAT survey trigger on resolved incidents ─────────────
+      await this._triggerCsatSurveys();
+
       // Clean up cycle-scoped data
       this._cycleIncidents = null;
     } catch (err) {
@@ -681,7 +687,7 @@ class WorkflowEngine {
       </div>`;
 
       await this.graphSendMail({
-        to: ["hlaing@vgctechnology.com"],
+        to: ["hlaing@vgctechnology.com", "johndoe@vgcsg.com"],
         subject: `[VGC ITSM] Daily Summary — ${todayStr} | ${open.length} open, ${resolvedToday.length} resolved`,
         body: html,
         isCustomerEmail: false,
@@ -833,7 +839,7 @@ class WorkflowEngine {
           if (tier.channels?.includes("email") && this.graphSendMail) {
             try {
               await this.graphSendMail({
-                to: ["hlaing@vgctechnology.com"],
+                to: ["hlaing@vgctechnology.com", "johndoe@vgcsg.com"],
                 subject: `[ESCALATION L${tier.level}] ${inc.priority} — ${inc.title || inc.id}`,
                 body: `<div style="font-family:Arial;padding:16px;">
                   <h2 style="color:#FF4444;">⚠️ Escalation Level ${tier.level}</h2>
@@ -1159,6 +1165,116 @@ class WorkflowEngine {
     } catch (err) {
       this._log("error", "CHANGE_APPROVAL", `Pipeline scan failed: ${err.message}`);
     }
+  }
+
+  // ─── ITIL4: Check overdue PIR action items ────────────────────────────
+  async _checkPirDueActions() {
+    try {
+      const rows = await this.db.getAll("pir_records");
+      const now = Date.now();
+      for (const row of rows) {
+        try {
+          const pir = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!pir || pir.status === "Completed") continue;
+          const actions = pir.actionItems || [];
+          for (const action of actions) {
+            if (action.status === "Completed" || action.status === "Overdue") continue;
+            if (!action.dueDate) continue;
+            if (new Date(action.dueDate).getTime() < now) {
+              action.status = "Overdue";
+              this._log("action", "PIR_DUE", `PIR ${pir.id} action "${(action.description || "").slice(0, 60)}" is overdue`);
+              this.stats.autoEscalated = (this.stats.autoEscalated || 0) + 1;
+            }
+          }
+          pir.actionItems = actions;
+          await this.db.upsert("pir_records", pir.id, JSON.stringify(pir));
+        } catch { /* ignore individual PIR errors */ }
+      }
+    } catch (err) {
+      this._log("error", "PIR_DUE", `PIR due-action scan failed: ${err.message}`);
+    }
+  }
+
+  // ─── ITIL4: Trigger CSAT surveys for recently resolved incidents ──────
+  async _triggerCsatSurveys() {
+    try {
+      const ff = require("./featureFlags");
+      if (!ff.isEnabled("csat_ai_loop")) return;
+      const delayHours = (ff.getFlag("csat_ai_loop")?.payload?.delayHours) || 24;
+      const incidents = this._cycleIncidents || [];
+      const now = Date.now();
+      const existingRows = await this.db.getAll("csat_responses");
+      const surveyedIds = new Set();
+      for (const r of existingRows) {
+        try { const c = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (c && c.incidentId) surveyedIds.add(c.incidentId); } catch { /* ignore */ }
+      }
+      const allRows = this.db.getOpen ? [] : await this.db.getAll("incidents");
+      const resolved = (this._cycleIncidents ? [] : allRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean))
+        .concat(incidents)
+        .filter(i => i && (i.status === "Resolved" || i.status === "Closed") && i.resolvedAt && !surveyedIds.has(i.id));
+
+      for (const inc of resolved) {
+        const resolvedTime = new Date(inc.resolvedAt).getTime();
+        const elapsed = (now - resolvedTime) / 3600000;
+        if (elapsed >= delayHours && elapsed < delayHours + 24) {
+          // Create a pending CSAT survey notification
+          const surveyId = `CSAT-PENDING-${inc.id}`;
+          if (surveyedIds.has(inc.id)) continue;
+          surveyedIds.add(inc.id);
+          const pending = { id: surveyId, incidentId: inc.id, status: "pending", createdAt: new Date().toISOString(), requester: inc.requester || inc.contactEmail };
+          await this.db.upsert("csat_responses", surveyId, JSON.stringify(pending));
+          this._log("action", "CSAT_SURVEY", `Survey triggered for resolved incident ${inc.id}`);
+          if (this.notifyEngine) {
+            await this.notifyEngine.send({
+              channels: ["inapp"], title: `CSAT Survey: ${inc.title || inc.id}`,
+              body: `Please rate your experience with incident ${inc.id}`, severity: "info",
+              type: "csat_survey", incidentId: inc.id,
+            }).catch(() => {});
+          }
+        }
+      }
+    } catch (err) {
+      this._log("error", "CSAT_SURVEY", `Survey trigger scan failed: ${err.message}`);
+    }
+  }
+
+  // ─── ITIL4: Get current on-call engineer for off-hours routing ────────
+  async getOnCallForNow() {
+    try {
+      const rows = await this.db.getAll("oncall_schedules");
+      const now = new Date();
+      const currentDay = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][now.getDay()];
+
+      for (const row of rows) {
+        try {
+          const sched = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (!sched || sched.status !== "Active") continue;
+          // Check if current date is within schedule range
+          if (sched.startDate && new Date(sched.startDate) > now) continue;
+          if (sched.endDate && new Date(sched.endDate) < now) continue;
+          // Find current rotation member
+          const members = sched.members || [];
+          if (members.length === 0) continue;
+          let idx = 0;
+          if (sched.rotationType === "Weekly") {
+            const weekNum = Math.floor((now - new Date(sched.startDate || sched.createdAt)) / (7 * 86400000));
+            idx = weekNum % members.length;
+          } else if (sched.rotationType === "Daily") {
+            const dayNum = Math.floor((now - new Date(sched.startDate || sched.createdAt)) / 86400000);
+            idx = dayNum % members.length;
+          }
+          // Check holiday overrides
+          const todayStr = now.toISOString().slice(0, 10);
+          const holidays = sched.holidayOverrides || [];
+          const holidayOverride = holidays.find(h => h.date === todayStr);
+          if (holidayOverride && holidayOverride.assignee) {
+            return { assignee: holidayOverride.assignee, schedule: sched.id, source: "holiday_override" };
+          }
+          return { assignee: members[idx], schedule: sched.id, source: "rotation" };
+        } catch { /* ignore */ }
+      }
+      return null;
+    } catch { return null; }
   }
 }
 

@@ -18,6 +18,8 @@ export default function EngineerReviewHub({ ctx }) {
     zdApproveAndSend,
     setActiveModule, setZdTab,
     setDetailItem, setModal,
+    aiAutoApprove, setAiAutoApprove,
+    bulkAutoApprove, showToast,
   } = ctx;
 
   const pendingAiActions = aiActions.filter(a => a.status === "pending_approval");
@@ -25,6 +27,13 @@ export default function EngineerReviewHub({ ctx }) {
   const pendingChanges = changes.filter(c => c.status === "Awaiting Approval");
   const pendingRequests = requests.filter(r => r.status === "Pending Approval");
   const totalPending = pendingAiActions.length + pendingZdQueue.length + pendingChanges.length + pendingRequests.length;
+
+  const autoApprovable = pendingAiActions.filter(a =>
+    (a.severity === "low" || a.severity === "medium") && (a.confidence || 0) >= 80 && a.type !== "kb_draft"
+  );
+  const needsHumanReview = pendingAiActions.filter(a =>
+    a.severity === "critical" || a.severity === "high" || (a.confidence || 0) < 80 || a.type === "kb_draft"
+  );
 
   const tabStyle = (id) => ({
     padding: "10px 18px", background: reviewTab === id ? "#12141E" : "transparent",
@@ -46,11 +55,14 @@ export default function EngineerReviewHub({ ctx }) {
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Engineer Review Hub</div>
               <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
-                All AI-generated items requiring engineer approval · {totalPending} pending review
+                All AI-generated items requiring engineer approval · {needsHumanReview.length + pendingZdQueue.length + pendingChanges.length + pendingRequests.length} need review{autoApprovable.length > 0 ? ` · ${autoApprovable.length} auto-approvable` : ""}
               </div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setAiAutoApprove(prev => !prev)} style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${aiAutoApprove ? "#4CAF5033" : "#FF525233"}`, background: aiAutoApprove ? "#4CAF5018" : "#FF525211", color: aiAutoApprove ? "#4CAF50" : "#FF5252", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+              {aiAutoApprove ? "⚡ Auto-Approve ON" : "🛑 Auto-Approve OFF"}
+            </button>
             <button onClick={() => runAiMonitor()} disabled={aiActionsLoading} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: aiActionsLoading ? "wait" : "pointer", fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
               {aiActionsLoading ? "⟳ Scanning..." : "🤖 Run AI Scan"}
             </button>
@@ -63,11 +75,11 @@ export default function EngineerReviewHub({ ctx }) {
 
       {/* Summary Cards */}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
-        <StatCard label="AI Actions Pending" value={pendingAiActions.length} icon="🤖" accent="#6366F1" />
-        <StatCard label="Zendesk Drafts Pending" value={pendingZdQueue.length} icon="🎫" accent="#EC4899" />
-        <StatCard label="Change Approvals" value={pendingChanges.length} icon="🔄" accent="#FFB347" />
-        <StatCard label="Request Approvals" value={pendingRequests.length} icon="📋" accent="#06B6D4" />
-        <StatCard label="Total Pending" value={totalPending} icon="👤" accent={totalPending > 0 ? "#FF6B6B" : "#81C784"} />
+        <StatCard label="Needs Human Review" value={needsHumanReview.length} icon="👤" accent={needsHumanReview.length > 0 ? "#FF6B6B" : "#81C784"} />
+        <StatCard label="Auto-Approvable" value={autoApprovable.length} icon="⚡" accent="#4CAF50" />
+        <StatCard label="Zendesk Drafts" value={pendingZdQueue.length} icon="🎫" accent="#EC4899" />
+        <StatCard label="Change/Request Approvals" value={pendingChanges.length + pendingRequests.length} icon="🔄" accent="#FFB347" />
+        <StatCard label="Total Pending" value={totalPending} icon="📋" accent={totalPending > 0 ? "#FF6B6B" : "#81C784"} />
       </div>
 
       {/* Tabs */}
@@ -93,8 +105,21 @@ export default function EngineerReviewHub({ ctx }) {
             <span style={{ color: "#6366F1" }}>🤖</span> AI Actions Requiring Approval
             <span style={{ fontSize: 10, color: "#5A6178", fontWeight: 400 }}>({pendingAiActions.length})</span>
           </h3>
+          {/* Bulk auto-approve banner */}
+          {autoApprovable.length > 0 && (
+            <div style={{ padding: "10px 16px", marginBottom: 12, borderRadius: 8, background: "linear-gradient(135deg, #4CAF5008, #4CAF5018)", border: "1px solid #4CAF5033", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <span style={{ fontSize: 12, color: "#81C784", fontWeight: 600 }}>⚡ {autoApprovable.length} item{autoApprovable.length > 1 ? "s" : ""} can be auto-approved</span>
+                <span style={{ fontSize: 10, color: "#5A6178", marginLeft: 8 }}>(non-critical, ≥80% confidence)</span>
+              </div>
+              <button onClick={() => bulkAutoApprove()} style={{ padding: "6px 16px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #4CAF50, #45a049)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+                ✅ Auto-Approve All Safe Items
+              </button>
+            </div>
+          )}
           {pendingAiActions.map(action => {
             const sevColor = sevColors[action.severity] || "#666";
+            const isAutoSafe = (action.severity === "low" || action.severity === "medium") && (action.confidence || 0) >= 80 && action.type !== "kb_draft";
             return (
               <div key={action.id} style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 10, background: "#1E213044", border: `1px solid ${sevColor}44`, transition: "all 0.2s" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
@@ -102,6 +127,8 @@ export default function EngineerReviewHub({ ctx }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                       <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: sevColor + "22", color: sevColor, fontWeight: 700, textTransform: "uppercase" }}>{action.severity}</span>
                       <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontWeight: 600 }}>{action.type}</span>
+                      {isAutoSafe && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#4CAF5022", color: "#4CAF50", fontWeight: 700 }}>⚡ AUTO-SAFE</span>}
+                      {!isAutoSafe && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FF525222", color: "#FF5252", fontWeight: 700 }}>👤 NEEDS REVIEW</span>}
                       {action.incidentId && <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#EC489922", color: "#EC4899", fontWeight: 600 }}>🎫 {action.incidentId}</span>}
                     </div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.title}</div>

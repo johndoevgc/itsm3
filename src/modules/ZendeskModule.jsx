@@ -236,21 +236,10 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
     }
   };
 
-  // ── Push ITSM changes to Zendesk ──
-  const zdPushToZendesk = async (incidentId, changes) => {
-    try {
-      const r = await fetch("/api/zendesk/push-to-zendesk", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ incidentId, ...changes, user: currentUser?.name || "System" }),
-      });
-      if (!r.ok) throw new Error((await r.json()).error || "Push failed");
-      const data = await r.json();
-      addAutoLog({ type: "info", message: `Pushed ${incidentId} → Zendesk #${data.zdTicketId} (${data.action})` });
-      return data;
-    } catch (e) {
-      addAutoLog({ type: "error", message: `Push to Zendesk failed for ${incidentId}: ${e.message}` });
-      return null;
-    }
+  // ── Push ITSM changes to Zendesk (retired in v4.0.0 — read-only mode) ──
+  const zdPushToZendesk = async () => {
+    addAutoLog({ type: "info", message: "Zendesk push has been retired in v4.0.0. ITSM operates in read-only import mode." });
+    return null;
   };
 
   // ── Import Historical Zendesk Tickets into ITSM (cursor-based, no page limit) ──
@@ -639,7 +628,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
                 { label: "AI Triage All Open", icon: "🧠", desc: "Auto-triage all unprocessed open tickets", color: "#6366F1", action: () => { if (zdConnected) zdAutoTriageBatch(); else addAutoLog({ type: "error", message: "Connect to Zendesk first" }); }, disabled: !zdConnected || zdLoading },
                 { label: "AI Train Knowledge", icon: "📚", desc: "Train AI from all resolved ticket patterns", color: "#81C784", action: () => { if (zdConnected) zdTrainAi(); }, disabled: !zdConnected },
                 { label: "AI Sync & Import", icon: "🔄", desc: "Full bi-directional sync with Zendesk", color: "#06B6D4", action: () => { if (zdConnected) zdFullImport({ createIncidents: true }); }, disabled: !zdConnected || zdSyncInProgress },
-                { label: "AI Push Updates", icon: "📤", desc: "Push ITSM changes back to Zendesk", color: "#EC4899", action: () => { if (zdConnected) zdPushToZendesk(); }, disabled: !zdConnected },
+                { label: "Push Retired", icon: "🚫", desc: "v4.0.0: Zendesk push retired — read-only import mode", color: "#5A6178", action: () => { addAutoLog({ type: "info", message: "Zendesk push retired in v4.0.0" }); }, disabled: true },
                 { label: "View SLA Risks", icon: "⏱️", desc: "Jump to SLA dashboard for at-risk tickets", color: "#FF6B6B", action: () => setActiveModule("sla"), disabled: false },
                 { label: "Open Incidents", icon: "🎫", desc: "View all AI-created ITSM incidents", color: "#FFB347", action: () => setActiveModule("incidents"), disabled: false },
               ].map((qa, i) => (
@@ -1475,7 +1464,7 @@ export default function ZendeskModule({  assets, changes, currentUser, customers
               <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
                 {[
                   { icon: "📥", label: "Zendesk → ITSM", desc: "Tickets, users, orgs auto-sync to local DB. Linked incidents update status/priority in real-time.", color: "#64B5F6", active: zdRealTimeEnabled, action: () => setZdTab("tickets") },
-                  { icon: "📤", label: "ITSM → Zendesk", desc: "Status, priority, comments on ITSM incidents auto-push to linked Zendesk tickets.", color: "#EC4899", active: zdRealTimeEnabled, action: () => setActiveModule("incidents") },
+                  { icon: "�", label: "ITSM → Zendesk (Retired)", desc: "v4.0.0: Push-back retired. ITSM operates as standalone — Zendesk is read-only import.", color: "#5A6178", active: false, action: null },
                   { icon: "🔔", label: "Webhook (Instant)", desc: "Configure Zendesk webhook to POST to /api/zendesk/webhook for instant sync on ticket events.", color: "#FFB347", active: true, action: null },
                   { icon: "🧠", label: "AI Knowledge", desc: "Resolved Zendesk tickets feed AI knowledge base. AI learns from historical resolutions.", color: "#81C784", active: true, action: () => setActiveModule("knowledge") },
                   { icon: "🔄", label: "Incremental Sync", desc: "Every 90s polls Zendesk incremental API for changes since last sync — minimal API usage.", color: "#6366F1", active: zdRealTimeEnabled, action: () => setZdTab("settings") },

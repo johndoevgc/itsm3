@@ -86,6 +86,16 @@ class AnalyticsEngine {
       assigneeWorkload[a] = (assigneeWorkload[a] || 0) + 1;
     }
 
+    // v3.36: MTTA (Mean Time To Acknowledge) — uses firstResponseAt or firstAckAt
+    const ackTimes = incidents.map(i => {
+      const created = new Date(i.createdAt || i.created_at || i.created);
+      const acked = i.firstResponseAt || i.firstAckAt || i.acknowledgedAt;
+      if (!acked) return null;
+      const hrs = (new Date(acked) - created) / 3600000;
+      return hrs > 0 && hrs < 720 ? hrs : null;
+    }).filter(t => t !== null);
+    const mttaHrs = ackTimes.length > 0 ? Math.round((ackTimes.reduce((a, b) => a + b, 0) / ackTimes.length) * 10) / 10 : null;
+
     const result = {
       totalIncidents: incidents.length,
       activeIncidents: activeIncidents.length,
@@ -94,6 +104,7 @@ class AnalyticsEngine {
       monthCreated: monthIncidents.length,
       resolvedCount: resolved.length,
       avgResolutionHrs: Math.round(avgResolutionHrs * 10) / 10,
+      mttaHrs,
       slaCompliance,
       slaTracked: slaActive.length,
       totalProblems: problems.length,
@@ -156,6 +167,7 @@ class AnalyticsEngine {
 
     const byPriority = {};
     const breaches = [];
+    const byCategory = {};
 
     for (const s of active) {
       const p = s.priority || "Unknown";
@@ -164,11 +176,23 @@ class AnalyticsEngine {
       if (s.status === "breached") { byPriority[p].breached++; breaches.push(s); }
       else if (s.status === "at_risk" || s.status === "critical") byPriority[p].atRisk++;
       else byPriority[p].met++;
+
+      // v3.36: SLA by category
+      const cat = s.category || "Other";
+      if (!byCategory[cat]) byCategory[cat] = { total: 0, met: 0, breached: 0, atRisk: 0 };
+      byCategory[cat].total++;
+      if (s.status === "breached") byCategory[cat].breached++;
+      else if (s.status === "at_risk" || s.status === "critical") byCategory[cat].atRisk++;
+      else byCategory[cat].met++;
     }
 
     // Compliance percentages
     for (const key of Object.keys(byPriority)) {
       const b = byPriority[key];
+      b.compliance = b.total > 0 ? Math.round((b.met / b.total) * 100) : 100;
+    }
+    for (const key of Object.keys(byCategory)) {
+      const b = byCategory[key];
       b.compliance = b.total > 0 ? Math.round((b.met / b.total) * 100) : 100;
     }
 
@@ -180,6 +204,7 @@ class AnalyticsEngine {
       overallCompliance: overall,
       totalTracked: active.length,
       byPriority,
+      byCategory,
       recentBreaches: breaches.slice(-20).map(b => ({
         incidentId: b.incidentId,
         priority: b.priority,
@@ -202,13 +227,20 @@ class AnalyticsEngine {
 
     for (const inc of incidents) {
       const agent = inc.assignee || inc.assignedTo || "Unassigned";
-      if (!agents[agent]) agents[agent] = { assigned: 0, resolved: 0, avgResolutionHrs: 0, _times: [] };
+      if (!agents[agent]) agents[agent] = { assigned: 0, resolved: 0, avgResolutionHrs: 0, _times: [], _ackTimes: [] };
       agents[agent].assigned++;
+
+      // v3.36: MTTA per agent
+      const created = new Date(inc.createdAt || inc.created_at || inc.created);
+      const acked = inc.firstResponseAt || inc.firstAckAt || inc.acknowledgedAt;
+      if (acked) {
+        const ackHrs = (new Date(acked) - created) / 3600000;
+        if (ackHrs > 0 && ackHrs < 720) agents[agent]._ackTimes.push(ackHrs);
+      }
 
       const status = (inc.status || "").toLowerCase();
       if (status === "resolved" || status === "closed") {
         agents[agent].resolved++;
-        const created = new Date(inc.createdAt || inc.created_at || inc.created);
         const resolvedAt = new Date(inc.resolvedAt || inc.closedAt || inc.lastModified);
         const hrs = (resolvedAt - created) / 3600000;
         if (hrs > 0 && hrs < 720) agents[agent]._times.push(hrs);
@@ -224,6 +256,9 @@ class AnalyticsEngine {
         resolutionRate: data.assigned > 0 ? Math.round((data.resolved / data.assigned) * 100) : 0,
         avgResolutionHrs: data._times.length > 0
           ? Math.round((data._times.reduce((a, b) => a + b, 0) / data._times.length) * 10) / 10
+          : null,
+        mttaHrs: data._ackTimes.length > 0
+          ? Math.round((data._ackTimes.reduce((a, b) => a + b, 0) / data._ackTimes.length) * 10) / 10
           : null,
       };
     }
@@ -329,6 +364,107 @@ class AnalyticsEngine {
     };
 
     return this._cacheSet("executive_summary", result);
+  }
+
+  // ─── Service Availability Metrics ─────────────────────────────────────
+  async getServiceAvailability(days = 30) {
+    const cacheKey = `service_availability_${days}`;
+    const cached = this._cacheGet(cacheKey);
+    if (cached) return cached;
+
+    const [incidents, services] = await Promise.all([
+      this._loadCollection("incidents"),
+      this._loadCollection("services"),
+    ]);
+
+    const now = new Date();
+    const periodStart = new Date(now);
+    periodStart.setDate(periodStart.getDate() - days);
+    const totalHours = days * 24;
+
+    // Group incidents by affected service/category
+    const serviceMap = {};
+    // Initialize from services catalog
+    for (const svc of services) {
+      const name = svc.name || svc.id;
+      serviceMap[name] = { name, incidents: [], downtimeHours: 0 };
+    }
+
+    // Map incidents to services via category or affectedService field
+    const relevantIncidents = incidents.filter(i => {
+      const created = new Date(i.createdAt || i.created_at || i.created);
+      return created >= periodStart;
+    });
+
+    for (const inc of relevantIncidents) {
+      const svcName = inc.affectedService || inc.category || "Other";
+      if (!serviceMap[svcName]) serviceMap[svcName] = { name: svcName, incidents: [], downtimeHours: 0 };
+      serviceMap[svcName].incidents.push(inc);
+
+      // Calculate downtime from created → resolved
+      const created = new Date(inc.createdAt || inc.created_at || inc.created);
+      const resolved = inc.resolvedAt ? new Date(inc.resolvedAt) : (inc.closedAt ? new Date(inc.closedAt) : null);
+      if (resolved && resolved > created) {
+        const downtimeHrs = (resolved - created) / 3600000;
+        // Only count Sev-A/B as downtime (critical impact)
+        const p = (inc.priority || "").toLowerCase();
+        if (p.includes("a") || p.includes("critical") || p.includes("p1") || p.includes("b") || p.includes("high") || p.includes("p2")) {
+          serviceMap[svcName].downtimeHours += Math.min(downtimeHrs, totalHours);
+        }
+      }
+    }
+
+    // Compute availability per service
+    const serviceAvailability = Object.values(serviceMap).map(svc => {
+      const uptimeHours = Math.max(0, totalHours - svc.downtimeHours);
+      const availability = totalHours > 0 ? Math.round((uptimeHours / totalHours) * 10000) / 100 : 100;
+      const incidentCount = svc.incidents.length;
+
+      // MTBF (Mean Time Between Failures) in hours
+      const mtbf = incidentCount > 1 ? Math.round((totalHours / incidentCount) * 10) / 10 : totalHours;
+
+      // MTTR (Mean Time To Repair) in hours
+      const repairTimes = svc.incidents
+        .filter(i => i.resolvedAt)
+        .map(i => {
+          const c = new Date(i.createdAt || i.created_at || i.created);
+          const r = new Date(i.resolvedAt);
+          return (r - c) / 3600000;
+        })
+        .filter(h => h > 0 && h < 720);
+      const mttr = repairTimes.length > 0 ? Math.round((repairTimes.reduce((a, b) => a + b, 0) / repairTimes.length) * 10) / 10 : 0;
+
+      return {
+        service: svc.name,
+        availability,
+        uptimeHours: Math.round(uptimeHours * 10) / 10,
+        downtimeHours: Math.round(svc.downtimeHours * 10) / 10,
+        incidentCount,
+        mtbf,
+        mttr,
+      };
+    });
+
+    serviceAvailability.sort((a, b) => a.availability - b.availability);
+
+    // Overall availability
+    const totalDowntime = Object.values(serviceMap).reduce((sum, s) => sum + s.downtimeHours, 0);
+    const serviceCount = Math.max(serviceAvailability.length, 1);
+    const overallAvailability = serviceAvailability.length > 0
+      ? Math.round((serviceAvailability.reduce((sum, s) => sum + s.availability, 0) / serviceCount) * 100) / 100
+      : 100;
+
+    const result = {
+      periodDays: days,
+      periodStart: periodStart.toISOString(),
+      periodEnd: now.toISOString(),
+      overallAvailability,
+      totalIncidents: relevantIncidents.length,
+      services: serviceAvailability,
+      computedAt: now.toISOString(),
+    };
+
+    return this._cacheSet(cacheKey, result);
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────

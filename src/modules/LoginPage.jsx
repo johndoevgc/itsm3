@@ -2,63 +2,58 @@ import { USERS } from "../constants/rbac.js";
 import { APP_VERSION } from "../constants/version.js";
 import { allLoginScopes } from "../../msalConfig.js";
 
-export default function LoginPage({ localUsername, setLocalUsername, localPassword, setLocalPassword, localLoginError, setLocalLoginError, localLoginLoading, setLocalLoginLoading, setCurrentUser, setIsLoggedIn, setErrorAdvisory, msalInstance }) {
+export default function LoginPage({ setCurrentUser, setIsLoggedIn, setErrorAdvisory, msalInstance }) {
 const loginCards = [
   {
-    id: "dev-admin",
-    user: USERS[0] || null,
-    icon: "🛡️",
-    title: "VGC Dev Admin",
-    subtitle: "Developer / Vendor",
-    gradient: "linear-gradient(135deg, #FF6B6B22 0%, #6366F122 50%, #06B6D422 100%)",
-    borderColor: "#FF6B6B",
-    glowColor: "#FF6B6B",
+    id: "customer",
+    user: { name: "Customer", email: "", role: "End User", rbacRole: "End User", avatar: "CU" },
+    icon: "🎫",
+    title: "Customer Portal",
+    subtitle: "Submit & Track IT Requests",
+    gradient: "linear-gradient(135deg, #F59E0B22 0%, #D9770622 50%, #F59E0B11 100%)",
+    borderColor: "#F59E0B",
+    glowColor: "#F59E0B",
     features: [
-      { icon: "☁️", label: "Azure Services", desc: "Full cloud infrastructure, App Services, SQL, Functions, Storage, CDN, VMs" },
-      { icon: "🤖", label: "AI Suggestions", desc: "Copilot-powered code & architecture recommendations, anomaly detection" },
-      { icon: "📊", label: "Predictions", desc: "ML-driven capacity forecasting, incident trend analysis, SLA risk scoring" },
-      { icon: "🔧", label: "Remediation", desc: "Automated runbook execution, self-healing infrastructure, rollback orchestration" },
-      { icon: "💰", label: "Cost Optimization", desc: "Azure Advisor integration, right-sizing VMs, reserved instance savings" },
-      { icon: "🔑", label: "API & Secrets", desc: "Key Vault, API management, Entra ID config, webhook & integration settings" },
+      { icon: "📝", label: "Submit Tickets" },
+      { icon: "📊", label: "Track Status" },
+      { icon: "📚", label: "Knowledge Base" },
     ],
-    badge: "SUPER ADMIN",
-    badgeColor: "#FF6B6B",
-  },
-  {
-    id: "vgc-admin",
-    user: USERS[1] || null,
-    icon: "🏢",
-    title: "VGC Admin",
-    subtitle: "End Customer Admin",
-    gradient: "linear-gradient(135deg, #EC489922 0%, #8B5CF622 50%, #6366F122 100%)",
-    borderColor: "#EC4899",
-    glowColor: "#EC4899",
-    features: [
-      { icon: "👥", label: "User Management", desc: "RBAC roles, Entra ID sync, group policies, SCIM provisioning" },
-      { icon: "📋", label: "Compliance", desc: "PDPA, audit logs, data retention, regulatory reporting" },
-      { icon: "⚙️", label: "Customisation", desc: "Tenant branding, workflow builder, SLA policy configuration" },
-      { icon: "📈", label: "Analytics", desc: "KPI dashboards, trend reports, team performance metrics" },
-    ],
-    badge: "TENANT ADMIN",
-    badgeColor: "#EC4899",
+    badge: "CUSTOMER",
+    badgeColor: "#F59E0B",
   },
   {
     id: "engineer",
     user: USERS[2] || null,
     icon: "🔧",
-    title: "Service Support Engineers",
-    subtitle: "End Customer Engineer",
+    title: "Engineer",
+    subtitle: "Service Support",
     gradient: "linear-gradient(135deg, #06B6D422 0%, #81C78422 50%, #6366F122 100%)",
     borderColor: "#06B6D4",
     glowColor: "#06B6D4",
     features: [
-      { icon: "🎫", label: "Ticket Management", desc: "Create, triage, escalate incidents & service requests" },
-      { icon: "📚", label: "Knowledge Base", desc: "AI-powered article lookup, contribute & publish solutions" },
-      { icon: "🔍", label: "Diagnostics", desc: "Root cause analysis, AI troubleshooting assistant" },
-      { icon: "📡", label: "Monitoring", desc: "Real-time alerts, SLA tracking, asset health checks" },
+      { icon: "🎫", label: "Ticket Management" },
+      { icon: "📚", label: "Knowledge Base" },
+      { icon: "🔍", label: "Diagnostics & Monitoring" },
     ],
     badge: "ENGINEER",
     badgeColor: "#06B6D4",
+  },
+  {
+    id: "vgc-admin",
+    user: USERS[1] || null,
+    icon: "🏢",
+    title: "Tenant Admin",
+    subtitle: "Organisation Management",
+    gradient: "linear-gradient(135deg, #EC489922 0%, #8B5CF622 50%, #6366F122 100%)",
+    borderColor: "#EC4899",
+    glowColor: "#EC4899",
+    features: [
+      { icon: "👥", label: "User & RBAC Management" },
+      { icon: "📋", label: "Compliance & Audit" },
+      { icon: "📈", label: "Analytics & Reports" },
+    ],
+    badge: "TENANT ADMIN",
+    badgeColor: "#EC4899",
   },
 ];
 
@@ -68,24 +63,6 @@ const handleLogin = (_user) => {
 };
 // eslint-disable-next-line no-unused-vars
 void handleLogin;
-
-// ─── Local Auth (Dev Admin only) ────────────────────────────────────
-const handleLocalLogin = async () => {
-  if (!localUsername.trim() || !localPassword) { setLocalLoginError("Enter username and password"); return; }
-  setLocalLoginLoading(true); setLocalLoginError("");
-  try {
-    const resp = await fetch("/api/auth/local", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: localUsername.trim(), password: localPassword }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) { setLocalLoginError(data.error || "Authentication failed"); return; }
-    setCurrentUser(data.user);
-    setIsLoggedIn(true);
-  } catch (err) {
-    setLocalLoginError("Connection error — check server");
-  } finally { setLocalLoginLoading(false); }
-};
 
 // ─── Entra ID SSO Login (VGC Admin & Engineers) ─────────────────────
 const handleSSOLogin = async (fallbackUser) => {
@@ -123,7 +100,7 @@ return (
       @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
       @keyframes loginGridMove { 0% { transform: translateY(0); } 100% { transform: translateY(-50px); } }
       @keyframes loginGlow { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.7; } }
-      @keyframes loginCardFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+      @keyframes loginCardFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
       @keyframes loginOrb1 { 0% { transform: translate(0,0) scale(1); } 33% { transform: translate(60px,-40px) scale(1.1); } 66% { transform: translate(-30px,50px) scale(0.9); } 100% { transform: translate(0,0) scale(1); } }
       @keyframes loginOrb2 { 0% { transform: translate(0,0) scale(1); } 33% { transform: translate(-50px,30px) scale(0.95); } 66% { transform: translate(40px,-60px) scale(1.08); } 100% { transform: translate(0,0) scale(1); } }
       @keyframes loginOrb3 { 0% { transform: translate(0,0) scale(1); } 33% { transform: translate(30px,50px) scale(1.05); } 66% { transform: translate(-60px,-20px) scale(0.92); } 100% { transform: translate(0,0) scale(1); } }
@@ -197,38 +174,38 @@ return (
 
     {/* Login Cards */}
     <div style={{
-      display: "flex", gap: 24, flexWrap: "wrap", justifyContent: "center",
+      display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center",
       maxWidth: 1200, padding: "0 20px", position: "relative", zIndex: 2,
     }}>
       {loginCards.map((card, ci) => (
         <div key={card.id} className="login-card" style={{
-          width: 340, background: card.gradient, backdropFilter: "blur(20px)",
-          border: `1.5px solid ${card.borderColor}33`, borderRadius: 20,
+          width: 290, background: card.gradient, backdropFilter: "blur(20px)",
+          border: `1.5px solid ${card.borderColor}33`, borderRadius: 18,
           padding: 0, overflow: "hidden", cursor: "default",
           boxShadow: `0 8px 32px ${card.glowColor}15, 0 0 0 1px #ffffff06`,
-          animation: `loginCardFloat ${5 + ci}s ease-in-out infinite`,
+          animation: `loginCardFloat ${7 + ci}s ease-in-out infinite`,
           animationDelay: `${ci * 0.3}s`,
         }}>
           {/* Card Header */}
           <div style={{
-            padding: "24px 24px 16px", display: "flex", alignItems: "center", gap: 14,
+            padding: "16px 16px 12px", display: "flex", alignItems: "center", gap: 10,
             borderBottom: `1px solid ${card.borderColor}15`,
           }}>
             <div style={{
-              width: 50, height: 50, borderRadius: 14,
+              width: 40, height: 40, borderRadius: 12,
               background: `linear-gradient(135deg, ${card.borderColor}33, ${card.borderColor}11)`,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 24, position: "relative",
+              fontSize: 20, position: "relative",
             }}>
               {card.icon}
-              <div style={{ position: "absolute", inset: -3, borderRadius: 17, border: `1.5px solid ${card.borderColor}22`, animation: "loginGlow 3s ease-in-out infinite" }} />
+              <div style={{ position: "absolute", inset: -3, borderRadius: 15, border: `1.5px solid ${card.borderColor}22`, animation: "loginGlow 3s ease-in-out infinite" }} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 17, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{card.title}</div>
-              <div style={{ fontSize: 11, color: "#5A6178", marginTop: 2 }}>{card.subtitle}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{card.title}</div>
+              <div style={{ fontSize: 10, color: "#5A6178", marginTop: 1 }}>{card.subtitle}</div>
             </div>
             <div style={{
-              padding: "3px 10px", borderRadius: 20, fontSize: 8, fontWeight: 700,
+              padding: "3px 10px", borderRadius: 20, fontSize: 9, fontWeight: 700,
               background: `${card.badgeColor}22`, color: card.badgeColor,
               border: `1px solid ${card.badgeColor}44`, letterSpacing: 1.2, textTransform: "uppercase",
             }}>
@@ -237,88 +214,39 @@ return (
           </div>
 
           {/* Features */}
-          <div style={{ padding: "12px 16px 8px" }}>
+          <div style={{ padding: "8px 12px 4px" }}>
             {card.features.map((f, fi) => (
               <div key={fi} className="login-feature-row" style={{
-                display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 10px",
-                borderRadius: 10, marginBottom: 2, cursor: "default",
+                display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                borderRadius: 8, marginBottom: 1, cursor: "default",
                 animation: `loginFeatureFade 0.5s ease-out ${fi * 0.08}s both`,
               }}>
-                <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{f.icon}</span>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#C8CDD8" }}>{f.label}</div>
-                  <div style={{ fontSize: 10, color: "#5A617899", lineHeight: 1.4, marginTop: 1 }}>{f.desc}</div>
-                </div>
+                <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0 }}>{f.icon}</span>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#C8CDD8" }}>{f.label}</div>
               </div>
             ))}
           </div>
 
           {/* Sign-in Button */}
-          <div style={{ padding: "12px 20px 22px" }}>
-            {card.id === "dev-admin" ? (
-              <>
-                {/* ─── Local Auth Form (Dev Admin Only) ────────────────── */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
-                  <input type="text" placeholder="Username" value={localUsername}
-                    onChange={e => { setLocalUsername(e.target.value); setLocalLoginError(""); }}
-                    onKeyDown={e => e.key === "Enter" && handleLocalLogin()}
-                    autoComplete="username"
-                    style={{
-                      width: "100%", padding: "10px 14px", borderRadius: 10,
-                      background: "#0D0F1A", border: `1.5px solid ${localLoginError ? "#FF6B6B55" : "#FF6B6B33"}`,
-                      color: "#E8ECF4", fontSize: 13, outline: "none",
-                      fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box",
-                    }} />
-                  <input type="password" placeholder="Password" value={localPassword}
-                    onChange={e => { setLocalPassword(e.target.value); setLocalLoginError(""); }}
-                    onKeyDown={e => e.key === "Enter" && handleLocalLogin()}
-                    autoComplete="current-password"
-                    style={{
-                      width: "100%", padding: "10px 14px", borderRadius: 10,
-                      background: "#0D0F1A", border: `1.5px solid ${localLoginError ? "#FF6B6B55" : "#FF6B6B33"}`,
-                      color: "#E8ECF4", fontSize: 13, outline: "none",
-                      fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box",
-                    }} />
-                </div>
-                {localLoginError && (
-                  <div style={{ fontSize: 11, color: "#FF6B6B", textAlign: "center", marginBottom: 6 }}>
-                    ⚠️ {localLoginError}
-                  </div>
-                )}
-                <button className="login-btn" onClick={handleLocalLogin} disabled={localLoginLoading} style={{
-                  width: "100%", padding: "13px 0", borderRadius: 12,
-                  background: localLoginLoading ? "#FF6B6B88" : `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
-                  border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: localLoginLoading ? "wait" : "pointer",
-                  fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-                  "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
-                }}>
-                  🔐 {localLoginLoading ? "Authenticating..." : "Sign In (Local)"}
-                </button>
-                <div style={{ textAlign: "center", marginTop: 8, fontSize: 10, color: "#5A617866" }}>
-                  🛡️ Local Authentication • Developer Access Only
-                </div>
-              </>
-            ) : card.id === "vgc-admin" || card.id === "engineer" ? (
-              <>
-                <button className="login-btn" onClick={() => handleSSOLogin(card.user)} style={{
-                  width: "100%", padding: "13px 0", borderRadius: 12,
-                  background: `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
-                  border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                  fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-                  "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
-                }}>
-                  <svg width="16" height="16" viewBox="0 0 23 23" fill="none"><path d="M1 1h10v10H1z" fill="#f25022"/><path d="M12 1h10v10H12z" fill="#7fba00"/><path d="M1 12h10v10H1z" fill="#00a4ef"/><path d="M12 12h10v10H12z" fill="#ffb900"/></svg>
-                  Sign in with Microsoft Entra ID
-                </button>
-                <div style={{ textAlign: "center", marginTop: 8, fontSize: 10, color: "#5A617866" }}>
-                  {card.id === "vgc-admin"
-                    ? "🔐 Live SSO • MFA Enforced • vgcsg.com Tenant"
-                    : "🔐 Live SSO • Entra ID Sync • Role assigned by Admin"}
-                </div>
-              </>
-            ) : null}
+          <div style={{ padding: "10px 18px 18px" }}>
+              <button className="login-btn" onClick={() => handleSSOLogin(card.user)} style={{
+                width: "100%", padding: "11px 0", borderRadius: 10,
+                background: `linear-gradient(135deg, ${card.borderColor}, ${card.borderColor}CC)`,
+                border: "none", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                "--glow": `${card.borderColor}66`, animation: "loginBtnGlow 3s ease-in-out infinite",
+              }}>
+                <svg width="14" height="14" viewBox="0 0 23 23" fill="none"><path d="M1 1h10v10H1z" fill="#f25022"/><path d="M12 1h10v10H12z" fill="#7fba00"/><path d="M1 12h10v10H1z" fill="#00a4ef"/><path d="M12 12h10v10H12z" fill="#ffb900"/></svg>
+                Sign in with Microsoft Entra ID
+              </button>
+              <div style={{ textAlign: "center", marginTop: 6, fontSize: 9, color: "#5A617866" }}>
+                {card.id === "customer"
+                  ? "🔐 SSO • Submit & track your requests"
+                  : card.id === "vgc-admin"
+                  ? "🔐 SSO • MFA Enforced • Tenant Admin"
+                  : "🔐 SSO • Role assigned by Admin"}
+              </div>
           </div>
         </div>
       ))}

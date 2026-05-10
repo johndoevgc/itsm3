@@ -8,17 +8,71 @@ const crypto = require("crypto");
 const WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 class WebSocketServer {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {function} [opts.validateToken] - async (token, tenantId, clientId, allowedTenantIds) => { valid, user, error }
+   * @param {string}   [opts.tenantId]
+   * @param {string}   [opts.clientId]
+   * @param {string[]} [opts.allowedTenantIds]
+   */
+  constructor(opts) {
     this.clients = new Map(); // id -> { socket, subscriptions, user, lastPing }
     this.channels = new Set(["incidents", "sla", "notifications", "escalations", "dashboard", "zendesk", "ai_actions", "ai_cards", "system"]);
+    // Auth config — when set, upgrade requests require a valid JWT
+    this._validateToken = opts?.validateToken || null;
+    this._tenantId = opts?.tenantId || "";
+    this._clientId = opts?.clientId || "";
+    this._allowedTenantIds = opts?.allowedTenantIds || [];
     // Heartbeat: every 30s, remove dead connections
     this.heartbeatTimer = setInterval(() => this._heartbeat(), 30000);
   }
 
   // Handle HTTP upgrade request
-  handleUpgrade(req, socket) {
+  async handleUpgrade(req, socket) {
     const key = req.headers["sec-websocket-key"];
     if (!key) { socket.destroy(); return; }
+
+    // ─── JWT Authentication on upgrade ──────────────────────────────
+    // Browser WebSocket API does not support Authorization headers, so
+    // the token is passed as a ?token= query parameter on the WS URL.
+    let authenticatedUser = null;
+    if (this._validateToken) {
+      let token = null;
+      try {
+        const url = new URL(req.url, "http://localhost");
+        token = url.searchParams.get("token");
+      } catch { /* malformed URL */ }
+
+      if (!token) {
+        // Also accept Authorization header (for non-browser clients)
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith("Bearer ")) {
+          token = authHeader.slice(7);
+        }
+      }
+
+      if (!token) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nMissing authentication token");
+        socket.destroy();
+        return;
+      }
+
+      try {
+        const result = await this._validateToken(token, this._tenantId, this._clientId, this._allowedTenantIds);
+        if (!result.valid) {
+          console.warn(`[WS] Auth rejected: ${result.error}`);
+          socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nInvalid token");
+          socket.destroy();
+          return;
+        }
+        authenticatedUser = result.user;
+      } catch (err) {
+        console.error("[WS] Auth error:", err.message);
+        socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nAuthentication failed");
+        socket.destroy();
+        return;
+      }
+    }
 
     const accept = crypto.createHash("sha1").update(key + WS_MAGIC).digest("base64");
     socket.write(
@@ -34,11 +88,11 @@ class WebSocketServer {
       id: clientId,
       socket,
       subscriptions: new Set(["system", "notifications"]), // default channels
-      user: null,
+      user: authenticatedUser, // set from validated JWT — never overridden by client messages
       lastPing: Date.now(),
     };
     this.clients.set(clientId, client);
-    console.log(`[WS] Client connected: ${clientId} (total: ${this.clients.size})`);
+    console.log(`[WS] Client connected: ${clientId} user=${authenticatedUser?.email || "anonymous"} (total: ${this.clients.size})`);
 
     // Send welcome message
     this._send(client, { type: "connected", clientId, channels: [...this.channels] });
@@ -172,9 +226,9 @@ class WebSocketServer {
         break;
 
       case "auth":
-        // Client sends user info for identification
-        client.user = msg.user || null;
-        this._send(client, { type: "authenticated", user: msg.user?.email || "anonymous" });
+        // v3.37: Identity is set from JWT at upgrade time — never trust client messages.
+        // This handler only acknowledges the existing identity; it cannot change it.
+        this._send(client, { type: "authenticated", user: client.user?.email || "anonymous" });
         break;
 
       case "ping":

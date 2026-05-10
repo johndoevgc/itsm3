@@ -29,7 +29,9 @@ const INTENT_PATTERNS = [
   { intent: 'duplicates',        patterns: [/duplicate/i, /merge/i, /similar.*ticket/i] },
   { intent: 'patterns',          patterns: [/pattern/i, /root.*cause/i, /trend/i, /recurring/i] },
   { intent: 'train_ai',          patterns: [/train/i, /teach/i, /correct/i, /improve.*ai/i] },
-  { intent: 'password',          patterns: [/password/i, /mfa/i, /reset.*access/i, /locked.*out/i, /can.*t.*login/i, /account.*issue/i] },
+  { intent: 'password',          patterns: [/password/i, /reset.*access/i, /locked.*out/i, /can.*t.*login/i, /account.*issue/i] },
+  { intent: 'mfa',               patterns: [/mfa/i, /multi.*factor/i, /authenticator/i, /2fa/i, /two.*factor/i, /verification.*code/i] },
+  { intent: 'onboarding',        patterns: [/onboard/i, /new.*joiner/i, /new.*starter/i, /first.*day/i, /setup.*account/i, /new.*employee/i, /getting.*started/i, /initial.*setup/i] },
   { intent: 'security',          patterns: [/security/i, /threat/i, /vulnerability/i, /phishing/i, /malware/i, /suspicious/i, /compromised/i] },
   { intent: 'connectivity',       patterns: [/vpn/i, /wifi/i, /wi-fi/i, /internet/i, /network/i, /can.*t.*connect/i, /no.*connection/i, /slow.*network/i, /disconnect/i] },
   { intent: 'software',           patterns: [/install/i, /software/i, /update/i, /upgrade/i, /app.*crash/i, /not.*working/i, /error.*message/i, /outlook/i, /teams/i, /excel/i, /word/i] },
@@ -455,6 +457,37 @@ function buildCustomerCards(intent, ctx) {
     ]));
   }
 
+  if (intent === 'mfa') {
+    cards.push(makeProgressCard('MFA Reset Steps', [
+      { label: 'Go to aka.ms/mfasetup', status: 'active' },
+      { label: 'Sign in with your work account', status: 'pending' },
+      { label: "Select 'Security info' > 'Add method'", status: 'pending' },
+      { label: 'Choose Authenticator app / Phone', status: 'pending' },
+      { label: 'Follow the setup wizard', status: 'pending' },
+    ]));
+    cards.push(makeQuickReplyCard([
+      { label: 'Lost my phone', icon: '📱', action: 'I lost my phone and cannot receive MFA codes' },
+      { label: 'Authenticator not working', icon: '🔐', action: 'My authenticator app is not generating correct codes' },
+      { label: 'Create ticket for me', icon: '🎫', action: 'Please create a ticket for MFA reset' },
+    ]));
+  }
+
+  if (intent === 'onboarding') {
+    cards.push(makeProgressCard('New Employee Setup Checklist', [
+      { label: 'Activate your email at portal.office.com', status: 'active' },
+      { label: 'Set up MFA (Authenticator app)', status: 'pending' },
+      { label: 'Install Microsoft Teams', status: 'pending' },
+      { label: 'Connect to corporate WiFi / VPN', status: 'pending' },
+      { label: 'Access internal portals & shared drives', status: 'pending' },
+    ]));
+    cards.push(makeQuickReplyCard([
+      { label: 'Set up email', icon: '📧', action: 'Help me set up my work email' },
+      { label: 'Set up MFA', icon: '🔐', action: 'I need to set up MFA on my new account' },
+      { label: 'VPN access', icon: '🌐', action: 'How do I connect to the company VPN' },
+      { label: 'Create ticket', icon: '🎫', action: 'I need help with my onboarding setup' },
+    ]));
+  }
+
   if (intent === 'security') {
     cards.push(makeQuickReplyCard([
       { label: '🚨 Report phishing', icon: '🚨', action: 'I received a suspicious phishing email' },
@@ -498,7 +531,9 @@ function buildCustomerCards(intent, ctx) {
   if (intent === 'help') {
     cards.push(makeListCard(`Hi ${firstName}! Here's what I can help with:`, [
       { icon: '🎫', title: 'Report an issue', subtitle: 'Create a ticket for any IT problem' },
-      { icon: '🔑', title: 'Password & login help', subtitle: 'Reset password, unlock account, MFA issues' },
+      { icon: '🔑', title: 'Password & login help', subtitle: 'Reset password, unlock account' },
+      { icon: '🔐', title: 'MFA / Authenticator', subtitle: 'Set up or reset multi-factor authentication' },
+      { icon: '🆕', title: 'New employee onboarding', subtitle: 'Email, VPN, Teams, and account setup' },
       { icon: '📋', title: 'Check my tickets', subtitle: 'View status of your requests' },
       { icon: '📚', title: 'Search help articles', subtitle: 'Find self-service solutions' },
       { icon: '💻', title: 'Software & hardware help', subtitle: 'Get help with apps, devices, and equipment' },

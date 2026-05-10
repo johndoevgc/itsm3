@@ -21,33 +21,10 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("node_modules")) {
-            // Split MSAL (auth) — large, only loaded for prod login flow
-            if (id.includes("@azure/msal-browser") || id.includes("@azure/msal-common")) return "msal";
-            // React core
-            if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/") || id.includes("node_modules/scheduler/")) return "vendor";
-            // Other node_modules → shared vendor-misc bucket
+            if (id.includes("@azure/msal-browser") || id.includes("@azure/msal-common") || id.includes("@azure/msal-react")) return "msal";
+            if (id.includes("react-dom") || id.includes("/react/") || id.includes("\\react\\") || id.includes("scheduler")) return "vendor";
             return "vendor-misc";
           }
-          // App-level code splitting for lazy-loaded modules
-          if (id.includes("src/modules/AdminSettingsModule")) return "mod-admin";
-          if (id.includes("src/modules/DashboardModule")) return "mod-dashboard";
-          if (id.includes("src/modules/ModalsModule")) return "mod-modals";
-          if (id.includes("src/modules/ZendeskModule")) return "mod-zendesk";
-          if (id.includes("src/modules/ReportingModule")) return "mod-reporting";
-          if (id.includes("src/modules/KnowledgeModule")) return "mod-knowledge";
-          if (id.includes("src/modules/CyberNewsModule")) return "mod-cybernews";
-          if (id.includes("src/modules/ProductivityDashboard")) return "mod-productivity";
-          if (id.includes("src/modules/SelfServicePortal")) return "mod-selfservice";
-          if (id.includes("src/modules/CustomersModule")) return "mod-customers";
-          if (id.includes("src/modules/IncidentsModule")) return "mod-incidents";
-          if (id.includes("src/modules/SLATrackerModule")) return "mod-sla";
-          if (id.includes("src/modules/ServiceStatusModule")) return "mod-status";
-          if (id.includes("src/modules/ArchitectureDiagram")) return "mod-architecture";
-          if (id.includes("src/modules/ChangeCalendarModule")) return "mod-changecal";
-          if (id.includes("src/modules/AIAssistModule")) return "mod-aiassist";
-          if (id.includes("src/modules/AnalyticsModule")) return "mod-analytics";
-          if (id.includes("src/modules/EngineerReviewHub")) return "mod-review";
-          if (id.includes("src/modules/VendorPortalModule")) return "mod-vendor";
         },
       },
     },

@@ -211,7 +211,7 @@ async function gatherKbGrounding(db, query, topK) {
 // ─── Live ITSM context gathering (v3.36.0) ───────────────────────────────
 // Queries incidents, approval_instances, and requests filtered by the
 // current user's email. Returns a compact text block for prompt injection.
-async function gatherLiveContext(db, cachedGetAll, userEmail, intent, limit = 5) {
+async function gatherLiveContext(db, cachedGetAll, userEmail, intent, limit = 5, channel = "agent") {
   if (!userEmail || !intent) return "";
   const lines = [];
   const getter = cachedGetAll || db.getAll.bind(db);
@@ -225,7 +225,8 @@ async function gatherLiveContext(db, cachedGetAll, userEmail, intent, limit = 5)
         try {
           const t = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
           if (t && t.id && t.id.toUpperCase() === intent.specificId) {
-            lines.push(`Record ${t.id}: status=${t.status || "unknown"}, title="${(t.title || t.summary || "").slice(0, 100)}", severity=${t.severity || t.priority || "N/A"}, category=${t.category || "N/A"}, created=${t.createdAt || t.created || "N/A"}, assigned=${t.assignedTo || t.assignee || "unassigned"}`);
+            const base = `Record ${t.id}: status=${t.status || "unknown"}, title="${(t.title || t.summary || "").slice(0, 100)}", severity=${t.severity || t.priority || "N/A"}, category=${t.category || "N/A"}, created=${t.createdAt || t.created || "N/A"}`;
+            lines.push(channel === "agent" ? `${base}, assigned=${t.assignedTo || t.assignee || "unassigned"}` : base);
             break;
           }
         } catch { /* skip bad row */ }
@@ -1521,7 +1522,7 @@ module.exports = function createChatAssistRoutes(ctx) {
             : session.agentEmail || session.createdBy;
           if (userEmail) {
             try {
-              liveContext = await gatherLiveContext(db, cachedGetAll, userEmail, operationalIntent, 5);
+              liveContext = await gatherLiveContext(db, cachedGetAll, userEmail, operationalIntent, 5, session.channel);
             } catch (err) {
               console.warn("[ChatAssist] gatherLiveContext failed:", err.message);
             }

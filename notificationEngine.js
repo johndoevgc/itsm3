@@ -15,7 +15,17 @@ class NotificationEngine {
       slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || "",
       defaultFrom: process.env.MAIL_FROM || "itsupport@vgctechnology.com",
     };
-    this.stats = { sent: 0, failed: 0, byChannel: { email: 0, teams: 0, slack: 0, inapp: 0, webhook: 0 } };
+    this.stats = { sent: 0, failed: 0, byChannel: { email: 0, teams: 0, slack: 0, inapp: 0, webhook: 0 }, retries: 0, batchesSent: 0 };
+
+    // v3.36: Retry queue — exponential backoff, max 3 attempts
+    this._retryQueue = [];
+    this._retryTimer = null;
+    this._maxRetries = 3;
+    this._retryBaseDelayMs = 5000; // 5s → 10s → 20s
+
+    // v3.36: Batch buffer — group notifications by recipient within a window
+    this._batchBuffer = new Map(); // key: recipientEmail → { items[], timer }
+    this._batchWindowMs = parseInt(process.env.NOTIFY_BATCH_WINDOW_MS || "60000", 10); // 60s default
   }
 
   // ─── Quiet hours filter (v3.25) ───────────────────────────────────
@@ -82,6 +92,14 @@ class NotificationEngine {
 
     for (const channel of channels) {
       try {
+        // v3.36: Non-critical email batching — group into digest
+        if (channel === "email" && severity !== "critical" && recipients && recipients.length > 0) {
+          for (const r of recipients) this._addToBatch(r, notification);
+          results.push({ channel: "email", success: true, batched: true });
+          this.stats.byChannel.email = (this.stats.byChannel.email || 0) + 1;
+          continue;
+        }
+
         let result;
         switch (channel) {
           case "email":
@@ -107,11 +125,14 @@ class NotificationEngine {
           this.stats.sent++;
         } else {
           this.stats.failed++;
+          // v3.36: Enqueue failed sends for retry (except inapp which is fire-and-forget)
+          if (channel !== "inapp") this._enqueueRetry(channel, notification, 0);
         }
         this.stats.byChannel[channel] = (this.stats.byChannel[channel] || 0) + 1;
       } catch (err) {
         results.push({ channel, success: false, error: err.message });
         this.stats.failed++;
+        if (channel !== "inapp") this._enqueueRetry(channel, notification, 0);
       }
     }
 
@@ -312,7 +333,107 @@ class NotificationEngine {
   }
 
   getStats() {
-    return { ...this.stats };
+    return { ...this.stats, retryQueueSize: this._retryQueue.length, batchBufferSize: this._batchBuffer.size };
+  }
+
+  // ─── v3.36: Retry with exponential backoff ──────────────────────────
+  _enqueueRetry(channel, notification, attempt) {
+    if (attempt >= this._maxRetries) {
+      console.warn(`[Notify] Max retries (${this._maxRetries}) reached for ${channel} – dropping`);
+      return;
+    }
+    const delayMs = this._retryBaseDelayMs * Math.pow(2, attempt);
+    this._retryQueue.push({ channel, notification, attempt, scheduledAt: Date.now() + delayMs });
+    if (!this._retryTimer) {
+      this._retryTimer = setTimeout(() => this._processRetryQueue(), delayMs);
+    }
+  }
+
+  async _processRetryQueue() {
+    this._retryTimer = null;
+    const now = Date.now();
+    const ready = this._retryQueue.filter(r => r.scheduledAt <= now);
+    this._retryQueue = this._retryQueue.filter(r => r.scheduledAt > now);
+
+    for (const item of ready) {
+      try {
+        let result;
+        switch (item.channel) {
+          case "email":  result = await this._sendEmail(item.notification); break;
+          case "teams":  result = await this._sendTeams(item.notification); break;
+          case "slack":  result = await this._sendSlack(item.notification); break;
+          case "webhook": result = await this._sendWebhook(item.notification); break;
+          default: continue;
+        }
+        this.stats.retries++;
+        if (result && result.success) {
+          this.stats.sent++;
+          console.log(`[Notify] Retry #${item.attempt + 1} succeeded for ${item.channel}`);
+        } else {
+          this._enqueueRetry(item.channel, item.notification, item.attempt + 1);
+        }
+      } catch {
+        this._enqueueRetry(item.channel, item.notification, item.attempt + 1);
+      }
+    }
+
+    // Schedule next batch if items remain
+    if (this._retryQueue.length > 0) {
+      const nextDelay = Math.max(1000, Math.min(...this._retryQueue.map(r => r.scheduledAt - Date.now())));
+      this._retryTimer = setTimeout(() => this._processRetryQueue(), nextDelay);
+    }
+  }
+
+  // ─── v3.36: Notification batching (digest emails) ──────────────────
+  // Groups info/warning email notifications to the same recipient into a single digest.
+  // Critical notifications bypass batching entirely.
+  _addToBatch(recipient, notification) {
+    if (!this._batchBuffer.has(recipient)) {
+      this._batchBuffer.set(recipient, { items: [], timer: null });
+    }
+    const bucket = this._batchBuffer.get(recipient);
+    bucket.items.push(notification);
+
+    if (!bucket.timer) {
+      bucket.timer = setTimeout(() => this._flushBatch(recipient), this._batchWindowMs);
+    }
+  }
+
+  async _flushBatch(recipient) {
+    const bucket = this._batchBuffer.get(recipient);
+    if (!bucket || bucket.items.length === 0) { this._batchBuffer.delete(recipient); return; }
+
+    const items = bucket.items.splice(0);
+    bucket.timer = null;
+    this._batchBuffer.delete(recipient);
+
+    if (items.length === 1) {
+      // Single item – send normally
+      const result = await this._sendEmail(items[0]);
+      if (!result || !result.success) this._enqueueRetry("email", items[0], 0);
+      else this.stats.sent++;
+      return;
+    }
+
+    // Build digest email
+    const title = `VGC ITSM — ${items.length} Notifications`;
+    const itemsHtml = items.map(n =>
+      `<div style="padding:8px 0;border-bottom:1px solid #eee;">
+        <strong>${n.title || "Notification"}</strong>${n.incidentId ? ` (${n.incidentId})` : ""}
+        <div style="color:#555;font-size:13px;margin-top:2px;">${n.body || ""}</div>
+      </div>`
+    ).join("");
+    const digestNotification = {
+      ...items[0],
+      title,
+      body: `You have ${items.length} recent notifications:\n\n${items.map(n => `• ${n.title}`).join("\n")}`,
+      recipients: [recipient],
+      data: { ...items[0].data, digest: true, itemCount: items.length, digestHtml: itemsHtml },
+    };
+
+    const result = await this._sendEmail(digestNotification);
+    if (result && result.success) { this.stats.sent++; this.stats.batchesSent++; }
+    else this._enqueueRetry("email", digestNotification, 0);
   }
 }
 

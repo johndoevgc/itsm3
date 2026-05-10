@@ -201,6 +201,31 @@ async function execute({ actionId, params, ctx, executedBy, incidentId, flagPayl
   return { ok, mode, result, error, idempotencyKey: idemKey, executionId };
 }
 
+// ─── Secure temp password generator ──────────────────────────────────────────
+function _generateTempPassword(len) {
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";    // no I/O to avoid confusion
+  const lower = "abcdefghjkmnpqrstuvwxyz";      // no l to avoid confusion
+  const digits = "23456789";                     // no 0/1 to avoid confusion
+  const symbols = "!@#$%&*-_=+?";
+  const all = upper + lower + digits + symbols;
+  const bytes = crypto.randomBytes(len);
+  // Guarantee at least one of each class.
+  const chars = [
+    upper[bytes[0] % upper.length],
+    lower[bytes[1] % lower.length],
+    digits[bytes[2] % digits.length],
+    symbols[bytes[3] % symbols.length],
+  ];
+  for (let i = 4; i < len; i++) chars.push(all[bytes[i] % all.length]);
+  // Fisher-Yates shuffle using crypto bytes for uniform distribution.
+  const shuffleBytes = crypto.randomBytes(len);
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = shuffleBytes[i] % (i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
+
 // ─── Built-in actions (all exec stubs throw — see header) ────────────────────
 function _stubExec(name) {
   return async function exec() {
@@ -308,6 +333,74 @@ function _registerBuiltins() {
   });
 
   register({
+    id: "resetPassword", name: "Reset M365 Password", riskTier: 3, idempotent: false,
+    description: "Reset a user's Microsoft 365 / Entra ID password. Generates a secure temporary password and forces change on next sign-in. Risk-tier 3 requires explicit approver.",
+    inputSchema: {
+      upn: { type: "string", required: true, max: 200, pattern: "^[^@\\s]+@[^@\\s]+$" },
+      approvedBy: { type: "string", required: true, max: 200 },
+    },
+    async shadow(p) {
+      return { ok: true, simulated: true, message: `Would reset password for ${p.upn} (approver: ${p.approvedBy})`,
+               steps: [`Lookup user by UPN`, `Validate account exists and is enabled`, `Generate secure temporary password (16 chars)`, `PATCH /users/{id} with new passwordProfile`, `Force password change on next sign-in`, `Revoke active sessions`, `Return temporary password (single display)`] };
+    },
+    async exec(p, ctx) {
+      const graph = ctx && ctx.graphAppCall;
+      if (typeof graph !== "function") {
+        return { ok: false, error: "graphAppCall unavailable in ctx" };
+      }
+      const upn = String(p.upn || "").trim();
+      if (!upn) return { ok: false, error: "upn required" };
+      const approvedBy = String(p.approvedBy || "").trim();
+      if (!approvedBy) return { ok: false, error: "approvedBy required" };
+
+      // 1. Resolve the user (confirms the UPN exists).
+      let user;
+      try {
+        user = await graph(`/users/${encodeURIComponent(upn)}?$select=id,userPrincipalName,accountEnabled,displayName`);
+      } catch (err) {
+        return { ok: false, error: `user lookup failed: ${err && err.message ? err.message : String(err)}` };
+      }
+      if (!user || !user.id) return { ok: false, error: `user not found: ${upn}` };
+      if (user.accountEnabled === false) {
+        return { ok: false, error: `account disabled: ${upn} — enable account before resetting password` };
+      }
+
+      // 2. Generate a secure temporary password (16 chars, mixed case + digits + symbols).
+      const tempPassword = _generateTempPassword(16);
+
+      // 3. Reset password via Graph API — PATCH /users/{id}
+      try {
+        await graph(`/users/${encodeURIComponent(user.id)}`, null, "PATCH", {
+          passwordProfile: {
+            password: tempPassword,
+            forceChangePasswordNextSignIn: true,
+          },
+        });
+      } catch (err) {
+        return { ok: false, error: `password reset failed: ${err && err.message ? err.message : String(err)}` };
+      }
+
+      // 4. Revoke active sessions so old tokens can't be reused.
+      try {
+        await graph(`/users/${encodeURIComponent(user.id)}/revokeSignInSessions`, null, "POST");
+      } catch (err) {
+        // Non-fatal — password was already reset. Log but don't fail.
+        console.warn(`[resetPassword] Session revoke failed for ${upn}: ${err && err.message}`);
+      }
+
+      return {
+        ok: true, simulated: false,
+        userId: user.id, upn: user.userPrincipalName,
+        displayName: user.displayName || upn,
+        tempPassword,
+        forceChangeOnNextSignIn: true,
+        approvedBy,
+        message: `Password reset for ${user.displayName || user.userPrincipalName}. Temporary password generated — user must change on next sign-in. Active sessions revoked.`,
+      };
+    },
+  });
+
+  register({
     id: "restartSpoolerOnDevice", name: "Restart Print Spooler on Device", riskTier: 2, idempotent: true,
     description: "Restart the Print Spooler service on a managed Intune device.",
     inputSchema: {
@@ -327,5 +420,5 @@ _registerBuiltins();
 module.exports = {
   register, get, list, validateInput, idempotencyKey, execute,
   EXEC_COLLECTION, DEFAULT_DAILY_CAP,
-  __internal: { _registerBuiltins, _resetForTests, _countToday, _stubExec },
+  __internal: { _registerBuiltins, _resetForTests, _countToday, _stubExec, _generateTempPassword },
 };

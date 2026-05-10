@@ -36,7 +36,7 @@ const DEFAULTS = {
   // Phase C — continual improvement
   // CSAT survey loop on AI-resolved incidents. Default OFF (staging first).
   // payload.delayHours = hours after resolution to send the survey.
-  csat_ai_loop:        { enabled: false, scope: "staging", payload: { delayHours: 24 } },
+  csat_ai_loop:        { enabled: true, scope: "all", payload: { delayHours: 24 } },
 
   // Phase D5 — Sev-A MIM Teams webhook fan-out (off by default; enable per-slot
   // once webhook URLs are populated in `teams_webhooks` collection).
@@ -46,13 +46,7 @@ const DEFAULTS = {
   // payload.windowHours = throttle window (default 24).
   internal_quiet_hours:{ enabled: true, scope: "all", payload: { windowHours: 24 } },
 
-  // Phase G — Outbound push from ITSM → Zendesk (status changes, escalations,
-  // sync-incident comments). Default OFF in prod to stop "[ITSM Sync] Status
-  // changed to ..." comment spam on linked ZD tickets. UI "Push to Zendesk"
-  // button uses the same endpoint, so when off, manual pushes no-op too —
-  // engineers must edit in ZD directly. Flip on per-tenant when bidirectional
-  // sync is wanted.
-  zd_push_back:        { enabled: false, scope: "prod" },
+  // Phase G — zd_push_back removed in v4.0.0 (ZD push retired, read-only import mode)
 
   // AI Autopilot rollout: server-side scheduler that runs the safe Week 1-4
   // operating model. Customer-facing actions still require human approval.
@@ -119,6 +113,31 @@ const DEFAULTS = {
   // as runbook actions: ≥1wk telemetry, ≥20 runs, 0 errors. Sev-A 24/7, Sev-B business-hours only.
   // dailyCap bounds blast radius. minAgeMinutes = grace period before triggering (lets human triage win).
   "auto_reassign_sev_ab": { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 50, minAgeMinutes: 15 } },
+
+  // v3.36.0 — SLA at-risk auto-reassign: when an incident reaches at_risk or
+  // critical SLA status, auto-reassign to the least-loaded engineer in the same
+  // assignment group. Off by default — enable per-slot after validation.
+  sla_at_risk_reassign: { enabled: false, scope: "staging" },
+
+  // v3.36.0 — SLA auto pause/resume: automatically pause the SLA clock when an
+  // incident status changes to Pending, and resume when it leaves Pending.
+  // Eliminates manual pause/resume for customer-wait scenarios.
+  sla_auto_pause_resume: { enabled: false, scope: "staging" },
+
+  // v3.36.0 — AI feedback loop closure: scheduled collection of low CSAT
+  // (≤2) responses and AI triage corrections into a retraining queue for
+  // model improvement. Gated to prevent accidental data collection.
+  ai_feedback_loop: { enabled: false, scope: "staging" },
+
+  // v3.36.1 — ITIL4 gap-closure feature flags
+  // PIR required for Sev-A MIM closure. Off in staging until validated.
+  pir_required_sev_a: { enabled: true, scope: "all" },
+  // Per-customer SLA policy overrides (3-tier: global → tier → customer).
+  per_customer_sla: { enabled: true, scope: "all" },
+  // On-call rotation for off-hours incident routing.
+  oncall_rotation: { enabled: true, scope: "all" },
+  // CSI register for continual improvement tracking.
+  csi_register: { enabled: true, scope: "all" },
 };
 
 let _db = null;

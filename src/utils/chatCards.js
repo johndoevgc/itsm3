@@ -52,22 +52,25 @@ export function makeQuickReplyCard(replies) {
   };
 }
 
-export function makeIncidentCard(incident, actions = []) {
+export function makeIncidentCard(incident, actions = [], { customerSafe = false } = {}) {
+  const data = {
+    id: incident.id,
+    title: incident.title || incident.subject,
+    priority: incident.priority,
+    status: incident.status,
+    category: incident.category,
+    created: incident.createdAt || incident.created,
+    description: incident.description?.substring(0, 120),
+  };
+  if (!customerSafe) {
+    data.assignee = incident.assignedTo || incident.assignee;
+    data.slaTarget = incident.slaTarget;
+  }
   return {
     type: CARD_TYPES.INCIDENT_CARD,
     id: `inc_${incident.id || Date.now()}`,
-    data: {
-      id: incident.id,
-      title: incident.title || incident.subject,
-      priority: incident.priority,
-      status: incident.status,
-      assignee: incident.assignedTo || incident.assignee,
-      category: incident.category,
-      created: incident.createdAt || incident.created,
-      slaTarget: incident.slaTarget,
-      description: incident.description?.substring(0, 120),
-    },
-    actions, // [{ label, icon, style, type, payload }]
+    data,
+    actions,
   };
 }
 
@@ -275,7 +278,7 @@ export const FORM_TEMPLATES = {
       { name: 'category', label: 'Category', type: 'select', required: false, options: ['Hardware', 'Software', 'Network', 'Access', 'Email', 'Other'] },
     ],
     submitLabel: '🎫 Create Incident',
-    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/incidents', method: 'POST' } },
+    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/ai/chat/create-ticket', method: 'POST' } },
   },
   incident_full: {
     name: 'incident_full',
@@ -290,7 +293,7 @@ export const FORM_TEMPLATES = {
       { name: 'affectedUser', label: 'Affected User', type: 'text', required: false, placeholder: 'Who is affected?' },
     ],
     submitLabel: '🎫 Create Incident',
-    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/incidents', method: 'POST' } },
+    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/ai/chat/create-ticket', method: 'POST' } },
   },
   service_request: {
     name: 'service_request',
@@ -304,7 +307,7 @@ export const FORM_TEMPLATES = {
       { name: 'requestedFor', label: 'Requested For', type: 'text', required: false, placeholder: 'If not for yourself...' },
     ],
     submitLabel: '📋 Submit Request',
-    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/requests', method: 'POST' } },
+    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/db/requests', method: 'POST' } },
   },
   change_request: {
     name: 'change_request',
@@ -319,7 +322,7 @@ export const FORM_TEMPLATES = {
       { name: 'scheduledDate', label: 'Planned Date', type: 'date', required: false },
     ],
     submitLabel: '🔄 Submit Change',
-    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/changes', method: 'POST' } },
+    submitAction: { type: ACTION_TYPES.API_CALL, payload: { endpoint: '/api/db/changes', method: 'POST' } },
   },
   feedback: {
     name: 'feedback',
@@ -351,5 +354,5 @@ export function detectUserTier(rbacRole) {
   if (MANAGEMENT_ROLES.has(rbacRole)) return 'management';
   if (ENGINEER_ROLES.has(rbacRole)) return 'engineer';
   if (CUSTOMER_ROLES.has(rbacRole)) return 'customer';
-  return 'engineer'; // default fallback
+  return 'customer'; // safe default — least-privilege
 }

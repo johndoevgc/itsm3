@@ -11,7 +11,7 @@ const ENTRA_TENANT_ID = window.__ITSM_CONFIG__?.tenantId || "3994f368-b34e-4722-
 
 // Multi-tenant: use /common/ to allow any M365 tenant, validated server-side via ALLOWED_TENANT_IDS
 // Single-tenant: use specific tenant ID for VGC-only deployments
-const AUTHORITY_MODE = window.__ITSM_CONFIG__?.authorityMode || "single"; // "single" | "multi"
+const AUTHORITY_MODE = window.__ITSM_CONFIG__?.authorityMode || "multi"; // "single" | "multi"
 const authorityBase = AUTHORITY_MODE === "multi"
   ? "https://login.microsoftonline.com/common"
   : `https://login.microsoftonline.com/${ENTRA_TENANT_ID}`;
@@ -38,7 +38,7 @@ const msalConfig = {
 
 // Scopes for Microsoft Graph API
 export const graphScopes = {
-  login: ["openid", "profile", "email", "User.Read"],
+  login: ["openid", "profile", "email", "User.Read", "User.ReadBasic.All"],
   mail: ["Mail.Read"],
   calendar: ["Calendars.Read"],
   chat: ["Chat.Read"],

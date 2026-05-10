@@ -23,11 +23,12 @@ function makeMockDb() {
 beforeEach(() => { runbookActions.__internal._resetForTests(); });
 
 describe("registry", () => {
-  it("ships 6 built-in actions", () => {
+  it("ships 7 built-in actions", () => {
     const ids = runbookActions.list().map(a => a.id);
     expect(ids).toEqual(expect.arrayContaining([
       "unlockAccount", "resetMfa", "clearPrintQueue",
       "extendMailboxQuota", "forceVpnReauth", "restartSpoolerOnDevice",
+      "resetPassword",
     ]));
   });
   it("get() returns null for unknown id", () => {
@@ -182,7 +183,8 @@ describe("execute (shadow path)", () => {
 
 describe("built-in shadow surface", () => {
   for (const id of ["unlockAccount", "resetMfa", "clearPrintQueue",
-                    "extendMailboxQuota", "forceVpnReauth", "restartSpoolerOnDevice"]) {
+                    "extendMailboxQuota", "forceVpnReauth", "restartSpoolerOnDevice",
+                    "resetPassword"]) {
     it(`${id}: shadow returns ok:true with steps and message`, async () => {
       const a = runbookActions.get(id);
       const params = {
@@ -197,7 +199,8 @@ describe("built-in shadow surface", () => {
       expect(r.steps.length).toBeGreaterThan(0);
     });
     // forceVpnReauth has a real exec() shipped in v3.34.2 (Phase 4.2) — covered separately below.
-    if (id === "forceVpnReauth") continue;
+    // resetPassword has a real exec() shipped in v3.35.2 — covered separately below.
+    if (id === "forceVpnReauth" || id === "resetPassword") continue;
     it(`${id}: real exec throws not-implemented`, async () => {
       const a = runbookActions.get(id);
       await expect(a.exec({}, {})).rejects.toThrow(/exec-not-implemented/);
@@ -277,5 +280,137 @@ describe("forceVpnReauth real exec (v3.34.2 Phase 4.2)", () => {
     expect(r.result.simulated).toBe(false);
     const auditActions = db._audits.map(a => a.action);
     expect(auditActions).toContain("runbook.action.real");
+  });
+});
+
+describe("resetPassword real exec", () => {
+  it("resets password via Graph PATCH and revokes sessions", async () => {
+    const calls = [];
+    const graphAppCall = async (endpoint, _hdrs, method, body) => {
+      calls.push({ endpoint, method: method || "GET", body });
+      if (endpoint.includes("?$select=")) {
+        return { id: "USER-1", userPrincipalName: "user@vgcsg.com", accountEnabled: true, displayName: "Test User" };
+      }
+      if (method === "PATCH") return { ok: true, status: 204 };
+      if (endpoint.endsWith("/revokeSignInSessions")) return { ok: true, status: 204 };
+      throw new Error(`unexpected graph call: ${endpoint}`);
+    };
+    const a = runbookActions.get("resetPassword");
+    const r = await a.exec({ upn: "user@vgcsg.com", approvedBy: "admin@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(true);
+    expect(r.simulated).toBe(false);
+    expect(r.userId).toBe("USER-1");
+    expect(r.displayName).toBe("Test User");
+    expect(r.tempPassword).toBeTruthy();
+    expect(r.tempPassword.length).toBe(16);
+    expect(r.forceChangeOnNextSignIn).toBe(true);
+    expect(r.approvedBy).toBe("admin@vgc.com");
+    // Verify Graph calls: GET user, PATCH password, POST revoke
+    expect(calls).toHaveLength(3);
+    expect(calls[0].method).toBe("GET");
+    expect(calls[1].method).toBe("PATCH");
+    expect(calls[1].body.passwordProfile.forceChangePasswordNextSignIn).toBe(true);
+    expect(calls[2].method).toBe("POST");
+    expect(calls[2].endpoint).toContain("revokeSignInSessions");
+  });
+
+  it("returns ok:false when graphAppCall is missing from ctx", async () => {
+    const a = runbookActions.get("resetPassword");
+    const r = await a.exec({ upn: "user@vgcsg.com", approvedBy: "admin@vgc.com" }, {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/graphAppCall unavailable/);
+  });
+
+  it("returns ok:false when user lookup fails", async () => {
+    const graphAppCall = async () => { throw new Error("404 Not Found"); };
+    const a = runbookActions.get("resetPassword");
+    const r = await a.exec({ upn: "ghost@vgcsg.com", approvedBy: "admin@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/user lookup failed/);
+  });
+
+  it("returns ok:false when account is disabled", async () => {
+    const graphAppCall = async () => ({ id: "U", userPrincipalName: "x@vgcsg.com", accountEnabled: false });
+    const a = runbookActions.get("resetPassword");
+    const r = await a.exec({ upn: "x@vgcsg.com", approvedBy: "admin@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/account disabled/);
+  });
+
+  it("returns ok:false when PATCH fails", async () => {
+    const graphAppCall = async (endpoint, _h, method) => {
+      if (!method || method === "GET") return { id: "U", userPrincipalName: "x@vgcsg.com", accountEnabled: true, displayName: "X" };
+      if (method === "PATCH") throw new Error("Insufficient privileges");
+      return { ok: true };
+    };
+    const a = runbookActions.get("resetPassword");
+    const r = await a.exec({ upn: "x@vgcsg.com", approvedBy: "admin@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/password reset failed/);
+  });
+
+  it("succeeds even if session revoke fails (non-fatal)", async () => {
+    const graphAppCall = async (endpoint, _h, method) => {
+      if (!method || method === "GET") return { id: "U", userPrincipalName: "x@vgcsg.com", accountEnabled: true, displayName: "X" };
+      if (method === "PATCH") return { ok: true, status: 204 };
+      if (method === "POST") throw new Error("Revoke timeout");
+      return { ok: true };
+    };
+    const a = runbookActions.get("resetPassword");
+    const r = await a.exec({ upn: "x@vgcsg.com", approvedBy: "admin@vgc.com" }, { graphAppCall });
+    expect(r.ok).toBe(true);
+    expect(r.tempPassword).toBeTruthy();
+  });
+
+  it("input validation requires both upn and approvedBy", () => {
+    const a = runbookActions.get("resetPassword");
+    expect(runbookActions.validateInput(a, {}).ok).toBe(false);
+    expect(runbookActions.validateInput(a, { upn: "a@b.com" }).ok).toBe(false);
+    expect(runbookActions.validateInput(a, { approvedBy: "admin" }).ok).toBe(false);
+    expect(runbookActions.validateInput(a, { upn: "a@b.com", approvedBy: "admin@vgc.com" }).ok).toBe(true);
+  });
+
+  it("end-to-end execute() with shadowOnly:false records mode='real'", async () => {
+    const db = makeMockDb();
+    const graphAppCall = async (endpoint, _h, method) => {
+      if (!method || method === "GET") return { id: "U", userPrincipalName: "user@vgcsg.com", accountEnabled: true, displayName: "User" };
+      return { ok: true, status: 204 };
+    };
+    const r = await runbookActions.execute({
+      actionId: "resetPassword", params: { upn: "user@vgcsg.com", approvedBy: "admin@vgc.com" },
+      ctx: { db, graphAppCall }, executedBy: "admin@vgc.com",
+      flagPayload: { shadowOnly: false, dailyCap: 5 },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.mode).toBe("real");
+    expect(r.result.tempPassword).toBeTruthy();
+    const auditActions = db._audits.map(a => a.action);
+    expect(auditActions).toContain("runbook.action.real");
+  });
+});
+
+describe("_generateTempPassword", () => {
+  const { _generateTempPassword } = runbookActions.__internal;
+
+  it("generates a password of the requested length", () => {
+    expect(_generateTempPassword(16).length).toBe(16);
+    expect(_generateTempPassword(20).length).toBe(20);
+  });
+
+  it("includes upper, lower, digit, and symbol", () => {
+    // Run multiple times to reduce flakiness from shuffle
+    for (let i = 0; i < 5; i++) {
+      const pw = _generateTempPassword(16);
+      expect(pw).toMatch(/[A-Z]/);
+      expect(pw).toMatch(/[a-z]/);
+      expect(pw).toMatch(/[0-9]/);
+      expect(pw).toMatch(/[!@#$%&*\-_=+?]/);
+    }
+  });
+
+  it("generates unique passwords each call", () => {
+    const passwords = new Set();
+    for (let i = 0; i < 20; i++) passwords.add(_generateTempPassword(16));
+    expect(passwords.size).toBe(20);
   });
 });

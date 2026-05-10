@@ -1438,6 +1438,22 @@ describe("gatherLiveContext", () => {
     const result = await gatherLiveContext(db, null, "alice@vgc.com", intent);
     expect(result.length).toBeLessThanOrEqual(800);
   });
+
+  it("hides assignee from customer channel in specific-ID lookup", async () => {
+    const db = makeLiveDb();
+    const intent = { tickets: true, approvals: false, requests: false, specificId: "INC-20260509-0001" };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent, 5, "customer");
+    expect(result).toContain("INC-20260509-0001");
+    expect(result).not.toContain("assigned=");
+  });
+
+  it("includes assignee for agent channel in specific-ID lookup", async () => {
+    const db = makeLiveDb();
+    const intent = { tickets: true, approvals: false, requests: false, specificId: "INC-20260509-0001" };
+    const result = await gatherLiveContext(db, null, "alice@vgc.com", intent, 5, "agent");
+    expect(result).toContain("INC-20260509-0001");
+    expect(result).toContain("assigned=");
+  });
 });
 
 // ─── buildUserPrompt with liveContext (v3.36.0) ──────────────────────────

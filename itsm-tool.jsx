@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
 import { allLoginScopes, graphScopes } from "./msalConfig.js";
-import { getMyProfile, getMyPhoto, getRecentEmails, getUnreadCount, getTodayEvents, getUpcomingEvents, getRecentChats, getJoinedTeams, getMyPresence } from "./graphService.js";
+import { getMyProfile, getMyPhoto, getUserPhoto, getRecentEmails, getUnreadCount, getTodayEvents, getUpcomingEvents, getRecentChats, getJoinedTeams, getMyPresence } from "./graphService.js";
 import {
   APP_VERSION, COLORS, PRIORITY_COLORS, STATUS_COLORS, PERM_COLORS, inputStyle, btnStyle,
   STATUS, OPEN_STATUSES, PRIORITY, SLA_TARGETS, DEFAULT_SLA_POLICY,
@@ -48,6 +48,7 @@ const EngineerReviewHub = lazyWithRetry(() => import("./src/modules/EngineerRevi
 const VendorPortalModule = lazyWithRetry(() => import("./src/modules/VendorPortalModule.jsx"));
 // ─── Eagerly-loaded (rendered before/around the lazy <Suspense>) ─────
 import LoginPage from "./src/modules/LoginPage.jsx";
+import { RunbookActionsTab } from "./src/components/RunbookActionsTab.jsx";
 import { markdownToHtml, exportToWord } from "./src/utils/docHelpers.js";
 import CardRenderer from "./src/components/chat/CardRenderer.jsx";
 import { buildChatCards } from "./src/utils/chatCardBuilder.js";
@@ -317,6 +318,7 @@ export default function ITSMApp() {
 
   const [profilePhoto, setProfilePhoto] = useState(() => _ls("vgc_profile_photo", null));
   const profilePhotoRef = useRef();
+  const [userPhotos, setUserPhotos] = useState(() => _ls("vgc_user_photos", {}));
   const chatEndRef = useRef(null);
   const floatingChatEndRef = useRef(null);
   const [aiIdleNudge, setAiIdleNudge] = useState(null);
@@ -372,6 +374,7 @@ export default function ITSMApp() {
   const [showNotifTray, setShowNotifTray] = useState(false);
   const unreadNotifCount = inAppNotifs.filter(n => !n.read).length;
   const [reviewTab, setReviewTab] = useState("all");
+  const [aiAutoApprove, setAiAutoApprove] = useState(true);
   const [portalTab, setPortalTab] = useState("myTickets");
   const [portalSearch, setPortalSearch] = useState("");
   // ─── AI Historical Incident Closure State ───────────────────────────
@@ -832,10 +835,6 @@ export default function ITSMApp() {
     return { ok: false, sessionId: activeSessionId };
   }, [createPortalSessionId]);
 
-  const [localUsername, setLocalUsername] = useState("");
-  const [localPassword, setLocalPassword] = useState("");
-  const [localLoginError, setLocalLoginError] = useState("");
-  const [localLoginLoading, setLocalLoginLoading] = useState(false);
   useEffect(() => {
     if (typeof localStorage !== "undefined") {
       const { showKey, testStatus, ...persist } = azureOpenAI;
@@ -1640,12 +1639,39 @@ export default function ITSMApp() {
           if (newActions.some(a => a.severity === "critical")) {
             setShowAiActionsPanel(true);
           }
+          // Auto-approve non-critical, high-confidence actions
+          if (aiAutoApprove) {
+            const safe = newActions.filter(a =>
+              a.status === "pending_approval" &&
+              (a.severity === "low" || a.severity === "medium") &&
+              (a.confidence || 0) >= 80 &&
+              a.type !== "kb_draft"
+            );
+            if (safe.length > 0) {
+              let count = 0;
+              for (const action of safe) {
+                try {
+                  if (action.type === "auto_triage") {
+                    const res = await fetch("/api/ai/auto-triage-assign/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionId: action.id, appliedBy: currentUser?.name || "AI Auto" }) });
+                    if (res.ok) count++;
+                  } else {
+                    const res = await fetch(`/api/ai/actions/${encodeURIComponent(action.id)}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approvedBy: "AI Auto-Approve", approverEmail: currentUser?.email }) });
+                    if (res.ok) count++;
+                  }
+                } catch (_) { /* skip failed auto-approve */ }
+              }
+              if (count > 0) {
+                showToast(`⚡ AI auto-approved ${count} non-critical action${count > 1 ? "s" : ""}`, "success");
+                fetchAiActions();
+              }
+            }
+          }
         }
         setAiMonitorLastRun(new Date().toISOString());
       }
     } catch (e) { console.warn("[AI Monitor] Scan error:", e.message); }
     setAiActionsLoading(false);
-  }, [aiActionsLoading, isLoggedIn, incidents, changes, currentUser]);
+  }, [aiActionsLoading, isLoggedIn, incidents, changes, currentUser, aiAutoApprove]);
 
   const trackAction = (module, action, detail, actor) => {
     const entry = {
@@ -1806,6 +1832,33 @@ export default function ITSMApp() {
       showToast("Failed to apply triage: " + err.message, "error");
     }
   }, [currentUser?.name]);
+
+  // Bulk auto-approve non-critical AI actions
+  const bulkAutoApprove = useCallback(async () => {
+    const safe = aiActions.filter(a =>
+      a.status === "pending_approval" &&
+      (a.severity === "low" || a.severity === "medium") &&
+      (a.confidence || 0) >= 80 &&
+      a.type !== "kb_draft"
+    );
+    if (safe.length === 0) { showToast("No auto-approvable actions found", "info"); return; }
+    let count = 0;
+    for (const action of safe) {
+      try {
+        if (action.type === "auto_triage") {
+          const res = await fetch("/api/ai/auto-triage-assign/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionId: action.id, appliedBy: currentUser?.name || "AI Auto" }) });
+          if (res.ok) count++;
+        } else {
+          const res = await fetch(`/api/ai/actions/${encodeURIComponent(action.id)}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approvedBy: "AI Auto-Approve", approverEmail: currentUser?.email }) });
+          if (res.ok) count++;
+        }
+      } catch (_) { /* skip */ }
+    }
+    if (count > 0) {
+      showToast(`⚡ Auto-approved ${count}/${safe.length} non-critical action${count > 1 ? "s" : ""}`, "success");
+      fetchAiActions();
+    }
+  }, [aiActions, currentUser]);
 
   // ─── Phase 2: AI SLA Breach Prediction ────────────────────────────
   const [slaPredictions, setSlaPredictions] = useState([]);
@@ -2764,6 +2817,42 @@ export default function ITSMApp() {
   });
   const [emailCompose, setEmailCompose] = useState(null); // {ticketId, to, subject, body, isInternal}
   const [managedUsers, setManagedUsers] = useState(() => _ls("vgc_managed_users", USERS));
+
+  // ─── Fetch Entra Profile Photos for Managed Users ──────────────────────
+  const userPhotosFetchedRef = useRef(false);
+  const managedUsersRef = useRef(managedUsers);
+  managedUsersRef.current = managedUsers;
+  useEffect(() => {
+    const users = managedUsersRef.current;
+    if (!isMsalAuthenticated || userPhotosFetchedRef.current || !users?.length) return;
+    userPhotosFetchedRef.current = true;
+    (async () => {
+      try {
+        const token = await getAccessToken(graphScopes.login);
+        if (!token) return;
+        const cached = _ls("vgc_user_photos", {});
+        const updates = { ...cached };
+        const usersWithEmail = users.filter(u => u.email && !cached[u.email]);
+        // Batch fetch photos (max 10 at a time to avoid throttling)
+        for (let i = 0; i < usersWithEmail.length; i += 10) {
+          const batch = usersWithEmail.slice(i, i + 10);
+          const results = await Promise.allSettled(
+            batch.map(u => getUserPhoto(token, u.email))
+          );
+          results.forEach((r, idx) => {
+            if (r.status === "fulfilled" && r.value) {
+              updates[batch[idx].email] = r.value;
+            }
+          });
+        }
+        setUserPhotos(updates);
+        _save("vgc_user_photos", updates);
+      } catch (err) {
+        console.warn("Failed to fetch user photos:", err.message);
+      }
+    })();
+  }, [isMsalAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Customer Management State ──────────────────────────────────────────
   const [customers, setCustomers] = useState(() => _ls("vgc_customers", INITIAL_CUSTOMERS));
   const [customerSearch, setCustomerSearch] = useState("");
@@ -3288,7 +3377,7 @@ export default function ITSMApp() {
     return <span style={{ width: 20, textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{icons[type] || <span style={{ fontSize: 15 }}>•</span>}</span>;
   };
 
-  const NAV = [
+  const NAV = useMemo(() => [
     { id: "dashboard", label: "Dashboard", count: 0, accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
     { section: "CORE" },
     { id: "tickets", label: "Tickets", count: incidents.filter(i => i.status !== "Resolved" && i.status !== "Closed").length + (zdStats?.open || 0) + (zdStats?.pending || 0) + problems.filter(p => !["Resolved","Closed"].includes(p.status)).length + changes.filter(c => ["New","Awaiting Approval","Approved"].includes(c.status)).length + requests.filter(r => ["Open","In Progress"].includes(r.status)).length, critical: incidents.some(i => i.priority === "Sev-A" && i.status !== "Resolved" && i.status !== "Closed") || zdAiQueue.filter(q => q.status === "pending_approval").length > 0, accent: "#FF6B6B", gradient: "linear-gradient(135deg, #FF6B6B08, #FF6B6B18)" },
@@ -3301,12 +3390,11 @@ export default function ITSMApp() {
     { id: "analytics", label: "Analytics", count: serviceReports.filter(r => r.status === "Draft").length, accent: "#64B5F6", gradient: "linear-gradient(135deg, #64B5F608, #64B5F618)" },
     { id: "serviceStatus", label: "Service Status", accent: "#4CAF50", gradient: "linear-gradient(135deg, #4CAF5008, #4CAF5018)" },
     { id: "customers", label: "Customers", count: customers.filter(c => c.status === "Active").length, accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #EC489918)" },
-    { id: "vendorPortal", label: "Vendor Portal", count: vendors.length, accent: "#8B5CF6", gradient: "linear-gradient(135deg, #8B5CF608, #8B5CF618)" },
     { section: "AI & SYSTEM" },
     { id: "ai", label: "AI Assist", accent: "#EC4899", gradient: "linear-gradient(135deg, #EC489908, #6366F118)" },
+    { id: "runbook", label: "Runbook Actions", accent: "#10B981", gradient: "linear-gradient(135deg, #10B98108, #10B98118)" },
     { id: "admin", label: "Admin Settings", accent: "#6366F1", gradient: "linear-gradient(135deg, #6366F108, #6366F118)" },
-    { id: "productivity", label: "Productivity", count: smartTasks.filter(t => t.status === "pending").length, accent: "#0078D4", gradient: "linear-gradient(135deg, #0078D408, #00BCF218)" },
-  ];
+  ], [incidents, problems, changes, requests, zdStats, zdAiQueue, aiActions, serviceReports, customers]);
 
   // ─── Dashboard (extracted to src/modules/DashboardModule.jsx) ──
 
@@ -3560,31 +3648,35 @@ export default function ITSMApp() {
   // ─── Assets / CMDB ────────────────────────────────────────────────────
   const AssetsModule = useStableComponent(() => (
     <div>
-      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <SearchBar value={search} onChange={setSearch} placeholder="Search assets..." />
         <button style={btnStyle()} onClick={() => setModal("newAsset")}>+ Add Asset</button>
         <button style={{ ...btnStyle("#0EA5E9"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={() => window.open("/api/export/assets?format=csv", "_blank")}>📥 Export CSV</button>
+        <button style={{ ...btnStyle("#7C3AED"), fontSize: 11, display: "flex", alignItems: "center", gap: 4 }} onClick={async () => {
+          try {
+            const r = await fetch("/api/intune/sync", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${window._msalToken || ""}` }, body: JSON.stringify({}) });
+            const d = await r.json();
+            if (r.ok) { alert(`Intune sync complete: ${d.added} added, ${d.updated} updated (${d.total} devices)`); window.location.reload(); }
+            else alert("Intune sync failed: " + (d.error || "Unknown error"));
+          } catch (e) { alert("Intune sync error: " + e.message); }
+        }}>🔄 Sync Intune Devices</button>
       </div>
       <DataTable
         columns={[
           { label: "Asset ID", key: "id", mono: true, minWidth: 80, render: r => <span style={{ color: "#CE93D8" }}>{r.id}</span> },
           { label: "Name", key: "name", maxWidth: 200, wrap: true },
-          { label: "Customer", maxWidth: 180, render: r => <span style={{ color: "#FFB347", fontSize: 12 }}>{r.customer || "—"}</span> },
-          { label: "User / Assigned To", key: "assignee", maxWidth: 160 },
+          { label: "Customer", maxWidth: 180, render: r => <span style={{ color: "#FFB347", fontSize: 12 }}>{r.customerName || r.customer || "—"}</span> },
+          { label: "User / Assigned To", maxWidth: 160, render: r => <span>{r.assignedUser || r.assignee || "—"}</span> },
           { label: "Type", render: r => <Badge color={{ bg: "#1A1A2E", text: "#A0AEC0" }}>{r.type}</Badge> },
           { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status] || STATUS_COLORS.Active}>{r.status}</Badge> },
+          { label: "Compliance", render: r => r.complianceState ? <Badge color={r.complianceState === "compliant" ? { bg: "#0D2F1C", text: "#81C784" } : r.complianceState === "noncompliant" ? { bg: "#2F0D0D", text: "#FF6B6B" } : { bg: "#1A1A2E", text: "#A0AEC0" }}>{r.complianceState}</Badge> : <span style={{ color: "#5A6178" }}>—</span> },
+          { label: "OS", render: r => <span style={{ color: "#A0AEC0", fontSize: 12 }}>{r.os || "—"}</span> },
           { label: "Serial No.", render: r => <span style={{ color: "#A0AEC0", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.serialNumber || "—"}</span> },
           { label: "Manufacturer", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.manufacturer || "—"}</span> },
-          { label: "Department", render: r => <span style={{ color: "#A0AEC0", fontSize: 12 }}>{r.department || "—"}</span> },
-          { label: "IP Address", render: r => <span style={{ color: "#64B5F6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{r.ipAddress || "—"}</span> },
-          { label: "Location", key: "location", mono: true },
-          { label: "Warranty", render: r => {
-            if (r.warranty === "N/A") return <span style={{ color: "#5A6178" }}>N/A</span>;
-            const exp = new Date(r.warranty) < new Date();
-            return <span style={{ color: exp ? "#FF6B6B" : "#81C784", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{r.warranty}</span>;
-          }},
+          { label: "Source", render: r => <Badge color={r.discoverySource === "intune" ? { bg: "#1A0D37", text: "#B388FF" } : { bg: "#1A1A2E", text: "#A0AEC0" }}>{r.discoverySource || "manual"}</Badge> },
+          { label: "Last Sync", render: r => r.lastSyncAt ? <span style={{ color: "#64B5F6", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>{new Date(r.lastSyncAt).toLocaleDateString()}</span> : <span style={{ color: "#5A6178" }}>—</span> },
         ]}
-        data={assets.filter(a => (a.name || "").toLowerCase().includes(search.toLowerCase()) || (a.id || "").toLowerCase().includes(search.toLowerCase()) || (a.type || "").toLowerCase().includes(search.toLowerCase()))}
+        data={assets.filter(a => (a.name || "").toLowerCase().includes(search.toLowerCase()) || (a.id || "").toLowerCase().includes(search.toLowerCase()) || (a.type || "").toLowerCase().includes(search.toLowerCase()) || (a.assignedUser || "").toLowerCase().includes(search.toLowerCase()))}
         onRowClick={row => { setDetailItem(row); setModal("assetDetail"); }}
       />
     </div>
@@ -3799,6 +3891,7 @@ export default function ITSMApp() {
         `RESPONSE FORMAT: Keep it conversational and ACTION-ORIENTED. Use: 1) Direct answer / solution immediately 2) Step-by-step fix or recommendation 3) Knowledge Cards (if relevant) 4) Proactive next-step offers (not questions). NEVER end with "What would you like to do?" or "Can you tell me more?" — instead end with actionable suggestions like "Here's what I'd recommend next: ...". Be decisive. Be the expert who already knows what to do.`,
         `BRANDING: Never reveal model names, versions, or internal engine details. Do not show any footer branding text.`,
         `SECURITY: Follow PDPA. Never output secrets, passwords, MFA codes, private keys. Minimize personal data.`,
+        `TICKET CREATION SUPPORT: When users want to create a ticket, report an issue, log an incident, or submit a request, respond with an encouraging and helpful message like "I'll help you create that right away! Just fill in the quick form below and I'll handle the rest." A form card will automatically appear for them to fill in. Do NOT say you don't have access, can't create tickets, or suggest they use another system — the inline form handles everything. After they submit, a confirmation with the ticket ID will appear automatically.`,
         `Suggest 2-3 relevant next actions after each response. Be a teammate, not a tool.`,
       ].join(" ");
 
@@ -3835,16 +3928,21 @@ export default function ITSMApp() {
 - Use technical terminology appropriate for the engineer's specialty (L1=basic, L2=advanced, Network=infra)`;
       } else if (isCustomer) {
         rolePrompt = `\n\nROLE-ADAPTIVE RESPONSE STYLE (End User/Customer):
-- Use SIMPLE, friendly language — avoid ITSM jargon and technical terminology
-- Lead with reassurance: "I can help with that!" or "Let me get this sorted for you"
-- Provide step-by-step instructions with numbered steps (1, 2, 3...)
-- Include expected wait times and what happens next
-- Offer to create a ticket on their behalf if the issue needs engineer attention
-- Show only their own tickets — never reference internal team discussions
-- Use encouraging language: "This should be quick to fix" or "We'll have this resolved soon"
-- Suggest self-service KB articles before escalation
-- For status queries, show simple status (Submitted → In Progress → Resolved) without technical details
-- Never mention internal escalation procedures, SLA internals, or team assignments`;
+- You are the PERSONAL IT CONCIERGE for ${currentUser.name} (${currentUser.email || 'customer'})${currentUser.email ? ` from ${currentUser.email.split('@')[1] || 'their organization'}` : ''}.
+- Be PROFESSIONAL, warm, and solution-oriented. Use clear, concise language — no ITSM jargon.
+- Lead with reassurance: "I can help with that right away!" or "Let me get this sorted for you."
+- AUTO-DETECT CONTEXT from the user's email domain (${currentUser.email || 'unknown'}) and name to personalize responses. Address them by first name.
+- FOR NON-CRITICAL ISSUES (password resets, app guidance, connectivity, printer setup, software help): Provide an IMMEDIATE step-by-step fix. Walk them through it with numbered steps (1, 2, 3...). Resolve it on the spot without creating a ticket unless they ask.
+- FOR ISSUES REQUIRING ENGINEER ATTENTION: Offer to create a ticket immediately. Say "I'll create a ticket for this right away — just fill in the quick form below!" The form card handles the rest automatically.
+- ALWAYS provide a solution or workaround FIRST, even if a ticket is needed. Don't just say "I'll log a ticket" — give them something actionable while they wait.
+- Show only their own tickets — never reference internal discussions, SLA internals, or engineer assignments.
+- When checking ticket status, show simple progress: Submitted → In Progress → Resolved. Include expected timeframes.
+- Suggest relevant self-service KB articles proactively when they match the issue.
+- For common issues (password reset, VPN, email, Teams, printer), provide the fix directly without asking follow-up questions.
+- Use professional but friendly tone: "Here's exactly what you need to do..." / "Great news — this is a quick fix..."
+- End with a specific, helpful next step — not "Is there anything else?" but "Here's what I'd suggest next..."
+- ALL responses must be concise (3-5 short paragraphs max), professional, and solution-focused.
+- NEVER say "I don't have access to that" or "I can't help with that" — always offer an alternative or escalation path.`;
       }
 
       // ─── Inject real-time ITSM data context so AI can answer accurately ───
@@ -3914,6 +4012,14 @@ ZENDESK TICKETING:
 ${zdTickets.length > 0 ? "ZENDESK TICKETS:\n" + zdTickets.slice(0, 20).map(t => `ZD#${t.id}: "${t.subject || t.title || 'N/A'}" | Status: ${t.status || 'N/A'} | Priority: ${t.priority || 'N/A'} | Requester: ${t.requester?.name || t.requester_name || t.requester || 'N/A'} | Created: ${t.created_at || t.createdAt || 'N/A'}${t.assignee?.name || t.assignee_name ? ` | Assigned: ${t.assignee?.name || t.assignee_name}` : ''}${t.tags?.length ? ` | Tags: ${t.tags.join(",")}` : ''}`).join("\n") : ""}
 
 CURRENT USER: ${currentUser.name} (${currentUser.rbacRole || "User"}) | Email: ${currentUser.email || "N/A"} | Team: ${currentUser.team || "N/A"}
+${isCustomer ? `
+CUSTOMER CONTEXT:
+- Name: ${currentUser.name} | Email: ${currentUser.email || 'N/A'}
+- Organization Domain: ${(currentUser.email || '').split('@')[1] || 'Unknown'}
+- Company: ${currentUser.company || currentUser.organization || (currentUser.email || '').split('@')[1]?.split('.')[0]?.toUpperCase() || 'Unknown'}
+- Your open tickets: ${[...incidents, ...requests].filter(t => (t.requestedBy || t.requester || t.createdBy || t.requesterEmail || '').toLowerCase() === (currentUser.email || '').toLowerCase() && t.status !== 'Resolved' && t.status !== 'Closed').length}
+- REMEMBER: This user is a CUSTOMER. Keep responses professional, concise, and solution-focused. Auto-detect their domain to personalize. For non-critical issues (password, software, printer, VPN, connectivity), provide an immediate fix. Only suggest creating a ticket for issues that genuinely need engineer intervention.
+` : ''}
 
 APP CAPABILITIES — You have access to and can discuss ALL of these features:
 MODULES: Dashboard (real-time KPIs, donut charts, AI metrics), Tickets (unified view: Incidents, Problems, Changes, Requests — filterable by status/priority/assignee), Service Catalog (browse & request services), Knowledge Portal (KB articles, search, AI-powered suggestions), Assets/CMDB (hardware/software inventory, config items), SLA & Approvals (SLA compliance tracking, approval workflows for changes/requests), Analytics (reports, trend analysis, performance metrics, MTTR/FCR), Customers (customer profiles, organizations, contact management), AI Assist (AI chatbot, auto-triage, auto-assignment, SLA prediction, pattern detection, KB auto-generation, daily briefing), Admin Settings (user management, RBAC roles, AI config, Zendesk integration, system settings), Productivity (smart tasks, calendar, reminders)
@@ -4140,6 +4246,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
   const handleAiChatRef = useRef(handleAiChat);
   handleAiChatRef.current = handleAiChat;
 
+  const addAiMessage = useCallback((text, opts = {}) => {
+    setAiMessages(prev => [...prev, { role: 'ai', text, source: 'system', ...opts }]);
+  }, []);
+
   const handleCardAction = useMemo(() => createActionHandler({
     setActiveModule,
     setModal,
@@ -4150,7 +4260,10 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     setShowDupPanel,
     setShowAiActionsPanel,
     setShowFloatingKbTraining,
-  }), [addCards]);
+    addAiMessage,
+    currentUser,
+    refreshIncidents: () => refreshIncidentsFromDB?.(),
+  }), [addCards, addAiMessage, currentUser]);
 
   // ─── AI File Upload Handler ──
   const handleFileUpload = useCallback(async (e) => {
@@ -4726,6 +4839,8 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         zdApproveAndSend,
         setActiveModule, setZdTab,
         setDetailItem, setModal,
+        aiAutoApprove, setAiAutoApprove,
+        bulkAutoApprove, showToast,
       }} />);
       case "catalog": return (<CatalogModule />);
       case "knowledge": return (<KnowledgeModule ctx={{
@@ -4758,6 +4873,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         showAddCustomer, setShowAddCustomer,
         customerForm, setCustomerForm,
         editingCustomerId, setEditingCustomerId,
+        softDelete, userPhotos,
       }} />);
       case "vendorPortal": return (<VendorPortalModule ctx={{
         currentUser, showToast, _save,
@@ -4797,6 +4913,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         return (<AnalyticsModuleWrapper ctx={analyticsCtx} />);
       }
       case "serviceStatus": return (<ServiceStatusModule ctx={{ currentUser, incidents, changes }} />);
+      case "runbook": return (<RunbookActionsTab currentUser={currentUser} showToast={showToast} />);
       case "admin": return (<AdminSettingsModule ctx={{
         currentUser, showToast, _save, adminTab, setAdminTab,
         incidents, problems, changes, requests, assets, kbArticles, serviceCatalog, customers,
@@ -4817,7 +4934,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         auditLogs, auditFilter, setAuditFilter, auditLoading,
         versionHistory, uatResults, uatRunning, uatLastRun,
         setUatResults, setUatRunning, setUatLastRun,
-        tourStep, runtimeConfig, profilePhoto, profilePhotoRef,
+        tourStep, runtimeConfig, profilePhoto, profilePhotoRef, userPhotos,
         avatarConfig, notifPrefs, cardVisibility,
         wsConnected, globalLastSync, globalSyncActive, prodTestMode,
         aiPipelineStats, modal, setModal, recycleBin, setRecycleBin,
@@ -4834,7 +4951,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
   // ─── Login Page (extracted to src/modules/LoginPage.jsx) ──
   if (!isLoggedIn || !currentUser) {
-    return <LoginPage localUsername={localUsername} setLocalUsername={setLocalUsername} localPassword={localPassword} setLocalPassword={setLocalPassword} localLoginError={localLoginError} setLocalLoginError={setLocalLoginError} localLoginLoading={localLoginLoading} setLocalLoginLoading={setLocalLoginLoading} setCurrentUser={setCurrentUser} setIsLoggedIn={setIsLoggedIn} setErrorAdvisory={setErrorAdvisory} msalInstance={msalInstance} />;
+    return <LoginPage setCurrentUser={setCurrentUser} setIsLoggedIn={setIsLoggedIn} setErrorAdvisory={setErrorAdvisory} msalInstance={msalInstance} />;
   }
 
   // ─── Setup Wizard Modal ─────────────────────────────────────────────

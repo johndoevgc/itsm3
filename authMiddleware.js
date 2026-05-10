@@ -166,10 +166,44 @@ const ADMIN_EMAILS = [
   "adrian@vgctechnology.com",
 ];
 
-// Resolve RBAC role from user email (matches client-side logic)
-function resolveRole(email) {
+// ─── DB Role Cache ──────────────────────────────────────────────────────
+// Cache DB-stored roles for 30s to avoid a query on every request
+const _roleCache = { data: null, expiresAt: 0 };
+const ROLE_CACHE_TTL = 30_000; // 30 seconds
+
+async function _getDbRole(email, db) {
+  if (!db || !email) return null;
+  const now = Date.now();
+  try {
+    if (!_roleCache.data || now > _roleCache.expiresAt) {
+      _roleCache.data = await db.getAll("users");
+      _roleCache.expiresAt = now + ROLE_CACHE_TTL;
+    }
+    const lower = email.toLowerCase();
+    const match = (_roleCache.data || []).find(u => {
+      const d = typeof u.data === "string" ? JSON.parse(u.data) : (u.data || u);
+      return (d.email || "").toLowerCase() === lower;
+    });
+    if (match) {
+      const d = typeof match.data === "string" ? JSON.parse(match.data) : (match.data || match);
+      return d.rbacRole || null;
+    }
+  } catch (e) {
+    console.warn("[Auth] DB role lookup failed:", e.message);
+  }
+  return null;
+}
+
+// Resolve RBAC role from user email — checks DB-stored roles when db is provided
+async function resolveRole(email, db) {
   const lower = (email || "").toLowerCase();
+  // DEV_ADMIN_EMAILS always wins (platform security — can't be downgraded via GUI)
   if (DEV_ADMIN_EMAILS.some(e => lower === e.toLowerCase())) return "VGC Dev Admin";
+  // DB-stored role takes precedence over hardcoded ADMIN_EMAILS
+  if (db) {
+    const dbRole = await _getDbRole(email, db);
+    if (dbRole) return dbRole;
+  }
   if (ADMIN_EMAILS.some(e => lower === e.toLowerCase())) return "Administrator";
   return "L1 Support Engineer"; // default for authenticated Entra users
 }
@@ -255,6 +289,7 @@ const READ_ONLY_POST_ROUTES = new Set([
   "/api/ai/resolve-error",
   "/api/chat-assist/message",
   "/api/chat-assist/feedback",
+  "/api/chat-assist/session",
   // VGC AI Assist guided-flow endpoints — reachable by anonymous customer widget.
   "/api/chat-assist/intake-action",
   "/api/chat-assist/create-ticket",
@@ -273,7 +308,7 @@ function isReadOnlyPostRoute(pathname, method) {
 
 // ─── Main Auth Middleware ───────────────────────────────────────────────
 // Returns: { authenticated, user, role } or writes 401/403 response
-async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTenantIds) {
+async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTenantIds, db) {
   // Public routes skip auth
   if (isPublicRoute(pathname)) {
     return { authenticated: false, user: null, role: "anonymous", skipped: true };
@@ -346,7 +381,7 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
     const decoded = decodeJWT(token);
     if (decoded) {
       const email = decoded.payload.preferred_username || decoded.payload.upn || decoded.payload.email || "";
-      const role = resolveRole(email);
+      const role = await resolveRole(email, db);
       return { authenticated: true, user: { email, name: decoded.payload.name || email, id: decoded.payload.oid }, role };
     }
     return { authenticated: false, user: null, role: "Read Only", skipped: false };
@@ -355,12 +390,18 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
   // Full validation
   const result = await validateToken(token, tenantId, clientId, allowedTenantIds);
   if (!result.valid) {
-    // Don't block — log warning and allow with limited role (graceful migration)
+    // v3.37: Fail closed for write operations — invalid tokens must not mutate data.
+    // Read-only requests still degrade gracefully during token rotation windows.
     console.warn(`[Auth] Token validation failed: ${result.error}`);
+    if (isWrite) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Authentication required", detail: result.error }));
+      return { authenticated: false, blocked: true };
+    }
     return { authenticated: false, user: null, role: "Read Only", skipped: false };
   }
 
-  const role = resolveRole(result.user.email);
+  const role = await resolveRole(result.user.email, db);
   return { authenticated: true, user: result.user, role };
 }
 
@@ -372,6 +413,7 @@ module.exports = {
   isPublicRoute,
   isReadOnlyPostRoute,
   decodeJWT,
+  validateToken,
   RBAC_PERMISSIONS,
   COLLECTION_TO_MODULE,
 };

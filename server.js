@@ -5,8 +5,8 @@ const https = require("https");
 const crypto = require("crypto");
 const zlib = require("zlib");
 process.env.INTERNAL_SCHEDULER_TOKEN = process.env.INTERNAL_SCHEDULER_TOKEN || crypto.randomBytes(32).toString("hex");
-const { authMiddleware, checkPermission, decodeJWT } = require("./authMiddleware");
-const { SlaEngine, computeSlaStatus, getBusinessHoursElapsed } = require("./slaEngine");
+const { authMiddleware, checkPermission, decodeJWT, validateToken } = require("./authMiddleware");
+const { SlaEngine, computeSlaStatus, computeSlaStatus_v2, getBusinessHoursElapsed } = require("./slaEngine");
 const { WebSocketServer } = require("./wsServer");
 const { NotificationEngine } = require("./notificationEngine");
 const { WorkflowEngine } = require("./workflowEngine");
@@ -65,7 +65,27 @@ const ENTRA_CLIENT_ID = process.env.ENTRA_CLIENT_ID || "";
 const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET || "";
 const ENTRA_CERT_THUMBPRINT = process.env.ENTRA_CERT_THUMBPRINT || "";
 // Multi-tenant: comma-separated list of allowed tenant IDs. If empty, all tenants allowed.
-const ALLOWED_TENANT_IDS = (process.env.ALLOWED_TENANT_IDS || ENTRA_TENANT_ID).split(",").map(s => s.trim()).filter(Boolean);
+const _staticAllowedTenantIds = (process.env.ALLOWED_TENANT_IDS || ENTRA_TENANT_ID).split(",").map(s => s.trim()).filter(Boolean);
+// Dynamic tenant list: merges static env var with customer m365TenantId values from DB.
+// Refreshed every 5 minutes so newly onboarded customers can sign in without restart.
+let ALLOWED_TENANT_IDS = [..._staticAllowedTenantIds];
+async function refreshAllowedTenantIds() {
+  try {
+    if (!db) return;
+    const customers = await db.getAll("customers");
+    const dbTenantIds = customers
+      .filter(c => c.status === "Active" && c.m365TenantId)
+      .map(c => c.m365TenantId.trim())
+      .filter(Boolean);
+    const merged = [...new Set([..._staticAllowedTenantIds, ...dbTenantIds])];
+    ALLOWED_TENANT_IDS = merged;
+    if (ctx) ctx.ALLOWED_TENANT_IDS = merged;
+  } catch (err) {
+    console.error("[TenantRefresh] Error refreshing allowed tenant IDs:", err.message);
+  }
+}
+// Schedule periodic refresh (first run after DB init, then every 5 min)
+setTimeout(() => { refreshAllowedTenantIds(); setInterval(refreshAllowedTenantIds, 5 * 60 * 1000); }, 5000);
 
 // Helper: Build client assertion JWT for certificate-based auth
 let _cachedPrivateKey = null;
@@ -134,7 +154,11 @@ function _isAuthError(msg) { return /^AI 401\b/.test(msg) || /^AI 403\b/.test(ms
 async function callAI(systemPrompt, userPrompt, { tier = "secondary", maxTokens = 1500, timeout = 30000 } = {}) {
   if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) throw new Error("Azure OpenAI not configured");
   // If the requested tier is known dead, promote up the chain to a healthy one.
-  while (_deadAITiers.has(tier) && AI_FALLBACK[tier]) tier = AI_FALLBACK[tier];
+  const _visited = new Set();
+  while (_deadAITiers.has(tier) && AI_FALLBACK[tier] && !_visited.has(tier)) {
+    _visited.add(tier);
+    tier = AI_FALLBACK[tier];
+  }
   // Budget enforcement: check monthly spend
   try {
     const now = new Date();
@@ -279,8 +303,7 @@ const CUSTOMER_REDIRECT_TARGET = process.env.CUSTOMER_REDIRECT_TARGET || "johndo
 const _PROD_TEST_EMAIL = EMAIL_REDIRECT_TARGET;
 // Inbound helpdesk mailbox — email-to-ticket reads from this mailbox
 const HELPDESK_MAILBOX = process.env.HELPDESK_MAILBOX || "helpdesk@vgctechnology.com";
-// Phase G — in-memory dedup of outbound ZD sync comments (key: ticketId|commentText, value: ts)
-const _zdPushDedup = new Map();
+// Phase G — _zdPushDedup removed in v4.0.0 (ZD push retired, read-only import mode)
 // Phase E1: internal Entra/customer domains — ticket is created but NO confirmation
 // email is sent back (they can see it on the dashboard). Override with env var.
 const INTERNAL_DOMAINS = (process.env.INTERNAL_DOMAINS || "vgctechnology.com,vgcsg.com")
@@ -342,13 +365,14 @@ function isHighSeverity(priority) {
   return p === "seva" || p === "sev1" || p === "p1" || p === "critical" || p === "sevcritical";
 }
 // Returns a real recipient or null. Never returns the "customer@example.com" placeholder.
+// When EMAIL_REDIRECT_MODE is on, always returns CUSTOMER_REDIRECT_TARGET for defense-in-depth.
 // Callers MUST handle null by skipping the send and logging to audit_log.
 function safeRecipient(record) {
   if (!record || typeof record !== "object") return null;
   const candidates = [record.reporterEmail, record.requesterEmail, record.contactEmail, record.email];
   for (const c of candidates) {
     if (typeof c === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c) && !/example\.com$/i.test(c)) {
-      return c;
+      return EMAIL_REDIRECT_MODE ? CUSTOMER_REDIRECT_TARGET : c;
     }
   }
   return null;
@@ -439,7 +463,8 @@ async function _drainCustomerEmailOutbox() {
     for (const r of rows) {
       let rec; try { rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { continue; }
       if (!rec || rec.status !== "queued") continue;
-      if (!rec.sendAfter || new Date(rec.sendAfter).getTime() > now) continue;
+      const _sendTime = rec.sendAfter ? new Date(rec.sendAfter).getTime() : 0;
+      if (!Number.isFinite(_sendTime) || _sendTime > now) continue;
       try {
         await graphSendMail(rec.opts);
         rec.status = "sent";
@@ -686,12 +711,13 @@ async function cachedGetOne(collection, id) {
 }
 
 // ─── Shared AI Actions Dedup Helper ─────────────────────────────────────
-// Returns { pendingByIncident: Map<incidentId, count>, pendingTotal: number, pendingByTypeInc: Set<"type:incidentId">, pendingByTitle: Set<normalized-title> }
+// Returns { pendingByIncident, pendingTotal, pendingByTypeInc, pendingByTitle (word-set array), pendingByTypeCreatedAt }
 async function getAiActionsDedupState() {
   const rows = await cachedGetAll("ai_actions");
   const pendingByIncident = new Map();
   const pendingByTypeInc = new Set();
-  const pendingByTitle = new Set();
+  const pendingByTitle = [];  // array of { words: Set, raw: string } for similarity matching
+  const pendingByTypeCreatedAt = new Map(); // type -> latest createdAt ISO string
   let pendingTotal = 0;
   for (const r of rows) {
     try {
@@ -702,10 +728,26 @@ async function getAiActionsDedupState() {
         pendingByIncident.set(item.incidentId, (pendingByIncident.get(item.incidentId) || 0) + 1);
         if (item.type) pendingByTypeInc.add(`${item.type}:${item.incidentId}`);
       }
-      if (item.title) pendingByTitle.add(item.title.toLowerCase().replace(/[^a-z0-9]/g, ""));
+      if (item.title) {
+        const norm = item.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+        pendingByTitle.push({ words: new Set(norm.split(" ").filter(Boolean)), raw: norm });
+      }
+      if (item.type && item.createdAt) {
+        const prev = pendingByTypeCreatedAt.get(item.type);
+        if (!prev || item.createdAt > prev) pendingByTypeCreatedAt.set(item.type, item.createdAt);
+      }
     } catch { /* ignore */ }
   }
-  return { pendingByIncident, pendingTotal, pendingByTypeInc, pendingByTitle };
+  return { pendingByIncident, pendingTotal, pendingByTypeInc, pendingByTitle, pendingByTypeCreatedAt };
+}
+
+// Jaccard word-set similarity: |A ∩ B| / |A ∪ B|
+function _titleSimilarity(wordsA, wordsB) {
+  if (!wordsA.size || !wordsB.size) return 0;
+  let intersection = 0;
+  for (const w of wordsA) if (wordsB.has(w)) intersection++;
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? intersection / union : 0;
 }
 
 // Check if we should skip creating a new pending action (returns reason string, or null if OK)
@@ -713,9 +755,19 @@ function shouldSkipAction(dedupState, { incidentId, type, title } = {}) {
   if (dedupState.pendingTotal >= AI_THRESHOLDS.maxPendingTotal) return `pending_total_cap (${dedupState.pendingTotal}>=${AI_THRESHOLDS.maxPendingTotal})`;
   if (incidentId && dedupState.pendingByIncident.get(incidentId) >= AI_THRESHOLDS.maxPendingPerIncident) return `per_incident_cap (${incidentId} has ${dedupState.pendingByIncident.get(incidentId)})`;
   if (incidentId && type && dedupState.pendingByTypeInc.has(`${type}:${incidentId}`)) return `dup_type_incident (${type}:${incidentId})`;
+  // Title dedup: exact match OR ≥75% word-set similarity
   if (title) {
-    const norm = title.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (dedupState.pendingByTitle.has(norm)) return `dup_title`;
+    const norm = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+    const words = new Set(norm.split(" ").filter(Boolean));
+    for (const existing of dedupState.pendingByTitle) {
+      if (existing.raw === norm) return "dup_title";
+      if (_titleSimilarity(words, existing.words) >= 0.75) return "dup_title_similar";
+    }
+  }
+  // Cooldown: skip if same action type was created < 4 hours ago (prevents scheduler re-creating similar actions)
+  if (type && dedupState.pendingByTypeCreatedAt.has(type)) {
+    const lastCreated = new Date(dedupState.pendingByTypeCreatedAt.get(type)).getTime();
+    if (Date.now() - lastCreated < 4 * 3600000) return `type_cooldown_4h (${type})`;
   }
   return null;
 }
@@ -727,7 +779,11 @@ function trackNewAction(dedupState, { incidentId, type, title } = {}) {
     dedupState.pendingByIncident.set(incidentId, (dedupState.pendingByIncident.get(incidentId) || 0) + 1);
     if (type) dedupState.pendingByTypeInc.add(`${type}:${incidentId}`);
   }
-  if (title) dedupState.pendingByTitle.add(title.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  if (title) {
+    const norm = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+    dedupState.pendingByTitle.push({ words: new Set(norm.split(" ").filter(Boolean)), raw: norm });
+  }
+  if (type) dedupState.pendingByTypeCreatedAt.set(type, new Date().toISOString());
 }
 
 // ─── Dynamic SLA Map helper (reads from slaEngine policy, falls back to defaults) ──
@@ -936,6 +992,23 @@ async function initDatabase() {
           .input("coll", sql.NVarChar(64), coll)
           .query("SELECT MAX(updated_at) AS max_updated FROM itsm_data WHERE collection = @coll");
         return r.recordset[0]?.max_updated || null;
+      },
+      getNextId: async (counterName) => {
+        const r = await pool.request()
+          .input("coll", sql.NVarChar(64), "itsm_counters")
+          .input("id", sql.NVarChar(128), counterName)
+          .query(`
+            MERGE itsm_data AS t
+            USING (SELECT @coll AS collection, @id AS id) AS s
+            ON t.collection = s.collection AND t.id = s.id
+            WHEN MATCHED THEN UPDATE SET
+              data = CAST(CAST(data AS INT) + 1 AS NVARCHAR(MAX)),
+              updated_at = GETUTCDATE()
+            WHEN NOT MATCHED THEN INSERT (collection, id, data)
+              VALUES (s.collection, s.id, '1');
+            SELECT data FROM itsm_data WHERE collection = @coll AND id = @id;
+          `);
+        return parseInt(r.recordset[0].data, 10);
       },
       ping: async () => { await pool.request().query("SELECT 1"); return true; },
       close: () => pool.close(),
@@ -1161,6 +1234,24 @@ async function initDatabase() {
         const [rows] = await pool.execute("SELECT MAX(updated_at) AS max_updated FROM itsm_data WHERE collection = ?", [coll]);
         return rows[0]?.max_updated || null;
       },
+      getNextId: async (counterName) => {
+        const conn = await pool.getConnection();
+        try {
+          await conn.execute(
+            "INSERT INTO itsm_data (collection, id, data) VALUES ('itsm_counters', ?, '0') ON DUPLICATE KEY UPDATE data = data",
+            [counterName]
+          );
+          await conn.execute(
+            "UPDATE itsm_data SET data = CAST(CAST(data AS UNSIGNED) + 1 AS CHAR), updated_at = CURRENT_TIMESTAMP WHERE collection = 'itsm_counters' AND id = ?",
+            [counterName]
+          );
+          const [rows] = await conn.execute(
+            "SELECT data FROM itsm_data WHERE collection = 'itsm_counters' AND id = ?",
+            [counterName]
+          );
+          return parseInt(rows[0].data, 10);
+        } finally { conn.release(); }
+      },
       ping: async () => { await pool.execute("SELECT 1"); return true; },
       close: () => pool.end(),
       // Phase 6 — slow query logging wrapper
@@ -1274,6 +1365,21 @@ async function initDatabase() {
       getMaxUpdatedAt: async (coll) => {
         const row = s.maxUpdatedAt.get(coll);
         return row?.max_updated || null;
+      },
+      getNextId: async (counterName) => {
+        const tx = sdb.transaction((name) => {
+          sdb.prepare(
+            "INSERT OR IGNORE INTO itsm_data (collection, id, data, updated_at) VALUES ('itsm_counters', ?, '0', datetime('now'))"
+          ).run(name);
+          sdb.prepare(
+            "UPDATE itsm_data SET data = CAST(CAST(data AS INTEGER) + 1 AS TEXT), updated_at = datetime('now') WHERE collection = 'itsm_counters' AND id = ?"
+          ).run(name);
+          const row = sdb.prepare(
+            "SELECT data FROM itsm_data WHERE collection = 'itsm_counters' AND id = ?"
+          ).get(name);
+          return parseInt(row.data, 10);
+        });
+        return tx(counterName);
       },
       ping: async () => { sdb.prepare("SELECT 1").get(); return true; },
       close: () => sdb.close(),
@@ -1476,7 +1582,9 @@ function esc(s) { return String(s || "").replace(/</g, "&lt;").replace(/>/g, "&g
 function formatResolutionText(raw) {
   if (!raw) return "";
   let text = String(raw);
-  // Convert markdown bold **text** to <strong>
+  // Escape HTML entities first to prevent XSS, then apply formatting
+  text = esc(text);
+  // Convert markdown bold **text** to <strong> (content already escaped)
   text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   // Detect numbered items: (1), 1., 1) — split into ordered list
   const numberedPattern = /(?:^|\n)\s*(?:\(?\d+\)?[.):])\s+/;
@@ -1833,6 +1941,11 @@ const VALID_COLLECTIONS = new Set([
   "compliance_evidence",
   "service_desk_roster",
   "auto_reassign_history",
+  "pir_records",
+  "customer_sla_policies",
+  "oncall_schedules",
+  "csi_register",
+  "itsm_counters",
 ]);
 
 // ─── Version Info ─────────────────────────────────────────────────────
@@ -2444,7 +2557,8 @@ async function processInboundEmails() {
         catch (e) { console.warn("[Email-to-Ticket] AI parse failed:", e.message); }
 
         // Create incident
-        const incId = `INC-EMAIL-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const _seq = await db.getNextId("incident_counter");
+        const incId = `INC-${String(_seq).padStart(4, "0")}`;
         const slaMap = getSlaMap();
         const _category = (aiParse && aiParse.category) || "General";
         const _priority = (aiParse && aiParse.priority) || "Sev-C";
@@ -2723,7 +2837,7 @@ const server = http.createServer(async (req, res) => {
   // ─── Auth & Rate Limiting (API routes only) ────────────────────────
   let authResult = { authenticated: false, user: null, role: "anonymous", skipped: true };
   if (pathname.startsWith("/api/")) {
-    authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ALLOWED_TENANT_IDS);
+    authResult = await authMiddleware(req, res, pathname, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ALLOWED_TENANT_IDS, db);
     if (authResult.blocked) return; // 429 already sent
   }
   const auth = { authenticated: authResult.authenticated, name: authResult.user, role: authResult.role };
@@ -2909,8 +3023,13 @@ async function start() {
   console.log("[Outbox Drain] Started (interval=60s)");
 
   // Start SLA Engine (after DB is initialized)
-  // Initialize WebSocket server
-  wsServer = new WebSocketServer();
+  // Initialize WebSocket server (with JWT auth on upgrade)
+  wsServer = new WebSocketServer({
+    validateToken,
+    tenantId: ENTRA_TENANT_ID,
+    clientId: ENTRA_CLIENT_ID,
+    allowedTenantIds: ALLOWED_TENANT_IDS,
+  });
   server.on("upgrade", (req, socket, _head) => wsServer.handleUpgrade(req, socket));
 
   // Initialize Notification Engine
@@ -2966,6 +3085,91 @@ async function start() {
         }
         if (wsServer) wsServer.broadcast("sla", { action: "breach", ...esc });
       } catch (e) { console.error("[SLA Breach Notify]", e.message); }
+    },
+    // v3.36: AI Auto-Reassign on at-risk SLA
+    onAtRisk: async (info) => {
+      const flagEnabled = featureFlags && featureFlags.isEnabled("sla_at_risk_reassign");
+      if (!flagEnabled) return;
+      try {
+        // Find least-loaded engineer in the same assignment group (or any if no group)
+        const incRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
+        const openIncs = incRows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean)
+          .filter(i => ["Open", "In Progress", "Assigned", "open", "in_progress", "assigned"].includes(i.status));
+
+        // Build workload map: engineer -> open incident count
+        const workload = new Map();
+        for (const inc of openIncs) {
+          const eng = inc.assignedTo || inc.assignee;
+          if (eng) workload.set(eng, (workload.get(eng) || 0) + 1);
+        }
+
+        // Filter to engineers in the same assignment group if available
+        const groupEngineers = info.assignmentGroup
+          ? [...workload.keys()].filter(eng => openIncs.some(i => (i.assignmentGroup === info.assignmentGroup) && (i.assignedTo === eng || i.assignee === eng)))
+          : [...workload.keys()];
+
+        // Exclude current assignee
+        const candidates = (groupEngineers.length > 0 ? groupEngineers : [...workload.keys()])
+          .filter(eng => eng !== info.assignee);
+
+        if (candidates.length === 0) {
+          console.log(`[SLA At-Risk] No reassign candidates for ${info.incidentId} — skipping`);
+          // Still notify about at-risk status
+          if (notifyEngine) {
+            await notifyEngine.send({
+              channels: ["inapp"],
+              subject: `SLA At-Risk: ${info.title || info.incidentId}`,
+              body: `${info.reason} — no alternate engineer available for reassignment`,
+              recipients: [info.assignee].filter(Boolean),
+              metadata: { type: "sla_at_risk", incidentId: info.incidentId }
+            });
+          }
+          if (wsServer) wsServer.broadcast("sla", { action: "at_risk", ...info });
+          return;
+        }
+
+        // Pick engineer with lowest workload
+        candidates.sort((a, b) => (workload.get(a) || 0) - (workload.get(b) || 0));
+        const newAssignee = candidates[0];
+        const previousAssignee = info.assignee;
+
+        // Update the incident
+        const row = await db.getOne("incidents", info.incidentId);
+        if (!row) return;
+        const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+        inc.assignedTo = newAssignee;
+        inc.assignee = newAssignee;
+        inc.slaReassignedAt = new Date().toISOString();
+        inc.slaReassignReason = info.reason;
+        inc.slaReassignedFrom = previousAssignee;
+        await db.upsert("incidents", info.incidentId, JSON.stringify(inc));
+        await db.audit("incidents", info.incidentId, "sla_at_risk_reassign", JSON.stringify({
+          from: previousAssignee, to: newAssignee, reason: info.reason,
+          slaStatus: info.slaStatus, pctUsed: info.pctUsed,
+        }), "sla_engine");
+
+        // Log to reassign history
+        await db.upsert("sla_reassign_history", info.id, JSON.stringify({
+          id: info.id, incidentId: info.incidentId, from: previousAssignee, to: newAssignee,
+          reason: info.reason, slaStatus: info.slaStatus, pctUsed: info.pctUsed,
+          timestamp: info.timestamp,
+        }));
+
+        if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
+        console.log(`[SLA At-Risk] Auto-reassigned ${info.incidentId} from ${previousAssignee || "unassigned"} to ${newAssignee} (${info.reason})`);
+
+        // Notify both engineers
+        if (notifyEngine) {
+          await notifyEngine.send({
+            channels: ["inapp", "email"],
+            subject: `SLA At-Risk Reassignment: ${info.title || info.incidentId}`,
+            body: `Incident ${info.incidentId} reassigned from ${previousAssignee || "unassigned"} to ${newAssignee} due to SLA risk (${Math.round(info.pctUsed)}% used)`,
+            recipients: [newAssignee, previousAssignee].filter(Boolean),
+            metadata: { type: "sla_at_risk_reassign", incidentId: info.incidentId }
+          });
+        }
+        if (wsServer) wsServer.broadcast("sla", { action: "at_risk_reassign", ...info, newAssignee, previousAssignee });
+      } catch (e) { console.error("[SLA At-Risk Reassign]", e.message); }
     }
   });
 
@@ -2992,21 +3196,21 @@ async function start() {
     processInboundEmails, generateKBDraft,
     queueOrSendCustomerEmail,
     shouldSkipAction, trackNewAction, getAiActionsDedupState,
-    getSlaMap, getSlaDescription, computeSlaStatus, getBusinessHoursElapsed,
+    getSlaMap, getSlaDescription, computeSlaStatus, computeSlaStatus_v2, getBusinessHoursElapsed,
     cachedGetAll, cachedGetOne,
     getOrgName, purgeStatus, checkPermission, decodeJWT,
     // Config & constants
     VALID_COLLECTIONS, APP_VERSION, APP_DISPLAY_NAME, PORT,
     PORTAL_URL, ORG_NAME, ORG_SHORT_NAME,
     ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT,
-    ALLOWED_TENANT_IDS, buildClientAssertion,
+    get ALLOWED_TENANT_IDS() { return ALLOWED_TENANT_IDS; }, buildClientAssertion, refreshAllowedTenantIds,
     ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, ZENDESK_WEBHOOK_SECRET,
     AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL,
     SOLARWINDS_API_KEY, SOLARWINDS_API_HOST,
     LOCAL_USERS, localAuthEnabled,
     MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET,
     AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP,
-    PROD_TEST_MODE, MIME, _zdPushDedup, structuredLog,
+    PROD_TEST_MODE, MIME, structuredLog,
     // Mutable state (Zendesk sync)
     zdSyncInProgress, zdLastSyncTime, zdSyncStats,
     // Lazy getter so /api/health can report whether the auto-sync interval is

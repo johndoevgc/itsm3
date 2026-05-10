@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   COLORS, inputStyle, btnStyle,
 } from "../constants/theme.js";
@@ -43,6 +43,15 @@ export default function ServiceStatusModule({ ctx }) {
   const overallStatus = operationalCount === allStatuses.length ? "All Systems Operational" : `${allStatuses.length - operationalCount} service(s) impacted`;
   const majorIncs = incidents.filter(i => i.isMajorIncident && i.status !== "Resolved" && i.status !== "Closed");
   const recentResolved = incidents.filter(i => i.status === "Resolved").sort((a, b) => new Date(b.resolvedAt || b.updatedAt || 0) - new Date(a.resolvedAt || a.updatedAt || 0)).slice(0, 5);
+
+  // Fetch real service availability data
+  const [availData, setAvailData] = useState(null);
+  useEffect(() => {
+    fetch("/api/analytics/service-availability?days=90")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setAvailData(d); })
+      .catch(() => {});
+  }, []);
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -97,11 +106,13 @@ export default function ServiceStatusModule({ ctx }) {
         <h3 style={{ margin: "0 0 16px", fontSize: 14, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📊 90-Day Uptime</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
           {SERVICES_LIST.slice(0, 5).map((svc, i) => {
-            const uptime = (97 + Math.random() * 3).toFixed(2);
+            const avSvc = availData && availData.services ? availData.services.find(s => s.service.toLowerCase().includes(svc.name.split(" ")[0].toLowerCase())) : null;
+            const uptime = avSvc ? avSvc.availability.toFixed(2) : (availData ? "100.00" : "--");
+            const uptimeNum = parseFloat(uptime) || 100;
             return (
               <div key={i} style={{ textAlign: "center", padding: 12, background: "#0A0C14", borderRadius: 8, border: "1px solid #1E213044" }}>
                 <div style={{ fontSize: 14 }}>{svc.icon}</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: parseFloat(uptime) >= 99.5 ? "#4CAF50" : parseFloat(uptime) >= 99 ? "#FFB347" : "#FF4444", fontFamily: "'JetBrains Mono', monospace", marginTop: 4 }}>{uptime}%</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: uptimeNum >= 99.5 ? "#4CAF50" : uptimeNum >= 99 ? "#FFB347" : "#FF4444", fontFamily: "'JetBrains Mono', monospace", marginTop: 4 }}>{uptime}%</div>
                 <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{svc.name.split(" ")[0]}</div>
               </div>
             );

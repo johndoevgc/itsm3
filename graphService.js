@@ -44,6 +44,25 @@ export async function getMyPhoto(accessToken) {
   }
 }
 
+// ─── Other User's Photo ──────────────────────────────────────────────────
+export async function getUserPhoto(accessToken, userId) {
+  try {
+    const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(userId)}/photo/$value`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
 // ─── Mail (Outlook) ──────────────────────────────────────────────────────
 export async function getRecentEmails(accessToken, top = 10) {
   return callGraph(accessToken, `/me/messages?$top=${top}&$orderby=receivedDateTime desc&$select=id,subject,from,receivedDateTime,isRead,importance,bodyPreview,hasAttachments`);

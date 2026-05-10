@@ -37,6 +37,13 @@ function makeDb(seed = {}) {
     async audit(collection, recordId, action, data, user) {
       audits.push({ collection, recordId, action, data, user });
     },
+    async getNextId(counterName) {
+      const key = `itsm_counters:${counterName}`;
+      const cur = parseInt(store.get(key) || "0", 10);
+      const next = cur + 1;
+      store.set(key, String(next));
+      return next;
+    },
   };
 }
 

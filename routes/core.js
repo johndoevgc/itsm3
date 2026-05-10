@@ -4,7 +4,7 @@
  */
 const https = require("https");
 const crypto = require("crypto");
-const { validate } = require("../src/server/validation");
+const { validate, validateEndpoint } = require("../src/server/validation");
 const { normalizePriority, priorityToPCode } = require("../src/utils/priorityNormalize.cjs");
 const runbookActions = require("../runbookActions");
 const m365Agent = require("../src/server/m365AgentService");
@@ -157,6 +157,30 @@ module.exports = function createCoreRoutes(ctx) {
     return json(res, 200, slaEngine ? slaEngine.getStats() : { error: "SLA engine not initialized" });
   }
 
+  // ─── v3.36: Customer-facing SLA status for a single incident ─────────
+  // Returns sanitized SLA info (no internal engineer names/groups) for portal use.
+  const custSlaMatch = /^\/api\/incidents\/([^/]+)\/sla$/.exec(pathname);
+  if (custSlaMatch && req.method === "GET") {
+    const incId = custSlaMatch[1];
+    try {
+      const row = await db.getOne("sla_tracking", incId);
+      if (!row) return json(res, 404, { error: "SLA data not found for this incident" });
+      const sla = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      // Sanitize: only expose customer-safe fields
+      return json(res, 200, {
+        incidentId: incId,
+        status: sla.status,
+        pctUsed: sla.worstPct || sla.resolutionPct || 0,
+        hoursElapsed: sla.hoursElapsed,
+        remainingHours: sla.remainingHours,
+        targetHours: sla.worstResponseTarget,
+        priority: sla.priority,
+        paused: sla.paused || false,
+        computedAt: sla.computedAt,
+      });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
   if (pathname === "/api/weather/disaster-alert" && req.method === "GET") {
     const checkedAt = new Date().toISOString();
     const [twoHourResult, twentyFourResult] = await Promise.allSettled([
@@ -205,12 +229,47 @@ module.exports = function createCoreRoutes(ctx) {
     }
     try {
       const body = await readBody(req);
-      if (!body.severities) return json(res, 400, { error: "severities object required" });
+      const v = validateEndpoint("sla_config", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       await db.upsert("sla_config", "active_policy", JSON.stringify(body));
       await db.audit("sla_config", "active_policy", "update", JSON.stringify(body), authResult.user?.email || "system");
       if (cacheLayer) cacheLayer.invalidatePrefix("sla_config");
       if (slaEngine) await slaEngine.loadPolicy();
       return json(res, 200, { ok: true, policy: body });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── v3.36: Category-Based SLA Modifiers CRUD ────────────────────────
+  if (pathname === "/api/sla/category-modifiers" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("sla_category_modifiers");
+      const items = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { count: items.length, data: items });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+  if (pathname === "/api/sla/category-modifiers" && req.method === "POST") {
+    if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin" && authResult.role !== "Tenant Admin") return json(res, 403, { error: "Admin only" });
+    try {
+      const body = await readBody(req);
+      const v = validateEndpoint("sla_category_modifier", body);
+      if (!v.success) return json(res, 400, { error: v.error });
+      const category = String(body.category || "").trim();
+      const multiplier = parseFloat(body.multiplier);
+      const record = { category, multiplier, updatedAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
+      await db.upsert("sla_category_modifiers", category, JSON.stringify(record));
+      await db.audit("sla_config", category, "category_modifier_set", JSON.stringify(record), authResult.user?.email || "system");
+      if (slaEngine) await slaEngine.loadPolicy();
+      return json(res, 200, { ok: true, ...record });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+  const catModDeleteMatch = /^\/api\/sla\/category-modifiers\/([^/]+)$/.exec(pathname);
+  if (catModDeleteMatch && req.method === "DELETE") {
+    if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin" && authResult.role !== "Tenant Admin") return json(res, 403, { error: "Admin only" });
+    try {
+      const cat = decodeURIComponent(catModDeleteMatch[1]);
+      await db.upsert("sla_category_modifiers", cat, JSON.stringify({ category: cat, deleted: true }));
+      if (slaEngine) await slaEngine.loadPolicy();
+      return json(res, 200, { ok: true, deleted: cat });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
@@ -313,8 +372,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/sla/pause" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("sla_pause", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { incidentId, reason } = body;
-      if (!incidentId) return json(res, 400, { error: "incidentId required" });
       const row = await db.getOne("incidents", incidentId);
       if (!row) return json(res, 404, { error: "Incident not found" });
       const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
@@ -337,8 +397,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/sla/resume" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("sla_resume", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { incidentId } = body;
-      if (!incidentId) return json(res, 400, { error: "incidentId required" });
       const row = await db.getOne("incidents", incidentId);
       if (!row) return json(res, 404, { error: "Incident not found" });
       const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
@@ -391,6 +452,13 @@ module.exports = function createCoreRoutes(ctx) {
     try { return json(res, 200, await analyticsEngine.getExecutiveSummary()); }
     catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
+  if (pathname === "/api/analytics/service-availability" && req.method === "GET") {
+    if (!analyticsEngine) return json(res, 503, { error: "Analytics engine not initialized" });
+    try {
+      const days = Math.min(parseInt(urlObj.searchParams.get("days") || "30", 10), 365);
+      return json(res, 200, await analyticsEngine.getServiceAvailability(days));
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
 
   // ─── Workflow Engine API ──────────────────────────────────────────────────
   if (pathname === "/api/workflow/stats" && req.method === "GET") {
@@ -428,6 +496,8 @@ module.exports = function createCoreRoutes(ctx) {
     if (!notifyEngine) return json(res, 503, { error: "Notification engine not initialized" });
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("notification_send", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const result = await notifyEngine.send(body);
       return json(res, 200, result);
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -736,12 +806,14 @@ module.exports = function createCoreRoutes(ctx) {
 
         // ─── Detect assignment change for incidents (before saving) ─────
         let previousAssignee = null;
+        let previousStatus = null;
         if (collection === "incidents") {
           try {
             const existingRow = await db.getOne(collection, recordId);
             if (existingRow) {
               const existing = typeof existingRow.data === "string" ? JSON.parse(existingRow.data) : existingRow.data;
               previousAssignee = existing.assignedTo || existing.assignee || null;
+              previousStatus = existing.status || null;
             }
           } catch { /* ignore */ }
         }
@@ -749,6 +821,36 @@ module.exports = function createCoreRoutes(ctx) {
         // ─── Stamp resolvedAt when incident transitions to Resolved/Closed ──
         if (collection === "incidents" && (body.status === "Resolved" || body.status === "Closed") && !body.resolvedAt) {
           body.resolvedAt = new Date().toISOString();
+        }
+
+        // ─── v3.36: Auto SLA Pause/Resume on status change to/from Pending ──
+        if (collection === "incidents" && body.status && previousStatus && body.status !== previousStatus
+            && featureFlags && featureFlags.isEnabled("sla_auto_pause_resume")) {
+          const isPendingNow = body.status === "Pending" || body.status === "pending";
+          const wasPending = previousStatus === "Pending" || previousStatus === "pending";
+          if (isPendingNow && !wasPending) {
+            // Entering Pending — auto-pause SLA clock
+            if (!body.slaPauseHistory) body.slaPauseHistory = [];
+            const lastPause = body.slaPauseHistory[body.slaPauseHistory.length - 1];
+            if (!lastPause || lastPause.resumedAt) {
+              body.slaPauseHistory.push({ pausedAt: new Date().toISOString(), reason: "Auto-pause: status changed to Pending", pausedBy: "system" });
+              body.slaPaused = true;
+              try { await db.audit("incidents", recordId, "sla_auto_pause", JSON.stringify({ previousStatus, newStatus: body.status }), "system"); } catch { /* ignore */ }
+              console.log(`[SLA Auto-Pause] Paused SLA for ${recordId} (status → Pending)`);
+            }
+          } else if (wasPending && !isPendingNow) {
+            // Leaving Pending — auto-resume SLA clock
+            if (Array.isArray(body.slaPauseHistory) && body.slaPauseHistory.length > 0) {
+              const lastPause = body.slaPauseHistory[body.slaPauseHistory.length - 1];
+              if (lastPause && !lastPause.resumedAt) {
+                lastPause.resumedAt = new Date().toISOString();
+                lastPause.resumedBy = "system";
+                body.slaPaused = false;
+                try { await db.audit("incidents", recordId, "sla_auto_resume", JSON.stringify({ previousStatus, newStatus: body.status }), "system"); } catch { /* ignore */ }
+                console.log(`[SLA Auto-Resume] Resumed SLA for ${recordId} (status → ${body.status})`);
+              }
+            }
+          }
         }
 
         await db.upsert(collection, recordId, JSON.stringify(body));
@@ -778,6 +880,11 @@ module.exports = function createCoreRoutes(ctx) {
               }
             } catch (wlErr) { console.warn("[Email Whitelist] Auto-add failed:", wlErr.message); }
           }
+        }
+
+        // ─── Auto-refresh allowed tenant IDs when customers change ─────
+        if (collection === "customers" && ctx.refreshAllowedTenantIds) {
+          ctx.refreshAllowedTenantIds().catch(() => {});
         }
 
         // Auto KB Draft: generate KB article when incident is Resolved/Closed
@@ -940,6 +1047,8 @@ module.exports = function createCoreRoutes(ctx) {
         return json(res, 503, { error: "M365/Azure expert diagnostics disabled", flag: "m365_agent.entraDiagnostics" });
       }
       const body = await readBody(req);
+      const v = validateEndpoint("m365_diagnose", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const executedBy = (authResult.user && authResult.user.email) || authResult.name || body.executedBy || "system";
       const result = await m365Agent.diagnoseEntraSignIn({
         db,
@@ -969,6 +1078,8 @@ module.exports = function createCoreRoutes(ctx) {
       if (!authResult || !authResult.authenticated) return json(res, 401, { error: "Authentication required" });
       if (!m365FlagEnabled("m365_agent.enabled")) return json(res, 503, { error: "M365/Azure expert disabled", flag: "m365_agent.enabled" });
       const body = await readBody(req);
+      const v = validateEndpoint("m365_action_propose", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const actionId = body.actionId || m365Agent.ACTION_FORCE_SIGN_OUT;
       if (actionId !== m365Agent.ACTION_FORCE_SIGN_OUT) return json(res, 400, { error: "Unsupported M365 action", actionId });
       const ctxResult = await m365Agent.resolveContext({ db, incidentId: body.incidentId, targetUpn: body.targetUpn });
@@ -993,7 +1104,8 @@ module.exports = function createCoreRoutes(ctx) {
       if (authResult.role !== "Administrator" && authResult.role !== "VGC Dev Admin") return json(res, 403, { error: "Administrator approval required" });
       if (!m365FlagEnabled("m365_agent.enabled")) return json(res, 503, { error: "M365/Azure expert disabled", flag: "m365_agent.enabled" });
       const body = await readBody(req);
-      if (!body.proposalId) return json(res, 400, { error: "proposalId is required" });
+      const v = validateEndpoint("m365_approve_execute", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const proposal = await getM365ActionProposal(body.proposalId);
       if (!proposal) return json(res, 404, { error: "M365 action proposal not found" });
       if (proposal.status !== "pending_approval") return json(res, 400, { error: "M365 action proposal is not pending approval", status: proposal.status });
@@ -1047,8 +1159,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/approvals/submit" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("approval_submit", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { chainId, targetCollection, targetId } = body;
-      if (!chainId || !targetCollection || !targetId) return json(res, 400, { error: "Missing chainId, targetCollection, or targetId" });
       if (!VALID_COLLECTIONS.has(targetCollection)) return json(res, 400, { error: "Invalid target collection" });
       const chain = dbParse(await db.getOne("approval_chains", chainId));
       if (!chain) return json(res, 404, { error: "Approval chain not found" });
@@ -1071,9 +1184,10 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname.startsWith("/api/approvals/") && pathname.endsWith("/action") && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("approval_action", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const instanceId = pathname.split("/")[3];
       const { action, comment, approvedBy } = body;
-      if (!["approved", "rejected"].includes(action)) return json(res, 400, { error: "Action must be 'approved' or 'rejected'" });
       const instance = dbParse(await db.getOne("approval_instances", instanceId));
       if (!instance) return json(res, 404, { error: "Approval instance not found" });
       if (instance.status !== "pending") return json(res, 400, { error: "Instance not pending" });
@@ -1127,8 +1241,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/approvals/generate-token" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("approval_generate_token", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { instanceId, approverEmail } = body;
-      if (!instanceId || !approverEmail) return json(res, 400, { error: "Missing instanceId or approverEmail" });
       const instance = dbParse(await db.getOne("approval_instances", instanceId));
       if (!instance) return json(res, 404, { error: "Approval instance not found" });
       const token = crypto.randomBytes(32).toString("hex");
@@ -1220,8 +1335,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/cmdb/relationships" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("cmdb_relationship", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { sourceId, targetId, type } = body;
-      if (!sourceId || !targetId || !type) return json(res, 400, { error: "Missing sourceId, targetId, or type" });
       const relId = `REL-${Date.now().toString(36)}`;
       const rel = { id: relId, sourceId, targetId, type, direction: "forward", createdBy: body.createdBy || "system", createdAt: new Date().toISOString() };
       await db.upsert("cmdb_relationships", relId, JSON.stringify(rel));
@@ -1308,8 +1424,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/runbook/execute" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("runbook_execute", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { runbookId, incidentId, executedBy } = body;
-      if (!runbookId) return json(res, 400, { error: "Missing runbookId" });
       const runbook = dbParse(await db.getOne("kb", runbookId));
       if (!runbook) return json(res, 404, { error: "Runbook not found" });
       const steps = (runbook.steps || runbook.content?.split(/\n(?=\d+\.)/) || ["Step 1: Execute"]).map((s, i) => ({
@@ -1332,10 +1449,11 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname.match(/^\/api\/runbook\/execution\/[^/]+\/step\/\d+$/) && req.method === "PUT") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("runbook_step_update", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const parts = pathname.split("/");
       const execId = parts[4], stepNum = parseInt(parts[6], 10);
       const { status, notes } = body;
-      if (!["completed", "skipped", "failed"].includes(status)) return json(res, 400, { error: "Status must be completed, skipped, or failed" });
       const execution = dbParse(await db.getOne("runbook_executions", execId));
       if (!execution) return json(res, 404, { error: "Execution not found" });
       const step = execution.steps.find(s => s.stepNum === stepNum);
@@ -1383,8 +1501,9 @@ module.exports = function createCoreRoutes(ctx) {
         return json(res, 403, { error: "Admin role required" });
       }
       const body = await readBody(req);
+      const v = validateEndpoint("runbook_action_execute", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { actionId, params, incidentId } = body || {};
-      if (!actionId) return json(res, 400, { error: "Missing actionId" });
 
       const action = runbookActions.get(actionId);
       if (!action) return json(res, 404, { error: "Unknown action", actionId });
@@ -1513,8 +1632,9 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/reports/schedule" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("report_schedule", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { name, type, frequency, recipients, format } = body;
-      if (!name || !type) return json(res, 400, { error: "Missing name or type" });
       const schedId = body.id || `RS-${Date.now().toString(36)}`;
       const schedule = { id: schedId, name, type, frequency: frequency || "weekly", dayOfWeek: body.dayOfWeek || 1, hour: body.hour || 9, recipients: recipients || [], format: format || "csv", filters: body.filters || {}, active: body.active !== false, createdAt: new Date().toISOString() };
       await db.upsert("report_schedules", schedId, JSON.stringify(schedule));
@@ -1549,7 +1669,8 @@ module.exports = function createCoreRoutes(ctx) {
     if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
     try {
       const body = await readBody(req);
-      if (!body.name) return json(res, 400, { error: "Calendar name required" });
+      const v = validateEndpoint("sla_calendar", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const calId = body.id || `CAL-${Date.now().toString(36)}`;
       const calendar = { id: calId, name: body.name, timezone: body.timezone || "Asia/Singapore", businessHours: body.businessHours || { start: 9, end: 18, days: "Mon-Fri" }, holidays: body.holidays || [], isDefault: body.isDefault || false, createdAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
       await db.upsert("sla_calendars", calId, JSON.stringify(calendar));
@@ -1580,7 +1701,8 @@ module.exports = function createCoreRoutes(ctx) {
     if (!["Administrator", "VGC Dev Admin", "Tenant Admin", "Service Desk Lead"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
     try {
       const body = await readBody(req);
-      if (!body.name || !body.eventType) return json(res, 400, { error: "name and eventType required" });
+      const v = validateEndpoint("notification_template", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const tplId = body.id || `TPL-${Date.now().toString(36)}`;
       const template = { id: tplId, name: body.name, eventType: body.eventType, channels: body.channels || ["email", "inapp"], subject: body.subject || "", bodyTemplate: body.bodyTemplate || "", variables: body.variables || [], active: body.active !== false, createdAt: body.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: authResult.user?.email || "system" };
       await db.upsert("notification_templates", tplId, JSON.stringify(template));
@@ -1664,7 +1786,8 @@ module.exports = function createCoreRoutes(ctx) {
     if (!["Administrator", "VGC Dev Admin", "Tenant Admin"].includes(authResult.role)) return json(res, 403, { error: "Admin only" });
     try {
       const body = await readBody(req);
-      if (!body.lang || !body.strings) return json(res, 400, { error: "lang and strings required" });
+      const v = validateEndpoint("i18n_pack", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       await db.upsert("i18n_packs", body.lang, JSON.stringify(body));
       await db.audit("i18n_packs", body.lang, "update", JSON.stringify({ lang: body.lang, keyCount: Object.keys(body.strings).length }), authResult.user?.email || "system");
       if (cacheLayer) cacheLayer.invalidatePrefix("i18n_packs");
@@ -1950,6 +2073,11 @@ module.exports = function createCoreRoutes(ctx) {
         automationRules: true,
       },
       aiGovernance: { autonomyLevel: AI_AUTONOMY_LEVEL, monthlyBudgetUSD: AI_MONTHLY_BUDGET_USD },
+      auth: {
+        authorityMode: process.env.AUTHORITY_MODE || "multi",
+        clientId: ENTRA_CLIENT_ID || undefined,
+        tenantId: ENTRA_TENANT_ID || undefined,
+      },
     });
   }
 
@@ -2192,7 +2320,8 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/portal/submit" && req.method === "POST") {
     const body = await parseBody(req);
     if (!body.email || !body.subject) return json(res, 400, { error: "email and subject required" });
-    const incId = `INC-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+    const _seq = await db.getNextId("incident_counter");
+    const incId = `INC-${String(_seq).padStart(4, "0")}`;
     const incident = {
       id: incId,
       title: String(body.subject).slice(0, 300),
@@ -2703,7 +2832,8 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/feature-flags" && req.method === "POST") {
     try {
       const body = await readBody(req);
-      if (!body?.name) return json(res, 400, { error: "name required" });
+      const v = validateEndpoint("feature_flag", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const rec = await featureFlags.set(body.name, {
         enabled: body.enabled,
         scope:   body.scope,
@@ -3571,7 +3701,6 @@ Respond ONLY with valid JSON:
                 liveInc.resolution = suggestion.resolution || "Auto-dismissed by AI — not customer-impacting";
                 liveInc.rootCause = suggestion.rootCause || liveInc.rootCause;
                 liveInc.updatedAt = new Date().toISOString();
-                liveInc.skipZendeskSync = true;
                 liveInc.activityLog = liveInc.activityLog || [];
                 liveInc.activityLog.push({ id: `AL-AID-${Date.now()}`, type: "ai_dismiss", user: "AI Smart Filter", time: new Date().toISOString(), detail: `Auto-dismissed (${relevance}, ${suggestion.confidence}% confidence): ${classificationReasoning.substring(0, 200)}` });
                 await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
@@ -3693,7 +3822,6 @@ Respond ONLY with valid JSON:
           inc.resolvedBy = `AI (approved by ${approvedBy})`;
           inc.updatedAt = new Date().toISOString();
           inc.aiResolved = true;
-          inc.skipZendeskSync = true; // Flag: do NOT push to Zendesk
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
           // Phase C1 — schedule CSAT survey for AI-resolved incidents
           scheduleCsatSurvey(inc, `AI (approved by ${approvedBy})`).catch(e => console.warn("[CSAT Schedule]", e.message));
@@ -3855,7 +3983,6 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
                   liveInc.resolvedAt = new Date().toISOString();
                   liveInc.resolution = item.resolution || "Auto-dismissed — not customer-impacting";
                   liveInc.updatedAt = new Date().toISOString();
-                  liveInc.skipZendeskSync = true;
                   liveInc.activityLog = liveInc.activityLog || [];
                   liveInc.activityLog.push({ id: `AL-BD-${Date.now()}`, type: "ai_bulk_dismiss", user: "AI Bulk Dismiss", time: new Date().toISOString(), detail: `Bulk dismissed: ${item.relevance} — ${(item.classificationReasoning || "").substring(0, 200)}` });
                   await db.upsert("incidents", liveInc.id, JSON.stringify(liveInc));
@@ -3923,7 +4050,6 @@ Respond ONLY with JSON: {"relevance": "...", "autoResolvable": true/false, "clas
             inc.resolvedBy = `AI (bulk approved by ${approvedBy})`;
             inc.updatedAt = new Date().toISOString();
             inc.aiResolved = true;
-            inc.skipZendeskSync = true;
             await db.upsert("incidents", inc.id, JSON.stringify(inc));
             scheduleCsatSurvey(inc, `AI (bulk approved by ${approvedBy})`).catch(e => console.warn("[CSAT Schedule]", e.message));
           }
@@ -4722,7 +4848,6 @@ Respond in JSON ONLY:
               }
               if (suggestion.suggestedAssignee) inc.assignee = suggestion.suggestedAssignee;
               inc.updatedAt = new Date().toISOString();
-              inc.skipZendeskSync = true;
               await db.upsert("incidents", inc.id, JSON.stringify(inc));
             }
           } catch (incErr) {
@@ -5131,8 +5256,9 @@ Create a professional KB article. Respond in JSON ONLY:
   // POST /api/changes/freeze-window — Create/update a change freeze window
   if (pathname === "/api/changes/freeze-window" && req.method === "POST") {
     const body = await readBody(req);
+    const v = validateEndpoint("change_freeze_window", body);
+    if (!v.success) return json(res, 400, { error: v.error });
     const { id, startDate, endDate, reason, createdBy, exceptions } = body;
-    if (!startDate || !endDate || !reason) return json(res, 400, { error: "startDate, endDate, and reason are required" });
     if (new Date(endDate) <= new Date(startDate)) return json(res, 400, { error: "endDate must be after startDate" });
 
     const fwId = id || `FRZ-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
@@ -5173,8 +5299,9 @@ Create a professional KB article. Respond in JSON ONLY:
   // POST /api/changes/conflict-check — AI-powered conflict analysis for a proposed change
   if (pathname === "/api/changes/conflict-check" && req.method === "POST") {
     const body = await readBody(req);
+    const v = validateEndpoint("change_conflict_check", body);
+    if (!v.success) return json(res, 400, { error: v.error });
     const { scheduledStart, scheduledEnd, title, type, category, impact } = body;
-    if (!scheduledStart || !title) return json(res, 400, { error: "scheduledStart and title are required" });
 
     // Fetch existing changes around the proposed time
     const changeRows = await db.getAll("changes");
@@ -5388,9 +5515,9 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
   if (pathname === "/api/ai/learning/feedback" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      const v = validateEndpoint("ai_learning_feedback", body);
+      if (!v.success) return json(res, 400, { error: v.error });
       const { triageId, verdict, notes, correctedCategory, correctedPriority } = body;
-      if (!triageId || !verdict) return json(res, 400, { error: "triageId and verdict (correct/incorrect) required" });
-      if (!["correct", "incorrect"].includes(verdict)) return json(res, 400, { error: "verdict must be 'correct' or 'incorrect'" });
 
       const feedbackId = `ALFB-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       const now = new Date().toISOString();
@@ -5500,6 +5627,139 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // ─── v3.36: Parent-Child Incident Linking ─────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // POST /api/incidents/:id/link-child — link a child incident under a parent
+  const linkChildMatch = /^\/api\/incidents\/([^/]+)\/link-child$/.exec(pathname);
+  if (linkChildMatch && req.method === "POST") {
+    const parentId = linkChildMatch[1];
+    try {
+      const body = await readBody(req);
+      const v = validateEndpoint("incident_link_child", body);
+      if (!v.success) return json(res, 400, { error: v.error });
+      const childId = String(body.childId || "").trim();
+      if (parentId === childId) return json(res, 400, { error: "Cannot link incident to itself" });
+
+      const parentRow = await db.getOne("incidents", parentId);
+      if (!parentRow) return json(res, 404, { error: "Parent incident not found" });
+      const childRow = await db.getOne("incidents", childId);
+      if (!childRow) return json(res, 404, { error: "Child incident not found" });
+
+      const parent = typeof parentRow.data === "string" ? JSON.parse(parentRow.data) : parentRow.data;
+      const child = typeof childRow.data === "string" ? JSON.parse(childRow.data) : childRow.data;
+
+      // Prevent circular linking
+      if (child.parentIncidentId) return json(res, 400, { error: `Child ${childId} already has parent ${child.parentIncidentId}` });
+      if (parent.parentIncidentId === childId) return json(res, 400, { error: "Circular link detected" });
+
+      // Update parent
+      if (!parent.childIncidentIds) parent.childIncidentIds = [];
+      if (!parent.childIncidentIds.includes(childId)) parent.childIncidentIds.push(childId);
+      await db.upsert("incidents", parentId, JSON.stringify(parent));
+
+      // Update child
+      child.parentIncidentId = parentId;
+      await db.upsert("incidents", childId, JSON.stringify(child));
+
+      await db.audit("incidents", parentId, "link_child", JSON.stringify({ childId }), authResult.user?.email || "system");
+      if (wsServer) wsServer.broadcast("incident", { action: "linked", parentId, childId });
+      return json(res, 200, { ok: true, parentId, childId, childCount: parent.childIncidentIds.length });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // POST /api/incidents/:id/unlink-child — remove a child link
+  const unlinkChildMatch = /^\/api\/incidents\/([^/]+)\/unlink-child$/.exec(pathname);
+  if (unlinkChildMatch && req.method === "POST") {
+    const parentId = unlinkChildMatch[1];
+    try {
+      const body = await readBody(req);
+      const v = validateEndpoint("incident_link_child", body);
+      if (!v.success) return json(res, 400, { error: v.error });
+      const childId = String(body.childId || "").trim();
+
+      const parentRow = await db.getOne("incidents", parentId);
+      if (!parentRow) return json(res, 404, { error: "Parent incident not found" });
+      const childRow = await db.getOne("incidents", childId);
+      if (!childRow) return json(res, 404, { error: "Child incident not found" });
+
+      const parent = typeof parentRow.data === "string" ? JSON.parse(parentRow.data) : parentRow.data;
+      const child = typeof childRow.data === "string" ? JSON.parse(childRow.data) : childRow.data;
+
+      parent.childIncidentIds = (parent.childIncidentIds || []).filter(id => id !== childId);
+      await db.upsert("incidents", parentId, JSON.stringify(parent));
+
+      if (child.parentIncidentId === parentId) {
+        delete child.parentIncidentId;
+        await db.upsert("incidents", childId, JSON.stringify(child));
+      }
+
+      await db.audit("incidents", parentId, "unlink_child", JSON.stringify({ childId }), authResult.user?.email || "system");
+      if (wsServer) wsServer.broadcast("incident", { action: "unlinked", parentId, childId });
+      return json(res, 200, { ok: true, parentId, childId });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/incidents/:id/children — list child incidents
+  const getChildrenMatch = /^\/api\/incidents\/([^/]+)\/children$/.exec(pathname);
+  if (getChildrenMatch && req.method === "GET") {
+    const parentId = getChildrenMatch[1];
+    try {
+      const parentRow = await db.getOne("incidents", parentId);
+      if (!parentRow) return json(res, 404, { error: "Incident not found" });
+      const parent = typeof parentRow.data === "string" ? JSON.parse(parentRow.data) : parentRow.data;
+      const childIds = parent.childIncidentIds || [];
+      const children = [];
+      for (const cid of childIds) {
+        const r = await db.getOne("incidents", cid);
+        if (r) children.push(typeof r.data === "string" ? JSON.parse(r.data) : r.data);
+      }
+      return json(res, 200, { parentId, count: children.length, children: children.map(c => ({ id: c.id, title: c.title, status: c.status, priority: c.priority, category: c.category })) });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // POST /api/incidents/:id/cascade-resolve — resolve parent and optionally cascade to children
+  const cascadeResolveMatch = /^\/api\/incidents\/([^/]+)\/cascade-resolve$/.exec(pathname);
+  if (cascadeResolveMatch && req.method === "POST") {
+    const parentId = cascadeResolveMatch[1];
+    try {
+      const body = await readBody(req);
+      const v = validateEndpoint("incident_cascade_resolve", body);
+      if (!v.success) return json(res, 400, { error: v.error });
+      const resolution = body.resolution || "Resolved via parent cascade";
+      const parentRow = await db.getOne("incidents", parentId);
+      if (!parentRow) return json(res, 404, { error: "Incident not found" });
+      const parent = typeof parentRow.data === "string" ? JSON.parse(parentRow.data) : parentRow.data;
+
+      // Resolve parent
+      parent.status = "Resolved";
+      parent.resolvedAt = new Date().toISOString();
+      parent.resolution = resolution;
+      await db.upsert("incidents", parentId, JSON.stringify(parent));
+
+      // Cascade to children
+      const childIds = parent.childIncidentIds || [];
+      let cascaded = 0;
+      for (const cid of childIds) {
+        const r = await db.getOne("incidents", cid);
+        if (!r) continue;
+        const child = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+        if (["Resolved", "Closed"].includes(child.status)) continue;
+        child.status = "Resolved";
+        child.resolvedAt = new Date().toISOString();
+        child.resolution = `Cascade from parent ${parentId}: ${resolution}`;
+        await db.upsert("incidents", cid, JSON.stringify(child));
+        await db.audit("incidents", cid, "cascade_resolve", JSON.stringify({ parentId, resolution }), authResult.user?.email || "system");
+        cascaded++;
+      }
+
+      await db.audit("incidents", parentId, "cascade_resolve", JSON.stringify({ childIds, resolution }), authResult.user?.email || "system");
+      if (wsServer) wsServer.broadcast("incident", { action: "cascade_resolved", parentId, cascaded });
+      return json(res, 200, { ok: true, parentId, cascaded, totalChildren: childIds.length });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // ─── PHASE 1: Core ITIL Gaps & Data Accuracy ─────────────────────────
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -5584,10 +5844,11 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       inc.isMajorIncident = true;
       inc.majorDeclaredAt = now;
       inc.majorBridge = body.bridge || { active: true, link: `https://teams.microsoft.com/l/meetup-join/vgc-mim-${body.incidentId}`, participants: [] };
-      inc.majorTimeline = [{ time: now, event: "Major Incident Declared", user: auth.name || "System" }];
+      inc.majorTimeline = [{ time: now, event: "Major Incident Declared", phase: "Detection", user: auth.name || "System" }];
       inc.majorComms = [];
+      inc.majorPhase = "Detection";
       await db.upsert("incidents", body.incidentId, JSON.stringify(inc));
-      const mimRecord = { id: `MIM-${Date.now()}`, incidentId: body.incidentId, declaredAt: now, declaredBy: auth.name || "System", status: "active", affectedServices: body.affectedServices || [], severity: inc.priority };
+      const mimRecord = { id: `MIM-${Date.now()}`, incidentId: body.incidentId, declaredAt: now, declaredBy: auth.name || "System", status: "active", affectedServices: body.affectedServices || [], severity: inc.priority, stakeholders: body.stakeholders || [], phase: "Detection" };
       await db.upsert("mim_records", mimRecord.id, JSON.stringify(mimRecord));
       await db.audit("incidents", body.incidentId, "mim_declare", "Major Incident declared", auth.name || "System");
       if (wsServer) wsServer.broadcast("mim", { action: "declared", incidentId: body.incidentId, mimId: mimRecord.id });
@@ -5631,9 +5892,18 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       const row = await db.getOne("incidents", body.incidentId);
       if (!row) return json(res, 404, { error: "Incident not found" });
       const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      // Gate: Sev-A MIM closure requires a PIR
+      const canonPriority = inc.priority || "";
+      if (canonPriority === "Sev-A" || canonPriority === "Critical" || canonPriority === "P1") {
+        const pirRows = await db.getAll("pir_records");
+        const hasPir = pirRows.some(r => {
+          try { const p = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return p && p.incidentId === body.incidentId; } catch { return false; }
+        });
+        if (!hasPir && !body.skipPirCheck) return json(res, 400, { error: "Sev-A MIM closure requires a Post-Incident Review (PIR). Create a PIR first via POST /api/pir" });
+      }
       inc.isMajorIncident = false;
       inc.majorResolvedAt = new Date().toISOString();
-      inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: "Major Incident Revoked", user: auth.name || "System" }];
+      inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: "Major Incident Revoked", phase: "Resolution", user: auth.name || "System" }];
       await db.upsert("incidents", body.incidentId, JSON.stringify(inc));
       await db.audit("incidents", body.incidentId, "mim_revoke", "Major Incident revoked", auth.name || "System");
       return json(res, 200, { success: true });
@@ -5660,6 +5930,69 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       inc.majorTimeline = [...(inc.majorTimeline || []), { time: new Date().toISOString(), event: `Comms sent: ${comm.type}`, user: auth.name || "System" }];
       await db.upsert("incidents", body.incidentId, JSON.stringify(inc));
       return json(res, 201, { success: true, communication: comm });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // POST /api/mim/stakeholders — manage stakeholder list for a MIM record
+  if (pathname === "/api/mim/stakeholders" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.mimId && !body.incidentId) return json(res, 400, { error: "mimId or incidentId required" });
+    if (!body.action) return json(res, 400, { error: "action required (add|remove)" });
+    try {
+      let mimRow = body.mimId ? await db.getOne("mim_records", body.mimId) : null;
+      if (!mimRow && body.incidentId) {
+        const all = await db.getAll("mim_records");
+        for (const r of all) {
+          try { const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (m && m.incidentId === body.incidentId) { mimRow = r; break; } } catch { /* ignore */ }
+        }
+      }
+      if (!mimRow) return json(res, 404, { error: "MIM record not found" });
+      const mim = typeof mimRow.data === "string" ? JSON.parse(mimRow.data) : mimRow.data;
+      if (!mim.stakeholders) mim.stakeholders = [];
+      if (body.action === "add" && body.stakeholder) {
+        const sh = { name: body.stakeholder.name, role: body.stakeholder.role || "Observer", email: body.stakeholder.email || null, addedAt: new Date().toISOString(), addedBy: (auth && auth.name) || "System" };
+        mim.stakeholders.push(sh);
+      } else if (body.action === "remove" && body.email) {
+        mim.stakeholders = mim.stakeholders.filter(s => s.email !== body.email);
+      }
+      await db.upsert("mim_records", mim.id, JSON.stringify(mim));
+      try { await db.audit("mim_records", mim.id, "stakeholder_" + body.action, JSON.stringify({ email: body.email || body.stakeholder?.email }), (auth && auth.name) || "System"); } catch { /* ignore */ }
+      return json(res, 200, { success: true, stakeholders: mim.stakeholders });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // POST /api/mim/phase — advance MIM timeline phase (Detection → Triage → Mitigation → Resolution → PIR)
+  if (pathname === "/api/mim/phase" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.mimId && !body.incidentId) return json(res, 400, { error: "mimId or incidentId required" });
+    const PHASES = ["Detection", "Triage", "Mitigation", "Resolution", "PIR"];
+    if (!body.phase || !PHASES.includes(body.phase)) return json(res, 400, { error: `phase required, one of: ${PHASES.join(", ")}` });
+    try {
+      let mimRow = body.mimId ? await db.getOne("mim_records", body.mimId) : null;
+      if (!mimRow && body.incidentId) {
+        const all = await db.getAll("mim_records");
+        for (const r of all) {
+          try { const m = typeof r.data === "string" ? JSON.parse(r.data) : r.data; if (m && m.incidentId === body.incidentId) { mimRow = r; break; } } catch { /* ignore */ }
+        }
+      }
+      if (!mimRow) return json(res, 404, { error: "MIM record not found" });
+      const mim = typeof mimRow.data === "string" ? JSON.parse(mimRow.data) : mimRow.data;
+      const now = new Date().toISOString();
+      mim.phase = body.phase;
+      if (!mim.phaseHistory) mim.phaseHistory = [];
+      mim.phaseHistory.push({ phase: body.phase, enteredAt: now, enteredBy: (auth && auth.name) || "System", notes: body.notes || "" });
+      await db.upsert("mim_records", mim.id, JSON.stringify(mim));
+      // Also add to incident timeline
+      const incRow = await db.getOne("incidents", mim.incidentId);
+      if (incRow) {
+        const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+        inc.majorPhase = body.phase;
+        inc.majorTimeline = [...(inc.majorTimeline || []), { time: now, event: `Phase: ${body.phase}`, phase: body.phase, user: (auth && auth.name) || "System" }];
+        await db.upsert("incidents", mim.incidentId, JSON.stringify(inc));
+      }
+      try { await db.audit("mim_records", mim.id, "phase_change", JSON.stringify({ phase: body.phase }), (auth && auth.name) || "System"); } catch { /* ignore */ }
+      if (wsServer) wsServer.broadcast("mim", { action: "phase_change", incidentId: mim.incidentId, mimId: mim.id, phase: body.phase });
+      return json(res, 200, { success: true, phase: body.phase, phaseHistory: mim.phaseHistory });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
@@ -5826,6 +6159,435 @@ Return ONLY valid JSON: { "riskLevel": "low|medium|high|critical", "recommendati
       try { await db.audit("mim_records", mim.id, "post_mortem", JSON.stringify({ url: mim.postMortemUrl, by: mim.postMortemBy }), mim.postMortemBy); } catch { /* ignore */ }
       if (wsServer) wsServer.broadcast("mim", { action: "post_mortem", incidentId: mim.incidentId, mimId: mim.id });
       return json(res, 200, { success: true, mim });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // PIR / Post-Incident Review (Structured RCA)
+  // ════════════════════════════════════════════════════════════════════════
+
+  // POST /api/pir — create a new PIR record
+  if (pathname === "/api/pir" && req.method === "POST") {
+    const body = await parseBody(req);
+    const vRes = validateEndpoint("pir", body);
+    if (!vRes.success) return json(res, 400, { error: vRes.error });
+    try {
+      const id = `PIR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const pir = {
+        id,
+        incidentId: body.incidentId,
+        mimId: body.mimId || null,
+        status: body.status || "Draft",
+        rca: body.rca || { type: "unknown", rootCause: "", contributingFactors: [] },
+        actionItems: (body.actionItems || []).map((a, i) => ({
+          id: a.id || `ACT-${id}-${i}`,
+          title: a.title,
+          owner: a.owner || "",
+          dueDate: a.dueDate || null,
+          status: a.status || "open",
+          priority: a.priority || "Medium",
+          completedAt: null,
+        })),
+        lessonsLearned: body.lessonsLearned || [],
+        impactAssessment: body.impactAssessment || {},
+        createdBy: (auth && auth.name) || body.createdBy || "Unknown",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await db.upsert("pir_records", id, JSON.stringify(pir));
+      try { await db.audit("pir_records", id, "create", JSON.stringify({ incidentId: pir.incidentId }), pir.createdBy); } catch { /* ignore */ }
+      if (wsServer) wsServer.broadcast("pir", { action: "created", pirId: id, incidentId: pir.incidentId });
+      return json(res, 201, { success: true, pir });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/pir — list all PIR records (optionally filter by incidentId)
+  if (pathname === "/api/pir" && req.method === "GET") {
+    try {
+      const filterIncidentId = urlObj.searchParams.get("incidentId");
+      const rows = await db.getAll("pir_records");
+      let records = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      if (filterIncidentId) records = records.filter(r => r.incidentId === filterIncidentId);
+      records.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      return json(res, 200, { total: records.length, records });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/pir/:id — get single PIR
+  if (pathname.startsWith("/api/pir/") && !pathname.includes("/actions/") && req.method === "GET") {
+    const pirId = pathname.split("/api/pir/")[1];
+    if (!pirId) return json(res, 400, { error: "pirId required" });
+    try {
+      const row = await db.getOne("pir_records", pirId);
+      if (!row) return json(res, 404, { error: "PIR not found" });
+      const pir = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      return json(res, 200, pir);
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // PUT /api/pir/:id — update PIR record
+  if (pathname.startsWith("/api/pir/") && !pathname.includes("/actions/") && req.method === "PUT") {
+    const pirId = pathname.split("/api/pir/")[1];
+    if (!pirId) return json(res, 400, { error: "pirId required" });
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("pir_records", pirId);
+      if (!row) return json(res, 404, { error: "PIR not found" });
+      const pir = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      // Merge updatable fields
+      if (body.rca !== undefined) pir.rca = body.rca;
+      if (body.status !== undefined) pir.status = body.status;
+      if (body.actionItems !== undefined) pir.actionItems = body.actionItems;
+      if (body.lessonsLearned !== undefined) pir.lessonsLearned = body.lessonsLearned;
+      if (body.impactAssessment !== undefined) pir.impactAssessment = body.impactAssessment;
+      pir.updatedAt = new Date().toISOString();
+      pir.updatedBy = (auth && auth.name) || body.updatedBy || "Unknown";
+      await db.upsert("pir_records", pirId, JSON.stringify(pir));
+      try { await db.audit("pir_records", pirId, "update", JSON.stringify({ status: pir.status }), pir.updatedBy); } catch { /* ignore */ }
+      if (wsServer) wsServer.broadcast("pir", { action: "updated", pirId, incidentId: pir.incidentId });
+      return json(res, 200, { success: true, pir });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // PUT /api/pir/:id/actions/:actionId — update a specific action item
+  if (pathname.includes("/api/pir/") && pathname.includes("/actions/") && req.method === "PUT") {
+    const parts = pathname.split("/");
+    const pirIdx = parts.indexOf("pir") + 1;
+    const actionIdx = parts.indexOf("actions") + 1;
+    const pirId = parts[pirIdx];
+    const actionId = parts[actionIdx];
+    if (!pirId || !actionId) return json(res, 400, { error: "pirId and actionId required" });
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("pir_records", pirId);
+      if (!row) return json(res, 404, { error: "PIR not found" });
+      const pir = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const action = (pir.actionItems || []).find(a => a.id === actionId);
+      if (!action) return json(res, 404, { error: "Action item not found" });
+      if (body.status !== undefined) action.status = body.status;
+      if (body.title !== undefined) action.title = body.title;
+      if (body.owner !== undefined) action.owner = body.owner;
+      if (body.dueDate !== undefined) action.dueDate = body.dueDate;
+      if (body.notes !== undefined) action.notes = body.notes;
+      if (action.status === "completed" && !action.completedAt) action.completedAt = new Date().toISOString();
+      pir.updatedAt = new Date().toISOString();
+      await db.upsert("pir_records", pirId, JSON.stringify(pir));
+      try { await db.audit("pir_records", pirId, "action_update", JSON.stringify({ actionId, status: action.status }), (auth && auth.name) || "Unknown"); } catch { /* ignore */ }
+      return json(res, 200, { success: true, action, pir });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Per-Customer SLA Policies
+  // ════════════════════════════════════════════════════════════════════════
+
+  // POST /api/sla/customer-policies — create/update a customer SLA policy
+  if (pathname === "/api/sla/customer-policies" && req.method === "POST") {
+    const body = await parseBody(req);
+    const vRes = validateEndpoint("customer_sla_policy", body);
+    if (!vRes.success) return json(res, 400, { error: vRes.error });
+    try {
+      const TIER_DEFAULTS = {
+        basic: { supportHours: { start: 9, end: 18, days: "Mon-Fri" }, multiplier: 1.0 },
+        premium: { supportHours: { start: 8, end: 20, days: "Mon-Sat" }, multiplier: 0.75 },
+        enterprise: { supportHours: { start: 0, end: 24, days: "24/7" }, multiplier: 0.5 },
+        custom: { supportHours: { start: 9, end: 18, days: "Mon-Fri" }, multiplier: 1.0 },
+      };
+      const tier = body.tier || "basic";
+      const defaults = TIER_DEFAULTS[tier] || TIER_DEFAULTS.basic;
+      const id = body.customerId;
+      const policy = {
+        id,
+        customerId: body.customerId,
+        tier,
+        supportHours: body.supportHours || defaults.supportHours,
+        severities: body.severities || null,
+        multiplier: body.multiplier || defaults.multiplier,
+        effectiveFrom: body.effectiveFrom || new Date().toISOString(),
+        effectiveTo: body.effectiveTo || null,
+        active: body.active !== false,
+        createdBy: (auth && auth.name) || body.createdBy || "Unknown",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await db.upsert("customer_sla_policies", id, JSON.stringify(policy));
+      try { await db.audit("customer_sla_policies", id, "create", JSON.stringify({ tier, customerId: id }), policy.createdBy); } catch { /* ignore */ }
+      return json(res, 201, { success: true, policy });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/sla/customer-policies — list all customer SLA policies
+  if (pathname === "/api/sla/customer-policies" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("customer_sla_policies");
+      const policies = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { total: policies.length, policies });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/sla/customer-policies/:customerId — get policy for a specific customer
+  if (pathname.startsWith("/api/sla/customer-policies/") && req.method === "GET") {
+    const customerId = pathname.split("/api/sla/customer-policies/")[1];
+    if (!customerId) return json(res, 400, { error: "customerId required" });
+    try {
+      const row = await db.getOne("customer_sla_policies", customerId);
+      if (!row) return json(res, 404, { error: "No SLA policy for this customer" });
+      const policy = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      return json(res, 200, policy);
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // On-Call / Shift Rotation Schedules
+  // ════════════════════════════════════════════════════════════════════════
+
+  // POST /api/oncall/schedules — create/update an on-call schedule
+  if (pathname === "/api/oncall/schedules" && req.method === "POST") {
+    const body = await parseBody(req);
+    const vRes = validateEndpoint("oncall_schedule", body);
+    if (!vRes.success) return json(res, 400, { error: vRes.error });
+    try {
+      const id = body.id || `OC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const schedule = {
+        id,
+        name: body.name,
+        rotationType: body.rotationType || "weekly",
+        members: body.members,
+        startDate: body.startDate || new Date().toISOString().slice(0, 10),
+        active: body.active !== false,
+        holidayOverrides: body.holidayOverrides || [],
+        createdBy: (auth && auth.name) || body.createdBy || "Unknown",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await db.upsert("oncall_schedules", id, JSON.stringify(schedule));
+      try { await db.audit("oncall_schedules", id, "create", JSON.stringify({ name: schedule.name, members: schedule.members.length }), schedule.createdBy); } catch { /* ignore */ }
+      return json(res, 201, { success: true, schedule });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/oncall/schedules — list all on-call schedules
+  if (pathname === "/api/oncall/schedules" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("oncall_schedules");
+      const schedules = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      return json(res, 200, { total: schedules.length, schedules });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/oncall/current — get who is currently on-call
+  if (pathname === "/api/oncall/current" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("oncall_schedules");
+      const schedules = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean).filter(s => s.active);
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const result = schedules.map(s => {
+        // Check holiday override first
+        const override = (s.holidayOverrides || []).find(h => h.date === todayStr);
+        if (override && override.member) {
+          return { scheduleId: s.id, scheduleName: s.name, onCall: override.member, source: "holiday_override" };
+        }
+        // Compute rotation index
+        const members = s.members || [];
+        if (members.length === 0) return { scheduleId: s.id, scheduleName: s.name, onCall: null, source: "no_members" };
+        const startDate = new Date(s.startDate || s.createdAt);
+        const daysDiff = Math.floor((now - startDate) / 86400000);
+        let idx;
+        if (s.rotationType === "daily") {
+          idx = daysDiff % members.length;
+        } else {
+          // weekly (default)
+          const weeksDiff = Math.floor(daysDiff / 7);
+          idx = weeksDiff % members.length;
+        }
+        return { scheduleId: s.id, scheduleName: s.name, onCall: members[idx], source: "rotation", rotationIndex: idx };
+      });
+      return json(res, 200, { total: result.length, onCall: result });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // CSI Register (Continual Service Improvement)
+  // ════════════════════════════════════════════════════════════════════════
+
+  // POST /api/csi — create a new CSI entry
+  if (pathname === "/api/csi" && req.method === "POST") {
+    const body = await parseBody(req);
+    const vRes = validateEndpoint("csi", body);
+    if (!vRes.success) return json(res, 400, { error: vRes.error });
+    try {
+      const id = `CSI-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const csi = {
+        id,
+        title: body.title,
+        description: body.description || "",
+        status: body.status || "Proposed",
+        priority: body.priority || "Medium",
+        category: body.category || "process",
+        owner: body.owner || "",
+        source: body.source || "manual",
+        targetDate: body.targetDate || null,
+        expectedBenefit: body.expectedBenefit || "",
+        actualOutcome: body.actualOutcome || "",
+        relatedIncidents: body.relatedIncidents || [],
+        relatedPirs: body.relatedPirs || [],
+        createdBy: (auth && auth.name) || body.createdBy || "Unknown",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await db.upsert("csi_register", id, JSON.stringify(csi));
+      try { await db.audit("csi_register", id, "create", JSON.stringify({ title: csi.title, category: csi.category }), csi.createdBy); } catch { /* ignore */ }
+      if (wsServer) wsServer.broadcast("csi", { action: "created", csiId: id });
+      return json(res, 201, { success: true, csi });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/csi — list all CSI entries (optionally filter by status/category)
+  if (pathname === "/api/csi" && req.method === "GET") {
+    try {
+      const filterStatus = urlObj.searchParams.get("status");
+      const filterCategory = urlObj.searchParams.get("category");
+      const rows = await db.getAll("csi_register");
+      let records = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      if (filterStatus) records = records.filter(r => r.status === filterStatus);
+      if (filterCategory) records = records.filter(r => r.category === filterCategory);
+      records.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      return json(res, 200, { total: records.length, records });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // PUT /api/csi/:id — update a CSI entry
+  if (pathname.startsWith("/api/csi/") && !pathname.includes("/stats") && req.method === "PUT") {
+    const csiId = pathname.split("/api/csi/")[1];
+    if (!csiId) return json(res, 400, { error: "csiId required" });
+    const body = await parseBody(req);
+    try {
+      const row = await db.getOne("csi_register", csiId);
+      if (!row) return json(res, 404, { error: "CSI entry not found" });
+      const csi = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      const updatableFields = ["title", "description", "status", "priority", "category", "owner", "targetDate", "expectedBenefit", "actualOutcome", "relatedIncidents", "relatedPirs"];
+      for (const f of updatableFields) { if (body[f] !== undefined) csi[f] = body[f]; }
+      csi.updatedAt = new Date().toISOString();
+      csi.updatedBy = (auth && auth.name) || body.updatedBy || "Unknown";
+      if (csi.status === "Completed" && !csi.completedAt) csi.completedAt = new Date().toISOString();
+      await db.upsert("csi_register", csiId, JSON.stringify(csi));
+      try { await db.audit("csi_register", csiId, "update", JSON.stringify({ status: csi.status }), csi.updatedBy); } catch { /* ignore */ }
+      if (wsServer) wsServer.broadcast("csi", { action: "updated", csiId });
+      return json(res, 200, { success: true, csi });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/csi/stats — aggregated CSI statistics
+  if (pathname === "/api/csi/stats" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("csi_register");
+      const records = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const byStatus = {}, byCategory = {}, byPriority = {};
+      for (const r of records) {
+        byStatus[r.status || "Unknown"] = (byStatus[r.status || "Unknown"] || 0) + 1;
+        byCategory[r.category || "Unknown"] = (byCategory[r.category || "Unknown"] || 0) + 1;
+        byPriority[r.priority || "Unknown"] = (byPriority[r.priority || "Unknown"] || 0) + 1;
+      }
+      const completed = records.filter(r => r.status === "Completed").length;
+      const completionRate = records.length > 0 ? Math.round((completed / records.length) * 100) : 0;
+      return json(res, 200, { total: records.length, completed, completionRate, byStatus, byCategory, byPriority });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // CSAT Survey Portal
+  // ════════════════════════════════════════════════════════════════════════
+
+  // GET /api/csat/portal/:incidentId — get survey form for an incident
+  if (pathname.startsWith("/api/csat/portal/") && req.method === "GET") {
+    const incidentId = pathname.split("/api/csat/portal/")[1];
+    if (!incidentId) return json(res, 400, { error: "incidentId required" });
+    try {
+      const row = await db.getOne("incidents", incidentId);
+      if (!row) return json(res, 404, { error: "Incident not found" });
+      const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      // Check if already submitted
+      const existingRows = await db.getAll("csat_responses");
+      const existing = existingRows.find(r => {
+        try { const c = typeof r.data === "string" ? JSON.parse(r.data) : r.data; return c && c.incidentId === incidentId; } catch { return false; }
+      });
+      return json(res, 200, {
+        incidentId,
+        title: inc.title,
+        resolvedAt: inc.resolvedAt,
+        assignee: inc.assignee,
+        alreadySubmitted: !!existing,
+        questions: [
+          { id: "overall", label: "Overall Satisfaction", type: "rating", min: 1, max: 5 },
+          { id: "timeliness", label: "Resolution Timeliness", type: "rating", min: 1, max: 5 },
+          { id: "communication", label: "Communication Quality", type: "rating", min: 1, max: 5 },
+          { id: "comment", label: "Additional Comments", type: "text" },
+        ],
+      });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // POST /api/csat/submit — submit a CSAT response
+  if (pathname === "/api/csat/submit" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body.incidentId) return json(res, 400, { error: "incidentId required" });
+    if (!body.overall || body.overall < 1 || body.overall > 5) return json(res, 400, { error: "overall rating 1-5 required" });
+    try {
+      const id = `CSAT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const response = {
+        id,
+        incidentId: body.incidentId,
+        overall: body.overall,
+        timeliness: body.timeliness || null,
+        communication: body.communication || null,
+        comment: typeof body.comment === "string" ? body.comment.slice(0, 2000) : "",
+        submittedBy: (auth && auth.name) || body.submittedBy || "Anonymous",
+        submittedAt: new Date().toISOString(),
+        aiResolved: body.aiResolved || false,
+      };
+      await db.upsert("csat_responses", id, JSON.stringify(response));
+      try { await db.audit("csat_responses", id, "submit", JSON.stringify({ incidentId: body.incidentId, overall: body.overall }), response.submittedBy); } catch { /* ignore */ }
+      return json(res, 201, { success: true, response });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/csat/responses — list CSAT responses
+  if (pathname === "/api/csat/responses" && req.method === "GET") {
+    try {
+      const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "100", 10), 500);
+      const rows = await db.getAll("csat_responses");
+      const responses = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      responses.sort((a, b) => String(b.submittedAt || "").localeCompare(String(a.submittedAt || "")));
+      return json(res, 200, { total: responses.length, responses: responses.slice(0, limit) });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/csat/stats — aggregated CSAT statistics
+  if (pathname === "/api/csat/stats" && req.method === "GET") {
+    try {
+      const days = Math.min(parseInt(urlObj.searchParams.get("days") || "30", 10), 365);
+      const since = new Date(Date.now() - days * 86400000);
+      const rows = await db.getAll("csat_responses");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const recent = all.filter(r => new Date(r.submittedAt) >= since);
+      const avg = (arr, field) => arr.length > 0 ? Math.round((arr.reduce((s, r) => s + (Number(r[field]) || 0), 0) / arr.length) * 10) / 10 : null;
+      const dist = {};
+      for (const r of recent) { const s = r.overall || 0; dist[s] = (dist[s] || 0) + 1; }
+      const aiResponses = recent.filter(r => r.aiResolved);
+      const humanResponses = recent.filter(r => !r.aiResolved);
+      return json(res, 200, {
+        windowDays: days,
+        totalResponses: recent.length,
+        allTimeResponses: all.length,
+        averageOverall: avg(recent, "overall"),
+        averageTimeliness: avg(recent, "timeliness"),
+        averageCommunication: avg(recent, "communication"),
+        distribution: dist,
+        aiResolved: { count: aiResponses.length, avg: avg(aiResponses, "overall") },
+        humanResolved: { count: humanResponses.length, avg: avg(humanResponses, "overall") },
+        nps: recent.length > 0 ? Math.round(((recent.filter(r => r.overall >= 4).length - recent.filter(r => r.overall <= 2).length) / recent.length) * 100) : null,
+      });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
@@ -6322,7 +7084,8 @@ Otherwise, provide helpful conversational responses as plain text.`;
       let actionResult = null;
       if (action) {
         if (action.action === "create_ticket") {
-          const id = `INC-${Date.now().toString(36).toUpperCase()}`;
+          const _seq = await db.getNextId("incident_counter");
+          const id = `INC-${String(_seq).padStart(4, "0")}`;
           const ticket = { id, title: action.title || "New ticket via AI Chat", description: action.description || body.message, priority: normalizePriority(action.priority), category: action.category || "General", status: "New", source: "ai_chat", createdBy: auth.name || "anonymous", createdAt: new Date().toISOString() };
           await db.upsert("incidents", id, JSON.stringify(ticket));
           actionResult = { action: "ticket_created", ticketId: id, title: ticket.title };
@@ -6410,7 +7173,8 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     const body = await parseBody(req);
     if (!body.from || !body.subject) return json(res, 400, { error: "from and subject required" });
     try {
-      const id = `INC-${Date.now().toString(36).toUpperCase()}`;
+      const _seq = await db.getNextId("incident_counter");
+      const id = `INC-${String(_seq).padStart(4, "0")}`;
       let aiCategory = { category: "General", priority: "Sev-C", subcategory: "" };
       try {
         const aiResult = await callAI("You are an IT ticket triage engine. Categorize this email into an IT ticket. Return JSON: {\"category\":\"...\",\"subcategory\":\"...\",\"priority\":\"P1-P4\"}", `From: ${body.from}\nSubject: ${body.subject}\nBody: ${(body.body || "").substring(0, 500)}`, { tier: "tertiary", maxTokens: 200 });
@@ -6647,7 +7411,8 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
     const body = await parseBody(req);
     if (!body.title || !body.requesterEmail) return json(res, 400, { error: "title and requesterEmail required" });
     try {
-      const id = `INC-${Date.now().toString(36).toUpperCase()}`;
+      const _seq = await db.getNextId("incident_counter");
+      const id = `INC-${String(_seq).padStart(4, "0")}`;
       const ticket = { id, title: body.title, description: body.description || "", category: body.category || "General", priority: normalizePriority(body.priority), status: "New", source: "self-service", requesterEmail: body.requesterEmail, requesterName: body.requesterName || body.requesterEmail.split("@")[0], createdAt: new Date().toISOString(), createdBy: body.requesterEmail };
       await db.upsert("incidents", id, JSON.stringify(ticket));
       await db.audit("incidents", id, "create", `Self-service ticket from ${body.requesterEmail}`, body.requesterEmail);
@@ -6930,6 +7695,106 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
       }
       await db.audit("assets", "discovery", "ingest", `Discovery ingest: ${added} added, ${updated} updated from ${body.source || "api"}`, auth.name || "System");
       return json(res, 200, { added, updated, total: body.assets.length, source: body.source || "api" });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── Step 28b: Intune Device Sync ─────────────────────────────────────
+  // POST /api/intune/sync — Sync Intune managed devices into CMDB assets for a customer tenant
+  // Body: { customerId?: string } — if omitted, syncs the home tenant
+  if (pathname === "/api/intune/sync" && req.method === "POST") {
+    const body = await parseBody(req);
+    try {
+      let tenantId = ENTRA_TENANT_ID;
+      let customerLabel = "Home Tenant";
+      // If customerId provided, resolve their tenant
+      if (body.customerId) {
+        const custRow = await db.getOne("customers", body.customerId).catch(() => null);
+        if (!custRow) return json(res, 404, { error: "Customer not found" });
+        const cust = typeof custRow.data === "string" ? JSON.parse(custRow.data) : (custRow.data || custRow);
+        if (!cust.m365TenantId && !cust.entraTenantId) return json(res, 400, { error: "Customer has no M365 tenant ID configured" });
+        tenantId = cust.m365TenantId || cust.entraTenantId;
+        customerLabel = cust.name || cust.company || body.customerId;
+      }
+      // Fetch Intune managed devices via Graph API
+      const graphCall = body.customerId ? (ep) => graphAppCallForTenant(tenantId, ep) : graphAppCall;
+      if (!graphCall) return json(res, 503, { error: "Graph API not configured" });
+      let allDevices = [];
+      let nextLink = "/deviceManagement/managedDevices?$top=100&$select=id,deviceName,managedDeviceOwnerType,operatingSystem,osVersion,complianceState,lastSyncDateTime,model,manufacturer,serialNumber,userPrincipalName,enrolledDateTime,managementAgent,deviceRegistrationState,isEncrypted,totalStorageSpaceInBytes,freeStorageSpaceInBytes";
+      while (nextLink) {
+        const page = await graphCall(nextLink);
+        const devices = Array.isArray(page.value) ? page.value : [];
+        allDevices = allDevices.concat(devices);
+        nextLink = page["@odata.nextLink"] ? page["@odata.nextLink"].replace("https://graph.microsoft.com/v1.0", "") : null;
+        if (allDevices.length >= 1000) break; // safety cap
+      }
+      // Upsert into assets collection
+      let added = 0, updated = 0;
+      for (const dev of allDevices) {
+        const assetId = `INTUNE-${dev.id}`;
+        const existing = await db.getOne("assets", assetId).catch(() => null);
+        const record = {
+          id: assetId, name: dev.deviceName || dev.id, hostname: dev.deviceName,
+          type: (dev.operatingSystem || "").toLowerCase().includes("windows") ? "Laptop" : (dev.operatingSystem || "").toLowerCase().includes("android") || (dev.operatingSystem || "").toLowerCase().includes("ios") ? "Mobile" : "Device",
+          os: dev.operatingSystem ? `${dev.operatingSystem} ${dev.osVersion || ""}`.trim() : undefined,
+          serialNumber: dev.serialNumber || undefined,
+          manufacturer: dev.manufacturer || undefined, model: dev.model || undefined,
+          status: dev.complianceState === "compliant" ? "Active" : dev.complianceState === "noncompliant" ? "NonCompliant" : "Active",
+          complianceState: dev.complianceState || "unknown",
+          managementAgent: dev.managementAgent || undefined,
+          ownerType: dev.managedDeviceOwnerType || undefined,
+          enrolledAt: dev.enrolledDateTime || undefined,
+          lastSyncAt: dev.lastSyncDateTime || undefined,
+          assignedUser: dev.userPrincipalName || undefined,
+          isEncrypted: dev.isEncrypted || false,
+          totalStorageGB: dev.totalStorageSpaceInBytes ? Math.round(dev.totalStorageSpaceInBytes / 1073741824) : undefined,
+          freeStorageGB: dev.freeStorageSpaceInBytes ? Math.round(dev.freeStorageSpaceInBytes / 1073741824) : undefined,
+          registrationState: dev.deviceRegistrationState || undefined,
+          discoverySource: "intune", discoveredAt: new Date().toISOString(),
+          customerId: body.customerId || undefined, customerName: customerLabel,
+          tenantId: tenantId,
+        };
+        await db.upsert("assets", assetId, JSON.stringify(record));
+        if (existing) updated++; else added++;
+      }
+      await db.audit("assets", "intune_sync", "sync", `Intune sync for ${customerLabel}: ${added} added, ${updated} updated, ${allDevices.length} total devices`, auth.name || "System");
+      return json(res, 200, { added, updated, total: allDevices.length, customer: customerLabel, tenantId });
+    } catch (err) {
+      console.error("[Intune Sync] Error:", err.message);
+      return json(res, 500, { error: err.message || "Intune sync failed" });
+    }
+  }
+
+  // GET /api/intune/devices?customerId= — List Intune-sourced assets
+  if (pathname === "/api/intune/devices" && req.method === "GET") {
+    try {
+      const customerId = urlObj.searchParams.get("customerId");
+      const allAssets = await db.getAll("assets");
+      const devices = allAssets
+        .map(r => typeof r.data === "string" ? JSON.parse(r.data) : (r.data || r))
+        .filter(a => a.discoverySource === "intune" && (!customerId || a.customerId === customerId));
+      return json(res, 200, { devices, total: devices.length, customerId: customerId || "all" });
+    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // GET /api/intune/summary — Asset summary grouped by customer/tenant
+  if (pathname === "/api/intune/summary" && req.method === "GET") {
+    try {
+      const allAssets = await db.getAll("assets");
+      const intuneAssets = allAssets
+        .map(r => typeof r.data === "string" ? JSON.parse(r.data) : (r.data || r))
+        .filter(a => a.discoverySource === "intune");
+      const byCustomer = {};
+      for (const a of intuneAssets) {
+        const key = a.customerName || a.customerId || "Unknown";
+        if (!byCustomer[key]) byCustomer[key] = { customer: key, customerId: a.customerId, tenantId: a.tenantId, total: 0, compliant: 0, nonCompliant: 0, byType: {}, byOS: {} };
+        byCustomer[key].total++;
+        if (a.complianceState === "compliant") byCustomer[key].compliant++;
+        else if (a.complianceState === "noncompliant") byCustomer[key].nonCompliant++;
+        byCustomer[key].byType[a.type] = (byCustomer[key].byType[a.type] || 0) + 1;
+        const osKey = (a.os || "Unknown").split(" ")[0];
+        byCustomer[key].byOS[osKey] = (byCustomer[key].byOS[osKey] || 0) + 1;
+      }
+      return json(res, 200, { tenants: Object.values(byCustomer), totalDevices: intuneAssets.length });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 

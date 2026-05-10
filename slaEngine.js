@@ -109,12 +109,30 @@ function getBusinessHoursElapsed(createdAt, now, options = {}) {
 }
 
 // ─── Compute SLA status for a single incident ──────────────────────────
-function computeSlaStatus(incident, policy) {
+function computeSlaStatus(incident, policy, customerPolicy) {
   // Normalize priority so legacy P1..P4 / Critical / High / etc. map onto
   // canonical Sev-A..Sev-D before policy lookup. Avoids silent Sev-C fallback
   // when a record was created via the email or self-service path with a P-code.
   const canonicalPriority = normalizePriority(incident.priority);
-  const sev = policy.severities[canonicalPriority] || policy.severities["Sev-C"];
+
+  // Per-customer SLA override: apply multiplier and custom support hours
+  let effectivePolicy = policy;
+  if (customerPolicy && customerPolicy.active) {
+    const cpSeverities = customerPolicy.severities || policy.severities;
+    const cpSupportHours = customerPolicy.supportHours || policy.supportHours;
+    const multiplier = customerPolicy.multiplier || 1;
+    // Build adjusted severities with multiplier applied
+    const adjustedSeverities = {};
+    for (const [sev, targets] of Object.entries(cpSeverities)) {
+      adjustedSeverities[sev] = {
+        firstResponse: Math.round(targets.firstResponse * multiplier * 100) / 100,
+        worstResponse: Math.round(targets.worstResponse * multiplier * 100) / 100,
+      };
+    }
+    effectivePolicy = { ...policy, supportHours: cpSupportHours, severities: adjustedSeverities };
+  }
+
+  const sev = effectivePolicy.severities[canonicalPriority] || effectivePolicy.severities["Sev-C"];
   const createdAt = incident.createdAt || incident.created_at || incident.created;
   const now = new Date();
 
@@ -134,7 +152,7 @@ function computeSlaStatus(incident, policy) {
       hoursElapsed = Math.round((zm.fullResolutionBizMin / 60) * 100) / 100;
       elapsedSource = "zendesk_full_resolution";
     } else {
-      const bhOptions = policy.supportHours ? { start: policy.supportHours.start, end: policy.supportHours.end, days: policy.supportHours.days, holidays: policy.holidays || [], slaPauseHistory: incident.slaPauseHistory || [] } : { slaPauseHistory: incident.slaPauseHistory || [] };
+      const bhOptions = effectivePolicy.supportHours ? { start: effectivePolicy.supportHours.start, end: effectivePolicy.supportHours.end, days: effectivePolicy.supportHours.days, holidays: effectivePolicy.holidays || policy.holidays || [], slaPauseHistory: incident.slaPauseHistory || [] } : { slaPauseHistory: incident.slaPauseHistory || [] };
       hoursElapsed = getBusinessHoursElapsed(createdAt, now, bhOptions);
     }
   }
@@ -199,7 +217,9 @@ class SlaEngine {
     this.lastRun = null;
     this.stats = { totalChecked: 0, atRisk: 0, breached: 0, escalated: 0, cyclesSkipped: 0, lastCycleMs: 0 };
     this.onBreach = options.onBreach || null; // callback(escalation) for notification
+    this.onAtRisk = options.onAtRisk || null; // callback(atRiskInfo) for auto-reassign
     this._notifiedBreaches = new Set(); // dedup: track incident IDs already notified — restored from DB on start()
+    this._notifiedAtRisk = new Set(); // dedup: track incident IDs already at-risk-notified
     this._lastDataHash = null; // change-detection
     // v3.24: by default use computeSlaStatus_v2 (worst-of response/resolution).
     // Set feature flag `sla_v1_legacy` to roll back. Read once per cycle.
@@ -213,6 +233,8 @@ class SlaEngine {
     // v3.24 Phase A1: restore breach-notification dedup so a process restart
     // doesn't re-fire alerts for incidents already notified within the last 7 days.
     await this._restoreNotifiedBreaches();
+    // v3.36: restore at-risk dedup
+    await this._restoreNotifiedAtRisk();
     // Run immediately, then on interval
     await this.runCycle();
     this.timer = setInterval(() => this.runCycle(), this.interval);
@@ -240,6 +262,30 @@ class SlaEngine {
       if (restored > 0) console.log(`[SLA Engine] Restored ${restored} breach-dedup entries from DB`);
     } catch (err) {
       console.warn("[SLA Engine] Could not restore breach dedup:", err.message);
+    }
+  }
+
+  // v3.36: persisted at-risk dedup. Stored in `sla_at_risk_notifications`.
+  async _restoreNotifiedAtRisk() {
+    try {
+      if (!this.db || !this.db.getAll) return;
+      const rows = await this.db.getAll("sla_at_risk_notifications");
+      const cutoffMs = Date.now() - 7 * 86400000;
+      let restored = 0;
+      for (const r of rows) {
+        try {
+          const rec = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (!rec || !rec.id) continue;
+          const notifiedMs = rec.notifiedAt ? new Date(rec.notifiedAt).getTime() : 0;
+          if (notifiedMs >= cutoffMs) {
+            this._notifiedAtRisk.add(rec.id);
+            restored++;
+          }
+        } catch { /* ignore */ }
+      }
+      if (restored > 0) console.log(`[SLA Engine] Restored ${restored} at-risk-dedup entries from DB`);
+    } catch (err) {
+      console.warn("[SLA Engine] Could not restore at-risk dedup:", err.message);
     }
   }
 
@@ -283,21 +329,59 @@ class SlaEngine {
         console.log(`[SLA Engine] Loaded ${Object.keys(this._customerPolicies).length} customer SLA tier overrides`);
       }
     } catch { /* ignore */ }
+
+    // v3.36: Category-based SLA modifiers — multipliers per category
+    // e.g. { "VPN": 0.5, "Email": 1.5, "Security": 0.3 }
+    // Multiplier <1 = tighter SLA, >1 = looser SLA
+    this._categoryModifiers = {};
+    try {
+      const catRows = await this.db.getAll("sla_category_modifiers");
+      for (const r of catRows) {
+        try {
+          const mod = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          if (mod && mod.category && typeof mod.multiplier === "number") {
+            this._categoryModifiers[mod.category] = mod.multiplier;
+          }
+        } catch { /* ignore */ }
+      }
+      if (Object.keys(this._categoryModifiers).length > 0) {
+        console.log(`[SLA Engine] Loaded ${Object.keys(this._categoryModifiers).length} category SLA modifiers`);
+      }
+    } catch { /* ignore */ }
+
     this.currentPolicy = this.policy;
   }
 
-  // Get effective policy for a specific incident (supports per-customer overrides)
+  // Get effective policy for a specific incident (supports per-customer overrides + category modifiers)
   getPolicyForIncident(incident) {
     const customer = incident.customer || incident.company || incident.organization;
+    let effectivePolicy;
     if (customer && this._customerPolicies && this._customerPolicies[customer]) {
       const override = this._customerPolicies[customer];
-      return {
+      effectivePolicy = {
         supportHours: override.supportHours || this.policy.supportHours,
         severities: { ...this.policy.severities, ...(override.severities || {}) },
         holidays: override.holidays || this.policy.holidays || [],
       };
+    } else {
+      effectivePolicy = { ...this.policy };
     }
-    return this.policy;
+
+    // v3.36: Apply category-based SLA modifier
+    const category = incident.category || incident.subcategory;
+    if (category && this._categoryModifiers && this._categoryModifiers[category]) {
+      const multiplier = this._categoryModifiers[category];
+      const adjusted = {};
+      for (const [sev, targets] of Object.entries(effectivePolicy.severities || {})) {
+        adjusted[sev] = {
+          firstResponse: Math.round((targets.firstResponse || targets.response || 1) * multiplier * 100) / 100,
+          worstResponse: Math.round((targets.worstResponse || targets.resolution || 4) * multiplier * 100) / 100,
+        };
+      }
+      effectivePolicy = { ...effectivePolicy, severities: adjusted, categoryModifier: multiplier };
+    }
+
+    return effectivePolicy;
   }
 
   getSlaMap() {
@@ -338,6 +422,10 @@ class SlaEngine {
       for (const notifiedId of this._notifiedBreaches) {
         if (!openIds.has(notifiedId)) this._notifiedBreaches.delete(notifiedId);
       }
+      // v3.36: also clean up at-risk dedup
+      for (const notifiedId of this._notifiedAtRisk) {
+        if (!openIds.has(notifiedId)) this._notifiedAtRisk.delete(notifiedId);
+      }
 
       let atRisk = 0, breached = 0, escalated = 0;
       const escalations = [];
@@ -367,6 +455,39 @@ class SlaEngine {
 
         if (sla.status === "at_risk") atRisk++;
         if (sla.status === "critical") { atRisk++; }
+
+        // v3.36: fire onAtRisk for at-risk/critical incidents (deduped)
+        if ((sla.status === "at_risk" || sla.status === "critical") && !this._notifiedAtRisk.has(inc.id)) {
+          this._notifiedAtRisk.add(inc.id);
+          const atRiskInfo = {
+            id: `AR-${inc.id}-${Date.now()}`,
+            incidentId: inc.id,
+            title: inc.title,
+            priority: inc.priority,
+            assignee: inc.assignee,
+            assignmentGroup: inc.assignmentGroup,
+            category: inc.category,
+            customer: inc.customer,
+            slaStatus: sla.status,
+            pctUsed: sla.worstPct || sla.pct,
+            hoursElapsed: sla.hoursElapsed,
+            remainingHours: sla.remainingHours,
+            worstResponseTarget: sla.worstResponseTarget,
+            reason: `SLA ${sla.status} — ${Math.round(sla.worstPct || sla.pct)}% used (${sla.hoursElapsed}h / ${sla.worstResponseTarget}h)`,
+            type: "sla_at_risk",
+            timestamp: now.toISOString(),
+          };
+          try {
+            await this.db.upsert("sla_at_risk_notifications", inc.id, JSON.stringify({
+              id: inc.id, notifiedAt: now.toISOString(), slaStatus: sla.status,
+              pctUsed: atRiskInfo.pctUsed, priority: inc.priority,
+            }));
+          } catch { /* non-fatal */ }
+          if (this.onAtRisk) {
+            try { await this.onAtRisk(atRiskInfo); } catch (e) { console.warn("[SLA Engine] onAtRisk callback failed:", e.message); }
+          }
+        }
+
         if (sla.breached) {
           breached++;
           // Auto-escalate on breach — deduplicate to avoid notification flood
