@@ -133,6 +133,9 @@ export default function EngineerReviewHub({ ctx }) {
                     </div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.title}</div>
                     <div style={{ fontSize: 11, color: "#8B8FA3", lineHeight: 1.5 }}>{action.description}</div>
+                    {(action.requesterName || action.customerCompany) && (
+                      <div style={{ fontSize: 11, color: "#8B8FA3", marginTop: 4 }}>Customer: {action.requesterName || action.customerCompany || "—"}{action.requesterEmail ? ` (${action.requesterEmail})` : ""}</div>
+                    )}
                   </div>
                   {action.confidence && <div style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600, whiteSpace: "nowrap" }}>🎯 {action.confidence}%</div>}
                 </div>

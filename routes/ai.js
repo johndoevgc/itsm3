@@ -2037,6 +2037,9 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
         title: `Auto-Triage: ${ticket.id || "New Ticket"} → ${triage.category} [${triage.priority}] → ${triage.assignee}`,
         description: triage.reasoning || "AI auto-triage recommendation",
         incidentId: ticket.id || null,
+        requesterName: ticket.reporter || ticket.reporterName || "",
+        requesterEmail: ticket.reporterEmail || "",
+        customerCompany: ticket.customer || "",
         suggestedAction: `Set category=${triage.category}, priority=${triage.priority}, assignee=${triage.assignee}, group=${triage.assignmentGroup}`,
         triage: {
           category: triage.category,
@@ -2704,6 +2707,7 @@ Respond with ONLY valid JSON (no markdown):
         if ((pred.breachProbability || 0) >= AI_THRESHOLDS.slaRisk) {
           const skipReason = shouldSkipAction(dedupState, { incidentId: pred.ticketId, type: "sla_prevention" });
           if (skipReason) { console.log(`[AI SLA] Skipped ${pred.ticketId}: ${skipReason}`); continue; }
+          const srcInc = openIncidents.find(i => i.id === pred.ticketId);
           const actionRecord = {
             id: `SLA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
             type: "sla_prevention",
@@ -2711,6 +2715,9 @@ Respond with ONLY valid JSON (no markdown):
             title: `SLA Breach Risk: ${pred.ticketId} (${pred.breachProbability}% likely)`,
             description: pred.reasoning || "Predicted SLA breach",
             incidentId: pred.ticketId,
+            requesterName: srcInc?.reporter || srcInc?.reporterName || "",
+            requesterEmail: srcInc?.reporterEmail || "",
+            customerCompany: srcInc?.customer || "",
             suggestedAction: pred.suggestedAction || "escalate",
             escalationTarget: pred.escalationTarget || "",
             emailDraft: pred.emailDraft || "",
@@ -3705,7 +3712,7 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
           const actionRecord = {
             id: `PRA-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
             type: "preventive_action",
-            severity: pat.confidence >= 90 ? "critical" : "high",
+            severity: pat.confidence >= 95 ? "high" : "medium",
             title: actionTitle,
             description: pat.description,
             patternId: patId,
