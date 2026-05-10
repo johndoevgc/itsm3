@@ -501,7 +501,7 @@ export default function ITSMApp() {
     { id: "weather", title: "🌤️ Singapore Weather", body: "A little local touch! ☀️ Real-time Singapore weather right in your header.\n\nBecause even IT heroes need to know if they should bring an umbrella! ☂️", position: "bottom", anchor: "header", icon: "🌏" },
     { id: "threats", title: "🚨 Security Alerts", body: "Stay safe! 🛡️ Critical and High severity cyber threats automatically pop up here with AI-powered recommendations.\n\n📧 You can even auto-draft emails to notify your team instantly!", position: "left", anchor: "threats", icon: "🔐" },
     { id: "aiAssistant", title: "🤖 Your AI Co-Pilot", body: "That's me! 👋😊 Click my avatar anytime to chat.\n\nI can help you triage incidents, recommend Knowledge Portal articles from SharePoint, analyze change risks, predict SLA breaches, and much more!", position: "left", anchor: "aiButton", icon: "🧠" },
-    { id: "admin", title: "🔧 Admin & Settings", body: "Admins, this one's for you! ⚡ Head to the Admin panel to configure:\n\n⚙️ AI Settings\n👥 Users & RBAC\n🔐 Entra ID SSO\n🛡️ PDPA Compliance\n💳 Licensing & Billing\n\nEverything you need to run a world-class ITSM!", position: "right", anchor: "sidebar", icon: "⚙️" },
+    { id: "admin", title: "🔧 Admin & Settings", body: "Admins, this one's for you! ⚡ Head to the Admin panel to configure:\n\n⚙️ AI Settings\n👥 Users & RBAC\n🔐 Entra ID SSO\n🛡️ Security & Compliance\n💳 Licensing & Billing\n\nEverything you need to run a world-class ITSM!", position: "right", anchor: "sidebar", icon: "⚙️" },
     { id: "done", title: "🎉 You're All Set!", body: "Awesome! You now know the essentials! 🌟\n\nRemember, I'm always here in the bottom-right corner if you need help. Just click my avatar! 💜\n\n🔄 You can restart this tour anytime from Admin → General settings.\n\nHappy ITSM-ing! 🚀", position: "center", icon: "✨" },
   ];
   const [dismissedThreats, setDismissedThreats] = useState([]);
@@ -548,7 +548,6 @@ export default function ITSMApp() {
     securityAlerts:  { on: true, important: true,  label: "Security Alerts",        roles: ["all"] },
     aiPerformance:   { on: true, important: true,  label: "AI Performance KPI",     roles: ["all"] },
     threatFeed:      { on: true, important: true,  label: "Cyber Threat Feed",      roles: ["all"] },
-    pdpaCompliance:  { on: true, important: true,  label: "PDPA Compliance",        roles: ["management"] },
     systemHealth:    { on: true, important: true,  label: "System Health",          roles: ["management"] },
     changeCalendar:  { on: true, important: false, label: "Change Calendar",        roles: ["management"] },
     workflowHub:     { on: true, important: false, label: "Workflow & Architecture Hub", roles: ["all"] },
@@ -768,7 +767,6 @@ export default function ITSMApp() {
       { id: "ST005", title: "Update Knowledge Portal articles from resolved tickets", recurrence: "weekly", category: "Knowledge Mgmt", priority: "Medium", status: "pending", nextDue: nextWeek, assignee: "L2 Support Engineer", aiSuggested: true, notes: "" },
       { id: "ST006", title: "Patch Tuesday — review & schedule OS patching", recurrence: "monthly", category: "Change Mgmt", priority: "High", status: "pending", nextDue: "2026-04-08", assignee: "Network Engineer", aiSuggested: true, notes: "" },
       { id: "ST007", title: "Monthly SLA & KPI performance report for management", recurrence: "monthly", category: "Reports", priority: "Medium", status: "pending", nextDue: "2026-04-01", assignee: "Service Desk Lead", aiSuggested: false, notes: "" },
-      { id: "ST008", title: "Quarterly PDPA compliance audit", recurrence: "quarterly", category: "Compliance", priority: "High", status: "pending", nextDue: "2026-06-01", assignee: "Tenant Admin", aiSuggested: true, notes: "" },
       { id: "ST009", title: "Bi-annual disaster recovery drill & documentation", recurrence: "6-monthly", category: "DR/BCP", priority: "Critical", status: "pending", nextDue: "2026-06-15", assignee: "VGC Dev Admin", aiSuggested: true, notes: "" },
       { id: "ST010", title: "Annual license & subscription renewal review", recurrence: "yearly", category: "Asset Mgmt", priority: "Medium", status: "pending", nextDue: "2026-12-01", assignee: "Tenant Admin", aiSuggested: false, notes: "" },
       { id: "ST011", title: "Escalate overdue Sev-B incidents to L2 support", recurrence: "daily", category: "Incident Mgmt", priority: "High", status: "pending", nextDue: yesterday, assignee: "Service Desk Lead", aiSuggested: true, notes: "" },
@@ -1223,11 +1221,11 @@ export default function ITSMApp() {
           }
         } catch (e) { /* ignore */ }
 
-        // Determine role: DB-stored > DEV_ADMIN check > ADMIN check > default L1 Support
+        // Determine role: DEV_ADMIN check > DB-stored > ADMIN check > default L1 Support
         const determineRole = (baseRole) => {
-          if (dbStoredRole) return dbStoredRole;
           const isDevAdmin = DEV_ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
           if (isDevAdmin) return "VGC Dev Admin";
+          if (dbStoredRole) return dbStoredRole;
           const isAdmin = ADMIN_EMAILS.some(ae => ae.toLowerCase() === email);
           if (isAdmin) return "Tenant Admin";
           return baseRole || "L1 Support Engineer";
@@ -2880,20 +2878,6 @@ export default function ITSMApp() {
       { entraGroup: "SG-ITSM-AllUsers", rbacRole: "End User" },
     ]
   });
-  const [pdpaConfig, setPdpaConfig] = useState({
-    enabled: true, dpoName: "VGC Admin", dpoEmail: "dpo@vgctechnology.com",
-    retentionPolicies: [
-      { entity: "Incidents", retention: 365, action: "Anonymize", enabled: true },
-      { entity: "Problems", retention: 730, action: "Anonymize", enabled: true },
-      { entity: "Changes", retention: 1095, action: "Archive", enabled: true },
-      { entity: "Service Requests", retention: 365, action: "Delete", enabled: true },
-      { entity: "User Activity Logs", retention: 180, action: "Delete", enabled: true },
-      { entity: "AI Training Data", retention: 90, action: "Anonymize", enabled: true },
-      { entity: "Chat Transcripts", retention: 30, action: "Delete", enabled: false },
-    ],
-    consentManagement: true, dsarWorkflow: true, dataClassification: true,
-    auditLog: []
-  });
   const INFRA_DEFAULTS = {
     database: { type: "Azure MySQL Flexible Server", region: "Southeast Asia (Singapore)", server: "vgc-itsm1-mysql.mysql.database.azure.com", database: "itsmdb", tier: "Burstable", sku: "Standard_B1ms", version: "8.0.21", storage: "20 GB", ha: "Disabled", backupRetention: "7 days", status: "Ready" },
     webApp: { name: "vgc-itsm1-app", region: "Southeast Asia (Singapore)", plan: "P1v3 (PremiumV3)", runtime: "Node.js 20 LTS", status: "Running", url: "vgc-itsm1-app.azurewebsites.net", ssl: "Azure Managed", scaling: "Manual (1 instance)", deployment: "ZIP Deploy (az webapp deploy)" },
@@ -3883,14 +3867,14 @@ export default function ITSMApp() {
         `ZENDESK HISTORICAL DATA: When available, learn from Zendesk ticket history — past resolutions, customer interactions, common issues, and response patterns. Use this context to provide more accurate and personalized assistance.`,
         `EMAIL DRAFTING: When drafting emails, write with sufficient detail and context. Include relevant ticket IDs, timestamps, and specifics. When referencing Microsoft products or services, include official Microsoft documentation links as hyperlinks (e.g., https://learn.microsoft.com/...). Be thorough but not over-written — professional and clear.`,
         `PROACTIVE BEHAVIOR: Give the complete answer FIRST, then proactively offer next steps. Never gate your answer behind a question. After delivering the solution, add 2-3 actionable follow-up suggestions at the end (not as questions, but as offers): "I can also check...", "Next step would be...", "You might also want to...". Anticipate what they need and deliver it — don't wait to be asked twice.`,
-        `CONTEXT: Singapore timezone (SGT), PDPA compliance, ISO 27001:2022 certified. Use available ticket data, KB articles, session context, and Zendesk data.`,
+        `CONTEXT: Singapore timezone (SGT), ISO 27001:2022 certified. Use available ticket data, KB articles, session context, and Zendesk data.`,
         `HIGH/CRITICAL RULES: If severity High/Critical — start with "⚠️ Urgency" line, provide containment steps, recommend escalation path, ask for approval BEFORE sending notices/escalations.`,
         `APPROVAL-FIRST POLICY: Before any outbound action (customer updates, escalations, meeting scheduling, remote sessions) — propose the action, explain why, and ask "Shall I go ahead?" with 3-6 suggested options.`,
         `HARD RULE — ENGINEER REVIEW REQUIRED: NEVER commit, approve, or execute any action that involves financial cost, budget changes, license purchases, infrastructure deletion, data loss, production deployments, or any potentially high-damage/irreversible change. ALWAYS flag these as requiring "Engineer Review" and present the action plan for explicit approval. Say: "This needs your sign-off before I proceed — [describe what and why]."`,
         `KB INTEGRATION: When relevant, recommend 1-3 Knowledge Cards with title, category, quick fix summary, and SharePoint link. If no KB exists, recommend creating one.`,
         `RESPONSE FORMAT: Keep it conversational and ACTION-ORIENTED. Use: 1) Direct answer / solution immediately 2) Step-by-step fix or recommendation 3) Knowledge Cards (if relevant) 4) Proactive next-step offers (not questions). NEVER end with "What would you like to do?" or "Can you tell me more?" — instead end with actionable suggestions like "Here's what I'd recommend next: ...". Be decisive. Be the expert who already knows what to do.`,
         `BRANDING: Never reveal model names, versions, or internal engine details. Do not show any footer branding text.`,
-        `SECURITY: Follow PDPA. Never output secrets, passwords, MFA codes, private keys. Minimize personal data.`,
+        `SECURITY: Follow data privacy best practices. Never output secrets, passwords, MFA codes, private keys. Minimize personal data.`,
         `TICKET CREATION SUPPORT: When users want to create a ticket, report an issue, log an incident, or submit a request, respond with an encouraging and helpful message like "I'll help you create that right away! Just fill in the quick form below and I'll handle the rest." A form card will automatically appear for them to fill in. Do NOT say you don't have access, can't create tickets, or suggest they use another system — the inline form handles everything. After they submit, a confirmation with the ticket ID will appear automatically.`,
         `Suggest 2-3 relevant next actions after each response. Be a teammate, not a tool.`,
       ].join(" ");
@@ -4026,7 +4010,7 @@ MODULES: Dashboard (real-time KPIs, donut charts, AI metrics), Tickets (unified 
 ZENDESK INTEGRATION: Bidirectional sync (Zendesk↔ITSM), AI auto-triage of incoming Zendesk tickets, human approval queue, real-time webhook sync, incremental polling every 90s, full data mirror for AI analysis, ticket import/export
 AI FEATURES: VGC-AI Chatbot (you — context-aware, streaming responses), AI Auto-Triage (auto-classify priority/category/assignment), AI Auto-Assignment (smart routing to best engineer), SLA Prediction (predict breaches before they happen), AI Pattern Detection (find recurring issues → create problems), AI KB Auto-Generation (auto-create KB from resolved tickets), AI Daily Briefing (shift handover reports), AI Actions & Approvals (human-in-the-loop for all AI suggestions), AI Email Drafting, AI Threat Analysis
 COMMUNICATION: Microsoft 365 integration (Outlook email, Teams channels, Calendar), Email drafting with AI, Escalation management (auto-call, Teams notify, email), Proactive alerts
-SECURITY: RBAC (VGC Dev Admin, Tenant Admin, Administrator, Service Desk Lead, L1/L2 Support, Network Engineer, Change/Problem/Asset Manager, End User, Read Only), PDPA compliance, ISO 27001:2022, Cyber News feed, Security alerts
+SECURITY: RBAC (VGC Dev Admin, Tenant Admin, Administrator, Service Desk Lead, L1/L2 Support, Network Engineer, Change/Problem/Asset Manager, End User, Read Only), ISO 27001:2022, Cyber News feed, Security alerts
 OTHER: Version history & audit trail, Recycle bin (soft delete), Data import/export, UAT testing suite, Guided tour/onboarding, Dark theme UI
 === END LIVE DATA ===
 
@@ -4807,15 +4791,29 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     zdConnected, wsBridgeConnected, zdAutoStats: safeZdAutoStats, zdAiQueue, setZdTab,
     showAiPanel, setShowAiPanel,
     fetchCsatScores, csatLoading, csatScores,
-    fetchAiActions, setIncidents, pdpaConfig,
+    fetchAiActions, setIncidents,
     zdStats, aiConfig,
   };
 
   const renderModule = () => {
+    // Pre-filter data for End User portal — defense-in-depth so the component never receives other users' data
+    const portalEmail = (currentUser.email || "").toLowerCase();
+    const portalName = currentUser.name || "";
+    const userIncidents = (incidents || []).filter(i =>
+      (i.reporterEmail || "").toLowerCase() === portalEmail ||
+      (i.reporter || "") === portalName ||
+      (i.requesterEmail || "").toLowerCase() === portalEmail ||
+      (i.createdBy || "").toLowerCase() === portalEmail
+    );
+    const userRequests = (requests || []).filter(r =>
+      (r.requester || "") === portalName ||
+      (r.requesterEmail || "").toLowerCase() === portalEmail
+    );
+
     // End Users always get the self-service portal
-    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={incidents} setIncidents={setIncidents} requests={requests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
+    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={userIncidents} setIncidents={setIncidents} requests={userRequests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
     switch (activeModule) {
-      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={incidents} setIncidents={setIncidents} requests={requests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
+      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={userIncidents} setIncidents={setIncidents} requests={userRequests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
       case "dashboard": return (<DashboardModule ctx={dashboardCtx} />);
       case "tickets": return (<TicketsModule />);
       case "incidents": return (<TicketsModule />);

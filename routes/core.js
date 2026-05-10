@@ -135,7 +135,7 @@ function buildTrustedWeatherAlert({ twoHour, twentyFour, checkedAt = new Date().
 
 module.exports = function createCoreRoutes(ctx) {
   return async function handleCoreRoutes(req, res, pathname, auth, authResult, urlObj) {
-    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex, buildEmailTemplate, normalizeCategory, graphSendMail, featureFlags, VALID_COLLECTIONS, AI_THRESHOLDS, AI_MODELS, getAIModel, scheduleCsatSurvey, isHighSeverity, safeRecipient, queueOrSendCustomerEmail, redactForAI, logAICall, piiRedact, generateKBDraft, notifyTeamsMajorIncident, processInboundEmails, cachedGetAll, cachedGetOne, APP_VERSION, shadowMode, graphAppCall, graphAppCallForTenant, graphAppCallBinary, getOrgName, purgeStatus, PORTAL_URL, ORG_SHORT_NAME, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, SOLARWINDS_API_KEY, SOLARWINDS_API_HOST, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL, LOCAL_USERS, EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, MAIL_FROM, INTERNAL_DOMAINS, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, senderFor, FEATURE_PDPA, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD, AI_AUTONOMY_LEVEL, AI_MONTHLY_BUDGET_USD, zdLastSyncTime, zdAutoSyncInterval, checkPermission, PROD_TEST_MODE, APP_DISPLAY_NAME } = ctx;
+    const { db, json, readBody, parseBody, sendText, callAI, extractAIText, cacheLayer, wsServer, notifyEngine, slaEngine, workflowEngine, analyticsEngine, incidentIndex, buildEmailTemplate, normalizeCategory, graphSendMail, featureFlags, VALID_COLLECTIONS, AI_THRESHOLDS, AI_MODELS, getAIModel, scheduleCsatSurvey, isHighSeverity, safeRecipient, queueOrSendCustomerEmail, redactForAI, logAICall, piiRedact, generateKBDraft, notifyTeamsMajorIncident, processInboundEmails, cachedGetAll, cachedGetOne, APP_VERSION, shadowMode, graphAppCall, graphAppCallForTenant, graphAppCallBinary, getOrgName, purgeStatus, PORTAL_URL, ORG_SHORT_NAME, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_CERT_THUMBPRINT, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN, SOLARWINDS_API_KEY, SOLARWINDS_API_HOST, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_MODEL, LOCAL_USERS, EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, MAIL_FROM, INTERNAL_DOMAINS, MERAKI_API_KEYS, SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, senderFor, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD, AI_AUTONOMY_LEVEL, AI_MONTHLY_BUDGET_USD, zdLastSyncTime, zdAutoSyncInterval, checkPermission, PROD_TEST_MODE, APP_DISPLAY_NAME } = ctx;
     // ─── auditLog(action, req, detail) — thin wrapper over db.audit for system-level events
     async function auditLog(action, reqObj, detail = {}) {
       try {
@@ -2065,7 +2065,6 @@ module.exports = function createCoreRoutes(ctx) {
       version: APP_VERSION.version,
       build: APP_VERSION.build,
       features: {
-        pdpa: FEATURE_PDPA,
         portal: FEATURE_PORTAL,
         billing: FEATURE_BILLING,
         setupWizard: FEATURE_SETUP_WIZARD,
@@ -2160,86 +2159,6 @@ module.exports = function createCoreRoutes(ctx) {
     } catch (e) { console.warn("[Holidays] Could not update SLA policy:", e.message); }
     await auditLog("sg_holidays_updated", req, { year: body.year, count: body.holidays.length });
     return json(res, 200, { ok: true });
-  }
-
-  // ─── PDPA Compliance Module ───────────────────────────────────────────
-  if (pathname.startsWith("/api/pdpa") && !FEATURE_PDPA) {
-    return json(res, 404, { error: "PDPA module not enabled" });
-  }
-
-  if (pathname === "/api/pdpa/config" && req.method === "GET") {
-    try {
-      const row = await db.getOne("pdpa_config", "active");
-      return json(res, 200, row ? JSON.parse(row.data) : { retentionDays: 365, consentRequired: true, autoDelete: false });
-    } catch (e) { return json(res, 500, { error: "Internal server error" }); }
-  }
-
-  if (pathname === "/api/pdpa/config" && req.method === "PUT") {
-    const body = await parseBody(req);
-    const config = {
-      retentionDays: Math.max(30, Math.min(3650, parseInt(body.retentionDays) || 365)),
-      consentRequired: !!body.consentRequired,
-      autoDelete: !!body.autoDelete,
-      dataCategories: Array.isArray(body.dataCategories) ? body.dataCategories.slice(0, 50) : ["personal", "contact", "ticket"],
-      updatedAt: new Date().toISOString(),
-      updatedBy: req.userEmail || "system",
-    };
-    await db.upsert("pdpa_config", "active", JSON.stringify(config));
-    await auditLog("pdpa_config_updated", req, config);
-    return json(res, 200, { ok: true, config });
-  }
-
-  if (pathname === "/api/pdpa/dsar" && req.method === "GET") {
-    const all = await db.getAll("dsar_requests");
-    const requests = all.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-    return json(res, 200, requests);
-  }
-
-  if (pathname === "/api/pdpa/dsar" && req.method === "POST") {
-    const body = await parseBody(req);
-    if (!body.type || !body.subjectEmail) return json(res, 400, { error: "type and subjectEmail required" });
-    const dsarId = `DSAR-${Date.now().toString(36).toUpperCase()}`;
-    const dsar = {
-      id: dsarId,
-      type: ["access", "erasure", "portability", "correction"].includes(body.type) ? body.type : "access",
-      subjectEmail: String(body.subjectEmail).slice(0, 200),
-      subjectName: String(body.subjectName || "").slice(0, 200),
-      reason: String(body.reason || "").slice(0, 1000),
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      createdBy: req.userEmail || "system",
-    };
-    await db.upsert("dsar_requests", dsarId, JSON.stringify(dsar));
-    await auditLog("dsar_created", req, { dsarId, type: dsar.type, subjectEmail: dsar.subjectEmail });
-    return json(res, 201, dsar);
-  }
-
-  if (pathname.startsWith("/api/pdpa/dsar/") && req.method === "PUT") {
-    const dsarId = pathname.split("/").pop();
-    const existing = await db.getOne("dsar_requests", dsarId);
-    if (!existing) return json(res, 404, { error: "DSAR not found" });
-    const dsar = JSON.parse(existing.data);
-    const body = await parseBody(req);
-    if (body.status && ["pending", "in_progress", "completed", "rejected"].includes(body.status)) dsar.status = body.status;
-    if (body.notes) dsar.notes = String(body.notes).slice(0, 2000);
-    dsar.updatedAt = new Date().toISOString();
-    dsar.updatedBy = req.userEmail || "system";
-    await db.upsert("dsar_requests", dsarId, JSON.stringify(dsar));
-    await auditLog("dsar_updated", req, { dsarId, status: dsar.status });
-    return json(res, 200, dsar);
-  }
-
-  if (pathname === "/api/pdpa/purge-preview" && req.method === "GET") {
-    try {
-      const cfgRow = await db.getOne("pdpa_config", "active");
-      const cfg = cfgRow ? JSON.parse(cfgRow.data) : { retentionDays: 365 };
-      const cutoff = new Date(Date.now() - cfg.retentionDays * 86400000).toISOString();
-      const incidents = await db.getAll("incidents");
-      const eligible = incidents.filter(r => {
-        try { const d = JSON.parse(r.data); return d.status === "Closed" && d.resolvedDate && d.resolvedDate < cutoff; } catch { return false; }
-      });
-      return json(res, 200, { retentionDays: cfg.retentionDays, cutoffDate: cutoff, eligibleCount: eligible.length });
-    } catch (e) { return json(res, 500, { error: "Internal server error" }); }
   }
 
   // ─── Billing / Time Tracking ──────────────────────────────────────────
@@ -7393,14 +7312,14 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
   }
 
   // ─── Step 22: End-User Self-Service Portal API ────────────────────────
-  // GET /api/self-service/my-tickets?email=
+  // GET /api/self-service/my-tickets — uses authenticated user's email from JWT
   if (pathname === "/api/self-service/my-tickets" && req.method === "GET") {
-    const email = urlObj.searchParams.get("email");
-    if (!email) return json(res, 400, { error: "email query parameter required" });
+    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Authentication required" });
+    const email = authResult.user.email.toLowerCase();
     try {
       const rows = await db.getAll("incidents");
       const tickets = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data)
-        .filter(i => (i.requesterEmail || "").toLowerCase() === email.toLowerCase() || (i.createdBy || "").toLowerCase() === email.toLowerCase())
+        .filter(i => (i.requesterEmail || "").toLowerCase() === email || (i.createdBy || "").toLowerCase() === email)
         .map(i => ({ id: i.id, title: i.title, status: i.status, priority: i.priority, category: i.category, createdAt: i.createdAt, updatedAt: i.updatedAt }))
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
       return json(res, 200, { tickets, total: tickets.length });
@@ -7408,19 +7327,22 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
   }
   // POST /api/self-service/create-ticket
   if (pathname === "/api/self-service/create-ticket" && req.method === "POST") {
+    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Authentication required" });
     const body = await parseBody(req);
-    if (!body.title || !body.requesterEmail) return json(res, 400, { error: "title and requesterEmail required" });
+    if (!body.title) return json(res, 400, { error: "title required" });
+    const safeEmail = authResult.user.email;
     try {
       const _seq = await db.getNextId("incident_counter");
       const id = `INC-${String(_seq).padStart(4, "0")}`;
-      const ticket = { id, title: body.title, description: body.description || "", category: body.category || "General", priority: normalizePriority(body.priority), status: "New", source: "self-service", requesterEmail: body.requesterEmail, requesterName: body.requesterName || body.requesterEmail.split("@")[0], createdAt: new Date().toISOString(), createdBy: body.requesterEmail };
+      const ticket = { id, title: body.title, description: body.description || "", category: body.category || "General", priority: normalizePriority(body.priority), status: "New", source: "self-service", requesterEmail: safeEmail, requesterName: authResult.user.name || safeEmail.split("@")[0], createdAt: new Date().toISOString(), createdBy: safeEmail };
       await db.upsert("incidents", id, JSON.stringify(ticket));
-      await db.audit("incidents", id, "create", `Self-service ticket from ${body.requesterEmail}`, body.requesterEmail);
+      await db.audit("incidents", id, "create", `Self-service ticket from ${safeEmail}`, safeEmail);
       return json(res, 201, { ticketId: id, title: ticket.title, status: ticket.status });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
   // GET /api/self-service/catalog
   if (pathname === "/api/self-service/catalog" && req.method === "GET") {
+    if (!authResult?.authenticated) return json(res, 401, { error: "Authentication required" });
     try {
       const rows = await db.getAll("requests");
       const items = rows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data)
@@ -7431,6 +7353,7 @@ Return as JSON: {"title":"...","category":"...","summary":"...","content":"...",
   }
   // GET /api/self-service/kb-search?q=
   if (pathname === "/api/self-service/kb-search" && req.method === "GET") {
+    if (!authResult?.authenticated) return json(res, 401, { error: "Authentication required" });
     const q = (urlObj.searchParams.get("q") || "").toLowerCase();
     if (!q) return json(res, 400, { error: "q query parameter required" });
     try {

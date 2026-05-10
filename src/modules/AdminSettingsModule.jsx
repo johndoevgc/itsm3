@@ -83,7 +83,6 @@ export default function AdminSettingsModule({ ctx }) {
   const [generalSettings, setGeneralSettings] = useState({ siteName: "VGC ITSM", language: "en", timezone: "Asia/Singapore", dateFormat: "DD/MM/YYYY", theme: "dark" });
   const [brandingSettings, setBrandingSettings] = useState({ logo: "", primaryColor: "#64B5F6", accentColor: "#81C784" });
   const [smtpConfig, setSmtpConfig] = useState({ host: "", port: 587, user: "", pass: "", from: "", secure: true });
-  const [pdpaConfig, setPdpaConfig] = useState({ enabled: false, retentionDays: 365, autoAnonymize: false, retentionPolicies: [], auditLog: [] });
   const [infraConfig, _setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90, cost: { total: 0, alerts: [], appService: { name: "App Service", monthly: 0 }, mysql: { name: "MySQL", monthly: 0, storage: 0, note: "" } } });
   const [infraLive, _setInfraLive] = useState(null);
   const [infraLoading, _setInfraLoading] = useState(false);
@@ -2173,7 +2172,7 @@ return (
       </div>
     )}
 
-    {/* Compliance Center — ISO 27001, PDPA Singapore, Cybertrust Mark */}
+    {/* Compliance Center — ISO 27001, Cybertrust Mark */}
     {activeTab === "compliance" && (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -2184,10 +2183,9 @@ return (
         </div>
 
         {/* Framework Overview Cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 24 }}>
           {[
             { id: "iso27001", title: "ISO 27001:2022", icon: "🏛️", color: "#6366F1", score: 94, status: "Certified", cert: "Valid until Dec 2027", desc: "Information Security Management System — Annex A controls implemented", controls: 93, total: 93 },
-            { id: "pdpa", title: "PDPA Singapore", icon: "🔐", color: "#EC4899", score: 97, status: "Compliant", cert: "PDPC Registered", desc: "Personal Data Protection Act — Singapore data privacy compliance", controls: 12, total: 12 },
             { id: "cybertrust", title: "Cybertrust Mark (CSA)", icon: "🇸🇬", color: "#06B6D4", score: 91, status: "Certified", cert: "CSA Cybertrust Mark — Tier 2", desc: "Cyber Security Agency of Singapore — Enterprise cybersecurity certification", controls: 22, total: 24 },
           ].map(fw => (
             <div key={fw.id} style={{ background: "#0F1117", borderRadius: 10, border: `1px solid ${fw.color}33`, padding: 20, position: "relative", overflow: "hidden" }}>
@@ -2259,100 +2257,6 @@ return (
           </div>
         </div>
 
-        {/* PDPA Singapore */}
-        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #EC489933", padding: 20, marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <h4 style={{ margin: 0, fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
-              🔐 PDPA Singapore — Personal Data Protection
-            </h4>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <StatCard label="DPO" value={pdpaConfig.dpoName} icon="👤" accent="#EC4899" />
-              <StatCard label="DSAR (YTD)" value="7" icon="📨" accent="#FFB347" />
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {/* Data Retention */}
-            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #1E2130" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <h5 style={{ margin: 0, fontSize: 12, color: "#EC4899", fontWeight: 600 }}>📋 Data Retention Policies</h5>
-                {isEditAdmin ? <span style={{ fontSize: 9, color: "#81C784", background: "#0D2D1A", padding: "2px 6px", borderRadius: 3 }}>✏️ Editable</span> : <span style={{ fontSize: 9, color: "#5A6178", background: "#1E2130", padding: "2px 6px", borderRadius: 3 }}>🔒 View Only</span>}
-              </div>
-              {pdpaConfig.retentionPolicies.map((p, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1E213033", fontSize: 11 }}>
-                  <span style={{ color: "#C4CAD6" }}>{p.entity}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {isEditAdmin ? (
-                      <input type="number" min="7" max="3650" value={p.retention} onChange={e => { const v = parseInt(e.target.value) || 90; setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, retention: v } : rp) })); }} style={{ width: 55, padding: "2px 4px", borderRadius: 3, border: "1px solid #1E2130", background: "#12141E", color: "#64B5F6", fontSize: 10, fontFamily: "'JetBrains Mono', monospace", outline: "none", textAlign: "center" }} />
-                    ) : (
-                      <span style={{ color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>{p.retention}d</span>
-                    )}
-                    {isEditAdmin ? (
-                      <select value={p.action} onChange={e => setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, action: e.target.value } : rp) }))} style={{ padding: "2px 6px", borderRadius: 3, border: "1px solid #1E2130", background: "#12141E", color: p.action === "Delete" ? "#FF6B6B" : "#FFB347", fontSize: 9, outline: "none" }}>
-                        <option value="Anonymize">Anonymize</option>
-                        <option value="Archive">Archive</option>
-                        <option value="Delete">Delete</option>
-                      </select>
-                    ) : (
-                      <Badge color={p.action === "Delete" ? { bg: "#2D0A0A", text: "#FF6B6B" } : { bg: "#2D1F0A", text: "#FFB347" }}>{p.action}</Badge>
-                    )}
-                    <div onClick={() => isEditAdmin && setPdpaConfig(prev => ({ ...prev, retentionPolicies: prev.retentionPolicies.map((rp, ri) => ri === i ? { ...rp, enabled: !rp.enabled } : rp) }))} style={{ width: 36, height: 18, borderRadius: 9, cursor: isEditAdmin ? "pointer" : "default", background: p.enabled ? "#EC4899" : "#1E2130", padding: 2, flexShrink: 0, opacity: isEditAdmin ? 1 : 0.6 }}>
-                      <div style={{ width: 14, height: 14, borderRadius: 7, background: "#fff", transform: p.enabled ? "translateX(18px)" : "translateX(0)", transition: "transform 0.2s" }} />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {/* Privacy Controls */}
-            <div style={{ background: "#0A0C14", borderRadius: 8, padding: 16, border: "1px solid #1E2130" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <h5 style={{ margin: 0, fontSize: 12, color: "#EC4899", fontWeight: 600 }}>🔒 Privacy Controls</h5>
-                {isEditAdmin ? <span style={{ fontSize: 9, color: "#81C784", background: "#0D2D1A", padding: "2px 6px", borderRadius: 3 }}>✏️ Editable</span> : <span style={{ fontSize: 9, color: "#5A6178", background: "#1E2130", padding: "2px 6px", borderRadius: 3 }}>🔒 View Only</span>}
-              </div>
-              {[
-                { key: "consentManagement", label: "Consent Management", desc: "Track user consent for data processing", icon: "✋" },
-                { key: "dsarWorkflow", label: "DSAR Workflow", desc: "Automated Data Subject Access Requests", icon: "📨" },
-                { key: "dataClassification", label: "AI Data Classification", desc: "Auto-classify PII & sensitive data", icon: "🏷️" },
-              ].map(ctrl => (
-                <div key={ctrl.key} style={{ padding: "8px 10px", background: "#12141E", borderRadius: 6, border: "1px solid #1E213033", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 14 }}>{ctrl.icon}</span>
-                    <div>
-                      <div style={{ color: "#E8ECF4", fontSize: 11, fontWeight: 600 }}>{ctrl.label}</div>
-                      <div style={{ color: "#5A6178", fontSize: 9 }}>{ctrl.desc}</div>
-                    </div>
-                  </div>
-                  <div onClick={() => isEditAdmin && setPdpaConfig(prev => ({ ...prev, [ctrl.key]: !prev[ctrl.key] }))} style={{ width: 36, height: 18, borderRadius: 9, cursor: isEditAdmin ? "pointer" : "default", background: pdpaConfig[ctrl.key] ? "#EC4899" : "#1E2130", padding: 2, flexShrink: 0, opacity: isEditAdmin ? 1 : 0.6 }}>
-                    <div style={{ width: 14, height: 14, borderRadius: 7, background: "#fff", transform: pdpaConfig[ctrl.key] ? "translateX(18px)" : "translateX(0)", transition: "transform 0.2s" }} />
-                  </div>
-                </div>
-              ))}
-              <div style={{ marginTop: 10, padding: "8px 10px", background: "#12141E", borderRadius: 6, border: "1px solid #1E213033" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <span style={{ color: "#5A6178", fontSize: 10 }}>DPO Name</span>
-                  {isEditAdmin ? (
-                    <input value={pdpaConfig.dpoName} onChange={e => setPdpaConfig(prev => ({ ...prev, dpoName: e.target.value }))} style={{ padding: "2px 6px", borderRadius: 3, border: "1px solid #1E2130", background: "#0A0C14", color: "#C4CAD6", fontSize: 10, outline: "none", width: 140, textAlign: "right" }} />
-                  ) : (
-                    <span style={{ color: "#C4CAD6", fontSize: 10 }}>{pdpaConfig.dpoName}</span>
-                  )}
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <span style={{ color: "#5A6178", fontSize: 10 }}>DPO Contact</span>
-                  {isEditAdmin ? (
-                    <input value={pdpaConfig.dpoEmail} onChange={e => setPdpaConfig(prev => ({ ...prev, dpoEmail: e.target.value }))} style={{ padding: "2px 6px", borderRadius: 3, border: "1px solid #1E2130", background: "#0A0C14", color: "#C4CAD6", fontSize: 10, outline: "none", width: 180, textAlign: "right" }} />
-                  ) : (
-                    <span style={{ color: "#C4CAD6", fontSize: 10 }}>{pdpaConfig.dpoEmail}</span>
-                  )}
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#5A6178", fontSize: 10 }}>Right to Erasure</span>
-                  <Badge color={{ bg: "#0D2D1A", text: "#81C784" }}>Enabled</Badge>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Cybertrust Mark — CSA Singapore */}
         <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #06B6D433", padding: 20, marginBottom: 20 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -2397,22 +2301,7 @@ return (
           </div>
         </div>
 
-        {/* Compliance Audit Log */}
-        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20, marginBottom: 20 }}>
-          <h4 style={{ margin: "0 0 14px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>📝 Compliance Audit Trail</h4>
-          <div style={{ maxHeight: 260, overflow: "auto" }}>
-            {pdpaConfig.auditLog.map((entry, i) => (
-              <div key={i} style={{ padding: "8px 12px", background: i % 2 === 0 ? "#0A0C14" : "#12141E", borderRadius: 4, marginBottom: 4 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                  <span style={{ color: "#E8ECF4", fontSize: 11, fontWeight: 600 }}>{entry.action}</span>
-                  <span style={{ color: "#5A617866", fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>{entry.timestamp}</span>
-                </div>
-                <div style={{ color: "#5A6178", fontSize: 10 }}>{entry.detail}</div>
-                <div style={{ color: "#6366F1", fontSize: 9, marginTop: 1, fontFamily: "'JetBrains Mono', monospace" }}>By: {entry.user}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Compliance Audit Trail — removed with PDPA, can be restored with general audit log */}
 
         {/* Data Classification Summary */}
         <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>

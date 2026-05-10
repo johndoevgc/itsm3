@@ -283,7 +283,6 @@ function senderFor(channel) {
 const PROD_TEST_MODE = process.env.PROD_TEST_MODE === "true";
 
 // ─── Feature Flags ──────────────────────────────────────────────────────
-const FEATURE_PDPA = process.env.FEATURE_PDPA === "true";
 const FEATURE_PORTAL = process.env.FEATURE_PORTAL === "true";
 const FEATURE_BILLING = process.env.FEATURE_BILLING === "true";
 const FEATURE_SETUP_WIZARD = process.env.FEATURE_SETUP_WIZARD !== "false"; // default ON
@@ -3188,7 +3187,7 @@ async function start() {
     EMAIL_REDIRECT_MODE, EMAIL_REDIRECT_TARGET, INTERNAL_DOMAINS,
     // Feature flags & shadow mode
     featureFlags, shadowMode, shadowWorkflow,
-    FEATURE_PDPA, FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD,
+    FEATURE_PORTAL, FEATURE_BILLING, FEATURE_SETUP_WIZARD,
     // Helpers
     normalizeCategory, isHighSeverity, safeRecipient,
     piiRedact, redactForAI, logAICall,

@@ -756,7 +756,7 @@ export default function Dashboard({ ctx }) {
     zdConnected, wsBridgeConnected, zdAutoStats, zdAiQueue, setZdTab,
     showAiPanel, setShowAiPanel,
     fetchCsatScores, csatLoading, csatScores,
-    fetchAiActions, setIncidents, pdpaConfig,
+    fetchAiActions, setIncidents,
     zdStats: _zdStats, aiConfig: _aiConfig,
   } = ctx;
 
@@ -3040,27 +3040,8 @@ return (
     </div></DashCard>}
 
     {/* ═══ COMPLIANCE & SYSTEM HEALTH (Management only) ═══ */}
-    {isManagement && (cardVisibility.pdpaCompliance.on || cardVisibility.systemHealth.on || cardVisibility.changeCalendar.on) && (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 20 }}>
-        {/* PDPA Compliance */}
-        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
-          <h3 onClick={() => setActiveModule("admin")} style={{ margin: "0 0 14px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
-            onMouseEnter={e => e.currentTarget.style.color = "#4CAF50"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
-            <span style={{ color: "#4CAF50" }}>🛡️</span> PDPA Compliance <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Settings →</span>
-          </h3>
-          {[
-            { label: "Data Retention", status: "Compliant", color: "#4CAF50" },
-            { label: "Consent Management", status: pdpaConfig.consentManagement ? "Active" : "Inactive", color: pdpaConfig.consentManagement ? "#4CAF50" : "#FF6B6B" },
-            { label: "DSAR Workflow", status: pdpaConfig.dsarWorkflow ? "Enabled" : "Disabled", color: pdpaConfig.dsarWorkflow ? "#4CAF50" : "#FFB347" },
-            { label: "Data Classification", status: "3 flags", color: "#FFB347" },
-            { label: "Last Audit", status: "24 hrs ago", color: "#64B5F6" },
-          ].map((item, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < 4 ? "1px solid #1E213033" : "none" }}>
-              <span style={{ fontSize: 11, color: "#C4CAD6" }}>{item.label}</span>
-              <span style={{ fontSize: 10, color: item.color, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{item.status}</span>
-            </div>
-          ))}
-        </div>
+    {isManagement && (cardVisibility.systemHealth.on || cardVisibility.changeCalendar.on) && (
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}>
 
         {/* System Health */}
         <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>

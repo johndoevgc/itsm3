@@ -346,6 +346,7 @@ const MANAGEMENT_ROLES = new Set([
 ]);
 const ENGINEER_ROLES = new Set([
   'L1 Engineer', 'L2 Engineer', 'Network Engineer',
+  'L1 Support Engineer', 'L2 Support Engineer',
   'Service Desk Lead', // dual role
 ]);
 const CUSTOMER_ROLES = new Set(['End User', 'Read Only']);
