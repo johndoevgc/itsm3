@@ -27,25 +27,26 @@ import { useLocale, SUPPORTED_LOCALES } from "./src/i18n/i18nProvider.jsx";
 import { lazyWithRetry } from "./src/utils/lazyWithRetry.js";
 // ─── Lazy-loaded modules (code-split into separate chunks) ───────────
 // Use lazyWithRetry so stale chunks after deploy auto-recover via reload.
-const AdminSettingsModule = lazyWithRetry(() => import("./src/modules/AdminSettingsModule.jsx"));
-const DashboardModule = lazyWithRetry(() => import("./src/modules/DashboardModule.jsx"));
-const ModalsModule = lazyWithRetry(() => import("./src/modules/ModalsModule.jsx"));
-const ZendeskModule = lazyWithRetry(() => import("./src/modules/ZendeskModule.jsx"));
-const ReportingModule = lazyWithRetry(() => import("./src/modules/ReportingModule.jsx"));
-const KnowledgeModule = lazyWithRetry(() => import("./src/modules/KnowledgeModule.jsx"));
-const CyberNewsModule = lazyWithRetry(() => import("./src/modules/CyberNewsModule.jsx"));
-const ProductivityDashboard = lazyWithRetry(() => import("./src/modules/ProductivityDashboard.jsx"));
-const SelfServicePortal = lazyWithRetry(() => import("./src/modules/SelfServicePortal.jsx"));
-const CustomersModule = lazyWithRetry(() => import("./src/modules/CustomersModule.jsx"));
-const IncidentsModule = lazyWithRetry(() => import("./src/modules/IncidentsModule.jsx"));
-const SLATrackerModule = lazyWithRetry(() => import("./src/modules/SLATrackerModule.jsx"));
-const ServiceStatusModule = lazyWithRetry(() => import("./src/modules/ServiceStatusModule.jsx"));
-const ArchitectureDiagram = lazyWithRetry(() => import("./src/modules/ArchitectureDiagram.jsx"));
-const ChangeCalendarModule = lazyWithRetry(() => import("./src/modules/ChangeCalendarModule.jsx"));
-const AIAssistModule = lazyWithRetry(() => import("./src/modules/AIAssistModule.jsx"));
-const AnalyticsModuleWrapper = lazyWithRetry(() => import("./src/modules/AnalyticsModule.jsx"));
-const EngineerReviewHub = lazyWithRetry(() => import("./src/modules/EngineerReviewHub.jsx"));
-const VendorPortalModule = lazyWithRetry(() => import("./src/modules/VendorPortalModule.jsx"));
+// React.memo wrapping prevents re-renders when parent state changes but module props haven't.
+const AdminSettingsModule = lazyWithRetry(() => import("./src/modules/AdminSettingsModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const DashboardModule = lazyWithRetry(() => import("./src/modules/DashboardModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const ModalsModule = lazyWithRetry(() => import("./src/modules/ModalsModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const ZendeskModule = lazyWithRetry(() => import("./src/modules/ZendeskModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const ReportingModule = lazyWithRetry(() => import("./src/modules/ReportingModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const KnowledgeModule = lazyWithRetry(() => import("./src/modules/KnowledgeModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const CyberNewsModule = lazyWithRetry(() => import("./src/modules/CyberNewsModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const ProductivityDashboard = lazyWithRetry(() => import("./src/modules/ProductivityDashboard.jsx").then(m => ({ default: React.memo(m.default) })));
+const SelfServicePortal = lazyWithRetry(() => import("./src/modules/SelfServicePortal.jsx").then(m => ({ default: React.memo(m.default) })));
+const CustomersModule = lazyWithRetry(() => import("./src/modules/CustomersModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const IncidentsModule = lazyWithRetry(() => import("./src/modules/IncidentsModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const SLATrackerModule = lazyWithRetry(() => import("./src/modules/SLATrackerModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const ServiceStatusModule = lazyWithRetry(() => import("./src/modules/ServiceStatusModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const ArchitectureDiagram = lazyWithRetry(() => import("./src/modules/ArchitectureDiagram.jsx").then(m => ({ default: React.memo(m.default) })));
+const ChangeCalendarModule = lazyWithRetry(() => import("./src/modules/ChangeCalendarModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const AIAssistModule = lazyWithRetry(() => import("./src/modules/AIAssistModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const AnalyticsModuleWrapper = lazyWithRetry(() => import("./src/modules/AnalyticsModule.jsx").then(m => ({ default: React.memo(m.default) })));
+const EngineerReviewHub = lazyWithRetry(() => import("./src/modules/EngineerReviewHub.jsx").then(m => ({ default: React.memo(m.default) })));
+const VendorPortalModule = lazyWithRetry(() => import("./src/modules/VendorPortalModule.jsx").then(m => ({ default: React.memo(m.default) })));
 // ─── Eagerly-loaded (rendered before/around the lazy <Suspense>) ─────
 import LoginPage from "./src/modules/LoginPage.jsx";
 import { RunbookActionsTab } from "./src/components/RunbookActionsTab.jsx";
@@ -59,6 +60,144 @@ import {
   matchAiTopic,
   renderAiRichText, buildAiResponse,
 } from "./src/utils/aiEngine.jsx";
+
+// ─── Static CSS (extracted to module level to avoid re-creating on every render) ───
+const GLOBAL_STYLES = `
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; margin: 0; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #27272A; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3F3F46; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes flowDot { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 20px; opacity: 0; } }
+        @keyframes flowDotDown { 0% { top: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { top: 16px; opacity: 0; } }
+        @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 8px #FFD70033, 0 0 18px #D4AF371A, inset 0 0 0 1px #FFD70022; filter: brightness(1); } 50% { box-shadow: 0 0 16px #FFD70066, 0 0 30px #D4AF3733, 0 0 44px #B8860B1A, inset 0 0 0 1px #FFD70044; filter: brightness(1.08); } }
+        @keyframes logoPulseRing { 0% { transform: scale(0.98); opacity: 0; } 18% { opacity: 0.42; } 72% { transform: scale(1.18); opacity: 0; } 100% { transform: scale(1.18); opacity: 0; } }
+        @keyframes logoSheen { 0% { transform: translateX(-130%) skewX(-20deg); opacity: 0; } 38% { opacity: 0; } 52% { opacity: 0.55; } 70% { opacity: 0.25; } 100% { transform: translateX(230%) skewX(-20deg); opacity: 0; } }
+        @keyframes logoTextShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+        @keyframes orbitDot { 0% { transform: rotate(0deg) translateX(28px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(28px) rotate(-360deg); } }
+        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 8px #FFD70044, 0 0 16px #D4AF371A; filter: brightness(1); } 50% { transform: scale(1.035) translateY(-1px); text-shadow: 0 0 14px #FFD70088, 0 0 26px #D4AF3744, 0 0 36px #FFD7001A; filter: brightness(1.12); } }
+        @keyframes goldShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+        @keyframes nudgeSlideIn { 0% { transform: translateY(8px) scale(0.95); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+        @keyframes nudgePulse { 0%, 100% { box-shadow: 0 2px 12px #6366F122; } 50% { box-shadow: 0 4px 20px #6366F144, 0 0 30px #06B6D422; } }
+        @keyframes aiFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+        @keyframes aiBreathe { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.025); filter: brightness(1.08); } }
+        @keyframes aiBounce { 0%, 100% { transform: translateY(0) scale(1); } 45% { transform: translateY(-3px) scale(1.01); } 70% { transform: translateY(-1px) scale(1); } }
+        @keyframes aiSmartPulse { 0%, 100% { box-shadow: 0 8px 24px var(--ai-glow-soft, #6366F144), 0 0 36px var(--ai-glow-faint, #6366F122); filter: brightness(1); } 33% { box-shadow: 0 9px 26px #06B6D444, 0 0 40px #6366F122; filter: brightness(1.05); } 66% { box-shadow: 0 9px 26px #EC489933, 0 0 38px #06B6D422; filter: brightness(1.04); } }
+        @keyframes aiNeonBorder { 0%, 100% { border-color: #6366F188; box-shadow: 0 0 8px #6366F144, inset 0 0 8px #6366F111; } 25% { border-color: #06B6D488; box-shadow: 0 0 8px #06B6D444, inset 0 0 8px #06B6D411; } 50% { border-color: #EC489988; box-shadow: 0 0 8px #EC489944, inset 0 0 8px #EC489911; } 75% { border-color: #81C78488; box-shadow: 0 0 8px #81C78444, inset 0 0 8px #81C78411; } }
+        @keyframes aiSparkle { 0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); } 50% { opacity: 1; transform: scale(1) rotate(180deg); } }
+        @keyframes aiThinkingRing { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes aiStatusOrbit { 0% { transform: rotate(0deg) translateX(32px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(32px) rotate(-360deg); } }
+        @keyframes proactiveSlideIn { 0% { transform: translateX(120%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes proactiveUrgent { 0%, 100% { border-color: #FF6B6B44; box-shadow: 0 0 8px #FF6B6B22; } 50% { border-color: #FF6B6B88; box-shadow: 0 0 20px #FF6B6B44, 0 0 40px #FF6B6B22; } }
+        @keyframes aiBorderPulse { 0%, 100% { border-color: #6366F133; } 50% { border-color: #6366F166; } }
+        @keyframes iconBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+        @keyframes iconSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes avatarBlink { 0%, 90%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+        @keyframes slideInRight { 0% { transform: translateX(100%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes threatAutoClose { from { width: 100%; } to { width: 0%; } }
+        @keyframes aiShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes aiPulseGlow { 0%, 100% { box-shadow: 0 0 8px #6366F122, 0 0 20px #06B6D411; } 50% { box-shadow: 0 0 16px #6366F144, 0 0 40px #06B6D422, 0 0 60px #EC489911; } }
+        @keyframes tourFadeIn { 0% { opacity: 0; transform: scale(0.92) translateY(8px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+        @keyframes tourBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+        @keyframes tourSpotlight { 0%, 100% { box-shadow: 0 0 0 4px #6366F133, 0 0 0 8px #6366F111; } 50% { box-shadow: 0 0 0 6px #6366F155, 0 0 0 14px #6366F122; } }
+        @keyframes tourWave { 0% { transform: rotate(0deg); } 15% { transform: rotate(14deg); } 30% { transform: rotate(-8deg); } 40% { transform: rotate(10deg); } 50% { transform: rotate(-4deg); } 60% { transform: rotate(6deg); } 100% { transform: rotate(0deg); } }
+        @keyframes tourConfetti { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(-30px) rotate(720deg); opacity: 0; } }
+        @keyframes tourProgressFill { from { width: 0; } }
+        @keyframes headerTitleGlow { 0% { text-shadow: 0 0 8px rgba(99,102,241,0.3); } 50% { text-shadow: 0 0 16px rgba(6,182,212,0.4), 0 0 30px rgba(99,102,241,0.2); } 100% { text-shadow: 0 0 8px rgba(99,102,241,0.3); } }
+        @keyframes bellShake { 0% { transform: rotate(0); } 15% { transform: rotate(12deg); } 30% { transform: rotate(-10deg); } 45% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 75% { transform: rotate(3deg); } 100% { transform: rotate(0); } }
+        @keyframes alertSlideDown { 0% { opacity: 0; transform: translateY(-10px) scale(0.96); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes criticalGlow { 0%, 100% { box-shadow: 0 0 4px #FF444422; border-color: #FF444433; } 50% { box-shadow: 0 0 14px #FF444455, 0 0 28px #FF444422; border-color: #FF444466; } }
+        @keyframes criticalBadgePulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 4px #FF444444; } 50% { transform: scale(1.15); box-shadow: 0 0 12px #FF444488; } }
+        @keyframes emojiBounce { 0%, 100% { transform: translateY(0) scale(1); } 25% { transform: translateY(-2px) scale(1.12); } 50% { transform: translateY(0) scale(1); } }
+        @keyframes highlightPulse { 0%, 100% { background: #FF6B6B11; } 50% { background: #FF6B6B22; } }
+        @keyframes sidebarCollapseHover { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+        @keyframes warningGlow { 0%, 100% { box-shadow: 0 0 4px #FFB34722; border-color: #FFB34733; } 50% { box-shadow: 0 0 10px #FFB34744, 0 0 20px #FFB34722; border-color: #FFB34755; } }
+        @keyframes criticalRowFlash { 0%, 100% { background: #1A080866; } 50% { background: #2D0A0A88; } }
+        @keyframes slaBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        @keyframes slaBlinkFast { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+        @keyframes slaBreachPulse { 0%, 100% { color: #FF4444; text-shadow: 0 0 4px #FF444444; } 50% { color: #FF6666; text-shadow: 0 0 12px #FF444488, 0 0 24px #FF444444; } }
+        @keyframes wfIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.85; } }
+        @keyframes wfCardFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+        @keyframes wfPulseLive { 0%, 100% { transform: scale(1); opacity: 0.7; } 50% { transform: scale(1.5); opacity: 1; } }
+        @keyframes gradientSlide { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+        @keyframes subtleFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+        @keyframes archNodeGlow { 0%, 100% { box-shadow: 0 0 16px #818CF844, 0 0 32px #22D3EE22; } 50% { box-shadow: 0 0 24px #818CF866, 0 0 48px #22D3EE44; } }
+        @keyframes archDataFlow { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 40px; opacity: 0; } }
+        @keyframes archHubOrbit { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes weatherSunPulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.08); filter: brightness(1.15); } }
+        @keyframes weatherRayPulse { 0%, 100% { opacity: 0.6; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.3); } }
+        @keyframes weatherMoonGlow { 0%, 100% { filter: brightness(1) drop-shadow(0 0 4px rgba(200,210,255,0.3)); } 50% { filter: brightness(1.15) drop-shadow(0 0 10px rgba(200,210,255,0.6)); } }
+        @keyframes weatherStarTwinkle { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.4); } }
+        @keyframes weatherCloudDrift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
+        @keyframes disasterSlideIn { 0% { transform: translateX(120%); opacity: 0; } 60% { transform: translateX(-8px); opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes disasterSlideOut { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(120%); opacity: 0; } }
+        @keyframes disasterIconPulse { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.3) rotate(-5deg); } 60% { transform: scale(1.1) rotate(5deg); } }
+        @keyframes disasterGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.15), inset 0 1px 0 rgba(255,255,255,0.05); } 50% { box-shadow: 0 4px 30px rgba(255,68,68,0.35), 0 0 40px rgba(255,68,68,0.1), inset 0 1px 0 rgba(255,255,255,0.05); } }
+        @keyframes disasterProgress { 0% { width: 100%; } 100% { width: 0%; } }
+        @keyframes disasterFadeOut { 0% { opacity: 1; transform: translateX(0); } 100% { opacity: 0; transform: translateX(120%); } }
+        @keyframes escalationBannerGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.1); } 50% { box-shadow: 0 4px 40px rgba(255,68,68,0.3), 0 0 60px rgba(255,68,68,0.08); } }
+        @keyframes escalationIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.85; } }
+        @keyframes escalationTextBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .vgc-logo-box { position: relative; overflow: hidden; animation: logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.35s ease; will-change: transform, box-shadow; }
+        .vgc-logo-box::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.45), transparent); animation: logoSheen 8s ease-in-out 1.2s infinite; pointer-events: none; mix-blend-mode: screen; }
+        .vgc-logo-box:hover { transform: scale(1.06) rotate(-1.5deg); box-shadow: 0 0 22px #FFD70088, 0 0 44px #D4AF3744; }
+        .vgc-logo-text { background: linear-gradient(90deg, #FFD700, #FFF8DC, #D4AF37, #B8860B, #FFD700); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 9s linear infinite; letter-spacing: 0; }
+        .vgc-logo-collapsed { position: relative; overflow: hidden; animation: logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1); will-change: transform; }
+        .vgc-logo-collapsed::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.42), transparent); animation: logoSheen 8s ease-in-out 1.2s infinite; pointer-events: none; mix-blend-mode: screen; }
+        .vgc-logo-collapsed:hover { transform: scale(1.10); }
+        select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
+        option { background: #09090B; color: #FAFAFA; }
+
+        /* ─── Sidebar Glassy Nav Items ─── */
+        .vgc-nav-btn { position: relative; overflow: hidden; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)) !important; border: 1px solid rgba(255,255,255,0.04) !important; border-left: 2px solid var(--nav-accent, transparent) !important; margin-bottom: 2px !important; }
+        .vgc-nav-btn::before { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, var(--nav-accent, #6366F1)08, transparent); opacity: 0.5; transition: opacity 0.3s; }
+        .vgc-nav-btn:hover { background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)) !important; border-color: rgba(255,255,255,0.08) !important; }
+        .vgc-nav-btn:hover::before { opacity: 1; }
+        .vgc-nav-btn::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent); }
+        .vgc-nav-active { background: linear-gradient(135deg, color-mix(in srgb, var(--nav-accent, #6366F1) 12%, transparent), color-mix(in srgb, var(--nav-accent, #6366F1) 6%, transparent)) !important; border-left: 2px solid var(--nav-accent, #6366F1) !important; border-color: color-mix(in srgb, var(--nav-accent, #6366F1) 20%, transparent) !important; box-shadow: inset 0 0 20px color-mix(in srgb, var(--nav-accent, #6366F1) 8%, transparent), 0 0 16px color-mix(in srgb, var(--nav-accent, #6366F1) 10%, transparent); }
+        .vgc-nav-active::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent) !important; }
+
+        /* ─── Responsive Breakpoints ─── */
+        @media (max-width: 1024px) {
+          .vgc-kpi-grid-6 { grid-template-columns: repeat(3, 1fr) !important; }
+          .vgc-kpi-grid-5 { grid-template-columns: repeat(3, 1fr) !important; }
+          .vgc-kpi-grid-3 { grid-template-columns: 1fr 1fr !important; }
+          .vgc-grid-2-1 { grid-template-columns: 1fr !important; }
+        }
+        @media (max-width: 768px) {
+          .vgc-kpi-grid-6 { grid-template-columns: repeat(2, 1fr) !important; }
+          .vgc-kpi-grid-5 { grid-template-columns: repeat(2, 1fr) !important; }
+          .vgc-kpi-grid-3 { grid-template-columns: 1fr !important; }
+          .vgc-donut-grid { grid-template-columns: repeat(3, 1fr) !important; }
+          .vgc-sidebar { position: fixed !important; z-index: 900; height: 100vh !important; box-shadow: 4px 0 24px rgba(0,0,0,0.5) !important; }
+          .vgc-sidebar.collapsed { width: 0 !important; padding: 0 !important; border: none !important; }
+          .vgc-mobile-toggle { display: flex !important; }
+        }
+        @media (max-width: 480px) {
+          .vgc-kpi-grid-6 { grid-template-columns: 1fr !important; }
+          .vgc-kpi-grid-5 { grid-template-columns: 1fr !important; }
+          .vgc-donut-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+        /* Respect user preference to reduce motion (accessibility) — opt-in via body.vgc-reduce-motion.
+           Default keeps decorative animations (logo, headers, AI glow, etc.) enabled even when the OS
+           reports prefers-reduced-motion, because users explicitly asked for the visual identity to remain.
+           Add the class to <body> from Admin → Accessibility settings to honor OS preference. */
+        @media (prefers-reduced-motion: reduce) {
+          body.vgc-reduce-motion *, body.vgc-reduce-motion *::before, body.vgc-reduce-motion *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+          }
+        }
+        /* Print styles */
+        @media print {
+          .vgc-sidebar, .vgc-mobile-toggle, .sidebar-collapse-btn { display: none !important; }
+          body { background: #fff !important; }
+        }
+      `;
 
 export default function ITSMApp() {
   // (#A follow-up, 2026-05-03) `isDemoMode` removed — it was hardcoded `false` and
@@ -372,7 +511,7 @@ export default function ITSMApp() {
   // ─── In-App Notification Bell State ────────────────────────────────
   const [inAppNotifs, setInAppNotifs] = useState([]);
   const [showNotifTray, setShowNotifTray] = useState(false);
-  const unreadNotifCount = inAppNotifs.filter(n => !n.read).length;
+  const unreadNotifCount = useMemo(() => inAppNotifs.filter(n => !n.read).length, [inAppNotifs]);
   const [reviewTab, setReviewTab] = useState("all");
   const [aiAutoApprove, setAiAutoApprove] = useState(true);
   const [portalTab, setPortalTab] = useState("myTickets");
@@ -5059,142 +5198,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       onFocus={e => { e.currentTarget.style.position = "fixed"; e.currentTarget.style.left = "16px"; e.currentTarget.style.top = "16px"; e.currentTarget.style.width = "auto"; e.currentTarget.style.height = "auto"; }}
       onBlur={e => { e.currentTarget.style.position = "absolute"; e.currentTarget.style.left = "-9999px"; e.currentTarget.style.width = "1px"; e.currentTarget.style.height = "1px"; }}
       >Skip to main content</a>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; margin: 0; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #27272A; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #3F3F46; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        @keyframes flowDot { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 20px; opacity: 0; } }
-        @keyframes flowDotDown { 0% { top: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { top: 16px; opacity: 0; } }
-        @keyframes logoGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-        @keyframes logoGlow { 0%, 100% { box-shadow: 0 0 8px #FFD70033, 0 0 18px #D4AF371A, inset 0 0 0 1px #FFD70022; filter: brightness(1); } 50% { box-shadow: 0 0 16px #FFD70066, 0 0 30px #D4AF3733, 0 0 44px #B8860B1A, inset 0 0 0 1px #FFD70044; filter: brightness(1.08); } }
-        @keyframes logoPulseRing { 0% { transform: scale(0.98); opacity: 0; } 18% { opacity: 0.42; } 72% { transform: scale(1.18); opacity: 0; } 100% { transform: scale(1.18); opacity: 0; } }
-        @keyframes logoSheen { 0% { transform: translateX(-130%) skewX(-20deg); opacity: 0; } 38% { opacity: 0; } 52% { opacity: 0.55; } 70% { opacity: 0.25; } 100% { transform: translateX(230%) skewX(-20deg); opacity: 0; } }
-        @keyframes logoTextShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
-        @keyframes orbitDot { 0% { transform: rotate(0deg) translateX(28px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(28px) rotate(-360deg); } }
-        @keyframes goldVBounce { 0%, 100% { transform: scale(1) translateY(0); text-shadow: 0 0 8px #FFD70044, 0 0 16px #D4AF371A; filter: brightness(1); } 50% { transform: scale(1.035) translateY(-1px); text-shadow: 0 0 14px #FFD70088, 0 0 26px #D4AF3744, 0 0 36px #FFD7001A; filter: brightness(1.12); } }
-        @keyframes goldShimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
-        @keyframes nudgeSlideIn { 0% { transform: translateY(8px) scale(0.95); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
-        @keyframes nudgePulse { 0%, 100% { box-shadow: 0 2px 12px #6366F122; } 50% { box-shadow: 0 4px 20px #6366F144, 0 0 30px #06B6D422; } }
-        @keyframes aiFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-        @keyframes aiBreathe { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.025); filter: brightness(1.08); } }
-        @keyframes aiBounce { 0%, 100% { transform: translateY(0) scale(1); } 45% { transform: translateY(-3px) scale(1.01); } 70% { transform: translateY(-1px) scale(1); } }
-        @keyframes aiSmartPulse { 0%, 100% { box-shadow: 0 8px 24px var(--ai-glow-soft, #6366F144), 0 0 36px var(--ai-glow-faint, #6366F122); filter: brightness(1); } 33% { box-shadow: 0 9px 26px #06B6D444, 0 0 40px #6366F122; filter: brightness(1.05); } 66% { box-shadow: 0 9px 26px #EC489933, 0 0 38px #06B6D422; filter: brightness(1.04); } }
-        @keyframes aiNeonBorder { 0%, 100% { border-color: #6366F188; box-shadow: 0 0 8px #6366F144, inset 0 0 8px #6366F111; } 25% { border-color: #06B6D488; box-shadow: 0 0 8px #06B6D444, inset 0 0 8px #06B6D411; } 50% { border-color: #EC489988; box-shadow: 0 0 8px #EC489944, inset 0 0 8px #EC489911; } 75% { border-color: #81C78488; box-shadow: 0 0 8px #81C78444, inset 0 0 8px #81C78411; } }
-        @keyframes aiSparkle { 0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); } 50% { opacity: 1; transform: scale(1) rotate(180deg); } }
-        @keyframes aiThinkingRing { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        @keyframes aiStatusOrbit { 0% { transform: rotate(0deg) translateX(32px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(32px) rotate(-360deg); } }
-        @keyframes proactiveSlideIn { 0% { transform: translateX(120%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
-        @keyframes proactiveUrgent { 0%, 100% { border-color: #FF6B6B44; box-shadow: 0 0 8px #FF6B6B22; } 50% { border-color: #FF6B6B88; box-shadow: 0 0 20px #FF6B6B44, 0 0 40px #FF6B6B22; } }
-        @keyframes aiBorderPulse { 0%, 100% { border-color: #6366F133; } 50% { border-color: #6366F166; } }
-        @keyframes iconBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
-        @keyframes iconSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes avatarBlink { 0%, 90%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
-        @keyframes slideInRight { 0% { transform: translateX(100%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
-        @keyframes threatAutoClose { from { width: 100%; } to { width: 0%; } }
-        @keyframes aiShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
-        @keyframes aiPulseGlow { 0%, 100% { box-shadow: 0 0 8px #6366F122, 0 0 20px #06B6D411; } 50% { box-shadow: 0 0 16px #6366F144, 0 0 40px #06B6D422, 0 0 60px #EC489911; } }
-        @keyframes tourFadeIn { 0% { opacity: 0; transform: scale(0.92) translateY(8px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
-        @keyframes tourBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-        @keyframes tourSpotlight { 0%, 100% { box-shadow: 0 0 0 4px #6366F133, 0 0 0 8px #6366F111; } 50% { box-shadow: 0 0 0 6px #6366F155, 0 0 0 14px #6366F122; } }
-        @keyframes tourWave { 0% { transform: rotate(0deg); } 15% { transform: rotate(14deg); } 30% { transform: rotate(-8deg); } 40% { transform: rotate(10deg); } 50% { transform: rotate(-4deg); } 60% { transform: rotate(6deg); } 100% { transform: rotate(0deg); } }
-        @keyframes tourConfetti { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(-30px) rotate(720deg); opacity: 0; } }
-        @keyframes tourProgressFill { from { width: 0; } }
-        @keyframes headerTitleGlow { 0% { text-shadow: 0 0 8px rgba(99,102,241,0.3); } 50% { text-shadow: 0 0 16px rgba(6,182,212,0.4), 0 0 30px rgba(99,102,241,0.2); } 100% { text-shadow: 0 0 8px rgba(99,102,241,0.3); } }
-        @keyframes bellShake { 0% { transform: rotate(0); } 15% { transform: rotate(12deg); } 30% { transform: rotate(-10deg); } 45% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 75% { transform: rotate(3deg); } 100% { transform: rotate(0); } }
-        @keyframes alertSlideDown { 0% { opacity: 0; transform: translateY(-10px) scale(0.96); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes criticalGlow { 0%, 100% { box-shadow: 0 0 4px #FF444422; border-color: #FF444433; } 50% { box-shadow: 0 0 14px #FF444455, 0 0 28px #FF444422; border-color: #FF444466; } }
-        @keyframes criticalBadgePulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 4px #FF444444; } 50% { transform: scale(1.15); box-shadow: 0 0 12px #FF444488; } }
-        @keyframes emojiBounce { 0%, 100% { transform: translateY(0) scale(1); } 25% { transform: translateY(-2px) scale(1.12); } 50% { transform: translateY(0) scale(1); } }
-        @keyframes highlightPulse { 0%, 100% { background: #FF6B6B11; } 50% { background: #FF6B6B22; } }
-        @keyframes sidebarCollapseHover { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
-        @keyframes warningGlow { 0%, 100% { box-shadow: 0 0 4px #FFB34722; border-color: #FFB34733; } 50% { box-shadow: 0 0 10px #FFB34744, 0 0 20px #FFB34722; border-color: #FFB34755; } }
-        @keyframes criticalRowFlash { 0%, 100% { background: #1A080866; } 50% { background: #2D0A0A88; } }
-        @keyframes slaBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        @keyframes slaBlinkFast { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
-        @keyframes slaBreachPulse { 0%, 100% { color: #FF4444; text-shadow: 0 0 4px #FF444444; } 50% { color: #FF6666; text-shadow: 0 0 12px #FF444488, 0 0 24px #FF444444; } }
-        @keyframes wfIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.85; } }
-        @keyframes wfCardFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-        @keyframes wfPulseLive { 0%, 100% { transform: scale(1); opacity: 0.7; } 50% { transform: scale(1.5); opacity: 1; } }
-        @keyframes gradientSlide { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
-        @keyframes subtleFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-        @keyframes archNodeGlow { 0%, 100% { box-shadow: 0 0 16px #818CF844, 0 0 32px #22D3EE22; } 50% { box-shadow: 0 0 24px #818CF866, 0 0 48px #22D3EE44; } }
-        @keyframes archDataFlow { 0% { left: 0; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 40px; opacity: 0; } }
-        @keyframes archHubOrbit { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        @keyframes weatherSunPulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.08); filter: brightness(1.15); } }
-        @keyframes weatherRayPulse { 0%, 100% { opacity: 0.6; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.3); } }
-        @keyframes weatherMoonGlow { 0%, 100% { filter: brightness(1) drop-shadow(0 0 4px rgba(200,210,255,0.3)); } 50% { filter: brightness(1.15) drop-shadow(0 0 10px rgba(200,210,255,0.6)); } }
-        @keyframes weatherStarTwinkle { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.4); } }
-        @keyframes weatherCloudDrift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
-        @keyframes disasterSlideIn { 0% { transform: translateX(120%); opacity: 0; } 60% { transform: translateX(-8px); opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
-        @keyframes disasterSlideOut { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(120%); opacity: 0; } }
-        @keyframes disasterIconPulse { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.3) rotate(-5deg); } 60% { transform: scale(1.1) rotate(5deg); } }
-        @keyframes disasterGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.15), inset 0 1px 0 rgba(255,255,255,0.05); } 50% { box-shadow: 0 4px 30px rgba(255,68,68,0.35), 0 0 40px rgba(255,68,68,0.1), inset 0 1px 0 rgba(255,255,255,0.05); } }
-        @keyframes disasterProgress { 0% { width: 100%; } 100% { width: 0%; } }
-        @keyframes disasterFadeOut { 0% { opacity: 1; transform: translateX(0); } 100% { opacity: 0; transform: translateX(120%); } }
-        @keyframes escalationBannerGlow { 0%, 100% { box-shadow: 0 4px 20px rgba(255,68,68,0.1); } 50% { box-shadow: 0 4px 40px rgba(255,68,68,0.3), 0 0 60px rgba(255,68,68,0.08); } }
-        @keyframes escalationIconPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.85; } }
-        @keyframes escalationTextBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        .vgc-logo-box { position: relative; overflow: hidden; animation: logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.35s ease; will-change: transform, box-shadow; }
-        .vgc-logo-box::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.45), transparent); animation: logoSheen 8s ease-in-out 1.2s infinite; pointer-events: none; mix-blend-mode: screen; }
-        .vgc-logo-box:hover { transform: scale(1.06) rotate(-1.5deg); box-shadow: 0 0 22px #FFD70088, 0 0 44px #D4AF3744; }
-        .vgc-logo-text { background: linear-gradient(90deg, #FFD700, #FFF8DC, #D4AF37, #B8860B, #FFD700); background-size: 300% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; animation: logoTextShimmer 9s linear infinite; letter-spacing: 0; }
-        .vgc-logo-collapsed { position: relative; overflow: hidden; animation: logoGradient 12s ease-in-out infinite, logoGlow 8s ease-in-out infinite; transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1); will-change: transform; }
-        .vgc-logo-collapsed::after { content: ''; position: absolute; top: 0; left: 0; width: 35%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,248,220,0.42), transparent); animation: logoSheen 8s ease-in-out 1.2s infinite; pointer-events: none; mix-blend-mode: screen; }
-        .vgc-logo-collapsed:hover { transform: scale(1.10); }
-        select { appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; padding-right: 28px !important; }
-        option { background: #09090B; color: #FAFAFA; }
-
-        /* ─── Sidebar Glassy Nav Items ─── */
-        .vgc-nav-btn { position: relative; overflow: hidden; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)) !important; border: 1px solid rgba(255,255,255,0.04) !important; border-left: 2px solid var(--nav-accent, transparent) !important; margin-bottom: 2px !important; }
-        .vgc-nav-btn::before { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, var(--nav-accent, #6366F1)08, transparent); opacity: 0.5; transition: opacity 0.3s; }
-        .vgc-nav-btn:hover { background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)) !important; border-color: rgba(255,255,255,0.08) !important; }
-        .vgc-nav-btn:hover::before { opacity: 1; }
-        .vgc-nav-btn::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent); }
-        .vgc-nav-active { background: linear-gradient(135deg, color-mix(in srgb, var(--nav-accent, #6366F1) 12%, transparent), color-mix(in srgb, var(--nav-accent, #6366F1) 6%, transparent)) !important; border-left: 2px solid var(--nav-accent, #6366F1) !important; border-color: color-mix(in srgb, var(--nav-accent, #6366F1) 20%, transparent) !important; box-shadow: inset 0 0 20px color-mix(in srgb, var(--nav-accent, #6366F1) 8%, transparent), 0 0 16px color-mix(in srgb, var(--nav-accent, #6366F1) 10%, transparent); }
-        .vgc-nav-active::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent) !important; }
-
-        /* ─── Responsive Breakpoints ─── */
-        @media (max-width: 1024px) {
-          .vgc-kpi-grid-6 { grid-template-columns: repeat(3, 1fr) !important; }
-          .vgc-kpi-grid-5 { grid-template-columns: repeat(3, 1fr) !important; }
-          .vgc-kpi-grid-3 { grid-template-columns: 1fr 1fr !important; }
-          .vgc-grid-2-1 { grid-template-columns: 1fr !important; }
-        }
-        @media (max-width: 768px) {
-          .vgc-kpi-grid-6 { grid-template-columns: repeat(2, 1fr) !important; }
-          .vgc-kpi-grid-5 { grid-template-columns: repeat(2, 1fr) !important; }
-          .vgc-kpi-grid-3 { grid-template-columns: 1fr !important; }
-          .vgc-donut-grid { grid-template-columns: repeat(3, 1fr) !important; }
-          .vgc-sidebar { position: fixed !important; z-index: 900; height: 100vh !important; box-shadow: 4px 0 24px rgba(0,0,0,0.5) !important; }
-          .vgc-sidebar.collapsed { width: 0 !important; padding: 0 !important; border: none !important; }
-          .vgc-mobile-toggle { display: flex !important; }
-        }
-        @media (max-width: 480px) {
-          .vgc-kpi-grid-6 { grid-template-columns: 1fr !important; }
-          .vgc-kpi-grid-5 { grid-template-columns: 1fr !important; }
-          .vgc-donut-grid { grid-template-columns: repeat(2, 1fr) !important; }
-        }
-        /* Respect user preference to reduce motion (accessibility) — opt-in via body.vgc-reduce-motion.
-           Default keeps decorative animations (logo, headers, AI glow, etc.) enabled even when the OS
-           reports prefers-reduced-motion, because users explicitly asked for the visual identity to remain.
-           Add the class to <body> from Admin → Accessibility settings to honor OS preference. */
-        @media (prefers-reduced-motion: reduce) {
-          body.vgc-reduce-motion *, body.vgc-reduce-motion *::before, body.vgc-reduce-motion *::after {
-            animation-duration: 0.01ms !important;
-            animation-iteration-count: 1 !important;
-            transition-duration: 0.01ms !important;
-          }
-        }
-        /* Print styles */
-        @media print {
-          .vgc-sidebar, .vgc-mobile-toggle, .sidebar-collapse-btn { display: none !important; }
-          body { background: #fff !important; }
-        }
-      `}</style>
+      <style>{GLOBAL_STYLES}</style>
 
       {/* ─── Production Test Mode Banner ──────────────────────────────────── */}
       {prodTestMode && (

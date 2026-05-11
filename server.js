@@ -3930,7 +3930,10 @@ async function start() {
       try {
         const maxAgeDays = AI_THRESHOLDS.staleDays;
         const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
-        const incRows = await db.getAll("incidents");
+        const [incRows, actionRows] = await Promise.all([
+          db.getAll("incidents"),
+          db.getAll("ai_actions"),
+        ]);
         const resolvedIds = new Set();
         for (const r of incRows) {
           try {
@@ -3938,7 +3941,6 @@ async function start() {
             if (inc && ["Resolved", "Closed"].includes(inc.status)) resolvedIds.add(inc.id);
           } catch { /* ignore */ }
         }
-        const actionRows = await db.getAll("ai_actions");
         let deleted = 0;
         let cappedDel = 0;
         // Collect pending items for potential cap enforcement

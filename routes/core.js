@@ -148,7 +148,7 @@ module.exports = function createCoreRoutes(ctx) {
   // ─── SLA Engine API ────────────────────────────────────────────────
   if (pathname === "/api/sla/status" && req.method === "GET") {
     try {
-      const rows = await db.getAll("sla_tracking");
+      const rows = await cachedGetAll("sla_tracking");
       const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
       return json(res, 200, { count: items.length, data: items, engine: slaEngine ? slaEngine.getStats() : null });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -277,7 +277,7 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/sla/trends" && req.method === "GET") {
     try {
       const days = Math.min(parseInt(urlObj.searchParams.get("days") || "30", 10), 365);
-      const rows = await db.getAll("sla_history");
+      const rows = await cachedGetAll("sla_history");
       const items = rows.map(r => {
         try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; }
       }).filter(Boolean);
@@ -507,7 +507,7 @@ module.exports = function createCoreRoutes(ctx) {
   }
   if (pathname === "/api/notifications/history" && req.method === "GET") {
     try {
-      const rows = await db.getAll("notifications");
+      const rows = await cachedGetAll("notifications");
       const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
       const limit = Math.min(parseInt(urlObj.searchParams.get("limit") || "50", 10), 500);
       return json(res, 200, { count: items.length, data: items.slice(-limit) });
@@ -1403,13 +1403,15 @@ module.exports = function createCoreRoutes(ctx) {
 
   if (pathname === "/api/audit/compliance-summary" && req.method === "GET") {
     try {
-      const changes = dbParseAll(await db.getAll("changes"));
+      const [changesRaw, incsRaw, auditRows] = await Promise.all([
+        cachedGetAll("changes"),
+        cachedGetAll("incidents"),
+        db.getAllAudit(10000),
+      ]);
+      const changes = dbParseAll(changesRaw);
       const withApproval = changes.filter(c => c.approvalInstanceId || c.status === "Approved" || c.status === "Completed").length;
       const totalChanges = changes.length;
-      const incs = dbParseAll(await db.getAll("incidents"));
-      const resolved = incs.filter(i => i.status === "Resolved" || i.status === "Closed");
-      const slaMet = resolved.filter(i => !i.slaBreach).length;
-      const auditRows = await db.getAllAudit(10000);
+      const incs = dbParseAll(incsRaw);
       return json(res, 200, {
         totalChanges, changesWithApproval: withApproval,
         approvalRate: totalChanges > 0 ? Math.round((withApproval / totalChanges) * 100) : 100,
@@ -2308,7 +2310,7 @@ module.exports = function createCoreRoutes(ctx) {
   if (pathname === "/api/ai/audit" && req.method === "GET") {
     try {
       const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "100") || 100, 1000));
-      const rows = await db.getAll("ai_audit_log");
+      const rows = await cachedGetAll("ai_audit_log");
       const logs = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
         .filter(Boolean).sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || "")).slice(0, limit);
       return json(res, 200, logs);
@@ -2376,7 +2378,7 @@ module.exports = function createCoreRoutes(ctx) {
   // GET /api/automation/rules — list all rules
   if (pathname === "/api/automation/rules" && req.method === "GET") {
     try {
-      const rows = await db.getAll("automation_rules");
+      const rows = await cachedGetAll("automation_rules");
       const rules = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
       return json(res, 200, rules);
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
@@ -2624,17 +2626,21 @@ module.exports = function createCoreRoutes(ctx) {
     }
     try {
       const SAMPLE_LIMIT = 25;
-      const incRows = await db.getAll("incidents");
+      const orphanCollections = ["ai_actions", "ai_resolve_queue", "ai_triage_history"];
+      const [incRows, ...orphanRowArrays] = await Promise.all([
+        cachedGetAll("incidents"),
+        ...orphanCollections.map(c => cachedGetAll(c).catch(() => [])),
+      ]);
       const incidents = incRows.map(r => typeof r.data === "string" ? JSON.parse(r.data) : r.data);
       const incidentIds = new Set(incidents.map(i => i.id));
 
       // Orphaned AI side-effect rows (parent incident no longer exists)
-      const orphanCollections = ["ai_actions", "ai_resolve_queue", "ai_triage_history"];
       const orphaned = {};
       let totalOrphaned = 0;
-      for (const coll of orphanCollections) {
+      for (let idx = 0; idx < orphanCollections.length; idx++) {
+        const coll = orphanCollections[idx];
         try {
-          const rows = await db.getAll(coll);
+          const rows = orphanRowArrays[idx];
           const items = rows.map(r => {
             const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
             return { id: r.id || d.id, incidentId: d.incidentId || d.ticketId || d.incident_id || null };
