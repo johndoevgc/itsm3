@@ -2715,9 +2715,13 @@ Respond with ONLY valid JSON (no markdown):
             title: `SLA Breach Risk: ${pred.ticketId} (${pred.breachProbability}% likely)`,
             description: pred.reasoning || "Predicted SLA breach",
             incidentId: pred.ticketId,
+            incidentTitle: srcInc?.title || "",
             requesterName: srcInc?.reporter || srcInc?.reporterName || "",
             requesterEmail: srcInc?.reporterEmail || "",
             customerCompany: srcInc?.customer || "",
+            source: srcInc?.source || srcInc?.contactMethod || "",
+            incidentCreatedAt: srcInc?.createdAt || "",
+            currentAssignee: srcInc?.assignee || "",
             suggestedAction: pred.suggestedAction || "escalate",
             escalationTarget: pred.escalationTarget || "",
             emailDraft: pred.emailDraft || "",
@@ -3033,6 +3037,7 @@ Return JSON ONLY (no markdown): {
       for (const r of (analysis.reassignments || [])) {
         const skipReason = shouldSkipAction(dedupState, { incidentId: r.ticketId, type: "workload_rebalance" });
         if (skipReason) { console.log(`[Workload] Skipped ${r.ticketId}: ${skipReason}`); continue; }
+        const srcInc = openIncidents.find(i => i.id === r.ticketId);
         const actionRecord = {
           id: `WLB-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
           type: "workload_rebalance",
@@ -3040,6 +3045,13 @@ Return JSON ONLY (no markdown): {
           title: `Reassign ${r.ticketId}: ${r.from} → ${r.to}`,
           description: r.reason,
           incidentId: r.ticketId,
+          incidentTitle: srcInc?.title || "",
+          requesterName: srcInc?.reporter || srcInc?.reporterName || srcInc?.requesterName || "",
+          requesterEmail: srcInc?.reporterEmail || srcInc?.requesterEmail || "",
+          customerCompany: srcInc?.customer || "",
+          source: srcInc?.source || srcInc?.contactMethod || "",
+          incidentCreatedAt: srcInc?.createdAt || "",
+          currentAssignee: r.from,
           suggestedAction: "reassign",
           fromAssignee: r.from,
           toAssignee: r.to,

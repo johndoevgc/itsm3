@@ -133,9 +133,17 @@ export default function EngineerReviewHub({ ctx }) {
                     </div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", marginBottom: 4 }}>{action.title}</div>
                     <div style={{ fontSize: 11, color: "#8B8FA3", lineHeight: 1.5 }}>{action.description}</div>
-                    {(action.requesterName || action.customerCompany) && (
-                      <div style={{ fontSize: 11, color: "#8B8FA3", marginTop: 4 }}>Customer: {action.requesterName || action.customerCompany || "—"}{action.requesterEmail ? ` (${action.requesterEmail})` : ""}</div>
-                    )}
+                    {/* Incident context block */}
+                    <div style={{ marginTop: 8, padding: "8px 10px", background: "#1A1D2366", borderRadius: 6, border: "1px solid #2A2F3A", fontSize: 10, color: "#A0A8B8", lineHeight: 1.7, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 16px" }}>
+                      {action.requesterName && <div><strong style={{ color: "#06B6D4" }}>Requester:</strong> {action.requesterName}</div>}
+                      {action.requesterEmail && <div><strong style={{ color: "#64B5F6" }}>Email:</strong> {action.requesterEmail}</div>}
+                      {action.customerCompany && <div><strong style={{ color: "#EC4899" }}>Company:</strong> {action.customerCompany}</div>}
+                      {action.source && <div><strong style={{ color: "#FFB347" }}>Source:</strong> {action.source}</div>}
+                      {(action.currentAssignee || action.fromAssignee) && <div><strong style={{ color: "#81C784" }}>Assigned:</strong> {action.currentAssignee || action.fromAssignee}</div>}
+                      {action.toAssignee && <div><strong style={{ color: "#4CAF50" }}>Reassign to:</strong> {action.toAssignee}</div>}
+                      {action.incidentCreatedAt && <div><strong style={{ color: "#5A6178" }}>Created:</strong> {new Date(action.incidentCreatedAt).toLocaleDateString()} {new Date(action.incidentCreatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>}
+                      {action.incidentTitle && action.incidentTitle !== action.title && <div style={{ gridColumn: "1 / -1" }}><strong style={{ color: "#C084FC" }}>Incident:</strong> {action.incidentTitle}</div>}
+                    </div>
                   </div>
                   {action.confidence && <div style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#81C78422", color: "#81C784", fontWeight: 600, whiteSpace: "nowrap" }}>🎯 {action.confidence}%</div>}
                 </div>
