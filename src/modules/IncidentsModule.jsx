@@ -474,19 +474,59 @@ const IncidentsModule = useStableComponent(() => {
                 </div>
                 {/* Edit-before-approve panel */}
                 {editingId === s.id && s.status === "pending_approval" && (
-                  <div style={{ background: "#0F111766", padding: 10, borderRadius: 8, border: "1px solid #4CAF5044", marginBottom: 8 }}>
-                    <div style={{ fontSize: 10, color: "#81C784", fontWeight: 600, marginBottom: 6 }}>✏️ Review & Confirm Approval</div>
+                  <div style={{ background: "#0F111766", padding: 14, borderRadius: 8, border: "1px solid #4CAF5044", marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: "#81C784", fontWeight: 600, marginBottom: 8 }}>✏️ Review & Confirm Approval</div>
+                    {/* Recipient info header */}
+                    <div style={{ background: "#1A1D2344", padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 11, color: "#A0A8B8", border: "1px solid #2A2F3A", lineHeight: 1.6 }}>
+                      <div><strong style={{ color: "#06B6D4" }}>To:</strong> {s.reporterEmail || s.reporter || "N/A"}</div>
+                      {(s.customerCompany || s.customer) && <div><strong style={{ color: "#FFB347" }}>Company:</strong> {s.customerCompany || s.customer}</div>}
+                      <div><strong style={{ color: "#81C784" }}>Subject:</strong> [VGC ITSM] Your incident {s.incidentId} has been resolved</div>
+                    </div>
                     <label style={{ fontSize: 10, color: "#A0A8B8", display: "block", marginBottom: 2 }}>Resolution:</label>
                     <textarea value={editResolution ?? s.resolution} onChange={e => setEditResolution(e.target.value)}
-                      style={{ ...inputStyle, width: "100%", fontSize: 11, minHeight: 48, marginBottom: 6, resize: "vertical" }} />
-                    <label style={{ fontSize: 10, color: "#A0A8B8", display: "block", marginBottom: 2 }}>Customer Email:</label>
-                    <textarea value={editEmail ?? (s.customerEmail || "")} onChange={e => setEditEmail(e.target.value)}
-                      style={{ ...inputStyle, width: "100%", fontSize: 11, minHeight: 48, marginBottom: 8, resize: "vertical" }} />
+                      style={{ ...inputStyle, width: "100%", fontSize: 11, minHeight: 80, marginBottom: 8, resize: "vertical" }} />
+                    <label style={{ fontSize: 10, color: "#A0A8B8", display: "block", marginBottom: 2 }}>Customer Email (HTML):</label>
+                    {/* Formatting toolbar */}
+                    <div style={{ display: "flex", gap: 4, marginBottom: 4, flexWrap: "wrap" }}>
+                      {[
+                        { title: "Bold", label: "B", before: "<strong>", after: "</strong>" },
+                        { title: "Paragraph", label: "\u00b6", before: "<p>", after: "</p>" },
+                        { title: "Bullet list", label: "\u2022 List", before: "<ul>\n<li>", after: "</li>\n</ul>" },
+                        { title: "Numbered list", label: "1. List", before: "<ol>\n<li>", after: "</li>\n</ol>" },
+                        { title: "List item", label: "+ Item", before: "<li>", after: "</li>" },
+                        { title: "Line break", label: "\u21b5", before: "<br/>", after: "" },
+                      ].map(btn => (
+                        <button key={btn.title} title={btn.title} type="button" onClick={() => {
+                          const ta = document.getElementById(`email-edit-textarea-${s.id}`);
+                          if (!ta) return;
+                          const start = ta.selectionStart, end = ta.selectionEnd;
+                          const text = ta.value;
+                          const selected = text.substring(start, end);
+                          const newText = text.substring(0, start) + btn.before + selected + btn.after + text.substring(end);
+                          setEditEmail(newText);
+                          setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = start + btn.before.length + selected.length; }, 0);
+                        }} style={{ ...btnStyle("#2A2F3A"), fontSize: 10, padding: "2px 8px", minWidth: 28, fontWeight: btn.label === "B" ? 700 : 400 }}>
+                          {btn.label}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea id={`email-edit-textarea-${s.id}`}
+                      value={editEmail ?? (s.customerEmailHtml || s.customerEmail || "")}
+                      onChange={e => setEditEmail(e.target.value)}
+                      style={{ ...inputStyle, width: "100%", fontSize: 12, minHeight: 200, marginBottom: 6, resize: "vertical", lineHeight: 1.6, fontFamily: "monospace" }} />
+                    {/* Live preview */}
+                    <details style={{ marginBottom: 8 }}>
+                      <summary style={{ fontSize: 10, color: "#06B6D4", cursor: "pointer", marginBottom: 4 }}>Preview Email</summary>
+                      <div style={{ background: "#ffffff", borderRadius: 6, padding: 12, maxHeight: 200, overflowY: "auto", border: "1px solid #2A2F3A" }}>
+                        <div style={{ fontSize: 12, color: "#1a1a1a", lineHeight: 1.5 }}
+                          dangerouslySetInnerHTML={{ __html: sanitizeHtml(editEmail ?? (s.customerEmailHtml || s.customerEmail || "")) }} />
+                      </div>
+                    </details>
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                       <button onClick={() => { setEditingId(null); setEditResolution(null); setEditEmail(null); }}
                         style={{ ...btnStyle("#333"), fontSize: 10, padding: "4px 12px" }}>Cancel</button>
                       <button disabled={aiResolveLoading} onClick={() => {
-                        handleAiResolveAction(s.id, "approve", editResolution ?? s.resolution, editEmail ?? s.customerEmail);
+                        handleAiResolveAction(s.id, "approve", editResolution ?? s.resolution, editEmail ?? (s.customerEmailHtml || s.customerEmail));
                         setEditingId(null); setEditResolution(null); setEditEmail(null);
                       }} style={{ ...btnStyle("#4CAF50"), fontSize: 10, padding: "4px 14px", opacity: aiResolveLoading ? 0.5 : 1 }}>
                         ✅ Confirm Approve
