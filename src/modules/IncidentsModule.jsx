@@ -456,6 +456,7 @@ const IncidentsModule = useStableComponent(() => {
                       {queueAge && <span style={{ fontSize: 9, color: ageColor, fontWeight: 600 }}>⏱️ {queueAge}</span>}
                       {s.incidentCreatedAt && <span style={{ fontSize: 9, color: "#5A6178" }}>📅 {new Date(s.incidentCreatedAt).toLocaleDateString()} {new Date(s.incidentCreatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
                       {s.reporter && <span style={{ fontSize: 9, color: "#A0A8B8" }}>👤 {s.reporter}</span>}
+                      {s.reporterEmail && <span style={{ fontSize: 9, color: "#64B5F6" }}>✉️ {s.reporterEmail}</span>}
                       {s.source && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#1E213044", color: "#64B5F6" }}>{s.source}</span>}
                       <span style={{ fontSize: 10, color: "#5A6178" }}>Confidence: <span style={{ color: s.confidence >= 80 ? "#4CAF50" : s.confidence >= 60 ? "#FFB347" : "#FF6B6B", fontWeight: 600 }}>{s.confidence}%</span></span>
                       {s.relevance && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: (relevanceColors[s.relevance] || "#5A6178") + "22", color: relevanceColors[s.relevance] || "#5A6178", fontWeight: 600 }}>{relevanceLabels[s.relevance] || s.relevance}</span>}
@@ -464,9 +465,13 @@ const IncidentsModule = useStableComponent(() => {
                     {s.classificationReasoning && <div style={{ fontSize: 9, color: "#5A617899", marginTop: 2, fontStyle: "italic" }}>AI: {s.classificationReasoning.substring(0, 120)}</div>}
                   </div>
                   {s.status === "pending_approval" && (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button disabled={aiResolveLoading} onClick={() => setEditingId(editingId === s.id ? null : s.id)}
-                        style={{ ...btnStyle("#4CAF50"), fontSize: 10, padding: "4px 12px", opacity: aiResolveLoading ? 0.5 : 1 }}>{editingId === s.id ? "▲ Cancel" : "✅ Approve"}</button>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button disabled={aiResolveLoading} onClick={() => {
+                        const next = editingId === s.id ? null : s.id;
+                        setEditingId(next);
+                        if (next) setTimeout(() => { const el = document.getElementById(`edit-panel-${s.id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 50);
+                      }}
+                        style={{ ...btnStyle(editingId === s.id ? "#333" : "#4CAF50"), fontSize: 10, padding: "4px 12px", opacity: aiResolveLoading ? 0.5 : 1 }}>{editingId === s.id ? "▲ Close Editor" : "✅ Approve"}</button>
                       <button disabled={aiResolveLoading} onClick={() => setRejectingId(rejectingId === s.id ? null : s.id)}
                         style={{ ...btnStyle("#FF6B6B"), fontSize: 10, padding: "4px 12px", opacity: aiResolveLoading ? 0.5 : 1 }}>{rejectingId === s.id ? "▲ Cancel" : "❌ Reject"}</button>
                     </div>
@@ -474,7 +479,7 @@ const IncidentsModule = useStableComponent(() => {
                 </div>
                 {/* Edit-before-approve panel */}
                 {editingId === s.id && s.status === "pending_approval" && (
-                  <div style={{ background: "#0F111766", padding: 14, borderRadius: 8, border: "1px solid #4CAF5044", marginBottom: 8 }}>
+                  <div id={`edit-panel-${s.id}`} style={{ background: "#0F111766", padding: 14, borderRadius: 8, border: "1px solid #4CAF5044", marginBottom: 8 }}>
                     <div style={{ fontSize: 11, color: "#81C784", fontWeight: 600, marginBottom: 8 }}>✏️ Review & Confirm Approval</div>
                     {/* Recipient info header */}
                     <div style={{ background: "#1A1D2344", padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 11, color: "#A0A8B8", border: "1px solid #2A2F3A", lineHeight: 1.6 }}>
@@ -522,14 +527,14 @@ const IncidentsModule = useStableComponent(() => {
                           dangerouslySetInnerHTML={{ __html: sanitizeHtml(editEmail ?? (s.customerEmailHtml || s.customerEmail || "")) }} />
                       </div>
                     </details>
-                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
                       <button onClick={() => { setEditingId(null); setEditResolution(null); setEditEmail(null); }}
-                        style={{ ...btnStyle("#333"), fontSize: 10, padding: "4px 12px" }}>Cancel</button>
+                        style={{ ...btnStyle("#333"), fontSize: 11, padding: "6px 16px" }}>Cancel</button>
                       <button disabled={aiResolveLoading} onClick={() => {
                         handleAiResolveAction(s.id, "approve", editResolution ?? s.resolution, editEmail ?? (s.customerEmailHtml || s.customerEmail));
                         setEditingId(null); setEditResolution(null); setEditEmail(null);
-                      }} style={{ ...btnStyle("#4CAF50"), fontSize: 10, padding: "4px 14px", opacity: aiResolveLoading ? 0.5 : 1 }}>
-                        ✅ Confirm Approve
+                      }} style={{ ...btnStyle("#4CAF50"), fontSize: 12, padding: "8px 24px", fontWeight: 700, opacity: aiResolveLoading ? 0.5 : 1 }}>
+                        ✅ Confirm Approve & Send Email
                       </button>
                     </div>
                   </div>
