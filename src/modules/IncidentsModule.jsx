@@ -79,6 +79,8 @@ const IncidentsModule = useStableComponent(() => {
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const [editEmail, setEditEmail] = useState(null);
   // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [editConsultedBy, setEditConsultedBy] = useState("");
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const [rejectingId, setRejectingId] = useState(null);
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const [rejectReason, setRejectReason] = useState("");
@@ -527,12 +529,26 @@ const IncidentsModule = useStableComponent(() => {
                           dangerouslySetInnerHTML={{ __html: sanitizeHtml(editEmail ?? (s.customerEmailHtml || s.customerEmail || "")) }} />
                       </div>
                     </details>
+                    {/* RACI consultedBy — required for Sev-B and above */}
+                    {(() => {
+                      const sev = String(s.priority || "").toLowerCase().replace(/[\s_-]/g, "");
+                      const isSevBPlus = sev === "seva" || sev === "sevb" || sev === "p1" || sev === "p2" || sev === "critical" || sev === "high";
+                      return isSevBPlus ? (
+                        <div style={{ marginBottom: 8 }}>
+                          <label style={{ fontSize: 10, color: "#FFB347", display: "block", marginBottom: 2 }}>Consulted by (required for {s.priority}):</label>
+                          <input value={editConsultedBy} onChange={e => setEditConsultedBy(e.target.value)}
+                            placeholder="e.g. Hlaing, Senior Engineer"
+                            style={{ ...inputStyle, width: "100%", fontSize: 11 }} />
+                        </div>
+                      ) : null;
+                    })()}
                     <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
-                      <button onClick={() => { setEditingId(null); setEditResolution(null); setEditEmail(null); }}
+                      <button onClick={() => { setEditingId(null); setEditResolution(null); setEditEmail(null); setEditConsultedBy(""); }}
                         style={{ ...btnStyle("#333"), fontSize: 11, padding: "6px 16px" }}>Cancel</button>
                       <button disabled={aiResolveLoading} onClick={() => {
-                        handleAiResolveAction(s.id, "approve", editResolution ?? s.resolution, editEmail ?? (s.customerEmailHtml || s.customerEmail));
-                        setEditingId(null); setEditResolution(null); setEditEmail(null);
+                        const consulted = editConsultedBy.split(",").map(x => x.trim()).filter(Boolean);
+                        handleAiResolveAction(s.id, "approve", editResolution ?? s.resolution, editEmail ?? (s.customerEmailHtml || s.customerEmail), null, consulted);
+                        setEditingId(null); setEditResolution(null); setEditEmail(null); setEditConsultedBy("");
                       }} style={{ ...btnStyle("#4CAF50"), fontSize: 12, padding: "8px 24px", fontWeight: 700, opacity: aiResolveLoading ? 0.5 : 1 }}>
                         ✅ Confirm Approve & Send Email
                       </button>

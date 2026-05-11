@@ -2258,12 +2258,12 @@ export default function ITSMApp() {
     setAiBulkApproveLoading(false);
   }, [currentUser?.name, fetchAiResolveQueue]);
 
-  const handleAiResolveAction = useCallback(async (suggestionId, action, editedResolution, editedCustomerEmail, rejectionReason) => {
+  const handleAiResolveAction = useCallback(async (suggestionId, action, editedResolution, editedCustomerEmail, rejectionReason, consultedBy) => {
     setAiResolveLoading(true);
     try {
       const res = await fetch("/api/ai/resolve-queue/action", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ suggestionId, action, approvedBy: currentUser?.name || "System", editedResolution, editedCustomerEmail, rejectionReason })
+        body: JSON.stringify({ suggestionId, action, approvedBy: currentUser?.name || "System", editedResolution, editedCustomerEmail, rejectionReason, consultedBy: consultedBy || [] })
       });
       if (!res.ok) { const err = await res.json(); showToast(err.error || "Action failed", "error"); setAiResolveLoading(false); return; }
       const data = await res.json();
