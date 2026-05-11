@@ -129,6 +129,13 @@ const DEFAULTS = {
   // model improvement. Gated to prevent accidental data collection.
   ai_feedback_loop: { enabled: true, scope: "all" },
 
+  // v3.40.0 — AI auto-triage on ingest: automatically run AI categorization,
+  // priority, and assignment when a new incident is created. Fires the existing
+  // /api/ai/auto-triage-assign endpoint as a background task. Eliminates manual
+  // triage step for engineers. payload.minConfidenceToApply = threshold above
+  // which the triage result is auto-applied (below = pending_approval action).
+  ai_auto_triage_on_ingest: { enabled: true, scope: "all", payload: { minConfidenceToApply: 75 } },
+
   // v3.36.1 — ITIL4 gap-closure feature flags
   // PIR required for Sev-A MIM closure. Off in staging until validated.
   pir_required_sev_a: { enabled: true, scope: "all" },

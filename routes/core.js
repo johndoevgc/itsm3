@@ -730,6 +730,45 @@ module.exports = function createCoreRoutes(ctx) {
             }
           }
 
+          // ─── AI Auto-Triage on Ingest ─────────────────────────────────
+          if (collection === "incidents" && body.title && featureFlags.isEnabled("ai_auto_triage_on_ingest")) {
+            (async () => {
+              try {
+                const http = require("http");
+                const triagePayload = JSON.stringify({
+                  ticket: { ...body, id },
+                  requestedBy: "system_auto_triage",
+                });
+                const triageReq = http.request({
+                  hostname: "127.0.0.1",
+                  port: ctx.PORT || process.env.PORT || 8080,
+                  path: "/api/ai/auto-triage-assign",
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(triagePayload),
+                    "x-internal-sync": "1",
+                    "x-internal-scheduler-token": process.env.INTERNAL_SCHEDULER_TOKEN || "internal",
+                  },
+                }, (triageRes) => {
+                  let d = "";
+                  triageRes.on("data", c => d += c);
+                  triageRes.on("end", () => {
+                    if (triageRes.statusCode >= 200 && triageRes.statusCode < 300) {
+                      console.log(`[AI Auto-Triage] ${id} triaged on ingest — ${d.substring(0, 120)}`);
+                    } else {
+                      console.warn(`[AI Auto-Triage] ${id} failed: ${triageRes.statusCode} ${d.substring(0, 200)}`);
+                    }
+                  });
+                });
+                triageReq.on("error", e => console.warn(`[AI Auto-Triage] ${id} error:`, e.message));
+                triageReq.setTimeout(30000, () => { try { triageReq.destroy(); } catch {} });
+                triageReq.write(triagePayload);
+                triageReq.end();
+              } catch (e) { console.warn("[AI Auto-Triage] Fire-and-forget error:", e.message); }
+            })();
+          }
+
           // ─── Phase A5: Auto-create MIM record for Sev-A / P1 / Critical ──
           if (collection === "incidents" && isHighSeverity(body.priority)) {
             try {
