@@ -25,7 +25,7 @@ const DEFAULTS = {
   // Phase B — operational maturity gates
   // Auto customer email on incident CRUD: OFF in prod by default (safer).
   // Engineers can flip to true once cooling-off + redaction are validated.
-  auto_customer_email: { enabled: false, scope: "prod" },
+  auto_customer_email: { enabled: true, scope: "all" },
   // Cooling-off queue: hold AI customer emails for N minutes by severity.
   // Default ON — payload defines per-severity delay (minutes).
   ai_cooling_off:      { enabled: true,  scope: "all",
@@ -62,7 +62,7 @@ const DEFAULTS = {
   // co-pilot side panel) and customers (self-service portal widget). Sessions
   // persist in `chat_assist_sessions`; messages are PII-redacted before each
   // OpenAI call. Off in prod by default — enable per slot once tuned.
-  chat_assist:         { enabled: false, scope: "staging",
+  chat_assist:         { enabled: true, scope: "all",
                          payload: { confidenceThreshold: 75, maxSuggestions: 3,
                                     customerWidgetEnabled: false, kbGroundingTopK: 5,
                                     rateLimitPerMin: 20 } },
@@ -112,22 +112,22 @@ const DEFAULTS = {
   // shadowOnly:true logs to auto_reassign_history without mutating incidents. Promotion criteria same
   // as runbook actions: ≥1wk telemetry, ≥20 runs, 0 errors. Sev-A 24/7, Sev-B business-hours only.
   // dailyCap bounds blast radius. minAgeMinutes = grace period before triggering (lets human triage win).
-  "auto_reassign_sev_ab": { enabled: false, scope: "staging", payload: { shadowOnly: true, dailyCap: 50, minAgeMinutes: 15 } },
+  "auto_reassign_sev_ab": { enabled: true, scope: "all", payload: { shadowOnly: true, dailyCap: 50, minAgeMinutes: 15 } },
 
   // v3.36.0 — SLA at-risk auto-reassign: when an incident reaches at_risk or
   // critical SLA status, auto-reassign to the least-loaded engineer in the same
   // assignment group. Off by default — enable per-slot after validation.
-  sla_at_risk_reassign: { enabled: false, scope: "staging" },
+  sla_at_risk_reassign: { enabled: true, scope: "all", payload: { shadowOnly: true, dailyCap: 30 } },
 
   // v3.36.0 — SLA auto pause/resume: automatically pause the SLA clock when an
   // incident status changes to Pending, and resume when it leaves Pending.
   // Eliminates manual pause/resume for customer-wait scenarios.
-  sla_auto_pause_resume: { enabled: false, scope: "staging" },
+  sla_auto_pause_resume: { enabled: true, scope: "all" },
 
   // v3.36.0 — AI feedback loop closure: scheduled collection of low CSAT
   // (≤2) responses and AI triage corrections into a retraining queue for
   // model improvement. Gated to prevent accidental data collection.
-  ai_feedback_loop: { enabled: false, scope: "staging" },
+  ai_feedback_loop: { enabled: true, scope: "all" },
 
   // v3.36.1 — ITIL4 gap-closure feature flags
   // PIR required for Sev-A MIM closure. Off in staging until validated.

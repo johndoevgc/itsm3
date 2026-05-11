@@ -3089,6 +3089,8 @@ async function start() {
     onAtRisk: async (info) => {
       const flagEnabled = featureFlags && featureFlags.isEnabled("sla_at_risk_reassign");
       if (!flagEnabled) return;
+      const atRiskPayload = (featureFlags.payload && featureFlags.payload("sla_at_risk_reassign")) || {};
+      const shadowOnly = atRiskPayload.shadowOnly !== false;
       try {
         // Find least-loaded engineer in the same assignment group (or any if no group)
         const incRows = db.getOpen ? await db.getOpen("incidents") : await db.getAll("incidents");
@@ -3132,42 +3134,44 @@ async function start() {
         const newAssignee = candidates[0];
         const previousAssignee = info.assignee;
 
-        // Update the incident
-        const row = await db.getOne("incidents", info.incidentId);
-        if (!row) return;
-        const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-        inc.assignedTo = newAssignee;
-        inc.assignee = newAssignee;
-        inc.slaReassignedAt = new Date().toISOString();
-        inc.slaReassignReason = info.reason;
-        inc.slaReassignedFrom = previousAssignee;
-        await db.upsert("incidents", info.incidentId, JSON.stringify(inc));
-        await db.audit("incidents", info.incidentId, "sla_at_risk_reassign", JSON.stringify({
-          from: previousAssignee, to: newAssignee, reason: info.reason,
-          slaStatus: info.slaStatus, pctUsed: info.pctUsed,
-        }), "sla_engine");
+        if (!shadowOnly) {
+          // Real mode: mutate the incident
+          const row = await db.getOne("incidents", info.incidentId);
+          if (!row) return;
+          const inc = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          inc.assignedTo = newAssignee;
+          inc.assignee = newAssignee;
+          inc.slaReassignedAt = new Date().toISOString();
+          inc.slaReassignReason = info.reason;
+          inc.slaReassignedFrom = previousAssignee;
+          await db.upsert("incidents", info.incidentId, JSON.stringify(inc));
+          await db.audit("incidents", info.incidentId, "sla_at_risk_reassign", JSON.stringify({
+            from: previousAssignee, to: newAssignee, reason: info.reason,
+            slaStatus: info.slaStatus, pctUsed: info.pctUsed,
+          }), "sla_engine");
+          if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
 
-        // Log to reassign history
+          if (notifyEngine) {
+            await notifyEngine.send({
+              channels: ["inapp", "email"],
+              subject: `SLA At-Risk Reassignment: ${info.title || info.incidentId}`,
+              body: `Incident ${info.incidentId} reassigned from ${previousAssignee || "unassigned"} to ${newAssignee} due to SLA risk (${Math.round(info.pctUsed)}% used)`,
+              recipients: [newAssignee, previousAssignee].filter(Boolean),
+              metadata: { type: "sla_at_risk_reassign", incidentId: info.incidentId }
+            });
+          }
+          if (wsServer) wsServer.broadcast("sla", { action: "at_risk_reassign", ...info, newAssignee, previousAssignee });
+        }
+
+        // Always log to reassign history (shadow or real)
+        const mode = shadowOnly ? "shadow" : "real";
         await db.upsert("sla_reassign_history", info.id, JSON.stringify({
           id: info.id, incidentId: info.incidentId, from: previousAssignee, to: newAssignee,
           reason: info.reason, slaStatus: info.slaStatus, pctUsed: info.pctUsed,
-          timestamp: info.timestamp,
+          timestamp: info.timestamp, mode,
         }));
 
-        if (cacheLayer) cacheLayer.invalidatePrefix("incidents");
-        console.log(`[SLA At-Risk] Auto-reassigned ${info.incidentId} from ${previousAssignee || "unassigned"} to ${newAssignee} (${info.reason})`);
-
-        // Notify both engineers
-        if (notifyEngine) {
-          await notifyEngine.send({
-            channels: ["inapp", "email"],
-            subject: `SLA At-Risk Reassignment: ${info.title || info.incidentId}`,
-            body: `Incident ${info.incidentId} reassigned from ${previousAssignee || "unassigned"} to ${newAssignee} due to SLA risk (${Math.round(info.pctUsed)}% used)`,
-            recipients: [newAssignee, previousAssignee].filter(Boolean),
-            metadata: { type: "sla_at_risk_reassign", incidentId: info.incidentId }
-          });
-        }
-        if (wsServer) wsServer.broadcast("sla", { action: "at_risk_reassign", ...info, newAssignee, previousAssignee });
+        console.log(`[SLA At-Risk] ${mode === "shadow" ? "Shadow-logged" : "Auto-reassigned"} ${info.incidentId} from ${previousAssignee || "unassigned"} to ${newAssignee} (${info.reason})`);
       } catch (e) { console.error("[SLA At-Risk Reassign]", e.message); }
     }
   });
