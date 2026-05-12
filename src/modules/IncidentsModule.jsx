@@ -749,27 +749,27 @@ const IncidentsModule = useStableComponent(() => {
               })()}
             </span>
           )},
-          { label: "Title", key: "title" },
-          { label: "Priority", render: r => <PriorityDot priority={r.priority} /> },
-          { label: "Impact", render: r => <Badge color={r.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : r.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{r.impact || "—"}</Badge> },
-          { label: "Status", render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
-          { label: "Category", key: "category", mono: true },
-          { label: "Assignee", key: "assignee" },
-          { label: "Group", render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.assignmentGroup || "—"}</span> },
-          { label: "Reporter", render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.reporter}</span> },
-          { label: "AI", render: r => r.aiTriaged ? (
+          { label: "Title", key: "title", maxWidth: 420, minWidth: 180 },
+          { label: "Priority", width: 180, render: r => <PriorityDot priority={r.priority} /> },
+          { label: "Impact", width: 100, render: r => <Badge color={r.impact === "Enterprise" ? PRIORITY_COLORS["Sev-A"] : r.impact === "Department" ? PRIORITY_COLORS["Sev-B"] : PRIORITY_COLORS["Sev-D"]}>{r.impact || "—"}</Badge> },
+          { label: "Status", width: 110, render: r => <Badge color={STATUS_COLORS[r.status]}>{r.status}</Badge> },
+          { label: "Category", key: "category", mono: true, width: 120 },
+          { label: "Assignee", key: "assignee", width: 120 },
+          { label: "Group", width: 110, render: r => <span style={{ color: "#A0AEC0", fontSize: 11 }}>{r.assignmentGroup || "—"}</span> },
+          { label: "Reporter", width: 120, render: r => <span style={{ color: "#C4CAD6", fontSize: 12 }}>{r.reporter}</span> },
+          { label: "AI", width: 50, render: r => r.aiTriaged ? (
             <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: r.aiConfidence >= 90 ? "#81C784" : r.aiConfidence >= 75 ? "#FFB347" : "#FF6B6B", fontWeight: 600 }}>
               {r.aiConfidence}%
             </span>
           ) : <span style={{ color: "#5A617855", fontSize: 10 }}>—</span> },
-          { label: "Tone", render: r => {
+          { label: "Tone", width: 50, render: r => {
             const sent = r.aiSentiment || r.sentiment;
             if (!sent) return <span style={{ color: "#5A617855", fontSize: 10 }}>—</span>;
             const sentMap = { positive: { emoji: "😊", color: "#81C784" }, neutral: { emoji: "😐", color: "#A0AEC0" }, frustrated: { emoji: "😤", color: "#FFB347" }, angry: { emoji: "🔥", color: "#FF6B6B" } };
             const s = sentMap[sent] || sentMap.neutral;
             return <span title={`${sent}${r.aiSentimentScore ? ` (${r.aiSentimentScore}%)` : ""}`} style={{ fontSize: 14, cursor: "help" }}>{s.emoji}</span>;
           }},
-          { label: "SLA", render: r => {
+          { label: "SLA", width: 90, render: r => {
             const pct = Math.min(100, Math.round((r.created / r.slaTarget) * 100));
             const hrsLeft = Math.max(0, r.slaTarget - r.created);
             const isBreach = pct >= 100;
@@ -788,7 +788,7 @@ const IncidentsModule = useStableComponent(() => {
               {(isCritical || isWarning) && <span style={{ fontSize: 8, color: "#5A6178", marginLeft: 2 }}>{hrsLeft.toFixed(1)}h</span>}
             </span>;
           }},
-          { label: "Created", render: r => <span style={{ color: "#5A6178" }}>{timeAgo(r.created)}</span> },
+          { label: "Created", width: 80, render: r => <span style={{ color: "#5A6178" }}>{timeAgo(r.created)}</span> },
         ]}
         data={filtered}
         onRowClick={row => { setDetailItem(row); setModal("incidentDetail"); }}
