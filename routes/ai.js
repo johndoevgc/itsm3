@@ -1965,11 +1965,22 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
           : category === "Software" ? "Application Support"
           : "Service Desk";
 
+        // Smart routing: resolve individual engineer from category
+        const _fallbackRouting = {
+          "Security": ["Evan", "Elmo"], "Network": ["Christopher"],
+          "Cloud Services": ["Adrian Wong"], "Email": ["Adrian Wong", "Zhi Qing"],
+          "Hardware": ["Jia Liang", "Ethan"], "Printing": ["Ethan", "Jia Liang"],
+          "Software": ["Zhi Qing", "Jia Liang", "Ethan"],
+        };
+        const _fbCandidates = _fallbackRouting[category] || ["Zhi Qing", "Jia Liang", "Ethan"];
+        const _isCrit = priority === "Sev-A" || priority === "Sev-B";
+        const fallbackAssignee = _isCrit ? "Elmo" : _fbCandidates[new Date().getMinutes() % _fbCandidates.length];
+
         return {
           category,
           subcategory: "",
           priority,
-          assignee: "Unassigned",
+          assignee: fallbackAssignee,
           assignmentGroup,
           confidence: 60,
           reasoning: `Rule-based triage fallback after AI triage was unavailable: ${reason}`,
@@ -2012,6 +2023,43 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
       } catch (aiErr) {
         console.warn("[AI Triage] Rule fallback:", aiErr.message);
         triage = fallbackTriage(aiErr.message);
+      }
+
+      // ─── Smart Routing: resolve assignee from specialty map ───
+      const SPECIALTY_ROUTING = {
+        "Security": ["Evan", "Elmo"],
+        "Identity & Access": ["Evan", "Adrian Wong"],
+        "Cloud Services": ["Adrian Wong"],
+        "Azure": ["Adrian Wong"],
+        "M365": ["Adrian Wong", "Evan"],
+        "Entra ID": ["Adrian Wong", "Evan"],
+        "Network": ["Christopher"],
+        "Infrastructure": ["Christopher"],
+        "Customer Onboarding": ["Adrian Wong"],
+        "Email": ["Adrian Wong", "Zhi Qing"],
+        "Access/Identity": ["Evan", "Adrian Wong"],
+        "General": ["Zhi Qing", "Jia Liang", "Ethan"],
+        "Software": ["Zhi Qing", "Jia Liang", "Ethan"],
+        "Hardware": ["Jia Liang", "Ethan"],
+        "Printing": ["Ethan", "Jia Liang"],
+        "End User Computing": ["Zhi Qing", "Ethan", "Jia Liang"],
+        "Service Request": ["Zhi Qing", "Jia Liang"],
+        "Cloud": ["Adrian Wong"],
+      };
+      const ESCALATION_CHAIN = { lead: "Hamadi", slaResponse: "Elmo", criticalIncident: ["Elmo", "Hamadi"] };
+
+      if (!triage.assignee || triage.assignee === "Unassigned") {
+        const candidates = SPECIALTY_ROUTING[triage.category] || SPECIALTY_ROUTING[triage.subcategory] || SPECIALTY_ROUTING["General"] || [];
+        const isCritical = triage.priority === "Sev-A" || triage.priority === "Sev-B";
+        if (isCritical && ESCALATION_CHAIN.criticalIncident) {
+          triage.assignee = ESCALATION_CHAIN.criticalIncident[0];
+        } else if (candidates.length > 0) {
+          // Round-robin by minute to distribute load
+          triage.assignee = candidates[new Date().getMinutes() % candidates.length];
+        }
+        if (triage.assignee && triage.assignee !== "Unassigned") {
+          triage.reasoning = (triage.reasoning || "") + ` [Smart-routed to ${triage.assignee} by specialty]`;
+        }
       }
 
       const now = new Date().toISOString();
@@ -2164,6 +2212,33 @@ Created: ${ticket.createdAt || new Date().toISOString()}`;
             slaPredReq.write(slaPredPayload);
             slaPredReq.end();
           } catch (slaErr) { console.warn("[SLA Guardian] Post-triage trigger error:", slaErr.message); }
+
+          // ─── Auto-Acknowledge Email to Reporter ───
+          const reporterEmail = inc.reporterEmail || inc.requesterEmail;
+          if (reporterEmail && graphSendMail) {
+            try {
+              const slaHrs = inc.slaTarget || slaMap[inc.priority] || 9;
+              await graphSendMail({
+                to: reporterEmail,
+                subject: `[VGC ITSM] Your request ${inc.id} has been received`,
+                body: `<div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6;">
+                  <p>Hi ${inc.reporter || inc.reporterName || "there"},</p>
+                  <p>We've received your request and it's now being worked on by our team.</p>
+                  <table style="border-collapse:collapse;margin:16px 0;font-size:13px;">
+                    <tr><td style="padding:4px 12px 4px 0;color:#666;font-weight:600;">Ticket ID</td><td style="padding:4px 0;font-weight:700;">${inc.id}</td></tr>
+                    <tr><td style="padding:4px 12px 4px 0;color:#666;font-weight:600;">Subject</td><td style="padding:4px 0;">${(inc.title || "").substring(0, 80)}</td></tr>
+                    <tr><td style="padding:4px 12px 4px 0;color:#666;font-weight:600;">Priority</td><td style="padding:4px 0;">${inc.priority}</td></tr>
+                    <tr><td style="padding:4px 12px 4px 0;color:#666;font-weight:600;">Assigned To</td><td style="padding:4px 0;">${inc.assignee || "Service Desk"}</td></tr>
+                    <tr><td style="padding:4px 12px 4px 0;color:#666;font-weight:600;">Target Resolution</td><td style="padding:4px 0;">Within ${slaHrs} business hours</td></tr>
+                  </table>
+                  <p>We'll keep you updated on progress. If you have additional information to share, simply reply to this email.</p>
+                  <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
+                  <p style="color:#888;font-size:11px;">VGC Technology Pte Ltd — IT Service Management<br/>This is an automated acknowledgment.</p>
+                </div>`,
+              });
+              console.log(`[Auto-Ack] Sent acknowledgment to ${reporterEmail} for ${inc.id}`);
+            } catch (ackErr) { console.warn(`[Auto-Ack] Failed for ${inc.id}:`, ackErr.message); }
+          }
         }
       }
 
@@ -2623,7 +2698,7 @@ Respond with ONLY valid JSON (no markdown):
       // Calculate SLA metrics for each open ticket
       const ticketSummaries = openIncidents.map(inc => {
         const slaTarget = inc.slaTarget || slaMap[inc.priority] || 9;
-        const hoursElapsed = inc.created || 0;
+        const hoursElapsed = inc.createdAt ? Math.max(0, (Date.now() - new Date(inc.createdAt).getTime()) / 3600000) : (inc.created || 0);
         const pctUsed = Math.round((hoursElapsed / slaTarget) * 100);
         const hrsLeft = Math.max(0, slaTarget - hoursElapsed);
         const activityCount = (inc.activityLog || []).length;
@@ -2740,8 +2815,32 @@ Respond with ONLY valid JSON (no markdown):
         }
       }
 
+      // ─── SLA Auto-Escalation: reassign critical incidents near breach ───
+      const SLA_ESCALATION_CHAIN = { lead: "Hamadi", slaResponse: "Elmo", criticalIncident: ["Elmo", "Hamadi"] };
+      const autoEscalated = [];
+      for (const pred of predictions) {
+        if ((pred.breachProbability || 0) >= 90 && pred.suggestedAction === "escalate") {
+          const srcInc = openIncidents.find(i => i.id === pred.ticketId);
+          if (!srcInc || srcInc.assignee === SLA_ESCALATION_CHAIN.slaResponse || srcInc.assignee === SLA_ESCALATION_CHAIN.lead) continue;
+          const escalateTo = srcInc.priority === "Sev-A" ? SLA_ESCALATION_CHAIN.lead : SLA_ESCALATION_CHAIN.slaResponse;
+          try {
+            const incRow = await db.getOne("incidents", srcInc.id);
+            if (incRow) {
+              const inc = JSON.parse(incRow.data);
+              const prevAssignee = inc.assignee;
+              inc.assignee = escalateTo;
+              inc.activityLog = inc.activityLog || [];
+              inc.activityLog.push({ id: `AL-ESC-${Date.now().toString(36)}`, type: "escalation", user: "AI SLA Guardian", time: now, detail: `Auto-escalated from ${prevAssignee} to ${escalateTo} (${pred.breachProbability}% breach risk, ${pred.predictedBreachIn} remaining)` });
+              await db.upsert("incidents", inc.id, JSON.stringify(inc));
+              autoEscalated.push({ ticketId: inc.id, from: prevAssignee, to: escalateTo, breachProbability: pred.breachProbability });
+            }
+          } catch (escErr) { console.warn(`[AI SLA Escalation] ${srcInc.id}:`, escErr.message); }
+        }
+      }
+      if (autoEscalated.length > 0) console.log(`[AI SLA] Auto-escalated ${autoEscalated.length} incidents:`, autoEscalated.map(e => `${e.ticketId}→${e.to}`).join(", "));
+
       console.log(`[AI SLA] Predicted ${predictions.length} risks, created ${actions.length} actions`);
-      return json(res, 200, { predictions, actions, count: predictions.length });
+      return json(res, 200, { predictions, actions, autoEscalated, count: predictions.length });
     } catch (err) {
       console.error("[AI SLA Predict]", err.message);
       return json(res, 500, { error: "Internal server error" });
@@ -3592,6 +3691,75 @@ Return JSON ONLY: { "title": "string", "category": "string", "content": "full ar
       return json(res, 200, { success: true, briefingId, briefing: briefingRecord });
     } catch (err) {
       console.error("[AI Briefing]", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
+  // POST /api/ai/shift-handoff — focused handoff summary for incoming engineer
+  if (pathname === "/api/ai/shift-handoff" && req.method === "POST") {
+    if (!ctx.AZURE_OPENAI_KEY || !ctx.AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "Azure OpenAI not configured" });
+    try {
+      const body = await parseBody(req, 50000);
+      const { engineer, incidents: clientIncidents, changes: clientChanges, requests: clientRequests } = body;
+      if (!engineer) return json(res, 400, { error: "engineer name required" });
+
+      const allInc = clientIncidents || [];
+      const now = new Date();
+      const openInc = allInc.filter(i => !["Resolved", "Closed"].includes(i.status));
+      const myTickets = openInc.filter(i => (i.assignee || "").toLowerCase().includes(engineer.toLowerCase()));
+      const unacknowledged = openInc.filter(i => i.status === "New" && (i.assignee || "").toLowerCase().includes(engineer.toLowerCase()));
+      const nearBreach = openInc.filter(i => {
+        const target = i.slaTarget || 24;
+        const elapsed = i.createdAt ? (Date.now() - new Date(i.createdAt).getTime()) / 3600000 : 0;
+        return elapsed / target >= 0.75 && elapsed / target < 1;
+      });
+      const breached = openInc.filter(i => {
+        const target = i.slaTarget || 24;
+        const elapsed = i.createdAt ? (Date.now() - new Date(i.createdAt).getTime()) / 3600000 : 0;
+        return elapsed / target >= 1;
+      });
+      const recentChanges = (clientChanges || []).filter(c => c.status === "Scheduled" || c.status === "Approved");
+
+      const dataCtx = `Engineer: ${engineer}\nTime: ${now.toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}\n\nYour Open Tickets (${myTickets.length}):\n${myTickets.map(i => `- ${i.id}: "${(i.title||"").substring(0,50)}" [${i.priority}] Status:${i.status} Category:${i.category||"?"}`).join("\n") || "None"}\n\nUnacknowledged (${unacknowledged.length}):\n${unacknowledged.map(i => `- ${i.id}: "${(i.title||"").substring(0,50)}" [${i.priority}]`).join("\n") || "None"}\n\nSLA Near-Breach (75%+, ${nearBreach.length}):\n${nearBreach.map(i => `- ${i.id}: "${(i.title||"").substring(0,50)}" Assignee:${i.assignee||"?"}`).join("\n") || "None"}\n\nSLA Breached (${breached.length}):\n${breached.map(i => `- ${i.id}: "${(i.title||"").substring(0,50)}" Assignee:${i.assignee||"?"}`).join("\n") || "None"}\n\nUpcoming Changes: ${recentChanges.length}\nTotal Open Queue: ${openInc.length}`;
+
+      const systemPrompt = `You are a shift-handoff AI for VGC Technology ITSM. Generate a focused, actionable shift summary for the incoming engineer. Be brief and prioritized. Return JSON ONLY: { "greeting": "one-line shift start greeting", "immediateActions": ["top 1-3 things to do NOW"], "myTicketsSummary": "brief summary of assigned tickets", "slaWarnings": ["tickets approaching or breaching SLA"], "unacknowledgedAlerts": ["new tickets needing ack"], "upcomingChanges": "brief change schedule", "recommendation": "overall recommendation for the shift" }`;
+
+      let handoff;
+      try {
+        const payload = { model: getAIModel("secondary"), input: [{ role: "system", content: systemPrompt }, { role: "user", content: dataCtx }], max_output_tokens: 800 };
+        const aiUrl = new URL(ctx.AZURE_OPENAI_ENDPOINT);
+        const aiResult = await new Promise((resolve, reject) => {
+          const aiReq = https.request({ hostname: aiUrl.hostname, port: 443, path: aiUrl.pathname + aiUrl.search, method: "POST", headers: { "Content-Type": "application/json", "api-key": ctx.AZURE_OPENAI_KEY } }, (aiRes) => {
+            let data = ""; aiRes.on("data", c => data += c);
+            aiRes.on("end", () => { if (aiRes.statusCode >= 200 && aiRes.statusCode < 300) resolve(JSON.parse(data)); else reject(new Error(`AI ${aiRes.statusCode}`)); });
+          });
+          aiReq.on("error", reject);
+          aiReq.setTimeout(20000, () => { aiReq.destroy(); reject(new Error("timeout")); });
+          aiReq.write(JSON.stringify(payload));
+          aiReq.end();
+        });
+        const text = extractAIText(aiResult);
+        handoff = JSON.parse(text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      } catch (aiErr) {
+        handoff = {
+          greeting: `Good ${now.getHours() < 12 ? "morning" : "afternoon"}, ${engineer}. Here's your shift summary.`,
+          immediateActions: [
+            ...(unacknowledged.length ? [`Acknowledge ${unacknowledged.length} new ticket(s): ${unacknowledged.map(i => i.id).join(", ")}`] : []),
+            ...(breached.length ? [`Review ${breached.length} SLA-breached ticket(s)`] : []),
+            ...(nearBreach.length ? [`Monitor ${nearBreach.length} near-breach ticket(s)`] : ["Check open queue"]),
+          ],
+          myTicketsSummary: `You have ${myTickets.length} open tickets assigned to you.`,
+          slaWarnings: [...breached, ...nearBreach].slice(0, 5).map(i => `${i.id}: ${(i.title||"").substring(0,40)}`),
+          unacknowledgedAlerts: unacknowledged.map(i => `${i.id}: ${(i.title||"").substring(0,40)}`),
+          upcomingChanges: `${recentChanges.length} change(s) scheduled.`,
+          recommendation: myTickets.length > 5 ? "Heavy workload — consider requesting rebalancing." : "Manageable workload. Focus on SLA-at-risk tickets first.",
+          degraded: true,
+        };
+      }
+
+      return json(res, 200, { success: true, engineer, handoff, stats: { myTickets: myTickets.length, unacknowledged: unacknowledged.length, nearBreach: nearBreach.length, breached: breached.length, totalOpen: openInc.length } });
+    } catch (err) {
+      console.error("[Shift Handoff]", err.message);
       return json(res, 500, { error: "Internal server error" });
     }
   }
@@ -5614,6 +5782,1073 @@ Respond ONLY with a valid JSON array. No markdown wrapping.`;
       await db.upsert("ai_retraining_queue", itemId, JSON.stringify(item));
       return json(res, 200, { ok: true, deleted: itemId });
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
+  }
+
+  // ─── Feature 34: Smart Field Auto-Complete ─────────────────────────────
+  // POST /api/ai/smart-fields — infer category, priority, assignment from description
+  if (pathname === "/api/ai/smart-fields" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const desc = String(body.description || body.text || "").trim();
+      if (!desc || desc.length < 5) return json(res, 400, { error: "description required (min 5 chars)" });
+
+      const categories = ["Network", "Hardware", "Software", "Security", "Email", "Access/Identity", "Cloud", "Printing", "End User Computing", "Service Request", "General"];
+      const priorities = ["Sev-A (Critical)", "Sev-B (High)", "Sev-C (Medium)", "Sev-D (Low)"];
+
+      const systemPrompt = `You are an ITSM ticket classifier for VGC Technology (MSP in Singapore). Given a ticket description, infer the fields.
+Return ONLY valid JSON:
+{
+  "category": "one of: ${categories.join(", ")}",
+  "priority": "one of: ${priorities.join(", ")}",
+  "urgency": "High|Medium|Low",
+  "impact": "Enterprise|Department|Individual",
+  "assignmentGroup": "Helpdesk|Security|Cloud|Infra|CSE|Lead|SLA",
+  "suggestedAssignee": "name from team or null",
+  "title": "concise ticket title (max 80 chars)",
+  "tags": ["tag1","tag2"]
+}
+Team: Zhi Qing (Helpdesk/triage), Evan (Security/Entra/Identity), Adrian (CSE/onboarding), Hamadi (Lead/escalation), Adrian Wong (Cloud/Azure/M365/Entra), Jia Liang (Helpdesk), Christopher (Network/Infra), Ethan (Helpdesk), Elmo (SLA/Critical).
+Route by keyword matching: password/MFA/login→Access/Identity, Outlook/email/Teams→Email, VPN/WiFi/internet→Network, laptop/monitor/printer→Hardware, install/update/license→Software, Azure/SharePoint/OneDrive→Cloud, phishing/malware/breach→Security.`;
+
+      const aiResult = await callAI(systemPrompt, desc, { tier: "secondary", maxTokens: 300 });
+      const raw = (aiResult && aiResult.text || "").replace(/```json\n?|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { const m = raw.match(/\{[\s\S]*\}/); if (m) try { parsed = JSON.parse(m[0]); } catch {} }
+      if (!parsed) return json(res, 200, { category: "General", priority: "Sev-C (Medium)", urgency: "Medium", impact: "Individual", assignmentGroup: "Helpdesk", suggestedAssignee: null, title: desc.slice(0, 80), tags: [], confidence: 0 });
+
+      return json(res, 200, { ...parsed, confidence: 85, model: aiResult?.model || "secondary", generatedAt: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "smart-fields failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 33: Time-to-Resolve Estimator ────────────────────────────
+  // POST /api/ai/estimate-resolution-time — predict ETA from historical data
+  if (pathname === "/api/ai/estimate-resolution-time" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const { category, priority, assignee } = body;
+      if (!category && !priority) return json(res, 400, { error: "category or priority required" });
+
+      const incRows = await db.getAll("incidents");
+      const resolved = incRows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } })
+        .filter(i => i && (i.status === "Resolved" || i.status === "Closed") && i.createdAt && i.resolvedAt);
+
+      const similar = resolved.filter(i => {
+        let score = 0;
+        if (category && i.category === category) score += 2;
+        if (priority && i.priority === priority) score += 2;
+        if (assignee && i.assignee === assignee) score += 1;
+        return score >= 2;
+      });
+
+      if (similar.length < 3) {
+        const allTimes = resolved.map(i => (new Date(i.resolvedAt).getTime() - new Date(i.createdAt).getTime()) / 3600000).filter(h => h > 0 && h < 720);
+        const avg = allTimes.length > 0 ? allTimes.reduce((a, b) => a + b, 0) / allTimes.length : 24;
+        return json(res, 200, { estimatedHours: Math.round(avg * 10) / 10, confidence: 40, sampleSize: allTimes.length, basis: "global_average" });
+      }
+
+      const times = similar.map(i => (new Date(i.resolvedAt).getTime() - new Date(i.createdAt).getTime()) / 3600000).filter(h => h > 0 && h < 720);
+      times.sort((a, b) => a - b);
+      const p50 = times[Math.floor(times.length * 0.5)] || 24;
+      const p80 = times[Math.floor(times.length * 0.8)] || 48;
+      const avg = times.reduce((a, b) => a + b, 0) / times.length;
+      const confidence = Math.min(95, 40 + similar.length * 3);
+
+      return json(res, 200, { estimatedHours: Math.round(p50 * 10) / 10, p80Hours: Math.round(p80 * 10) / 10, averageHours: Math.round(avg * 10) / 10, confidence, sampleSize: similar.length, basis: "category_priority_match" });
+    } catch (err) {
+      return json(res, 500, { error: "estimate-resolution-time failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 31: Smart Ticket Context Panel ───────────────────────────
+  // POST /api/ai/ticket-context — aggregate context for a ticket in one call
+  if (pathname === "/api/ai/ticket-context" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const ticketId = String(body.ticketId || "").trim();
+      if (!ticketId) return json(res, 400, { error: "ticketId required" });
+
+      const incRow = await db.getOne("incidents", ticketId);
+      if (!incRow) return json(res, 404, { error: "Ticket not found" });
+      const inc = typeof incRow.data === "string" ? JSON.parse(incRow.data) : incRow.data;
+
+      const reporterEmail = (inc.reporterEmail || inc.requesterEmail || inc.createdBy || "").toLowerCase();
+
+      // 1. User's recent tickets (last 10)
+      const allInc = await db.getAll("incidents");
+      const allIncidents = allInc.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const userHistory = reporterEmail ? allIncidents
+        .filter(i => i.id !== ticketId && ((i.reporterEmail || "").toLowerCase() === reporterEmail || (i.requesterEmail || "").toLowerCase() === reporterEmail))
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .slice(0, 10)
+        .map(i => ({ id: i.id, title: i.title, status: i.status, priority: i.priority, category: i.category, createdAt: i.createdAt, resolvedAt: i.resolvedAt })) : [];
+
+      // 2. Similar resolved tickets (by title/category)
+      const query = `${inc.title || ""} ${(inc.description || "").slice(0, 100)}`.toLowerCase();
+      const similarResolved = allIncidents
+        .filter(i => i.id !== ticketId && (i.status === "Resolved" || i.status === "Closed") && i.category === inc.category)
+        .map(i => {
+          const t = `${i.title || ""} ${(i.description || "").slice(0, 100)}`.toLowerCase();
+          const words = query.split(/\s+/).filter(w => w.length > 3);
+          const overlap = words.filter(w => t.includes(w)).length;
+          return { ...i, _score: overlap };
+        })
+        .filter(i => i._score >= 2)
+        .sort((a, b) => b._score - a._score)
+        .slice(0, 5)
+        .map(i => ({ id: i.id, title: i.title, resolution: (i.resolution || i.workaround || "").slice(0, 200), resolvedAt: i.resolvedAt, assignee: i.assignee }));
+
+      // 3. Relevant KB articles
+      let kbArticles = [];
+      try {
+        kbArticles = await _gatherKbGrounding(db, `${inc.title} ${inc.category}`, 5);
+      } catch { /* tolerate */ }
+
+      // 4. Resolution time estimate
+      const catMatches = allIncidents.filter(i => i.category === inc.category && i.status === "Resolved" && i.createdAt && i.resolvedAt);
+      const times = catMatches.map(i => (new Date(i.resolvedAt).getTime() - new Date(i.createdAt).getTime()) / 3600000).filter(h => h > 0 && h < 720);
+      const etaHours = times.length >= 3 ? Math.round(times.sort((a, b) => a - b)[Math.floor(times.length * 0.5)] * 10) / 10 : null;
+
+      // 5. Recurring issue flag
+      const recurringCount = userHistory.filter(h => h.category === inc.category).length;
+
+      return json(res, 200, {
+        ticketId,
+        reporter: { email: reporterEmail, ticketCount: userHistory.length, recurringCategory: recurringCount >= 2 ? inc.category : null },
+        userHistory,
+        similarResolved,
+        kbArticles: kbArticles.map(k => ({ id: k.id, title: k.title, snippet: (k.snippet || "").slice(0, 150) })),
+        estimatedResolutionHours: etaHours,
+        isRecurring: recurringCount >= 2,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      return json(res, 500, { error: "ticket-context failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 6: Natural Language Ticket Creation ──────────────────────
+  // POST /api/ai/nlp-create-ticket — parse one sentence into full ticket fields
+  if (pathname === "/api/ai/nlp-create-ticket" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const text = String(body.text || body.message || "").trim();
+      if (!text || text.length < 5) return json(res, 400, { error: "text required (min 5 chars)" });
+
+      const systemPrompt = `You are an ITSM intake AI for VGC Technology (MSP in Singapore). A user describes their IT issue in natural language. Extract ALL ticket fields from their message.
+
+Return ONLY valid JSON:
+{
+  "title": "concise title (max 80 chars)",
+  "description": "structured problem description with key details",
+  "category": "one of: Network, Hardware, Software, Security, Email, Access/Identity, Cloud, Printing, End User Computing, General",
+  "priority": "Sev-A (Critical)|Sev-B (High)|Sev-C (Medium)|Sev-D (Low)",
+  "urgency": "High|Medium|Low",
+  "impact": "Enterprise|Department|Individual",
+  "affectedUsers": "number or 'unknown'",
+  "reporterName": "extracted name or null",
+  "service": "affected service name or null",
+  "startedAt": "when it started (ISO or relative) or null",
+  "symptoms": ["symptom1","symptom2"],
+  "suggestedAssignee": "best engineer name from team or null"
+}
+
+Priority guide: Sev-A=entire company affected/security breach, Sev-B=department affected/VIP user, Sev-C=individual affected/workaround exists, Sev-D=cosmetic/enhancement.
+Team: Zhi Qing (Helpdesk), Evan (Security/Entra), Adrian (CSE), Hamadi (Lead), Adrian Wong (Cloud/Azure/M365), Jia Liang (Helpdesk), Christopher (Network/Infra), Ethan (Helpdesk), Elmo (SLA/Critical).`;
+
+      const aiResult = await callAI(systemPrompt, text, { tier: "secondary", maxTokens: 500 });
+      const raw = (aiResult && aiResult.text || "").replace(/```json\n?|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { const m = raw.match(/\{[\s\S]*\}/); if (m) try { parsed = JSON.parse(m[0]); } catch {} }
+      if (!parsed) return json(res, 502, { error: "AI could not parse the request", raw: raw.slice(0, 300) });
+
+      return json(res, 200, { ...parsed, originalText: text, confidence: 82, model: aiResult?.model || "secondary", generatedAt: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "nlp-create-ticket failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 46: AI Decision Audit Trail ──────────────────────────────
+  // GET /api/ai/decision-log — query the AI decision audit log
+  if (pathname === "/api/ai/decision-log" && req.method === "GET") {
+    try {
+      const params = Object.fromEntries(urlObj.searchParams);
+      const limit = Math.min(parseInt(params.limit || "50", 10), 200);
+      const rows = await db.getAll("ai_audit_log");
+      let entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      if (params.type) entries = entries.filter(e => (e.type || "").includes(params.type));
+      if (params.ticketId) entries = entries.filter(e => e.ticketId === params.ticketId);
+      if (params.since) { const since = new Date(params.since).getTime(); entries = entries.filter(e => new Date(e.at || e.createdAt || 0).getTime() >= since); }
+      entries.sort((a, b) => new Date(b.at || b.createdAt || 0) - new Date(a.at || a.createdAt || 0));
+      entries = entries.slice(0, limit);
+      return json(res, 200, { count: entries.length, entries });
+    } catch (err) {
+      return json(res, 500, { error: "decision-log failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 1: AI Autopilot Status & Activity Feed ───────────────────
+  // GET /api/ai/autopilot/status — return recent autopilot runs + summary stats
+  if (pathname === "/api/ai/autopilot/status" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_audit_log");
+      let entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const autopilotRuns = entries.filter(e => e.type === "ai_autopilot").sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0)).slice(0, 20);
+      const lastRun = autopilotRuns[0] || null;
+      const totalRuns = autopilotRuns.length;
+      const stepStats = {};
+      for (const run of autopilotRuns) {
+        for (const step of (run.steps || [])) {
+          if (!stepStats[step.step]) stepStats[step.step] = { ok: 0, skipped: 0, failed: 0 };
+          if (step.ok === false) stepStats[step.step].failed++;
+          else if (step.skipped) stepStats[step.step].skipped++;
+          else stepStats[step.step].ok++;
+        }
+      }
+      const autoTriaged = entries.filter(e => e.type === "auto_triage" && e.autoExecutable).length;
+      const autoResolved = entries.filter(e => (e.type === "auto_resolve" || e.type === "auto_dismiss") && e.confidence >= (AI_THRESHOLDS.autoResolveConfidence || 85)).length;
+      return json(res, 200, {
+        enabled: true,
+        lastRun: lastRun ? { id: lastRun.id, startedAt: lastRun.startedAt, finishedAt: lastRun.finishedAt, rolloutWeek: lastRun.rolloutWeek, steps: lastRun.steps } : null,
+        totalRuns,
+        stats: { autoTriaged, autoResolved, stepStats },
+        recentRuns: autopilotRuns.slice(0, 5).map(r => ({ id: r.id, startedAt: r.startedAt, rolloutWeek: r.rolloutWeek, stepsCount: (r.steps || []).length, error: r.error || null }))
+      });
+    } catch (err) {
+      return json(res, 500, { error: "autopilot-status failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 35: Knowledge Surfacing on Type ──────────────────────────
+  // POST /api/ai/kb-surface — real-time KB search as user types (debounced)
+  if (pathname === "/api/ai/kb-surface" && req.method === "POST") {
+    try {
+      const { query } = body;
+      if (!query || query.trim().length < 5) return json(res, 200, { articles: [] });
+      const articles = await _gatherKbGrounding(db, query, 5);
+      const results = articles.map(a => ({
+        id: a.id,
+        title: a.title,
+        category: a.category,
+        snippet: (a.content || "").substring(0, 150),
+        resolution: (a.resolution || "").substring(0, 200),
+        tags: a.tags || [],
+        score: a._score || 0
+      }));
+      return json(res, 200, { articles: results });
+    } catch (err) {
+      return json(res, 500, { error: "kb-surface failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 25: Multi-Language Auto-Response ─────────────────────────
+  // POST /api/ai/translate-response — detect language + translate AI response
+  if (pathname === "/api/ai/translate-response" && req.method === "POST") {
+    try {
+      const { text, targetLanguage, detectFrom } = body;
+      if (!text) return json(res, 400, { error: "text required" });
+      const systemPrompt = `You are a professional translation engine for an IT Service Management platform.
+If targetLanguage is provided, translate the text into that language.
+If detectFrom is provided, detect the language of that text first, then translate the main text into that detected language.
+Preserve all technical terms (ticket IDs, system names, URLs) untranslated.
+Return JSON: { "detectedLanguage": "<language name>", "languageCode": "<iso-639-1>", "translatedText": "<translated>" }
+If the text is already in the target language, return it unchanged with detectedLanguage set.`;
+      const userPrompt = targetLanguage
+        ? `Translate to ${targetLanguage}:\n\n${text}`
+        : `Detect the language of this message: "${detectFrom}"\nThen translate the following response into that language:\n\n${text}`;
+      const raw = await callAI(systemPrompt, userPrompt, { tier: "secondary", maxTokens: 1200 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { error: "translate failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 36: AI Standup Generator (per-engineer) ──────────────────
+  // POST /api/ai/standup — generate personalized morning standup for an engineer
+  if (pathname === "/api/ai/standup" && req.method === "POST") {
+    try {
+      const { engineerName, incidents: incList } = body;
+      if (!engineerName) return json(res, 400, { error: "engineerName required" });
+      const allInc = incList || (await db.getAll("incidents")).map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const myTickets = allInc.filter(i => i && i.assignee === engineerName && !["Resolved", "Closed"].includes(i.status));
+      const resolvedYesterday = allInc.filter(i => i && i.assignee === engineerName && i.status === "Resolved" && i.resolvedAt && (Date.now() - new Date(i.resolvedAt).getTime()) < 86400000);
+      const slaMap = getSlaMap();
+      const atRisk = myTickets.filter(i => {
+        const target = slaMap[i.priority] || 9;
+        const elapsed = (Date.now() - new Date(i.created).getTime()) / 3600000;
+        return (elapsed / target) >= 0.7;
+      });
+      const standup = {
+        engineer: engineerName,
+        generatedAt: new Date().toISOString(),
+        yesterday: { resolved: resolvedYesterday.length, tickets: resolvedYesterday.slice(0, 5).map(i => ({ id: i.id, title: i.title })) },
+        today: { openCount: myTickets.length, queue: myTickets.sort((a, b) => { const pMap = { "Sev-A": 0, "Sev-B": 1, "Sev-C": 2, "Sev-D": 3 }; return (pMap[a.priority] || 9) - (pMap[b.priority] || 9); }).slice(0, 8).map(i => ({ id: i.id, title: i.title, priority: i.priority, status: i.status })) },
+        slaRisks: atRisk.slice(0, 5).map(i => ({ id: i.id, title: i.title, priority: i.priority })),
+        suggestedFocus: atRisk.length > 0 ? `SLA at-risk: ${atRisk[0].id} (${atRisk[0].priority})` : myTickets.length > 0 ? `Continue: ${myTickets[0].id}` : "All clear — assist teammates"
+      };
+      return json(res, 200, standup);
+    } catch (err) {
+      return json(res, 500, { error: "standup failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 3: Smart SLA Defender ────────────────────────────────────
+  // POST /api/ai/sla-defend — proactive SLA defense: auto-escalate at-risk tickets
+  if (pathname === "/api/ai/sla-defend" && req.method === "POST") {
+    try {
+      const { incidents } = body;
+      if (!incidents || !Array.isArray(incidents)) return json(res, 400, { error: "incidents array required" });
+      const slaMap = getSlaMap();
+      const now = Date.now();
+      const atRisk = [];
+      for (const inc of incidents) {
+        if (!inc.id || ["Resolved", "Closed"].includes(inc.status)) continue;
+        const target = slaMap[inc.priority] || 9;
+        const elapsed = getBusinessHoursElapsed ? getBusinessHoursElapsed(inc.created) : ((now - new Date(inc.created).getTime()) / 3600000);
+        const pctUsed = elapsed / target;
+        if (pctUsed >= 0.7) {
+          atRisk.push({ id: inc.id, title: inc.title, priority: inc.priority, assignee: inc.assignee, pctUsed: Math.round(pctUsed * 100), elapsed: Math.round(elapsed * 10) / 10, target, status: pctUsed >= 1.0 ? "breached" : pctUsed >= 0.85 ? "critical" : "warning" });
+        }
+      }
+      const actions = [];
+      for (const ticket of atRisk.filter(t => t.status === "critical" || t.status === "breached")) {
+        actions.push({ type: "sla_escalation", ticketId: ticket.id, priority: ticket.priority, reason: `SLA ${ticket.pctUsed}% used (${ticket.elapsed}h / ${ticket.target}h)`, suggestedAction: ticket.status === "breached" ? "Immediate escalation to lead" : "Reassign to available specialist" });
+      }
+      return json(res, 200, { atRisk, actions, totalChecked: incidents.length, atRiskCount: atRisk.length });
+    } catch (err) {
+      return json(res, 500, { error: "sla-defend failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 4: Auto-Merge Duplicate Storms ───────────────────────────
+  // POST /api/ai/detect-duplicates — detect duplicate storms in recent tickets
+  if (pathname === "/api/ai/detect-duplicates" && req.method === "POST") {
+    try {
+      const { incidents, windowMinutes = 15, threshold = 0.85 } = body;
+      if (!incidents || !Array.isArray(incidents)) return json(res, 400, { error: "incidents array required" });
+      const cutoff = Date.now() - (windowMinutes * 60 * 1000);
+      const recent = incidents.filter(i => new Date(i.created).getTime() >= cutoff && !["Resolved", "Closed"].includes(i.status));
+      const groups = [];
+      const used = new Set();
+      for (let i = 0; i < recent.length; i++) {
+        if (used.has(recent[i].id)) continue;
+        const cluster = [recent[i]];
+        const wordsA = `${recent[i].title || ""} ${recent[i].description || ""} ${recent[i].category || ""}`.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        for (let j = i + 1; j < recent.length; j++) {
+          if (used.has(recent[j].id)) continue;
+          const wordsB = `${recent[j].title || ""} ${recent[j].description || ""} ${recent[j].category || ""}`.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+          const intersection = wordsA.filter(w => wordsB.includes(w)).length;
+          const union = new Set([...wordsA, ...wordsB]).size;
+          const similarity = union > 0 ? intersection / union : 0;
+          if (similarity >= threshold) { cluster.push(recent[j]); used.add(recent[j].id); }
+        }
+        if (cluster.length >= 3) {
+          used.add(recent[i].id);
+          groups.push({ parentId: cluster[0].id, childIds: cluster.slice(1).map(c => c.id), count: cluster.length, similarity: threshold, category: cluster[0].category || "General", title: `Duplicate Storm: ${cluster[0].title || cluster[0].category}` });
+        }
+      }
+      return json(res, 200, { storms: groups, totalChecked: recent.length, stormsDetected: groups.length });
+    } catch (err) {
+      return json(res, 500, { error: "detect-duplicates failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 12: User Frustration Detector ────────────────────────────
+  // POST /api/ai/detect-frustration — analyze sentiment of incoming message
+  if (pathname === "/api/ai/detect-frustration" && req.method === "POST") {
+    try {
+      const { text, ticketId } = body;
+      if (!text) return json(res, 400, { error: "text required" });
+      const systemPrompt = `You are a sentiment analysis engine for IT support communications.
+Analyze the customer message for frustration level and urgency signals.
+Return JSON: { "frustrationScore": <0.0-1.0>, "sentiment": "<positive|neutral|negative|angry>", "urgencySignals": [<list of signals detected>], "suggestedTone": "<empathetic response tone suggestion>", "shouldEscalate": <true if frustration > 0.8> }`;
+      const raw = await callAI(systemPrompt, `Analyze this customer message:\n\n"${text}"`, { tier: "secondary", maxTokens: 400 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      if (result.shouldEscalate && ticketId) {
+        await db.upsert("ai_audit_log", `FRUST-${Date.now().toString(36)}`, JSON.stringify({ type: "frustration_detected", ticketId, score: result.frustrationScore, sentiment: result.sentiment, at: new Date().toISOString() }));
+      }
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { error: "frustration-detect failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 8: AI Command Bar (NLP Action Execution) ─────────────────
+  // POST /api/ai/command — parse natural language command and return structured action
+  if (pathname === "/api/ai/command" && req.method === "POST") {
+    try {
+      const { command, context } = body;
+      if (!command) return json(res, 400, { error: "command required" });
+      const systemPrompt = `You are an AI command parser for an ITSM platform. Parse the user's natural language command into a structured action.
+Available actions:
+- assign: { action: "assign", ticketId, assignee }
+- escalate: { action: "escalate", ticketId, reason }
+- close: { action: "close", ticketId, resolution }
+- prioritize: { action: "prioritize", ticketId, newPriority }
+- search: { action: "search", query, filters }
+- report: { action: "report", type, timeRange, groupBy }
+- bulk_close: { action: "bulk_close", filter, reason }
+- status_update: { action: "status_update", ticketId, newStatus }
+
+Current context: ${context ? JSON.stringify(context) : "general ITSM operations"}
+
+Return JSON: { "action": "<action_type>", "params": { ... }, "confidence": <0-100>, "explanation": "<what this will do>" }
+If the command is ambiguous, return multiple possible interpretations in an "alternatives" array.`;
+      const raw = await callAI(systemPrompt, `Command: "${command}"`, { tier: "secondary", maxTokens: 500 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { error: "command-parse failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 21: Auto-Generated Status Updates ────────────────────────
+  // POST /api/ai/generate-status-update — generate stakeholder update for active incident
+  if (pathname === "/api/ai/generate-status-update" && req.method === "POST") {
+    try {
+      const { incident } = body;
+      if (!incident) return json(res, 400, { error: "incident required" });
+      const kbContext = await _gatherKbGrounding(db, `${incident.title} ${incident.category}`, 2);
+      const systemPrompt = `You are writing a professional stakeholder status update email for an IT incident.
+Write a concise update suitable for managers and affected users. Include:
+1. Current Status (1 sentence)
+2. Impact Summary (who is affected)
+3. Actions Taken (bullet points)
+4. Next Steps & ETA
+5. Contact info for questions
+
+Keep it under 150 words. Professional but human tone.
+Return JSON: { "subject": "<email subject>", "body": "<html email body>", "summary": "<1-line summary>" }`;
+      const activitySummary = (incident.activityLog || []).slice(-5).map(a => `${a.time}: ${a.detail}`).join("\n");
+      const raw = await callAI(systemPrompt, `Incident: ${incident.id} - ${incident.title}\nPriority: ${incident.priority}\nStatus: ${incident.status}\nAssignee: ${incident.assignee}\nCreated: ${incident.created}\nRecent activity:\n${activitySummary}`, { tier: "secondary", maxTokens: 800 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { error: "status-update failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 22: Smart Escalation Notifications ───────────────────────
+  // POST /api/ai/generate-escalation — compose escalation email with context
+  if (pathname === "/api/ai/generate-escalation" && req.method === "POST") {
+    try {
+      const { incident, escalationReason, targetEngineer } = body;
+      if (!incident) return json(res, 400, { error: "incident required" });
+      const systemPrompt = `Compose a professional escalation notification email for an IT incident.
+Include: Summary, Business Impact, Attempted Actions, Recommended Next Steps, Urgency Level.
+Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body": "<html body>", "urgencyTag": "<immediate|high|normal>" }`;
+      const raw = await callAI(systemPrompt, `Escalating: ${incident.id} - ${incident.title}\nPriority: ${incident.priority}\nReason: ${escalationReason || "SLA risk"}\nTarget: ${targetEngineer || "Team Lead"}\nCurrent assignee: ${incident.assignee}\nActivity: ${(incident.activityLog || []).slice(-3).map(a => a.detail).join("; ")}`, { tier: "secondary", maxTokens: 600 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { error: "escalation-generate failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 47: Feedback-Driven Learning ─────────────────────────────
+  // POST /api/ai/feedback — capture engineer override as learning signal
+  if (pathname === "/api/ai/feedback" && req.method === "POST") {
+    try {
+      const { ticketId, field, originalValue, correctedValue, correctedBy, reason } = body;
+      if (!ticketId || !field) return json(res, 400, { error: "ticketId and field required" });
+      const entry = { id: `FB-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`, type: "ai_feedback", ticketId, field, originalValue, correctedValue, correctedBy: correctedBy || "engineer", reason: reason || "", at: new Date().toISOString() };
+      await db.upsert("ai_audit_log", entry.id, JSON.stringify(entry));
+      return json(res, 200, { success: true, feedbackId: entry.id });
+    } catch (err) {
+      return json(res, 500, { error: "feedback failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 11: Ticket Volume Forecaster ─────────────────────────────
+  // POST /api/ai/forecast-volume — predict next-day ticket volume by category
+  if (pathname === "/api/ai/forecast-volume" && req.method === "POST") {
+    try {
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const now = Date.now();
+      const last7 = all.filter(i => i.created && (now - new Date(i.created).getTime()) < 7 * 86400000);
+      const last30 = all.filter(i => i.created && (now - new Date(i.created).getTime()) < 30 * 86400000);
+      const byCategory = {};
+      for (const inc of last7) { const cat = inc.category || "General"; byCategory[cat] = (byCategory[cat] || 0) + 1; }
+      const dailyAvg7 = last7.length / 7;
+      const dailyAvg30 = last30.length / 30;
+      const trend = dailyAvg7 > dailyAvg30 * 1.2 ? "increasing" : dailyAvg7 < dailyAvg30 * 0.8 ? "decreasing" : "stable";
+      const topCategories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([cat, count]) => ({ category: cat, count, pct: Math.round((count / last7.length) * 100) }));
+      return json(res, 200, { predicted: { tomorrow: Math.round(dailyAvg7 * (trend === "increasing" ? 1.1 : trend === "decreasing" ? 0.9 : 1)), nextWeek: Math.round(dailyAvg7 * 7) }, trend, dailyAvg7: Math.round(dailyAvg7 * 10) / 10, dailyAvg30: Math.round(dailyAvg30 * 10) / 10, topCategories, staffingSuggestion: dailyAvg7 > 10 ? "Consider adding coverage" : "Current staffing adequate" });
+    } catch (err) {
+      return json(res, 500, { error: "forecast failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 13: Recurring Issue Predictor ────────────────────────────
+  // POST /api/ai/recurring-issues — detect users with recurring problems
+  if (pathname === "/api/ai/recurring-issues" && req.method === "POST") {
+    try {
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const cutoff = Date.now() - 30 * 86400000;
+      const recent = all.filter(i => i.created && new Date(i.created).getTime() >= cutoff);
+      const byReporter = {};
+      for (const inc of recent) {
+        const key = `${inc.reporter || inc.reporterEmail || "unknown"}|${inc.category || "General"}`;
+        if (!byReporter[key]) byReporter[key] = [];
+        byReporter[key].push(inc);
+      }
+      const recurring = Object.entries(byReporter).filter(([_, arr]) => arr.length >= 3).map(([key, arr]) => {
+        const [reporter, category] = key.split("|");
+        return { reporter, category, count: arr.length, tickets: arr.slice(0, 5).map(i => ({ id: i.id, title: i.title, created: i.created })), suggestion: "Create Problem record or schedule preventive maintenance" };
+      }).sort((a, b) => b.count - a.count);
+      return json(res, 200, { recurring, total: recurring.length });
+    } catch (err) {
+      return json(res, 500, { error: "recurring-issues failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 15: Engineer Burnout Predictor ───────────────────────────
+  // POST /api/ai/burnout-risk — analyze per-engineer workload stress
+  if (pathname === "/api/ai/burnout-risk" && req.method === "POST") {
+    try {
+      const { roster } = body;
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const now = Date.now();
+      const last7 = all.filter(i => i.created && (now - new Date(i.created).getTime()) < 7 * 86400000);
+      const teamAvg = last7.length / Math.max(1, (roster || []).length);
+      const risks = (roster || []).map(eng => {
+        const myTickets = last7.filter(i => i.assignee === eng.name);
+        const openCount = all.filter(i => i.assignee === eng.name && !["Resolved", "Closed"].includes(i.status)).length;
+        const sevAB = myTickets.filter(i => i.priority === "Sev-A" || i.priority === "Sev-B").length;
+        const volume = myTickets.length;
+        const volumeRatio = teamAvg > 0 ? volume / teamAvg : 1;
+        const burnoutScore = Math.min(100, Math.round((volumeRatio * 30) + (openCount * 5) + (sevAB * 15)));
+        return { name: eng.name, volume, openCount, sevAB, burnoutScore, risk: burnoutScore > 70 ? "high" : burnoutScore > 40 ? "medium" : "low" };
+      }).sort((a, b) => b.burnoutScore - a.burnoutScore);
+      return json(res, 200, { risks, teamAvg: Math.round(teamAvg * 10) / 10, highRisk: risks.filter(r => r.risk === "high").length });
+    } catch (err) {
+      return json(res, 500, { error: "burnout-risk failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 37: Skill Gap Detector ───────────────────────────────────
+  // POST /api/ai/skill-gaps — analyze resolution times by engineer x category
+  if (pathname === "/api/ai/skill-gaps" && req.method === "POST") {
+    try {
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const resolved = all.filter(i => i.status === "Resolved" && i.resolvedAt && i.created && i.assignee);
+      const matrix = {};
+      for (const inc of resolved) {
+        const hours = (new Date(inc.resolvedAt) - new Date(inc.created)) / 3600000;
+        if (hours < 0 || hours > 720) continue;
+        const key = `${inc.assignee}|${inc.category || "General"}`;
+        if (!matrix[key]) matrix[key] = [];
+        matrix[key].push(hours);
+      }
+      const categoryAvgs = {};
+      for (const [key, times] of Object.entries(matrix)) {
+        const cat = key.split("|")[1];
+        if (!categoryAvgs[cat]) categoryAvgs[cat] = [];
+        categoryAvgs[cat].push(...times);
+      }
+      for (const cat of Object.keys(categoryAvgs)) {
+        categoryAvgs[cat] = categoryAvgs[cat].reduce((s, v) => s + v, 0) / categoryAvgs[cat].length;
+      }
+      const gaps = [];
+      for (const [key, times] of Object.entries(matrix)) {
+        const [engineer, cat] = key.split("|");
+        const avgTime = times.reduce((s, v) => s + v, 0) / times.length;
+        const teamAvg = categoryAvgs[cat] || avgTime;
+        const ratio = avgTime / teamAvg;
+        if (ratio > 2.0 && times.length >= 3) {
+          gaps.push({ engineer, category: cat, avgHours: Math.round(avgTime * 10) / 10, teamAvgHours: Math.round(teamAvg * 10) / 10, ratio: Math.round(ratio * 10) / 10, sampleSize: times.length, suggestion: `Pair with faster resolver or assign training` });
+        }
+      }
+      return json(res, 200, { gaps: gaps.sort((a, b) => b.ratio - a.ratio), totalResolved: resolved.length });
+    } catch (err) {
+      return json(res, 500, { error: "skill-gaps failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 38: Auto Queue Optimizer ─────────────────────────────────
+  // POST /api/ai/optimize-queue — suggest ticket reassignments for load balancing
+  if (pathname === "/api/ai/optimize-queue" && req.method === "POST") {
+    try {
+      const { roster } = body;
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const open = all.filter(i => i && !["Resolved", "Closed"].includes(i.status));
+      const load = {};
+      for (const eng of (roster || [])) load[eng.name] = { count: 0, tickets: [], specialty: eng.specialty || [] };
+      for (const inc of open) {
+        if (load[inc.assignee]) { load[inc.assignee].count++; load[inc.assignee].tickets.push(inc); }
+      }
+      const counts = Object.values(load).map(l => l.count);
+      const avg = counts.reduce((s, v) => s + v, 0) / Math.max(1, counts.length);
+      const suggestions = [];
+      for (const [eng, data] of Object.entries(load)) {
+        if (data.count > avg * 1.5 && data.count > 3) {
+          const overload = data.tickets.slice(Math.ceil(avg));
+          const underloaded = Object.entries(load).filter(([_, d]) => d.count < avg * 0.7).map(([n]) => n);
+          if (underloaded.length > 0) {
+            for (const ticket of overload.slice(0, 2)) {
+              suggestions.push({ action: "reassign", ticketId: ticket.id, from: eng, to: underloaded[0], reason: `${eng} overloaded (${data.count} tickets, avg ${Math.round(avg)})` });
+            }
+          }
+        }
+      }
+      return json(res, 200, { suggestions, currentLoad: Object.entries(load).map(([name, d]) => ({ name, count: d.count })), avg: Math.round(avg * 10) / 10, imbalance: Math.max(...counts) - Math.min(...counts) });
+    } catch (err) {
+      return json(res, 500, { error: "optimize-queue failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 44: Post-Resolution Health Check ─────────────────────────
+  // POST /api/ai/health-check — verify resolved tickets haven't recurred
+  if (pathname === "/api/ai/health-check" && req.method === "POST") {
+    try {
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const cutoff48h = Date.now() - 48 * 3600000;
+      const recentlyResolved = all.filter(i => i.status === "Resolved" && i.resolvedAt && new Date(i.resolvedAt).getTime() <= cutoff48h && new Date(i.resolvedAt).getTime() > (cutoff48h - 24 * 3600000));
+      const results = recentlyResolved.map(resolved => {
+        const recurred = all.filter(i => i.id !== resolved.id && i.reporter === resolved.reporter && i.category === resolved.category && new Date(i.created).getTime() > new Date(resolved.resolvedAt).getTime());
+        return { id: resolved.id, title: resolved.title, reporter: resolved.reporter, resolvedAt: resolved.resolvedAt, recurred: recurred.length > 0, recurrenceCount: recurred.length, action: recurred.length > 0 ? "reopen" : "auto-close" };
+      });
+      return json(res, 200, { checked: results.length, healthy: results.filter(r => !r.recurred).length, recurred: results.filter(r => r.recurred).length, results });
+    } catch (err) {
+      return json(res, 500, { error: "health-check failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 45: Customer Success Score ───────────────────────────────
+  // POST /api/ai/customer-health — compute per-customer health scores
+  if (pathname === "/api/ai/customer-health" && req.method === "POST") {
+    try {
+      const rows = await db.getAll("incidents");
+      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const byCustomer = {};
+      for (const inc of all) {
+        const cust = inc.customer || inc.reporterEmail || "Unknown";
+        if (!byCustomer[cust]) byCustomer[cust] = { total: 0, resolved: 0, slaBreaches: 0, sevAB: 0, lastTicket: null };
+        byCustomer[cust].total++;
+        if (inc.status === "Resolved" || inc.status === "Closed") byCustomer[cust].resolved++;
+        if (inc.slaBreached) byCustomer[cust].slaBreaches++;
+        if (inc.priority === "Sev-A" || inc.priority === "Sev-B") byCustomer[cust].sevAB++;
+        if (!byCustomer[cust].lastTicket || new Date(inc.created) > new Date(byCustomer[cust].lastTicket)) byCustomer[cust].lastTicket = inc.created;
+      }
+      const scores = Object.entries(byCustomer).map(([customer, data]) => {
+        const resolutionRate = data.total > 0 ? data.resolved / data.total : 1;
+        const slaCompliance = data.total > 0 ? 1 - (data.slaBreaches / data.total) : 1;
+        const severityScore = data.total > 0 ? 1 - (data.sevAB / data.total) * 0.5 : 1;
+        const healthScore = Math.round(((resolutionRate * 40) + (slaCompliance * 40) + (severityScore * 20)));
+        return { customer, healthScore, status: healthScore >= 80 ? "healthy" : healthScore >= 50 ? "at-risk" : "critical", ...data };
+      }).sort((a, b) => a.healthScore - b.healthScore);
+      return json(res, 200, { customers: scores, atRisk: scores.filter(s => s.status === "at-risk" || s.status === "critical").length, total: scores.length });
+    } catch (err) {
+      return json(res, 500, { error: "customer-health failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 41: Proactive Customer Notification ──────────────────────
+  // POST /api/ai/proactive-notify — generate proactive notification for service issue
+  if (pathname === "/api/ai/proactive-notify" && req.method === "POST") {
+    try {
+      const { incident, affectedCustomers } = body;
+      if (!incident) return json(res, 400, { error: "incident required" });
+      const systemPrompt = `Generate a proactive customer notification for a service issue.
+Tone: professional, transparent, reassuring. Under 80 words.
+Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta": "<estimated resolution time>" }`;
+      const raw = await callAI(systemPrompt, `Service Issue: ${incident.title}\nPriority: ${incident.priority}\nAffected: ${(affectedCustomers || []).join(", ") || "multiple users"}\nStatus: Being investigated`, { tier: "secondary", maxTokens: 400 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { error: "proactive-notify failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 48: Weekly AI Performance Report ─────────────────────────
+  // GET /api/ai/performance-report — compute AI accuracy and efficiency metrics
+  if (pathname === "/api/ai/performance-report" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_audit_log");
+      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const weekCutoff = Date.now() - 7 * 86400000;
+      const thisWeek = entries.filter(e => new Date(e.at || e.startedAt || e.createdAt || 0).getTime() >= weekCutoff);
+      const triages = thisWeek.filter(e => e.type === "auto_triage");
+      const overrides = thisWeek.filter(e => e.type === "ai_feedback");
+      const autopilotRuns = thisWeek.filter(e => e.type === "ai_autopilot");
+      const accuracy = triages.length > 0 ? Math.round(((triages.length - overrides.length) / triages.length) * 100) : 100;
+      return json(res, 200, {
+        period: "last_7_days",
+        totalAiActions: thisWeek.length,
+        triages: triages.length,
+        overrides: overrides.length,
+        accuracy: Math.max(0, accuracy),
+        autopilotRuns: autopilotRuns.length,
+        topOverrideFields: (() => { const f = {}; overrides.forEach(o => { f[o.field] = (f[o.field] || 0) + 1; }); return Object.entries(f).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([field, count]) => ({ field, count })); })()
+      });
+    } catch (err) {
+      return json(res, 500, { error: "performance-report failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 50: Configuration Recommendation Engine ──────────────────
+  // GET /api/ai/config-recommendations — suggest threshold/config optimizations
+  if (pathname === "/api/ai/config-recommendations" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_audit_log");
+      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const overrides = entries.filter(e => e.type === "ai_feedback");
+      const triages = entries.filter(e => e.type === "auto_triage");
+      const recommendations = [];
+      const overrideRate = triages.length > 0 ? overrides.length / triages.length : 0;
+      if (overrideRate > 0.2) {
+        recommendations.push({ setting: "AI_AUTO_APPLY_THRESHOLD", current: AI_THRESHOLDS.autoApply, suggested: Math.min(95, AI_THRESHOLDS.autoApply + 5), reason: `Override rate is ${Math.round(overrideRate * 100)}% — increase threshold to reduce false auto-applies`, impact: "fewer incorrect auto-triages" });
+      } else if (overrideRate < 0.05 && triages.length > 20) {
+        recommendations.push({ setting: "AI_AUTO_APPLY_THRESHOLD", current: AI_THRESHOLDS.autoApply, suggested: Math.max(70, AI_THRESHOLDS.autoApply - 5), reason: `Override rate is only ${Math.round(overrideRate * 100)}% — AI is reliable enough to lower threshold`, impact: `~${Math.round(triages.length * 0.1)} more tickets auto-triaged per week` });
+      }
+      if (AI_THRESHOLDS.autoResolveConfidence < 90 && overrideRate < 0.1) {
+        recommendations.push({ setting: "AI_AUTO_RESOLVE_THRESHOLD", current: AI_THRESHOLDS.autoResolveConfidence, suggested: AI_THRESHOLDS.autoResolveConfidence - 3, reason: "High accuracy suggests auto-resolve can be more aggressive", impact: "More routine tickets resolved without human intervention" });
+      }
+      return json(res, 200, { recommendations, metrics: { overrideRate: Math.round(overrideRate * 100), totalTriages: triages.length, totalOverrides: overrides.length } });
+    } catch (err) {
+      return json(res, 500, { error: "config-recommendations failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 9: Conversational Report Builder ──────────────────────
+  // POST /api/ai/conversational-report — NLP → chart spec + data
+  if (pathname === "/api/ai/conversational-report" && req.method === "POST") {
+    try {
+      const { query } = body || {};
+      if (!query) return json(res, 400, { error: "query required" });
+      const incidents = await db.getAll("incidents");
+      const changes = await db.getAll("changes");
+      const problems = await db.getAll("problems");
+      const dataSnapshot = {
+        incidentCount: incidents.length,
+        categories: {},
+        priorities: {},
+        monthlyTrend: {},
+        assignees: {},
+        statuses: {},
+        changeCount: changes.length,
+        problemCount: problems.length,
+      };
+      incidents.forEach(t => {
+        const cat = t.category || "Unknown";
+        const pri = t.priority || "Unknown";
+        const mon = (t.createdAt || t.created || "").slice(0, 7) || "Unknown";
+        const assignee = t.assignedTo || "Unassigned";
+        const status = t.status || "Unknown";
+        dataSnapshot.categories[cat] = (dataSnapshot.categories[cat] || 0) + 1;
+        dataSnapshot.priorities[pri] = (dataSnapshot.priorities[pri] || 0) + 1;
+        dataSnapshot.monthlyTrend[mon] = (dataSnapshot.monthlyTrend[mon] || 0) + 1;
+        dataSnapshot.assignees[assignee] = (dataSnapshot.assignees[assignee] || 0) + 1;
+        dataSnapshot.statuses[status] = (dataSnapshot.statuses[status] || 0) + 1;
+      });
+      const aiResult = await callAI(
+        `You are a data analytics assistant for an ITSM system. Given a natural-language query about ticket data, produce a JSON response with: { "chartType": "bar"|"line"|"pie"|"table"|"number", "title": "...", "labels": [...], "datasets": [{ "label": "...", "data": [...] }], "summary": "one-line insight" }. Use the data snapshot provided. Return ONLY valid JSON.`,
+        `Query: "${query}"\n\nData snapshot:\n${JSON.stringify(dataSnapshot)}`,
+        { tier: "quick", maxTokens: 1200 }
+      );
+      let chart;
+      try { chart = JSON.parse(aiResult.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch { chart = { chartType: "table", title: query, summary: aiResult, labels: [], datasets: [] }; }
+      return json(res, 200, { chart, query });
+    } catch (err) {
+      return json(res, 500, { error: "conversational-report failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 14: Service Degradation Early Warning ─────────────────
+  // POST /api/ai/service-degradation — correlate multiple signals
+  if (pathname === "/api/ai/service-degradation" && req.method === "POST") {
+    try {
+      const incidents = await db.getAll("incidents");
+      const oneHourAgo = Date.now() - 60 * 60 * 1000;
+      const recent = incidents.filter(t => {
+        const ts = new Date(t.createdAt || t.created || 0).getTime();
+        return ts > oneHourAgo && (t.status === "Open" || t.status === "In Progress");
+      });
+      const serviceBuckets = {};
+      recent.forEach(t => {
+        const svc = t.category || t.service || "General";
+        if (!serviceBuckets[svc]) serviceBuckets[svc] = [];
+        serviceBuckets[svc].push(t);
+      });
+      const warnings = [];
+      Object.entries(serviceBuckets).forEach(([svc, tickets]) => {
+        if (tickets.length >= 3) {
+          const affectedUsers = [...new Set(tickets.map(t => t.requester || t.createdBy).filter(Boolean))];
+          warnings.push({
+            service: svc,
+            ticketCount: tickets.length,
+            affectedUsers: affectedUsers.length,
+            severity: tickets.length >= 7 ? "critical" : tickets.length >= 5 ? "high" : "medium",
+            tickets: tickets.map(t => ({ id: t.id, title: t.title, priority: t.priority })),
+            detectedAt: new Date().toISOString(),
+            suggestedComms: `We've detected a potential issue with ${svc}. ${tickets.length} related reports in the last hour affecting ${affectedUsers.length} user(s). Our team is investigating.`,
+          });
+        }
+      });
+      return json(res, 200, { warnings, scanned: recent.length, timestamp: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "service-degradation failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 26: 1-Click Onboarding ────────────────────────────────
+  // POST /api/ai/onboard — generate full onboarding plan from name + role
+  if (pathname === "/api/ai/onboard" && req.method === "POST") {
+    try {
+      const { employeeName, role, department, manager } = body || {};
+      if (!employeeName) return json(res, 400, { error: "employeeName required" });
+      const plan = {
+        employee: employeeName,
+        role: role || "IT Staff",
+        department: department || "IT",
+        manager: manager || "Not specified",
+        generatedAt: new Date().toISOString(),
+        steps: [
+          { step: 1, action: "Create Entra ID account", service: "Entra ID", status: "planned", auto: true },
+          { step: 2, action: "Assign M365 E3/E5 license", service: "M365 Admin", status: "planned", auto: true },
+          { step: 3, action: "Add to security groups based on role", service: "Entra ID", status: "planned", auto: true },
+          { step: 4, action: "Create shared mailbox access", service: "Exchange Online", status: "planned", auto: true },
+          { step: 5, action: "Add to Teams channels", service: "Microsoft Teams", status: "planned", auto: true },
+          { step: 6, action: "Provision laptop / workstation", service: "Intune", status: "planned", auto: false },
+          { step: 7, action: "Configure VPN access", service: "Network", status: "planned", auto: true },
+          { step: 8, action: "Send welcome email with credentials", service: "Email", status: "planned", auto: true },
+          { step: 9, action: "Schedule IT orientation meeting", service: "Calendar", status: "planned", auto: true },
+          { step: 10, action: "Create CMDB asset record", service: "ITSM", status: "planned", auto: true },
+        ],
+        estimatedTime: "15 minutes (automated) + 1-2 days (hardware provisioning)",
+      };
+      await db.upsert("ai_audit_log", `onboard-${Date.now()}`, { type: "onboarding", employee: employeeName, role, timestamp: plan.generatedAt, stepCount: plan.steps.length });
+      return json(res, 200, { plan });
+    } catch (err) {
+      return json(res, 500, { error: "onboard failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 27: 1-Click Offboarding ───────────────────────────────
+  // POST /api/ai/offboard — generate full offboarding plan
+  if (pathname === "/api/ai/offboard" && req.method === "POST") {
+    try {
+      const { employeeName, email, lastDay } = body || {};
+      if (!employeeName) return json(res, 400, { error: "employeeName required" });
+      const plan = {
+        employee: employeeName,
+        email: email || "",
+        lastDay: lastDay || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+        generatedAt: new Date().toISOString(),
+        steps: [
+          { step: 1, action: "Disable Entra ID account", service: "Entra ID", status: "planned", auto: true, timing: "last day" },
+          { step: 2, action: "Revoke MFA and sessions", service: "Entra ID", status: "planned", auto: true, timing: "last day" },
+          { step: 3, action: "Set email forwarding to manager", service: "Exchange Online", status: "planned", auto: true, timing: "last day" },
+          { step: 4, action: "Backup OneDrive to manager", service: "OneDrive", status: "planned", auto: true, timing: "last day" },
+          { step: 5, action: "Remove from all security groups", service: "Entra ID", status: "planned", auto: true, timing: "last day" },
+          { step: 6, action: "Remove from Teams channels", service: "Microsoft Teams", status: "planned", auto: true, timing: "last day" },
+          { step: 7, action: "Revoke VPN access", service: "Network", status: "planned", auto: true, timing: "last day" },
+          { step: 8, action: "Create asset recovery task", service: "ITSM", status: "planned", auto: false, timing: "last day +1" },
+          { step: 9, action: "Archive mailbox (litigation hold)", service: "Exchange Online", status: "planned", auto: true, timing: "last day +30" },
+          { step: 10, action: "Delete Entra ID account", service: "Entra ID", status: "planned", auto: true, timing: "last day +90" },
+        ],
+        estimatedTime: "10 minutes (automated) + manual asset recovery",
+      };
+      await db.upsert("ai_audit_log", `offboard-${Date.now()}`, { type: "offboarding", employee: employeeName, timestamp: plan.generatedAt, stepCount: plan.steps.length });
+      return json(res, 200, { plan });
+    } catch (err) {
+      return json(res, 500, { error: "offboard failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 28: 1-Click War Room ──────────────────────────────────
+  // POST /api/ai/war-room — set up incident war room
+  if (pathname === "/api/ai/war-room" && req.method === "POST") {
+    try {
+      const { incidentId, title, severity } = body || {};
+      if (!incidentId) return json(res, 400, { error: "incidentId required" });
+      const engineers = await db.getAll("users");
+      const activeEngineers = engineers.filter(u => u.rbacRole && !["End User", "Read Only"].includes(u.rbacRole));
+      const incident = await db.get("incidents", incidentId).catch(() => null);
+      const incTitle = title || incident?.title || incidentId;
+      const warRoom = {
+        incidentId,
+        title: `War Room: ${incTitle}`,
+        severity: severity || incident?.priority || "Sev-A",
+        createdAt: new Date().toISOString(),
+        channelName: `war-room-${incidentId.toLowerCase().replace(/[^a-z0-9]/g, "-")}`,
+        bridgeCallLink: `https://teams.microsoft.com/l/meetup-join/war-room-${incidentId}`,
+        invitedEngineers: activeEngineers.slice(0, 8).map(u => ({ name: u.name, email: u.email, role: u.role || u.rbacRole })),
+        incidentBrief: {
+          title: incTitle,
+          priority: incident?.priority || severity || "Sev-A",
+          description: incident?.description || "Details pending",
+          impact: incident?.impact || "Under assessment",
+          timeline: [
+            { time: new Date().toISOString(), event: "War room created" },
+            { time: new Date().toISOString(), event: "Engineers notified" },
+          ],
+        },
+        timer: { startedAt: new Date().toISOString(), elapsed: 0 },
+      };
+      await db.upsert("ai_audit_log", `warroom-${Date.now()}`, { type: "war_room", incidentId, timestamp: warRoom.createdAt, engineerCount: warRoom.invitedEngineers.length });
+      return json(res, 200, { warRoom });
+    } catch (err) {
+      return json(res, 500, { error: "war-room failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 32: Impact Radius Visualizer ──────────────────────────
+  // POST /api/ai/impact-radius — map blast radius of an incident
+  if (pathname === "/api/ai/impact-radius" && req.method === "POST") {
+    try {
+      const { incidentId } = body || {};
+      if (!incidentId) return json(res, 400, { error: "incidentId required" });
+      const incident = await db.get("incidents", incidentId).catch(() => null);
+      if (!incident) return json(res, 404, { error: "Incident not found" });
+      const allIncidents = await db.getAll("incidents");
+      const cmdbAssets = await db.getAll("cmdb_assets").catch(() => []);
+      const relatedTickets = allIncidents.filter(t => t.id !== incidentId && t.category === incident.category && (t.status === "Open" || t.status === "In Progress"));
+      const affectedUsers = [...new Set([incident.requester, incident.createdBy, ...relatedTickets.map(t => t.requester || t.createdBy)].filter(Boolean))];
+      const affectedAssets = cmdbAssets.filter(a => {
+        const cat = (incident.category || "").toLowerCase();
+        return (a.category || "").toLowerCase().includes(cat) || (a.type || "").toLowerCase().includes(cat);
+      });
+      const impactGraph = {
+        center: { id: incidentId, title: incident.title, type: "incident", priority: incident.priority },
+        affectedUsers: affectedUsers.map(u => ({ name: u, type: "user" })),
+        relatedTickets: relatedTickets.slice(0, 10).map(t => ({ id: t.id, title: t.title, type: "ticket", status: t.status })),
+        affectedAssets: affectedAssets.slice(0, 10).map(a => ({ id: a.id, name: a.name || a.hostname, type: "asset", category: a.category })),
+        affectedServices: [incident.category].filter(Boolean).map(s => ({ name: s, type: "service" })),
+        summary: {
+          totalUsers: affectedUsers.length,
+          totalTickets: relatedTickets.length,
+          totalAssets: affectedAssets.length,
+          estimatedBusinessImpact: incident.priority === "Sev-A" ? "Critical" : incident.priority === "Sev-B" ? "High" : "Moderate",
+        },
+      };
+      return json(res, 200, { impactGraph });
+    } catch (err) {
+      return json(res, 500, { error: "impact-radius failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 39: Peer Learning Suggestions ─────────────────────────
+  // POST /api/ai/peer-learning — find recent solutions relevant to open tickets
+  if (pathname === "/api/ai/peer-learning" && req.method === "POST") {
+    try {
+      const incidents = await db.getAll("incidents");
+      const resolved = incidents.filter(t => t.status === "Resolved" || t.status === "Closed");
+      const open = incidents.filter(t => t.status === "Open" || t.status === "In Progress");
+      const recentResolved = resolved.filter(t => {
+        const ts = new Date(t.resolvedAt || t.updatedAt || t.createdAt || 0).getTime();
+        return ts > Date.now() - 7 * 86400000;
+      });
+      const suggestions = [];
+      for (const rTicket of recentResolved.slice(0, 20)) {
+        const rTitle = (rTicket.title || "").toLowerCase();
+        const rCat = (rTicket.category || "").toLowerCase();
+        for (const oTicket of open) {
+          if (oTicket.assignedTo === rTicket.assignedTo) continue;
+          const oTitle = (oTicket.title || "").toLowerCase();
+          const oCat = (oTicket.category || "").toLowerCase();
+          if (rCat === oCat || rTitle.split(/\s+/).filter(w => w.length > 3 && oTitle.includes(w)).length >= 2) {
+            suggestions.push({
+              resolvedTicket: { id: rTicket.id, title: rTicket.title, resolvedBy: rTicket.assignedTo, resolution: (rTicket.resolution || rTicket.notes || "").slice(0, 200) },
+              openTicket: { id: oTicket.id, title: oTicket.title, assignedTo: oTicket.assignedTo },
+              matchReason: rCat === oCat ? `Same category: ${rTicket.category}` : "Similar title keywords",
+            });
+          }
+        }
+      }
+      return json(res, 200, { suggestions: suggestions.slice(0, 15), scanned: { resolved: recentResolved.length, open: open.length } });
+    } catch (err) {
+      return json(res, 500, { error: "peer-learning failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 43: Smart Callback Scheduler ──────────────────────────
+  // POST /api/ai/callback-schedule — propose callback times
+  if (pathname === "/api/ai/callback-schedule" && req.method === "POST") {
+    try {
+      const { ticketId, requesterEmail } = body || {};
+      if (!ticketId) return json(res, 400, { error: "ticketId required" });
+      const now = new Date();
+      const slots = [];
+      for (let d = 0; d < 3; d++) {
+        const day = new Date(now.getTime() + (d + 1) * 86400000);
+        if (day.getDay() === 0 || day.getDay() === 6) continue;
+        [9, 11, 14, 16].forEach(hour => {
+          const slotTime = new Date(day);
+          slotTime.setHours(hour, 0, 0, 0);
+          slots.push({ time: slotTime.toISOString(), display: `${slotTime.toLocaleDateString("en-SG", { weekday: "short", month: "short", day: "numeric" })} ${hour > 12 ? hour - 12 : hour}:00 ${hour >= 12 ? "PM" : "AM"}` });
+        });
+      }
+      return json(res, 200, { ticketId, requesterEmail: requesterEmail || "", slots: slots.slice(0, 6), expiresAt: new Date(now.getTime() + 48 * 3600000).toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "callback-schedule failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 7: Voice-to-Ticket (metadata endpoint) ────────────────
+  // POST /api/ai/voice-to-ticket — transcription → structured ticket
+  if (pathname === "/api/ai/voice-to-ticket" && req.method === "POST") {
+    try {
+      const { transcript } = body || {};
+      if (!transcript) return json(res, 400, { error: "transcript required" });
+      const aiResult = await callAI(
+        `You are an ITSM intake assistant. Given a voice transcript, extract ticket fields. Return JSON: { "title": "...", "description": "...", "category": "...", "priority": "Sev-A|Sev-B|Sev-C|Sev-D", "urgency": "Critical|High|Medium|Low", "impact": "Critical|High|Medium|Low" }. Return ONLY valid JSON.`,
+        `Transcript: "${transcript}"`,
+        { tier: "quick", maxTokens: 500 }
+      );
+      let ticket;
+      try { ticket = JSON.parse(aiResult.replace(/```json?\n?/g, "").replace(/```/g, "").trim()); } catch { ticket = { title: transcript.slice(0, 80), description: transcript, category: "General", priority: "Sev-C" }; }
+      return json(res, 200, { ticket, source: "voice" });
+    } catch (err) {
+      return json(res, 500, { error: "voice-to-ticket failed", details: err.message });
+    }
+  }
+
+  // ─── Feature 49: AI Self-Monitoring / Anomaly Detection ────────────
+  // GET /api/ai/self-monitor — AI monitors its own performance metrics
+  if (pathname === "/api/ai/self-monitor" && req.method === "GET") {
+    try {
+      const rows = await db.getAll("ai_audit_log");
+      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
+      const weekAgo = Date.now() - 7 * 86400000;
+      const twoWeeksAgo = Date.now() - 14 * 86400000;
+      const thisWeek = entries.filter(e => new Date(e.timestamp || 0).getTime() > weekAgo);
+      const lastWeek = entries.filter(e => { const ts = new Date(e.timestamp || 0).getTime(); return ts > twoWeeksAgo && ts <= weekAgo; });
+      const countByType = (list, type) => list.filter(e => e.type === type).length;
+      const metrics = {
+        thisWeek: { triages: countByType(thisWeek, "auto_triage"), overrides: countByType(thisWeek, "ai_feedback"), kbGenerated: countByType(thisWeek, "kb_harvest"), autoResolved: countByType(thisWeek, "auto_resolve") },
+        lastWeek: { triages: countByType(lastWeek, "auto_triage"), overrides: countByType(lastWeek, "ai_feedback"), kbGenerated: countByType(lastWeek, "kb_harvest"), autoResolved: countByType(lastWeek, "auto_resolve") },
+      };
+      const anomalies = [];
+      if (metrics.lastWeek.triages > 0) {
+        const triageChange = (metrics.thisWeek.triages - metrics.lastWeek.triages) / metrics.lastWeek.triages;
+        if (Math.abs(triageChange) > 0.5) anomalies.push({ metric: "Auto-Triage Volume", change: `${Math.round(triageChange * 100)}%`, severity: Math.abs(triageChange) > 1 ? "high" : "medium", message: triageChange > 0 ? "Unusual spike in auto-triage volume" : "Significant drop in auto-triage volume" });
+      }
+      if (metrics.thisWeek.triages > 0) {
+        const overrideRate = metrics.thisWeek.overrides / metrics.thisWeek.triages;
+        if (overrideRate > 0.3) anomalies.push({ metric: "Override Rate", value: `${Math.round(overrideRate * 100)}%`, severity: "high", message: "AI decisions are being overridden frequently — model may need retuning" });
+      }
+      const lastWeekOverrideRate = metrics.lastWeek.triages > 0 ? metrics.lastWeek.overrides / metrics.lastWeek.triages : 0;
+      const thisWeekOverrideRate = metrics.thisWeek.triages > 0 ? metrics.thisWeek.overrides / metrics.thisWeek.triages : 0;
+      if (thisWeekOverrideRate - lastWeekOverrideRate > 0.1) anomalies.push({ metric: "Override Rate Trend", change: `+${Math.round((thisWeekOverrideRate - lastWeekOverrideRate) * 100)}%`, severity: "medium", message: "Override rate increasing week-over-week — possible model drift" });
+      return json(res, 200, { metrics, anomalies, healthStatus: anomalies.some(a => a.severity === "high") ? "degraded" : anomalies.length > 0 ? "warning" : "healthy", timestamp: new Date().toISOString() });
+    } catch (err) {
+      return json(res, 500, { error: "self-monitor failed", details: err.message });
+    }
   }
 
     return false;

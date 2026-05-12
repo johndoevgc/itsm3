@@ -6,7 +6,7 @@ import {
   STATUS, OPEN_STATUSES, PRIORITY,
 } from "../constants/status.js";
 import {
-  RBAC_PERMISSIONS,
+  RBAC_PERMISSIONS, SPECIALTY_ROUTING, ESCALATION_CHAIN,
 } from "../constants/rbac.js";
 import { lazyWithRetry } from "../utils/lazyWithRetry.js";
 import M365ExpertPanel from "./M365ExpertPanel.jsx";
@@ -72,7 +72,7 @@ function AiSummaryHeader({ inc }) {
     <div role="region" aria-label="AI Summary" style={{ background: "#0F1117", border: "1px solid #6366F133", borderRadius: 10, padding: 14, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", color: "#E8ECF4", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>
-          <span style={{ fontSize: 16 }}>🤖</span>
+          <span style={{ fontSize: 16 }}>✨</span>
           AI Summary
           <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 8, background: "#6366F122", color: "#A5B4FC", fontWeight: 600 }}>v3.32 · {data?.cached ? "cached" : "live"}</span>
           <span style={{ marginLeft: 4, color: "#5A6178", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
@@ -136,22 +136,22 @@ function AiResolveTab({ inc, addActivity, showToast }) {
   };
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, #6366F1, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🤖</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #6366F1, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>✨</div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Resolution Assistant</div>
-          <div style={{ fontSize: 11, color: "#5A6178" }}>AI analyzes this incident and suggests resolution steps from the knowledge base</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Resolution</div>
+          <div style={{ fontSize: 10, color: "#5A6178" }}>Analyzes incident and suggests resolution steps</div>
         </div>
-        <button onClick={fetchSuggestions} disabled={aiSugLoading} style={{ ...btnStyle("#6366F1"), padding: "8px 16px", fontSize: 12, background: "linear-gradient(135deg, #6366F1, #8B5CF6)", opacity: aiSugLoading ? 0.6 : 1 }}>
-          {aiSugLoading ? "⏳ Analyzing..." : "🤖 Get AI Suggestions"}
+        <button onClick={fetchSuggestions} disabled={aiSugLoading} style={{ ...btnStyle("#6366F1"), padding: "7px 14px", fontSize: 11, background: "linear-gradient(135deg, #6366F1, #8B5CF6)", opacity: aiSugLoading ? 0.6 : 1 }}>
+          {aiSugLoading ? "⏳ Analyzing..." : "✨ Get Suggestions"}
         </button>
       </div>
 
       {aiSugLoading && (
-        <div style={{ textAlign: "center", padding: 40 }}>
-          <div style={{ fontSize: 32, marginBottom: 12, animation: "pulse 1.5s ease-in-out infinite" }}>🤖</div>
-          <div style={{ color: "#818CF8", fontSize: 13, fontWeight: 600 }}>AI is analyzing the incident...</div>
-          <div style={{ color: "#5A6178", fontSize: 11, marginTop: 4 }}>Searching knowledge base, analyzing patterns, generating resolution steps</div>
+        <div style={{ textAlign: "center", padding: 30 }}>
+          <div style={{ fontSize: 28, marginBottom: 10, animation: "pulse 1.5s ease-in-out infinite" }}>🔍</div>
+          <div style={{ color: "#818CF8", fontSize: 12, fontWeight: 600 }}>Analyzing incident...</div>
+          <div style={{ color: "#5A6178", fontSize: 10, marginTop: 4 }}>Searching KB, analyzing patterns</div>
         </div>
       )}
 
@@ -211,10 +211,10 @@ function AiResolveTab({ inc, addActivity, showToast }) {
       )}
 
       {!aiSuggestions && !aiSugLoading && (
-        <div style={{ textAlign: "center", padding: "40px 20px", color: "#5A6178" }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>🤖</div>
-          <div style={{ fontSize: 13, color: "#C4CAD6", marginBottom: 6 }}>Click "Get AI Suggestions" to analyze this incident</div>
-          <div style={{ fontSize: 11 }}>AI will search the knowledge base, analyze patterns, and suggest resolution steps</div>
+        <div style={{ textAlign: "center", padding: "30px 20px", color: "#5A6178" }}>
+          <div style={{ fontSize: 30, marginBottom: 10 }}>✨</div>
+          <div style={{ fontSize: 12, color: "#C4CAD6", marginBottom: 4 }}>Click "Get Suggestions" to analyze this incident</div>
+          <div style={{ fontSize: 10 }}>AI searches KB and generates resolution steps</div>
         </div>
       )}
     </div>
@@ -267,6 +267,35 @@ const NewIncidentModal = () => {
   const [createInZendesk, setCreateInZendesk] = useState(isEntraProductionUser);
   const [submitting, setSubmitting] = useState(false);
   const [wizardStep, setWizardStep] = useState(1); // 1=Describe, 2=AI Review, 3=Details
+  const [nlpMode, setNlpMode] = useState(false);
+  const [nlpText, setNlpText] = useState("");
+  const [nlpLoading, setNlpLoading] = useState(false);
+  const [nlpResult, setNlpResult] = useState(null);
+
+  const runNlpCreate = async () => {
+    if (nlpText.trim().length < 5) return;
+    setNlpLoading(true);
+    try {
+      const r = await fetch("/api/ai/nlp-create-ticket", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ text: nlpText }) });
+      const d = await r.json();
+      if (d.title) {
+        setNlpResult(d);
+        setForm(prev => ({
+          ...prev,
+          title: d.title || prev.title,
+          description: d.description || prev.description,
+          category: d.category || prev.category,
+          priority: d.priority?.split(" ")[0] || prev.priority,
+          urgency: d.priority?.split(" ")[0] || prev.urgency,
+          impact: d.impact || prev.impact,
+          assignee: d.suggestedAssignee || prev.assignee,
+        }));
+        setWizardStep(2);
+        setAiSuggestion({ suggestedCategory: d.category, suggestedPriority: d.priority?.split(" ")[0], suggestedAssignee: d.suggestedAssignee, confidence: d.confidence || 82, reasoning: `NLP extracted from: "${nlpText.slice(0, 60)}..."`, source: "nlp", kbSuggestions: [] });
+      }
+    } catch { /* fallback to manual */ }
+    setNlpLoading(false);
+  };
 
   const SUBCATEGORIES = {
     Network: ["VPN / Remote Access", "WiFi / LAN", "DNS / DHCP", "Bandwidth / Latency", "Firewall / Proxy"],
@@ -342,6 +371,39 @@ const NewIncidentModal = () => {
 
   return (
     <Modal title="Create New Incident" onClose={() => setModal(null)} wide>
+      {/* ─── Mode Toggle: NLP vs Wizard ─────────────────────── */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, padding: "0 4px" }}>
+        <button onClick={() => setNlpMode(false)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: `1px solid ${!nlpMode ? "#6366F1" : "#1E2130"}`, background: !nlpMode ? "#6366F118" : "#0A0C14", color: !nlpMode ? "#6366F1" : "#5A6178", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>📋 Guided Wizard</button>
+        <button onClick={() => setNlpMode(true)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: `1px solid ${nlpMode ? "#10B981" : "#1E2130"}`, background: nlpMode ? "#10B98118" : "#0A0C14", color: nlpMode ? "#10B981" : "#5A6178", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>⚡ Quick Create (AI)</button>
+      </div>
+
+      {/* ─── NLP Quick Create Mode ─────────────────────── */}
+      {nlpMode && wizardStep === 1 && <>
+        <div style={{ padding: 14, background: "linear-gradient(135deg, #10B98108, #06B6D408)", borderRadius: 8, border: "1px solid #10B98133", marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: "#10B981", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>⚡ Describe the issue in one sentence — AI fills everything</div>
+          <textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical", fontSize: 13 }} value={nlpText} onChange={e => setNlpText(e.target.value)} placeholder={"e.g. \"Outlook keeps crashing for the marketing team since Monday morning, they can't send emails\""} autoFocus />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+            <span style={{ fontSize: 10, color: "#5A6178" }}>{nlpText.length > 0 ? `${nlpText.split(/\s+/).length} words` : "Type naturally — AI extracts title, category, priority, assignee"}</span>
+            <button disabled={nlpText.trim().length < 5 || nlpLoading} onClick={runNlpCreate} style={{ ...btnStyle("#10B981"), fontSize: 11, padding: "6px 16px", opacity: nlpText.trim().length < 5 ? 0.5 : 1 }}>
+              {nlpLoading ? "🤖 Analyzing..." : "⚡ Create with AI"}
+            </button>
+          </div>
+        </div>
+        {nlpResult && (
+          <div style={{ padding: 12, background: "#0A0C14", borderRadius: 6, border: "1px solid #10B98122", fontSize: 11, color: "#C4CAD6" }}>
+            <div style={{ color: "#10B981", fontWeight: 700, marginBottom: 6 }}>✓ AI Extracted Fields:</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <span>Title: <strong style={{ color: "#E8ECF4" }}>{nlpResult.title}</strong></span>
+              <span>Category: <strong style={{ color: "#E8ECF4" }}>{nlpResult.category}</strong></span>
+              <span>Priority: <strong style={{ color: "#E8ECF4" }}>{nlpResult.priority}</strong></span>
+              <span>Assignee: <strong style={{ color: "#E8ECF4" }}>{nlpResult.suggestedAssignee || "Auto"}</strong></span>
+            </div>
+          </div>
+        )}
+      </>}
+
+      {/* ─── Wizard Mode ─────────────────────── */}
+      {!nlpMode && <>
       {/* ─── Wizard Step Indicator ─────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 20, padding: "0 8px" }}>
         {wizardSteps.map((s, i) => (
@@ -405,6 +467,7 @@ const NewIncidentModal = () => {
             Next: AI Analysis →
           </button>
         </div>
+      </>}
       </>}
 
       {/* ─── Step 2: AI Review & Suggestions ───────────────── */}
@@ -653,6 +716,10 @@ const IncidentDetailModal = () => {
   const [suggestedRepliesData, setSuggestedRepliesData] = useState(null);
   const [draftResolutionLoading, setDraftResolutionLoading] = useState(false);
   const [draftResolutionData, setDraftResolutionData] = useState(null);
+  const [contextPanel, setContextPanel] = useState(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [kbSurface, setKbSurface] = useState([]);
+  const kbSurfaceTimer = useRef(null);
   const fileInputRef = useRef(null);
   // ─── Live SLA Countdown Tick ───
   const [slaTick, setSlaTick] = useState(0);
@@ -662,6 +729,17 @@ const IncidentDetailModal = () => {
     const iv = setInterval(() => setSlaTick(t => t + 1), 60000);
     return () => clearInterval(iv);
   }, [inc?.status, inc]);
+
+  // ─── Feature 31: Auto-load Smart Context ───
+  useEffect(() => {
+    if (!inc?.id) return;
+    setContextLoading(true);
+    fetch("/api/ai/ticket-context", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ ticketId: inc.id }) })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setContextPanel(d); })
+      .catch(() => {})
+      .finally(() => setContextLoading(false));
+  }, [inc?.id]);
 
   if (!inc) return null;
   const reporterUser = (users || []).find(u => u.name === inc.reporter);
@@ -897,13 +975,13 @@ const IncidentDetailModal = () => {
           </div>
         )}
         {/* Tabs */}
-        <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0 }}>
-          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity & Communications", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolution", icon: "🤖" }, { id: "m365Expert", label: "M365/Azure Expert", icon: "🔷" }, { id: "copilot", label: "AI Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "Major Incident", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
+        <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0, overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolve", icon: "✨" }, { id: "m365Expert", label: "M365", icon: "🔷" }, { id: "copilot", label: "Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "MIM", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
             <button key={t.id} onClick={() => setDetailTab(t.id)}
-              style={{ padding: "10px 20px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 6 }}>
+              style={{ padding: "8px 12px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4, flexShrink: 0, whiteSpace: "nowrap" }}>
               <span>{t.icon}</span> {t.label}
-              {t.id === "activity" && activities.length > 0 && <span style={{ background: "#6366F1", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700, marginLeft: 2 }}>{activities.length}</span>}
-              {t.id === "worklog" && (inc.workLogs || []).length > 0 && <span style={{ background: "#FFB347", color: "#000", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700, marginLeft: 2 }}>{(inc.workLogs || []).length}</span>}
+              {t.id === "activity" && activities.length > 0 && <span style={{ background: "#6366F1", color: "#fff", borderRadius: 10, padding: "1px 5px", fontSize: 8, fontWeight: 700, marginLeft: 2 }}>{activities.length}</span>}
+              {t.id === "worklog" && (inc.workLogs || []).length > 0 && <span style={{ background: "#FFB347", color: "#000", borderRadius: 10, padding: "1px 5px", fontSize: 8, fontWeight: 700, marginLeft: 2 }}>{(inc.workLogs || []).length}</span>}
             </button>
           ))}
         </div>
@@ -913,6 +991,66 @@ const IncidentDetailModal = () => {
             <>
               {/* v3.32.0 (Phase 2) — AI Summary header */}
               <AiSummaryHeader inc={inc} />
+              {/* Feature 31: Smart Context Panel */}
+              {contextLoading && <div style={{ padding: "8px 12px", background: "#6366F108", border: "1px solid #6366F122", borderRadius: 6, marginBottom: 16, fontSize: 10, color: "#6366F1", display: "flex", alignItems: "center", gap: 6 }}><span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span> Loading AI context...</div>}
+              {contextPanel && (
+                <div style={{ background: "#0A0C14", borderRadius: 8, padding: 12, marginBottom: 16, border: "1px solid #6366F133" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#6366F1", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span>🧠</span> AI Context Panel
+                    </div>
+                    {contextPanel.estimatedResolutionHours && (
+                      <div style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#10B98115", border: "1px solid #10B98133", color: "#10B981", fontWeight: 600 }}>
+                        ETA: ~{contextPanel.estimatedResolutionHours}h
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {contextPanel.recentUserTickets?.length > 0 && (
+                      <div style={{ background: "#12141D", borderRadius: 6, padding: 8, border: "1px solid #1E2130" }}>
+                        <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 6, textTransform: "uppercase" }}>User History ({contextPanel.recentUserTickets.length})</div>
+                        {contextPanel.recentUserTickets.slice(0, 4).map((t, i) => (
+                          <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "3px 0", borderBottom: i < 3 ? "1px solid #1E213044" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span style={{ color: t.status === "Resolved" ? "#10B981" : "#FFB347", marginRight: 4 }}>{t.status === "Resolved" ? "✓" : "●"}</span>
+                            {t.title || t.id}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {contextPanel.similarResolvedTickets?.length > 0 && (
+                      <div style={{ background: "#12141D", borderRadius: 6, padding: 8, border: "1px solid #1E2130" }}>
+                        <div style={{ fontSize: 9, color: "#10B981", fontWeight: 600, marginBottom: 6, textTransform: "uppercase" }}>Similar Resolved</div>
+                        {contextPanel.similarResolvedTickets.slice(0, 4).map((t, i) => (
+                          <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "3px 0", borderBottom: i < 3 ? "1px solid #1E213044" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span style={{ color: "#10B981", marginRight: 4 }}>✓</span>
+                            {t.title || t.id}
+                            {t.resolution && <div style={{ fontSize: 9, color: "#5A6178", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.resolution.substring(0, 60)}...</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {contextPanel.relevantKbArticles?.length > 0 && (
+                    <div style={{ marginTop: 8, background: "#12141D", borderRadius: 6, padding: 8, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 9, color: "#CE93D8", fontWeight: 600, marginBottom: 6, textTransform: "uppercase" }}>Suggested KB Articles</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {contextPanel.relevantKbArticles.slice(0, 3).map((kb, i) => (
+                          <div key={i} style={{ fontSize: 10, padding: "4px 8px", borderRadius: 4, background: "#CE93D810", border: "1px solid #CE93D822", color: "#CE93D8", maxWidth: "45%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            📄 {kb.title}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {contextPanel.recurringIssue && (
+                    <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 6, background: "#FF6B6B10", border: "1px solid #FF6B6B33", display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 12 }}>🔄</span>
+                      <span style={{ fontSize: 10, color: "#FF6B6B", fontWeight: 600 }}>Recurring Issue Detected</span>
+                      <span style={{ fontSize: 9, color: "#A0AEC0", marginLeft: 4 }}>— {contextPanel.recurringIssue.count} similar tickets in {contextPanel.recurringIssue.days || 30} days</span>
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Core Fields */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
                 <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>STATUS</span><Badge color={STATUS_COLORS[inc.status]}>{inc.status}</Badge></div>
@@ -924,7 +1062,27 @@ const IncidentDetailModal = () => {
               </div>
               {/* Assignment & Reporter */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-                <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNEE</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.assignee}</span>{inc.assignmentGroup && <span style={{ color: "#5A6178", fontSize: 11, marginLeft: 6 }}>({inc.assignmentGroup})</span>}</div>
+                <div>
+                  <span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>ASSIGNEE</span>
+                  <span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.assignee}</span>{inc.assignmentGroup && <span style={{ color: "#5A6178", fontSize: 11, marginLeft: 6 }}>({inc.assignmentGroup})</span>}
+                  {(!inc.assignee || inc.assignee === "Unassigned") && (() => {
+                    const candidates = SPECIALTY_ROUTING[inc.category] || SPECIALTY_ROUTING[inc.subcategory] || SPECIALTY_ROUTING["General"] || [];
+                    const suggested = candidates[0];
+                    if (!suggested) return null;
+                    const isCritical = inc.priority === "Sev-A" || inc.priority === "Sev-B";
+                    const finalSuggestion = isCritical ? (ESCALATION_CHAIN.criticalIncident?.[0] || suggested) : suggested;
+                    return (
+                      <div style={{ padding: "6px 10px", background: "#6366F108", border: "1px solid #6366F133", borderRadius: 6, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 10, color: "#6366F1", animation: "iconBounce 2s ease-in-out infinite" }}>💡</span>
+                        <span style={{ color: "#A0AEC0", fontSize: 10 }}>Suggested:</span>
+                        <strong style={{ color: "#E8ECF4", fontSize: 11 }}>{finalSuggestion}</strong>
+                        {isCritical && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 4, background: "#FF6B6B22", color: "#FF6B6B", fontWeight: 700 }}>CRITICAL</span>}
+                        <button onClick={() => { const updated = { ...inc, assignee: finalSuggestion, assignmentGroup: (users || []).find(u => u.name === finalSuggestion)?.team || inc.assignmentGroup }; setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i)); setDetailItem(updated); showToast?.(`Assigned to ${finalSuggestion}`, "success"); }}
+                          style={{ ...btnStyle("#6366F1"), fontSize: 9, padding: "3px 8px", marginLeft: "auto" }}>Assign</button>
+                      </div>
+                    );
+                  })()}
+                </div>
                 <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>REPORTER</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.reporter}</span>{inc.reporterEmail && <div style={{ color: "#64B5F6", fontSize: 11, marginTop: 2 }}>{inc.reporterEmail}</div>}{inc.reporterRole && <div style={{ color: "#5A6178", fontSize: 10 }}>{inc.reporterRole}</div>}</div>
               </div>
               {/* Customer Info */}
@@ -943,6 +1101,81 @@ const IncidentDetailModal = () => {
                 <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>LOCATION</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{inc.location || "—"}</span></div>
                 <div><span style={{ fontSize: 11, color: "#5A6178", display: "block", marginBottom: 4, fontFamily: "'JetBrains Mono', monospace" }}>CREATED</span><span style={{ color: "#C4CAD6", fontSize: 13 }}>{timeAgo(inc.created)}</span>{inc.firstResponseTime != null && <div style={{ color: "#81C784", fontSize: 10 }}>First response: {inc.firstResponseTime}h</div>}</div>
               </div>
+              {/* Quick Resolution Templates */}
+              {inc.status !== "Resolved" && inc.status !== "Closed" && (() => {
+                const QUICK_TEMPLATES = [
+                  { id: "pwd_reset", icon: "🔑", label: "Password Reset", match: /password|pwd|reset|locked out|cant login|can't log/i, resolution: "Password has been reset successfully. User has been notified with temporary credentials and instructed to change on first login.", email: "Your password has been reset. Please use the temporary credentials sent to your registered phone/email to log in, and set a new password immediately." },
+                  { id: "vpn", icon: "🔒", label: "VPN Issue", match: /vpn|remote access|connect.*office|tunnel/i, resolution: "VPN connectivity issue resolved. Cleared cached credentials, reinstalled VPN profile, and verified tunnel connectivity.", email: "Your VPN connection has been restored. We cleared your cached credentials and reinstalled the VPN profile. Please reconnect using your current domain credentials." },
+                  { id: "unlock", icon: "🔓", label: "Account Unlock", match: /unlock|locked|account.*lock|disabled.*account/i, resolution: "User account has been unlocked in Entra ID. Verified no suspicious sign-in activity. Account is now accessible.", email: "Your account has been unlocked. You can now sign in normally. If you continue to experience lockouts, please contact us to review your sign-in security settings." },
+                  { id: "mfa", icon: "📱", label: "MFA Setup", match: /mfa|multi.?factor|authenticator|2fa|two.?factor/i, resolution: "MFA has been reconfigured for the user. Old authentication methods removed and new Authenticator app registered successfully.", email: "Your Multi-Factor Authentication has been reconfigured. Please open Microsoft Authenticator and verify the new setup works by signing in." },
+                  { id: "mailbox", icon: "📧", label: "Mailbox Permission", match: /mailbox|shared.*mail|delegate|send.*as|calendar.*access/i, resolution: "Mailbox permissions updated in Exchange Online. Changes may take up to 60 minutes to fully propagate.", email: "The requested mailbox permissions have been configured. Please allow up to 60 minutes for changes to take effect, then restart Outlook to see the shared mailbox." },
+                ];
+                const text = `${inc.title || ""} ${inc.description || ""} ${inc.category || ""}`;
+                const matched = QUICK_TEMPLATES.filter(t => t.match.test(text));
+                if (matched.length === 0) return null;
+                return (
+                  <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, marginBottom: 16, border: "1px solid #10B98133" }}>
+                    <div style={{ fontSize: 9, color: "#10B981", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ animation: "iconBounce 2s ease-in-out infinite" }}>⚡</span> Quick Resolve
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {matched.map(tpl => (
+                        <button key={tpl.id} onClick={() => {
+                          const updated = { ...inc, status: "Resolved", resolution: tpl.resolution, resolvedAt: new Date().toISOString(), activityLog: [...(inc.activityLog || []), { id: `AL-QR-${Date.now().toString(36)}`, type: "resolution", user: currentUser?.name || "Engineer", time: new Date().toISOString(), detail: `Quick-resolved: ${tpl.label}` }] };
+                          setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                          setDetailItem(updated);
+                          showToast?.(`Resolved: ${tpl.label}`, "success");
+                        }}
+                          style={{ padding: "6px 10px", borderRadius: 6, background: "#10B98112", border: "1px solid #10B98133", color: "#10B981", cursor: "pointer", fontSize: 10, fontWeight: 600, display: "flex", alignItems: "center", gap: 4, transition: "all 0.15s" }}
+                          onMouseEnter={e => { e.currentTarget.style.background = "#10B98122"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = "#10B98112"; e.currentTarget.style.transform = "translateY(0)"; }}>
+                          <span>{tpl.icon}</span> {tpl.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+              {/* KB Auto-Suggest */}
+              {(() => {
+                if (!kbArticles || kbArticles.length === 0) return null;
+                const incText = `${inc.title || ""} ${inc.category || ""} ${inc.subcategory || ""} ${inc.description || ""}`.toLowerCase();
+                const incWords = incText.replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter(w => w.length > 3);
+                const scored = kbArticles.map(kb => {
+                  const kbText = `${kb.title || ""} ${kb.category || ""} ${kb.tags?.join(" ") || ""} ${kb.content || ""}`.toLowerCase();
+                  const matches = incWords.filter(w => kbText.includes(w)).length;
+                  return { kb, score: matches };
+                }).filter(s => s.score >= 2).sort((a, b) => b.score - a.score).slice(0, 3);
+                if (scored.length === 0) return null;
+                return (
+                  <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, marginBottom: 16, border: "1px solid #6366F133" }}>
+                    <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span>📚</span> Related Knowledge Base
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {scored.map(({ kb, score }) => (
+                        <div key={kb.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 6, background: "#6366F108", border: "1px solid #6366F122", cursor: "pointer", transition: "background 0.15s" }}
+                          onMouseEnter={e => e.currentTarget.style.background = "#6366F115"}
+                          onMouseLeave={e => e.currentTarget.style.background = "#6366F108"}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 11, color: "#E8ECF4", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kb.title}</div>
+                            <div style={{ fontSize: 9, color: "#5A6178" }}>{kb.category} • {score} keyword matches</div>
+                          </div>
+                          {kb.resolution && <button onClick={() => {
+                            const updated = { ...inc, status: "Resolved", resolution: kb.resolution || kb.content?.substring(0, 300), resolvedAt: new Date().toISOString(), kbArticleUsed: kb.id, activityLog: [...(inc.activityLog || []), { id: `AL-KB-${Date.now().toString(36)}`, type: "resolution", user: currentUser?.name || "Engineer", time: new Date().toISOString(), detail: `Resolved using KB article: ${kb.title}` }] };
+                            setIncidents(prev => prev.map(i => i.id === inc.id ? updated : i));
+                            setDetailItem(updated);
+                            showToast?.(`Resolved using KB: ${kb.title}`, "success");
+                          }}
+                            style={{ padding: "3px 8px", borderRadius: 4, background: "#10B98118", border: "1px solid #10B98133", color: "#10B981", cursor: "pointer", fontSize: 9, fontWeight: 600, flexShrink: 0 }}>
+                            Apply Fix
+                          </button>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               {/* SLA Progress */}
               {(() => {
                 const isPaused = inc.status === "Pending" || inc.status === "On Hold";
@@ -1326,15 +1559,69 @@ const IncidentDetailModal = () => {
                     </div>
                   )}
                   <div id="reply-editor" contentEditable
-                    onInput={e => setReplyBody(sanitizeHTML(e.currentTarget.innerHTML))}
+                    onInput={e => {
+                      const html = sanitizeHTML(e.currentTarget.innerHTML);
+                      setReplyBody(html);
+                      const plainText = e.currentTarget.innerText || "";
+                      if (kbSurfaceTimer.current) clearTimeout(kbSurfaceTimer.current);
+                      if (plainText.trim().length >= 8) {
+                        kbSurfaceTimer.current = setTimeout(async () => {
+                          try {
+                            const r = await fetch("/api/ai/kb-surface", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ query: plainText.substring(0, 200) }) });
+                            if (r.ok) { const d = await r.json(); setKbSurface(d.articles || []); }
+                          } catch {}
+                        }, 600);
+                      } else { setKbSurface([]); }
+                    }}
                     style={{ minHeight: 120, maxHeight: 260, overflow: "auto", padding: "12px 14px", color: "#C4CAD6", fontSize: 13, lineHeight: 1.6, outline: "none", background: "#0F1117" }}
                     suppressContentEditableWarning />
+                  {kbSurface.length > 0 && (
+                    <div style={{ padding: "8px 14px", borderTop: "1px solid #6366F133", background: "#6366F108" }}>
+                      <div style={{ fontSize: 9, color: "#6366F1", fontWeight: 700, textTransform: "uppercase", marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
+                        <span>📚</span> KB Suggestions (live)
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {kbSurface.slice(0, 3).map(kb => (
+                          <div key={kb.id} onClick={() => {
+                            const editor = document.getElementById("reply-editor");
+                            if (editor && kb.resolution) {
+                              editor.innerHTML += `<br/><p style="color:#10B981;font-size:12px"><strong>From KB:</strong> ${kb.resolution}</p>`;
+                              setReplyBody(sanitizeHTML(editor.innerHTML));
+                            }
+                            setKbSurface([]);
+                          }}
+                            style={{ flex: "1 1 30%", padding: "6px 8px", borderRadius: 6, background: "#12141D", border: "1px solid #6366F122", cursor: "pointer", transition: "border-color 0.15s" }}
+                            onMouseEnter={e => e.currentTarget.style.borderColor = "#6366F166"}
+                            onMouseLeave={e => e.currentTarget.style.borderColor = "#6366F122"}>
+                            <div style={{ fontSize: 10, color: "#E8ECF4", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kb.title}</div>
+                            <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kb.snippet || kb.category}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div style={{ padding: "10px 14px", borderTop: "1px solid #1E213044", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 10, color: "#5A617888" }}>
                       {replyMode === "external" ? `Via ${smtpConfig?.host || "—"}:${smtpConfig?.port || "—"} (${smtpConfig?.encryption || "—"})` : "Internal note — visible to agents only"}
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={() => { setReplyMode(null); setReplyBody(""); }} style={{ ...btnStyle("#333"), color: "#A0AEC0", padding: "6px 14px", fontSize: 11 }}>Cancel</button>
+                      {replyMode === "external" && replyBody.length > 10 && (
+                        <button onClick={async () => {
+                          try {
+                            const detectText = inc.description || inc.title || "";
+                            const r = await fetch("/api/ai/translate-response", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ text: replyBody.replace(/<[^>]+>/g, " ").trim(), detectFrom: detectText }) });
+                            if (r.ok) {
+                              const d = await r.json();
+                              if (d.translatedText) {
+                                const editor = document.getElementById("reply-editor");
+                                if (editor) { editor.innerHTML = d.translatedText; setReplyBody(d.translatedText); }
+                                showToast?.(`Translated to ${d.detectedLanguage || "detected language"}`, "success");
+                              }
+                            }
+                          } catch {}
+                        }} style={{ ...btnStyle("#8B5CF6"), padding: "6px 10px", fontSize: 10 }}>🌐 Auto-Translate</button>
+                      )}
                       <button onClick={sendReply} style={{ ...btnStyle(replyMode === "internal" ? "#FFB347" : "#3B82F6"), padding: "6px 14px", fontSize: 11 }}>
                         {replyMode === "internal" ? "💾 Save Note" : "📤 Send Email"}
                       </button>

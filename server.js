@@ -1463,61 +1463,6 @@ function json(res, status, data) {
   res.end(body);
 }
 
-function parseStoredRecord(row) {
-  if (!row) return null;
-  const data = row.data !== undefined ? row.data : row;
-  if (!data) return null;
-  if (typeof data === "string") {
-    try { return JSON.parse(data); } catch { return null; }
-  }
-  return typeof data === "object" ? data : null;
-}
-
-function normalizePortalEmail(email) {
-  return String(email || "").trim().toLowerCase();
-}
-
-function portalSessionRecordId(email) {
-  return "active:" + crypto.createHash("sha256").update(normalizePortalEmail(email)).digest("hex").slice(0, 40);
-}
-
-function isPortalSessionBypass(pathname) {
-  if (!pathname.startsWith("/api/")) return true;
-  if (pathname.startsWith("/api/auth/session")) return true;
-  if (pathname === "/api/health" || pathname === "/api/auth/local" || pathname === "/api/client-error") return true;
-  if (pathname === "/api/db-stats" || pathname === "/api/entra/users" || pathname === "/api/entra/users/photos") return true;
-  if (pathname === "/api/db/users") return true;
-  return pathname.startsWith("/api/zendesk/webhook")
-    || pathname.startsWith("/api/self-service/")
-    || pathname.startsWith("/api/status/")
-    || pathname.startsWith("/api/ingest/email")
-    || pathname.startsWith("/api/csat/");
-}
-
-async function enforcePortalSession(req, res, pathname, authResult) {
-  if (isPortalSessionBypass(pathname)) return false;
-  const email = normalizePortalEmail(authResult?.user?.email);
-  if (!authResult?.authenticated || !email || authResult.user?.id === "SYSTEM-SCHEDULER") return false;
-  try {
-    const row = await db.getOne("portal_sessions", portalSessionRecordId(email));
-    const active = parseStoredRecord(row);
-    if (!active || !active.activeSessionId) return false;
-    const provided = String(req.headers["x-itsm-session-id"] || "");
-    if (provided && provided === active.activeSessionId) return false;
-    json(res, 409, {
-      error: "Another ITSM session is active for this Entra user.",
-      code: "STALE_SESSION",
-      active: false,
-      activeSince: active.startedAt || null,
-      lastSeenAt: active.lastSeenAt || null,
-    });
-    return true;
-  } catch (err) {
-    console.warn("[Portal Session] Enforcement skipped:", err.message);
-    return false;
-  }
-}
-
 // Phase T5 — compressed text response helper. Used by CSV/HTML/text exports.
 function sendText(res, status, contentType, body, extraHeaders) {
   const req = res.req;
@@ -1915,7 +1860,6 @@ const VALID_COLLECTIONS = new Set([
   "dsar_requests",
   "billing_entries",
   "sg_holidays",
-  "portal_sessions",
   "ai_usage",
   "ai_audit_log",
   "releases",
@@ -2814,7 +2758,7 @@ const server = http.createServer(async (req, res) => {
       res.setHeader("Access-Control-Allow-Origin", origin);
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-ITSM-Session-ID");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   }
   // Security headers
@@ -2840,8 +2784,6 @@ const server = http.createServer(async (req, res) => {
     if (authResult.blocked) return; // 429 already sent
   }
   const auth = { authenticated: authResult.authenticated, name: authResult.user, role: authResult.role };
-
-  if (await enforcePortalSession(req, res, pathname, authResult)) return;
 
 
   // ─── Phase 4: Route Delegation ───────────────────────────────────

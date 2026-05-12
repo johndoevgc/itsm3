@@ -19,18 +19,6 @@ function parseStoredRecord(row) {
   return typeof data === "object" ? data : null;
 }
 
-function normalizePortalEmail(email) {
-  return String(email || "").trim().toLowerCase();
-}
-
-function portalSessionRecordId(email) {
-  return "active:" + crypto.createHash("sha256").update(normalizePortalEmail(email)).digest("hex").slice(0, 40);
-}
-
-function isValidPortalSessionId(sessionId) {
-  return typeof sessionId === "string" && /^[A-Za-z0-9._:-]{16,128}$/.test(sessionId);
-}
-
 const TRUSTED_WEATHER_SOURCES = [
   { title: "data.gov.sg 2-hour Weather Forecast", url: "https://api.data.gov.sg/v1/environment/2-hour-weather-forecast" },
   { title: "data.gov.sg 24-hour Weather Forecast", url: "https://api.data.gov.sg/v1/environment/24-hour-weather-forecast" },
@@ -295,79 +283,6 @@ module.exports = function createCoreRoutes(ctx) {
     } catch (err) { return json(res, 500, { error: "Internal server error" }); }
   }
 
-  // ─── Portal Session Control: one active ITSM app session per Entra user ───
-  if (pathname === "/api/auth/session/start" && req.method === "POST") {
-    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Entra authentication required" });
-    try {
-      const body = await readBody(req);
-      const sessionId = String(body.sessionId || "").trim();
-      if (!isValidPortalSessionId(sessionId)) return json(res, 400, { error: "Valid sessionId required" });
-      const email = normalizePortalEmail(authResult.user.email);
-      const recordId = portalSessionRecordId(email);
-      const existing = parseStoredRecord(await db.getOne("portal_sessions", recordId));
-      const now = new Date().toISOString();
-      const previousSessionId = existing?.activeSessionId || null;
-      const record = {
-        id: recordId,
-        email,
-        name: authResult.user.name || email,
-        userId: authResult.user.id || "",
-        activeSessionId: sessionId,
-        previousSessionId: previousSessionId && previousSessionId !== sessionId ? previousSessionId : null,
-        status: "active",
-        startedAt: now,
-        lastSeenAt: now,
-        userAgent: String(req.headers["user-agent"] || "").slice(0, 300),
-        ipHash: crypto.createHash("sha256").update(String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown")).digest("hex").slice(0, 32),
-      };
-      await db.upsert("portal_sessions", recordId, JSON.stringify(record));
-      await db.audit("portal_sessions", recordId, "session_start", JSON.stringify({ replaced: !!record.previousSessionId }), email);
-      if (cacheLayer) cacheLayer.invalidatePrefix("portal_sessions");
-      if (wsServer) wsServer.broadcast("portal_sessions", { action: "session_start", email, recordId });
-      return json(res, 200, { ok: true, active: true, sessionId, previousSessionReplaced: !!record.previousSessionId, heartbeatSeconds: 30 });
-    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
-  }
-
-  if (pathname === "/api/auth/session/heartbeat" && req.method === "POST") {
-    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Entra authentication required" });
-    try {
-      const body = await readBody(req);
-      const sessionId = String(body.sessionId || "").trim();
-      if (!isValidPortalSessionId(sessionId)) return json(res, 400, { error: "Valid sessionId required" });
-      const email = normalizePortalEmail(authResult.user.email);
-      const recordId = portalSessionRecordId(email);
-      const record = parseStoredRecord(await db.getOne("portal_sessions", recordId));
-      if (!record || record.activeSessionId !== sessionId) {
-        return json(res, 409, { error: "Another ITSM session is active for this Entra user.", code: "STALE_SESSION", active: false });
-      }
-      record.lastSeenAt = new Date().toISOString();
-      record.status = "active";
-      await db.upsert("portal_sessions", recordId, JSON.stringify(record));
-      if (cacheLayer) cacheLayer.invalidatePrefix("portal_sessions");
-      return json(res, 200, { ok: true, active: true, sessionId, lastSeenAt: record.lastSeenAt });
-    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
-  }
-
-  if (pathname === "/api/auth/session/end" && req.method === "POST") {
-    if (!authResult?.authenticated || !authResult.user?.email) return json(res, 401, { error: "Entra authentication required" });
-    try {
-      const body = await readBody(req);
-      const sessionId = String(body.sessionId || "").trim();
-      const email = normalizePortalEmail(authResult.user.email);
-      const recordId = portalSessionRecordId(email);
-      const record = parseStoredRecord(await db.getOne("portal_sessions", recordId));
-      if (record && record.activeSessionId === sessionId) {
-        record.activeSessionId = null;
-        record.status = "signed_out";
-        record.endedAt = new Date().toISOString();
-        await db.upsert("portal_sessions", recordId, JSON.stringify(record));
-        await db.audit("portal_sessions", recordId, "session_end", JSON.stringify({}), email);
-        if (cacheLayer) cacheLayer.invalidatePrefix("portal_sessions");
-      }
-      return json(res, 200, { ok: true });
-    } catch (err) { return json(res, 500, { error: "Internal server error" }); }
-  }
-
   // ─── POST /api/sla/pause — Pause SLA clock for an incident ────────────
   if (pathname === "/api/sla/pause" && req.method === "POST") {
     try {
@@ -595,7 +510,7 @@ module.exports = function createCoreRoutes(ctx) {
         };
 
         // Use SQL-level pagination when no search filter and db.getPage is available
-        if (limit > 0 && !search && db.getPage) {
+        if (limit > 0 && !search && db.getPage && authResult.role !== "End User") {
           const totalCount = await db.count(collection);
           const pageRows = await db.getPage(collection, { limit, offset });
           const items = pageRows.map(r => project(hydrate(r)));
@@ -605,6 +520,18 @@ module.exports = function createCoreRoutes(ctx) {
         const rows = await cachedGetAll(collection);
         const allItems = rows.map(hydrate);
         let items = allItems;
+
+        // ─── End User tenant isolation: only see own tickets/requests ───
+        if (authResult.role === "End User" && authResult.user?.email) {
+          const ue = authResult.user.email.toLowerCase();
+          if (collection === "incidents" || collection === "zendesk_tickets") {
+            items = items.filter(i => (i.requesterEmail || "").toLowerCase() === ue || (i.reporterEmail || "").toLowerCase() === ue || (i.createdBy || "").toLowerCase() === ue);
+          } else if (collection === "requests") {
+            items = items.filter(r => (r.requesterEmail || "").toLowerCase() === ue || (r.createdBy || "").toLowerCase() === ue);
+          } else if (collection === "kb") {
+            items = items.filter(a => a.status === "Published" && !(a.content || "").includes("Classification: Internal"));
+          }
+        }
         if (search) {
           const q = search.toLowerCase();
           items = items.filter(i => JSON.stringify(i).toLowerCase().includes(q));
@@ -634,6 +561,21 @@ module.exports = function createCoreRoutes(ctx) {
           } catch { /* ignore */ }
         }
         if (!item.title && item.subject) item.title = item.subject;
+        // ─── End User: block access to records not belonging to them ───
+        if (authResult.role === "End User" && authResult.user?.email) {
+          const ue = authResult.user.email.toLowerCase();
+          if ((collection === "incidents" || collection === "zendesk_tickets") &&
+              (item.requesterEmail || "").toLowerCase() !== ue &&
+              (item.reporterEmail || "").toLowerCase() !== ue &&
+              (item.createdBy || "").toLowerCase() !== ue) {
+            return json(res, 403, { error: "Access denied" });
+          }
+          if (collection === "requests" &&
+              (item.requesterEmail || "").toLowerCase() !== ue &&
+              (item.createdBy || "").toLowerCase() !== ue) {
+            return json(res, 403, { error: "Access denied" });
+          }
+        }
         return json(res, 200, item);
       }
 
@@ -976,6 +918,12 @@ module.exports = function createCoreRoutes(ctx) {
             }),
           }, { incidentId: recordId, severity: body.priority || "Sev-C", source: "incident_resolve" })
             .catch(e => console.warn("[Incident Resolve] Customer email failed:", e.message));
+
+          // ─── CSAT Survey: auto-schedule on resolution ──────────────────
+          if (body.status === "Resolved") {
+            scheduleCsatSurvey(body, body.resolvedBy || body.assignee || "IT Support")
+              .catch(e => console.warn("[CSAT Schedule]", e.message));
+          }
           }
         }
 

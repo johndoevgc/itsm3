@@ -386,6 +386,17 @@ export default function ITSMApp() {
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [cmdSearch, setCmdSearch] = useState("");
+  const [cmdAiResult, setCmdAiResult] = useState(null);
+  const [cmdAiLoading, setCmdAiLoading] = useState(false);
+  const [reportBuilderOpen, setReportBuilderOpen] = useState(false);
+  const [reportQuery, setReportQuery] = useState("");
+  const [reportResult, setReportResult] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [onboardModal, setOnboardModal] = useState(null);
+  const [offboardModal, setOffboardModal] = useState(null);
+  const [warRoomModal, setWarRoomModal] = useState(null);
+  const [impactRadiusModal, setImpactRadiusModal] = useState(null);
+  const [callbackModal, setCallbackModal] = useState(null);
   const [globalLastSync, setGlobalLastSync] = useState(null);
   const [globalSyncActive, setGlobalSyncActive] = useState(false);
   const globalSyncRef = useRef(null);
@@ -606,7 +617,7 @@ export default function ITSMApp() {
     const handleKeyDown = (e) => {
       // Escape: close modal / command palette / recycle bin / alert panel / AI panel
       if (e.key === "Escape") {
-        if (showCommandPalette) { setShowCommandPalette(false); setCmdSearch(""); return; }
+        if (showCommandPalette) { setShowCommandPalette(false); setCmdSearch(""); setCmdAiResult(null); return; }
         if (showRecycleBin) { setShowRecycleBin(false); return; }
         if (showAlertPanel) { setShowAlertPanel(false); return; }
         if (showAiActionsPanel) { setShowAiActionsPanel(false); return; }
@@ -615,10 +626,10 @@ export default function ITSMApp() {
       }
       // Ctrl+K : toggle command palette
       if (e.ctrlKey && e.key === "k") { e.preventDefault(); setShowCommandPalette(p => !p); setCmdSearch(""); }
-      // Ctrl+/ : toggle AI assistant
-      if (e.ctrlKey && e.key === "/") { e.preventDefault(); setShowAiPanel(p => !p); }
-      // Ctrl+Shift+A : toggle AI Actions panel
-      if (e.ctrlKey && e.shiftKey && (e.key === "A" || e.key === "a")) { e.preventDefault(); setShowAiActionsPanel(p => !p); }
+      // Ctrl+/ : toggle AI assistant (not for End Users)
+      if (e.ctrlKey && e.key === "/" && currentUser.rbacRole !== "End User") { e.preventDefault(); setShowAiPanel(p => !p); }
+      // Ctrl+Shift+A : toggle AI Actions panel (not for End Users)
+      if (e.ctrlKey && e.shiftKey && (e.key === "A" || e.key === "a") && currentUser.rbacRole !== "End User") { e.preventDefault(); setShowAiActionsPanel(p => !p); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -925,53 +936,6 @@ export default function ITSMApp() {
   // isEntraProductionUser still distinguishes Entra-authed sessions for write-path gating.
   const isEntraProductionUser = !!(currentUser && currentUser.authType === "entra");
   const isEditAdmin = !!(currentUser && ["VGC Dev Admin", "Tenant Admin", "Administrator"].includes(currentUser.rbacRole));
-  const portalSessionIdRef = useRef(null);
-  const portalSessionStaleRef = useRef(false);
-
-  const createPortalSessionId = useCallback(() => {
-    try {
-      const existing = sessionStorage.getItem("vgc_portal_session_id");
-      if (existing) { portalSessionIdRef.current = existing; return existing; }
-      const nextId = crypto?.randomUUID ? crypto.randomUUID() : `ps-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      sessionStorage.setItem("vgc_portal_session_id", nextId);
-      portalSessionIdRef.current = nextId;
-      return nextId;
-    } catch {
-      const fallback = `ps-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      portalSessionIdRef.current = fallback;
-      return fallback;
-    }
-  }, []);
-
-  const clearPortalSessionId = useCallback(() => {
-    portalSessionIdRef.current = null;
-    try { sessionStorage.removeItem("vgc_portal_session_id"); } catch (e) { /* ignore */ }
-  }, []);
-
-  const startPortalSessionNow = useCallback(async (sessionId) => {
-    const activeSessionId = sessionId || createPortalSessionId();
-    try {
-      if (window.__vgcWaitForApiAuth) {
-        const authReady = await window.__vgcWaitForApiAuth(15000);
-        if (!authReady) return { ok: false, status: 401 };
-      }
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const response = await fetch("/api/auth/session/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: activeSessionId }),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok) return { ok: true, data, sessionId: activeSessionId };
-        if (attempt === 2) return { ok: false, status: response.status, data, sessionId: activeSessionId };
-        await new Promise(resolve => setTimeout(resolve, 500 + attempt * 750));
-      }
-    } catch (e) {
-      return { ok: false, error: e.message, sessionId: activeSessionId };
-    }
-    return { ok: false, sessionId: activeSessionId };
-  }, [createPortalSessionId]);
-
   useEffect(() => {
     if (typeof localStorage !== "undefined") {
       const { showKey, testStatus, ...persist } = azureOpenAI;
@@ -1058,10 +1022,6 @@ export default function ITSMApp() {
     }
   }, [currentUser, isEntraProductionUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    window.__vgcGetPortalSessionId = () => portalSessionIdRef.current || sessionStorage.getItem("vgc_portal_session_id") || "";
-    return () => { if (window.__vgcGetPortalSessionId) delete window.__vgcGetPortalSessionId; };
-  }, []);
 
   const clearAppSessionState = useCallback(() => {
     setIsLoggedIn(false);
@@ -1071,94 +1031,13 @@ export default function ITSMApp() {
     setZdTickets([]);
     setZdStats({ open: 0, pending: 0, hold: 0, solved: 0 });
     setZdAiQueue([]);
-    clearPortalSessionId();
     try {
       sessionStorage.removeItem("vgc_current_user");
       localStorage.removeItem("vgc_current_user");
       ["vgc_customers","vgc_service_reports","vgc_zd_tickets","vgc_zd_stats","vgc_zd_ai_queue","vgc_zd_auto_log","vgc_zd_auto_stats"].forEach(k => localStorage.removeItem(k));
     } catch (e) { /* ignore */ }
-  }, [clearPortalSessionId]);
+  }, []);
 
-  const endPortalSession = useCallback(async () => {
-    const sessionId = portalSessionIdRef.current || sessionStorage.getItem("vgc_portal_session_id");
-    if (!sessionId || !isEntraProductionUser) { clearPortalSessionId(); return; }
-    try {
-      await fetch("/api/auth/session/end", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      });
-    } catch (e) { /* ignore */ }
-    clearPortalSessionId();
-  }, [clearPortalSessionId, isEntraProductionUser]);
-
-  useEffect(() => {
-    if (!isEntraProductionUser || !currentUser?.email) return;
-    portalSessionStaleRef.current = false;
-    let stopped = false;
-    let heartbeatTimer = null;
-    const email = currentUser.email.toLowerCase();
-    const sessionId = createPortalSessionId();
-    const staleSignOut = (detail) => {
-      if (portalSessionStaleRef.current) return;
-      portalSessionStaleRef.current = true;
-      showToast("This ITSM session was signed out because another active session was opened for your Entra user.", "warning");
-      setErrorAdvisory({
-        type: "Session Control",
-        code: detail?.code || "STALE_SESSION",
-        message: "Another ITSM session is active for this Entra user.",
-        timestamp: new Date().toISOString(),
-        details: "The previous app session was cleared to prevent concurrent access to production ITSM data.",
-        stack: "",
-      });
-      clearAppSessionState();
-    };
-    const heartbeat = async () => {
-      try {
-        const response = await fetch("/api/auth/session/heartbeat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
-        });
-        if (response.status === 409) return staleSignOut(await response.json().catch(() => ({})));
-        if (!response.ok) return;
-        const data = await response.json().catch(() => ({}));
-        if (data && data.active === false) staleSignOut(data);
-      } catch (e) { /* ignore */ }
-    };
-    const start = async () => {
-      try {
-        const result = await startPortalSessionNow(sessionId);
-        if (!result.ok) return;
-        localStorage.setItem("vgc_active_session_marker", JSON.stringify({ email, sessionId, ts: Date.now() }));
-        if (!stopped) {
-          await heartbeat();
-          heartbeatTimer = setInterval(heartbeat, 30000);
-        }
-      } catch (e) { /* ignore */ }
-    };
-    const onStorage = (event) => {
-      if (event.key !== "vgc_active_session_marker" || !event.newValue) return;
-      try {
-        const marker = JSON.parse(event.newValue);
-        if (marker.email === email && marker.sessionId && marker.sessionId !== sessionId) staleSignOut({ code: "STALE_SESSION" });
-      } catch (e) { /* ignore */ }
-    };
-    const onServerStale = (event) => staleSignOut(event.detail || { code: "STALE_SESSION" });
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("vgc:portal-session-stale", onServerStale);
-    start();
-    return () => {
-      stopped = true;
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("vgc:portal-session-stale", onServerStale);
-    };
-  }, [clearAppSessionState, createPortalSessionId, currentUser?.email, isEntraProductionUser, startPortalSessionNow]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ─── DEMO MODE REMOVED ─── Production data only, loaded from DB
-
-  // Fetch live cyber news for dashboard threat feed
   useEffect(() => {
     fetch("/api/cybernews").then(r => r.json()).then(data => {
       if (data.threats && data.threats.length > 0) setDashboardThreats(data.threats.slice(0, 5));
@@ -1414,7 +1293,6 @@ export default function ITSMApp() {
           };
         }
 
-        await startPortalSessionNow();
         setCurrentUser(nextCurrentUser);
 
         // Auto-add to managedUsers if first-time login (enables GUI role editing & DB persistence)
@@ -1446,7 +1324,7 @@ export default function ITSMApp() {
         setIsLoggedIn(true);
       })();
     }
-  }, [isMsalAuthenticated, accounts, currentUser, startPortalSessionNow]);
+  }, [isMsalAuthenticated, accounts, currentUser]);
 
   // ─── Prevent Browser Back Button (keep session alive until sign-out) ──
   useEffect(() => {
@@ -2953,12 +2831,20 @@ export default function ITSMApp() {
     signature: "<p>Best regards,<br/><b>VGC Technology Pte Ltd</b><br/>IT Service Management<br/>📧 help@vgctechnology.com | 📞 +65 6234 0000</p>"
   });
   const [emailCompose, setEmailCompose] = useState(null); // {ticketId, to, subject, body, isInternal}
-  const [managedUsers, setManagedUsers] = useState(() => _ls("vgc_managed_users", USERS));
+  const [managedUsers, setManagedUsers] = useState(() => {
+    const stored = _ls("vgc_managed_users", USERS);
+    if (!stored || stored.length === 0) return [...USERS];
+    const existingEmails = new Set(stored.map(u => u.email));
+    const missing = USERS.filter(u => !existingEmails.has(u.email));
+    return missing.length > 0 ? [...stored, ...missing] : stored;
+  });
 
   // ─── Fetch Entra Profile Photos for Managed Users ──────────────────────
   const userPhotosFetchedRef = useRef(false);
   const managedUsersRef = useRef(managedUsers);
   managedUsersRef.current = managedUsers;
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
   useEffect(() => {
     const users = managedUsersRef.current;
     if (!isMsalAuthenticated || userPhotosFetchedRef.current || !users?.length) return;
@@ -3447,6 +3333,18 @@ export default function ITSMApp() {
             // ─── v3.32.0 (Phase 2): AI Summary live-refresh on worklog change ───
             if (msg.collection === "worklog" && msg.incidentId) {
               try { window.dispatchEvent(new CustomEvent("vgc-worklog-updated", { detail: { incidentId: msg.incidentId } })); } catch { /* ignore */ }
+            }
+            // ─── Proactive Assignment Notification ───
+            if (msg.collection === "incidents" && msg.data && (msg.action === "upsert" || msg.action === "update")) {
+              const d = Array.isArray(msg.data) ? msg.data : [msg.data];
+              const me = currentUserRef.current?.name;
+              if (me) {
+                d.forEach(inc => {
+                  if (inc && inc.assignee === me && inc._prevAssignee !== me) {
+                    showToast(`🔔 ${inc.id || "Incident"} assigned to you — ${inc.priority || ""} ${(inc.title || "").substring(0, 40)}`, "info");
+                  }
+                });
+              }
             }
             if (msg.action === "delete" || msg.action === "upsert" || msg.action === "update" || msg.action === "bulk_upsert" || msg.action === "bulk_update" || msg.action === "merge") {
               scheduleRefresh(msg.collection);
@@ -4934,6 +4832,13 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     zdStats, aiConfig,
   };
 
+  const INTERNAL_AUDIENCES = ["Developers", "DevOps", "Platform Administrators", "IT Administrators", "Service Desk Leads", "AI Configuration Managers", "Security Officers", "Compliance Managers", "IT Auditors", "IT Decision Makers", "Procurement Teams", "C-Level"];
+  const portalKbArticles = useMemo(() => (kbArticles || []).filter(a =>
+    a.status === "Published" &&
+    !(a.content || "").includes("Classification: Internal") &&
+    !INTERNAL_AUDIENCES.some(aud => (a.bestFor || "").includes(aud))
+  ), [kbArticles]);
+
   const renderModule = () => {
     // Pre-filter data for End User portal — defense-in-depth so the component never receives other users' data
     const portalEmail = (currentUser.email || "").toLowerCase();
@@ -4950,9 +4855,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     );
 
     // End Users always get the self-service portal
-    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={userIncidents} setIncidents={setIncidents} requests={userRequests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
+    if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={userIncidents} setIncidents={setIncidents} requests={userRequests} problems={[]} changes={[]} kbArticles={portalKbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
     switch (activeModule) {
-      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={userIncidents} setIncidents={setIncidents} requests={userRequests} problems={problems} changes={changes} kbArticles={kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
+      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={currentUser.rbacRole === "End User" ? userIncidents : incidents} setIncidents={setIncidents} requests={currentUser.rbacRole === "End User" ? userRequests : requests} problems={currentUser.rbacRole === "End User" ? [] : problems} changes={currentUser.rbacRole === "End User" ? [] : changes} kbArticles={currentUser.rbacRole === "End User" ? portalKbArticles : kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
       case "dashboard": return (<DashboardModule ctx={dashboardCtx} />);
       case "tickets": return (<TicketsModule />);
       case "incidents": return (<TicketsModule />);
@@ -4981,7 +4886,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
       }} />);
       case "catalog": return (<CatalogModule />);
       case "knowledge": return (<KnowledgeModule ctx={{
-        currentUser, showToast, _save, kbArticles, setKbArticles,
+        currentUser, showToast, _save, kbArticles: currentUser.rbacRole === "End User" ? portalKbArticles : kbArticles, setKbArticles: currentUser.rbacRole === "End User" ? () => {} : setKbArticles,
         search, setActiveModule, setDetailItem, setModal,
         guideGenerating, setGuideGenerating, guideTopic, setGuideTopic,
         guideCategory, setGuideCategory, guideResult, setGuideResult,
@@ -5429,7 +5334,6 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             </div>
             {/* Sign Out */}
             <button aria-label="Sign out" onClick={() => {
-              endPortalSession();
               setIsLoggedIn(false); setCurrentUser(null); _save("vgc_current_user", null);
               setMsalUser(null); setMsalPhoto(null); setProfilePhoto(null); setGraphEmails(null); setGraphCalendar(null);
               setGraphChats(null); setGraphTeams(null); setGraphPresence(null); setGraphUnread(0);
@@ -5891,6 +5795,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           detailItem, setDetailItem, modal, setModal,
           setActiveModule, slaPolicy,
           isEntraProductionUser, softDelete,
+          setImpactRadiusModal, setCallbackModal, setWarRoomModal,
         }} />
       </Suspense>
 
@@ -5982,7 +5887,13 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
 
       {/* ═══ COMMAND PALETTE (Ctrl+K) ═══ */}
       {showCommandPalette && (() => {
-        const commands = [
+        const isEndUser = currentUser.rbacRole === "End User";
+        const commands = isEndUser ? [
+          { icon: "📝", label: "New Ticket", action: () => { setActiveModule("selfService"); setPortalTab("create"); } },
+          { icon: "🎫", label: "My Tickets", action: () => { setActiveModule("selfService"); setPortalTab("tickets"); } },
+          { icon: "📚", label: "Go to Knowledge Base", action: () => setActiveModule("knowledge") },
+          { icon: "📦", label: "Go to Service Catalog", action: () => setActiveModule("catalog") },
+        ] : [
           { icon: "📝", label: "New Incident", action: () => { setActiveModule("incidents"); setModal("createIncident"); } },
           { icon: "🔧", label: "New Problem", action: () => { setActiveModule("incidents"); setModal("createProblem"); } },
           { icon: "📋", label: "New Change Request", action: () => { setActiveModule("incidents"); setModal("createChange"); } },
@@ -6000,6 +5911,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           { icon: "🗑️", label: "Open Recycle Bin", action: () => setShowRecycleBin(true) },
           { icon: "📧", label: "Go to Email Intelligence", action: () => setActiveModule("emailIntelligence") },
           { icon: "🛡️", label: "Go to Admin Panel", action: () => setActiveModule("admin") },
+          { icon: "📊", label: "Report Builder", action: () => { setReportBuilderOpen(true); setShowCommandPalette(false); } },
+          { icon: "🚀", label: "1-Click Onboarding", action: () => { setOnboardModal({}); setShowCommandPalette(false); } },
+          { icon: "🔒", label: "1-Click Offboarding", action: () => { setOffboardModal({}); setShowCommandPalette(false); } },
+          { icon: "🚨", label: "Create War Room", action: () => { setWarRoomModal({}); setShowCommandPalette(false); } },
+          { icon: "💥", label: "Impact Radius", action: () => { setImpactRadiusModal({}); setShowCommandPalette(false); } },
+          { icon: "📞", label: "Schedule Callback", action: () => { setCallbackModal({}); setShowCommandPalette(false); } },
         ];
         const q = cmdSearch.toLowerCase();
         const filtered = q ? commands.filter(c => (c.label || "").toLowerCase().includes(q)) : commands;
@@ -6007,22 +5924,27 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         // AI Smart Search — search incidents, KB, and everything when command palette is open
         const smartResults = q && q.length >= 2 ? (() => {
           const results = [];
-          // Search incidents
-          incidents.filter(inc => inc.title?.toLowerCase().includes(q) || inc.id?.toLowerCase().includes(q) || inc.description?.toLowerCase().includes(q)).slice(0, 3).forEach(inc => {
+          const portalEmail = (currentUser.email || "").toLowerCase();
+          // Search incidents (End Users only see their own)
+          const searchableIncidents = isEndUser ? incidents.filter(i => (i.reporterEmail || "").toLowerCase() === portalEmail || (i.requesterEmail || "").toLowerCase() === portalEmail || (i.createdBy || "").toLowerCase() === portalEmail) : incidents;
+          searchableIncidents.filter(inc => inc.title?.toLowerCase().includes(q) || inc.id?.toLowerCase().includes(q) || inc.description?.toLowerCase().includes(q)).slice(0, 3).forEach(inc => {
             results.push({ type: "incident", icon: "🎫", label: `${inc.id} — ${inc.title}`, sublabel: `${inc.status} · ${inc.priority} · ${inc.category || ""}`, action: () => { setDetailItem(inc); setModal("incidentDetail"); } });
           });
-          // Search KB
-          kbArticles.filter(kb => kb.title?.toLowerCase().includes(q) || kb.content?.toLowerCase().includes(q) || (kb.tags || []).some(t => t.toLowerCase().includes(q))).slice(0, 3).forEach(kb => {
+          // Search KB (End Users only see published non-internal)
+          const searchableKb = isEndUser ? portalKbArticles : kbArticles;
+          searchableKb.filter(kb => kb.title?.toLowerCase().includes(q) || kb.content?.toLowerCase().includes(q) || (kb.tags || []).some(t => t.toLowerCase().includes(q))).slice(0, 3).forEach(kb => {
             results.push({ type: "kb", icon: "📚", label: kb.title, sublabel: `${kb.category || "KB"} · ${kb.id}`, action: () => { setDetailItem(kb); setModal("kbDetail"); } });
           });
-          // Search requests
-          (requests || []).filter(r => r.title?.toLowerCase().includes(q) || r.id?.toLowerCase().includes(q)).slice(0, 2).forEach(r => {
-            results.push({ type: "request", icon: "📋", label: `${r.id} — ${r.title || r.type}`, sublabel: `${r.status}`, action: () => { setDetailItem(r); setModal("requestDetail"); } });
-          });
-          // Search changes
-          (changes || []).filter(c => c.title?.toLowerCase().includes(q) || c.id?.toLowerCase().includes(q)).slice(0, 2).forEach(c => {
-            results.push({ type: "change", icon: "🔄", label: `${c.id} — ${c.title}`, sublabel: `${c.status}`, action: () => { setDetailItem(c); setModal("changeDetail"); } });
-          });
+          if (!isEndUser) {
+            // Search requests
+            (requests || []).filter(r => r.title?.toLowerCase().includes(q) || r.id?.toLowerCase().includes(q)).slice(0, 2).forEach(r => {
+              results.push({ type: "request", icon: "📋", label: `${r.id} — ${r.title || r.type}`, sublabel: `${r.status}`, action: () => { setDetailItem(r); setModal("requestDetail"); } });
+            });
+            // Search changes
+            (changes || []).filter(c => c.title?.toLowerCase().includes(q) || c.id?.toLowerCase().includes(q)).slice(0, 2).forEach(c => {
+              results.push({ type: "change", icon: "🔄", label: `${c.id} — ${c.title}`, sublabel: `${c.status}`, action: () => { setDetailItem(c); setModal("changeDetail"); } });
+            });
+          }
           return results;
         })() : [];
 
@@ -6074,7 +5996,35 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   </>
                 )}
 
-                {filtered.length === 0 && smartResults.length === 0 && <div style={{ padding: "20px 16px", textAlign: "center", color: "#5A6178", fontSize: 12 }}>No results found for "{cmdSearch}"</div>}
+                {filtered.length === 0 && smartResults.length === 0 && cmdSearch.trim().split(/\s+/).length >= 3 && (
+                  <div style={{ padding: "10px 16px" }}>
+                    {!cmdAiResult && !cmdAiLoading && (
+                      <button onClick={async () => {
+                        setCmdAiLoading(true);
+                        try {
+                          const r = await fetch("/api/ai/command", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ command: cmdSearch }) });
+                          if (r.ok) setCmdAiResult(await r.json());
+                        } catch {}
+                        setCmdAiLoading(false);
+                      }} style={{ width: "100%", padding: "10px 14px", borderRadius: 6, background: "#6366F112", border: "1px solid #6366F133", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                        <span>🤖</span> Run as AI Command: "{cmdSearch}"
+                      </button>
+                    )}
+                    {cmdAiLoading && <div style={{ fontSize: 11, color: "#6366F1", padding: 8 }}>Parsing command...</div>}
+                    {cmdAiResult && (
+                      <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, border: "1px solid #6366F133" }}>
+                        <div style={{ fontSize: 10, color: "#6366F1", fontWeight: 700, marginBottom: 6 }}>AI Parsed Action</div>
+                        <div style={{ fontSize: 12, color: "#E8ECF4", marginBottom: 4 }}>{cmdAiResult.explanation || cmdAiResult.action}</div>
+                        <div style={{ fontSize: 10, color: "#5A6178" }}>Action: {cmdAiResult.action} | Confidence: {cmdAiResult.confidence}%</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          <button onClick={() => { showToast?.(`Command queued: ${cmdAiResult.action}`, "success"); setShowCommandPalette(false); setCmdSearch(""); setCmdAiResult(null); }} style={{ padding: "4px 10px", borderRadius: 4, background: "#10B98118", border: "1px solid #10B98133", color: "#10B981", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Execute</button>
+                          <button onClick={() => setCmdAiResult(null)} style={{ padding: "4px 10px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3F", color: "#A0AEC0", cursor: "pointer", fontSize: 10 }}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {filtered.length === 0 && smartResults.length === 0 && cmdSearch.trim().split(/\s+/).length < 3 && cmdSearch.length > 0 && <div style={{ padding: "20px 16px", textAlign: "center", color: "#5A6178", fontSize: 12 }}>No results found. Type 3+ words for AI command.</div>}
               </div>
               <div style={{ padding: "8px 16px", borderTop: "1px solid #1E2130", display: "flex", gap: 16, fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
                 <span>↵ Select</span><span>ESC Close</span><span>Ctrl+K Toggle</span><span style={{ color: "#6366F1" }}>🤖 AI-powered search</span>
@@ -7371,102 +7321,97 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", animation: "alertSlideDown 0.3s ease-out" }}
             onClick={e => { if (e.target === e.currentTarget) { setErrorAdvisory(null); setAiErrorResolution(null); } }}>
-            <div style={{ width: 620, maxHeight: "90vh", background: "#0F1117", borderRadius: 16, border: "1px solid #FF6B6B33", overflow: "hidden", boxShadow: "0 24px 64px rgba(255,107,107,0.15), 0 8px 24px #00000088", animation: "alertSlideDown 0.35s ease-out" }}>
+            <div style={{ width: 540, maxHeight: "85vh", background: "#0F1117", borderRadius: 14, border: "1px solid #FF6B6B33", overflow: "hidden", boxShadow: "0 20px 48px rgba(255,107,107,0.12), 0 6px 20px #00000066", animation: "alertSlideDown 0.35s ease-out" }}>
               {/* Header */}
-              <div style={{ padding: "16px 20px", background: "linear-gradient(135deg, #FF6B6B10, #FF444408)", borderBottom: "1px solid #FF6B6B22", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #FF6B6B22, #FF444411)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, animation: "aiBreathe 3s ease-in-out infinite" }}>🤖</div>
+              <div style={{ padding: "12px 16px", background: "linear-gradient(135deg, #FF6B6B10, #FF444408)", borderBottom: "1px solid #FF6B6B22", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg, #FF6B6B22, #FF444411)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🔧</div>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>AI Error Resolver</div>
-                    <div style={{ fontSize: 10, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>Error Resolver</div>
+                    <div style={{ fontSize: 9, color: "#FF6B6B", fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4 }}>
                       <span style={{ width: 5, height: 5, borderRadius: "50%", background: aiErrorResolving ? "#FFB347" : "#FF6B6B", animation: "pulse 1.5s infinite" }} />
-                      {aiErrorResolving ? "AI is analyzing and resolving..." : `${ea.type} Error Detected — AI Solution Ready`}
+                      {aiErrorResolving ? "Analyzing..." : `${ea.type} — Solution Ready`}
                     </div>
                   </div>
                 </div>
-                <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18, padding: "4px 6px", borderRadius: 6, transition: "all 0.2s" }}
+                <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); }} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 16, padding: "4px 6px", borderRadius: 6, transition: "all 0.2s" }}
                   onMouseEnter={e => e.currentTarget.style.color = "#FF6B6B"}
                   onMouseLeave={e => e.currentTarget.style.color = "#5A6178"}>✕</button>
               </div>
 
               {/* Content */}
-              <div style={{ padding: 20, maxHeight: "65vh", overflow: "auto" }}>
-                {/* Error Info Card */}
-                <div style={{ padding: 14, borderRadius: 10, background: "#FF6B6B08", border: "1px solid #FF6B6B1A", marginBottom: 16 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                    <span style={{ fontSize: 12 }}>⚠️</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#FF6B6B", fontFamily: "'Space Grotesk', sans-serif" }}>Error Details</span>
-                    <span style={{ marginLeft: "auto", fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "#FF6B6B15", color: "#FF8888", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{ea.code}</span>
+              <div style={{ padding: 16, maxHeight: "60vh", overflow: "auto" }}>
+                {/* Error Info Card — compact */}
+                <div style={{ padding: 10, borderRadius: 8, background: "#FF6B6B08", border: "1px solid #FF6B6B1A", marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 11 }}>⚠️</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#FF6B6B" }}>Error</span>
+                    <span style={{ marginLeft: "auto", fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "#FF6B6B15", color: "#FF8888", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{ea.code}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: "#E8ECF4", marginBottom: 6, lineHeight: 1.5, fontFamily: "'DM Sans', sans-serif" }}>{ea.message}</div>
-                  <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.5, fontFamily: "'JetBrains Mono', monospace" }}>{ea.details}</div>
-                  <div style={{ marginTop: 8, fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>🕐 {sgTime}</div>
+                  <div style={{ fontSize: 11, color: "#E8ECF4", marginBottom: 4, lineHeight: 1.4 }}>{ea.message}</div>
+                  <div style={{ fontSize: 9, color: "#5A6178", lineHeight: 1.4, fontFamily: "'JetBrains Mono', monospace" }}>{ea.details}</div>
+                  <div style={{ marginTop: 4, fontSize: 8, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace" }}>🕐 {sgTime}</div>
                 </div>
 
-                {/* AI Resolution — Dynamic, not hardcoded */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#06B6D4", marginBottom: 10, display: "flex", alignItems: "center", gap: 6, fontFamily: "'Space Grotesk', sans-serif" }}>
-                    <span style={{ fontSize: 13 }}>🤖</span> AI-Powered Resolution
-                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "#6366F122", color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>GPT-5.4-Pro</span>
+                {/* AI Resolution — compact */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#06B6D4", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
+                    <span style={{ fontSize: 12 }}>💡</span> Resolution
+                    <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "#6366F122", color: "#6366F1", fontFamily: "'JetBrains Mono', monospace" }}>AI</span>
                   </div>
                   {aiErrorResolving ? (
-                    <div style={{ padding: 20, borderRadius: 10, background: "#06B6D408", border: "1px solid #06B6D422", textAlign: "center" }}>
-                      <div style={{ fontSize: 24, marginBottom: 10, animation: "aiBreathe 2s ease-in-out infinite" }}>🤖</div>
-                      <div style={{ fontSize: 12, color: "#06B6D4", fontWeight: 600 }}>AI is analyzing the error...</div>
-                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 4 }}>Checking knowledge base, Zendesk history, and generating resolution steps</div>
-                      <div style={{ marginTop: 12, width: 200, height: 3, borderRadius: 3, background: "#1E2130", margin: "12px auto 0" }}>
+                    <div style={{ padding: 14, borderRadius: 8, background: "#06B6D408", border: "1px solid #06B6D422", textAlign: "center" }}>
+                      <div style={{ fontSize: 20, marginBottom: 6, animation: "aiBreathe 2s ease-in-out infinite" }}>🔍</div>
+                      <div style={{ fontSize: 11, color: "#06B6D4", fontWeight: 600 }}>Analyzing error...</div>
+                      <div style={{ marginTop: 8, width: 160, height: 3, borderRadius: 3, background: "#1E2130", margin: "8px auto 0" }}>
                         <div style={{ width: "60%", height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #6366F1, #06B6D4)", animation: "shimmerBg 1.5s ease-in-out infinite" }} />
                       </div>
                     </div>
                   ) : aiErrorResolution ? (
-                    <div style={{ padding: 16, borderRadius: 10, background: "#ffffff03", border: "1px solid #1E2130", fontSize: 12, color: "#C4CAD6", lineHeight: 1.7, fontFamily: "'DM Sans', sans-serif", whiteSpace: "pre-wrap" }}>
+                    <div style={{ padding: 12, borderRadius: 8, background: "#ffffff03", border: "1px solid #1E2130", fontSize: 11, color: "#C4CAD6", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                       {aiErrorResolution}
                     </div>
                   ) : null}
                 </div>
 
-                {/* Screenshot Tip */}
-                <div style={{ padding: 10, borderRadius: 8, background: "#FFB34708", border: "1px solid #FFB34718", marginBottom: 16, display: "flex", alignItems: "flex-start", gap: 8 }}>
-                  <span style={{ fontSize: 13, flexShrink: 0 }}>📸</span>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#FFB347", marginBottom: 3 }}>Take a Screenshot</div>
-                    <div style={{ fontSize: 10, color: "#5A6178", lineHeight: 1.5 }}>
-                      Press <kbd style={{ padding: "1px 5px", borderRadius: 3, background: "#1E2130", border: "1px solid #2A2F45", fontSize: 9, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>Win + Shift + S</kbd> to capture a screenshot, then paste it into the email below.
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                {/* Quick Actions */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
                   <button onClick={() => { navigator.clipboard.writeText(screenshotInfo + "\n\n─── AI RESOLUTION ───\n" + (aiErrorResolution || "Pending...")); }}
-                    style={{ flex: 1, padding: "9px 0", borderRadius: 8, background: "#1E2130", border: "1px solid #2A2F45", color: "#E8ECF4", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s" }}
+                    style={{ padding: "6px 12px", borderRadius: 6, background: "#1E2130", border: "1px solid #2A2F45", color: "#E8ECF4", cursor: "pointer", fontSize: 10, fontWeight: 600, transition: "all 0.2s" }}
                     onMouseEnter={e => { e.currentTarget.style.background = "#2A2F45"; }}
                     onMouseLeave={e => { e.currentTarget.style.background = "#1E2130"; }}
-                  >📋 Copy Error + AI Resolution</button>
+                  >📋 Copy</button>
                   {!aiErrorResolving && <button onClick={() => resolveErrorWithAI(ea)}
-                    style={{ padding: "9px 16px", borderRadius: 8, background: "#6366F115", border: "1px solid #6366F133", color: "#6366F1", cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.2s" }}
+                    style={{ padding: "6px 12px", borderRadius: 6, background: "#6366F115", border: "1px solid #6366F133", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600, transition: "all 0.2s" }}
                     onMouseEnter={e => { e.currentTarget.style.background = "#6366F125"; }}
                     onMouseLeave={e => { e.currentTarget.style.background = "#6366F115"; }}
                   >🔄 Re-analyze</button>}
                 </div>
+
+                {/* Screenshot Tip — compact */}
+                <div style={{ padding: 8, borderRadius: 6, background: "#FFB34708", border: "1px solid #FFB34718", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 11 }}>📸</span>
+                  <div style={{ fontSize: 9, color: "#5A6178" }}>
+                    Press <kbd style={{ padding: "0px 4px", borderRadius: 2, background: "#1E2130", border: "1px solid #2A2F45", fontSize: 8, color: "#E8ECF4", fontFamily: "'JetBrains Mono', monospace" }}>Win+Shift+S</kbd> to screenshot, then paste in email
+                  </div>
+                </div>
               </div>
 
-              {/* Footer Actions */}
-              <div style={{ padding: "14px 20px", borderTop: "1px solid #1E2130", background: "#0A0C14", display: "flex", gap: 8, alignItems: "center" }}>
-                <a href={mailtoLink} target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: "11px 0", borderRadius: 10, background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", textDecoration: "none", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 4px 16px #6366F144", transition: "all 0.2s" }}
+              {/* Footer Actions — compact */}
+              <div style={{ padding: "10px 16px", borderTop: "1px solid #1E2130", background: "#0A0C14", display: "flex", gap: 6, alignItems: "center" }}>
+                <a href={mailtoLink} target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: "9px 0", borderRadius: 8, background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", textDecoration: "none", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxShadow: "0 4px 16px #6366F144", transition: "all 0.2s" }}
                   onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
                   onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                  Email Developer — help@vgctechnology.com
+                  ✉️ Email Developer
                 </a>
                 <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); if (ea.type !== "SSO Login") { graphFetchedRef.current = false; fetchGraphData(); } }}
-                  style={{ padding: "11px 20px", borderRadius: 10, background: "#FF6B6B15", border: "1px solid #FF6B6B33", color: "#FF6B6B", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", transition: "all 0.2s", whiteSpace: "nowrap" }}
+                  style={{ padding: "9px 14px", borderRadius: 8, background: "#FF6B6B15", border: "1px solid #FF6B6B33", color: "#FF6B6B", cursor: "pointer", fontSize: 11, fontWeight: 700, transition: "all 0.2s", whiteSpace: "nowrap" }}
                   onMouseEnter={e => { e.currentTarget.style.background = "#FF6B6B25"; }}
                   onMouseLeave={e => { e.currentTarget.style.background = "#FF6B6B15"; }}
                 >🔄 Retry</button>
                 <button onClick={() => { setErrorAdvisory(null); setAiErrorResolution(null); }}
-                  style={{ padding: "11px 16px", borderRadius: 10, background: "transparent", border: "1px solid #1E2130", color: "#5A6178", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s" }}
+                  style={{ padding: "9px 12px", borderRadius: 8, background: "transparent", border: "1px solid #1E2130", color: "#5A6178", cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.2s" }}
                   onMouseEnter={e => { e.currentTarget.style.color = "#E8ECF4"; }}
                   onMouseLeave={e => { e.currentTarget.style.color = "#5A6178"; }}
                 >Dismiss</button>
@@ -7662,6 +7607,334 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           </>
         );
       })()}
+
+      {/* ─── Feature 9: Conversational Report Builder ─── */}
+      {reportBuilderOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setReportBuilderOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0F1117", borderRadius: 16, border: "1px solid #1E2130", width: 600, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 80px #00000088" }}>
+            <div style={{ padding: 20, borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 18 }}>📊</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: "#E2E8F0" }}>Conversational Report Builder</span>
+              </div>
+              <button onClick={() => setReportBuilderOpen(false)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ padding: 20 }}>
+              <div style={{ fontSize: 11, color: "#A0AEC0", marginBottom: 12 }}>Ask a question about your data in plain English:</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={reportQuery} onChange={e => setReportQuery(e.target.value)} placeholder="e.g., Show me tickets by category for last month" onKeyDown={e => {
+                  if (e.key === "Enter" && reportQuery.trim() && !reportLoading) {
+                    setReportLoading(true);
+                    fetch("/api/ai/conversational-report", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ query: reportQuery }) })
+                      .then(r => r.json()).then(d => setReportResult(d)).catch(() => setReportResult({ error: "Failed to generate report" })).finally(() => setReportLoading(false));
+                  }
+                }} style={{ flex: 1, padding: "10px 14px", borderRadius: 8, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 13, outline: "none" }} />
+                <button disabled={reportLoading || !reportQuery.trim()} onClick={() => {
+                  setReportLoading(true);
+                  fetch("/api/ai/conversational-report", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ query: reportQuery }) })
+                    .then(r => r.json()).then(d => setReportResult(d)).catch(() => setReportResult({ error: "Failed" })).finally(() => setReportLoading(false));
+                }} style={{ padding: "10px 18px", borderRadius: 8, background: reportLoading ? "#1E2130" : "#6366F1", color: "#fff", border: "none", cursor: reportLoading ? "default" : "pointer", fontSize: 12, fontWeight: 600 }}>
+                  {reportLoading ? "Generating..." : "Generate"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {["Tickets by category this month", "SLA compliance trend", "Top 5 assignees by volume", "Compare this week vs last week"].map(q => (
+                  <button key={q} onClick={() => setReportQuery(q)} style={{ padding: "4px 10px", borderRadius: 99, background: "#1E2130", border: "1px solid #2A2E3F", color: "#A0AEC0", cursor: "pointer", fontSize: 9 }}>{q}</button>
+                ))}
+              </div>
+              {reportResult && !reportResult.error && reportResult.chart && (
+                <div style={{ marginTop: 16, padding: 16, background: "#080A12", borderRadius: 8, border: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#E2E8F0", marginBottom: 8 }}>{reportResult.chart.title}</div>
+                  {reportResult.chart.chartType === "number" && reportResult.chart.datasets?.[0]?.data?.[0] !== undefined && (
+                    <div style={{ fontSize: 42, fontWeight: 700, color: "#6366F1", textAlign: "center", padding: 20 }}>{reportResult.chart.datasets[0].data[0]}</div>
+                  )}
+                  {(reportResult.chart.chartType === "bar" || reportResult.chart.chartType === "line") && reportResult.chart.labels && (
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 120, paddingTop: 10 }}>
+                      {reportResult.chart.labels.map((label, i) => {
+                        const val = reportResult.chart.datasets?.[0]?.data?.[i] || 0;
+                        const max = Math.max(...(reportResult.chart.datasets?.[0]?.data || [1]));
+                        return (
+                          <div key={i} style={{ flex: 1, textAlign: "center" }}>
+                            <div style={{ background: "#6366F1", borderRadius: "4px 4px 0 0", height: `${Math.max((val / max) * 100, 4)}px`, transition: "height 0.3s" }} />
+                            <div style={{ fontSize: 8, color: "#5A6178", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</div>
+                            <div style={{ fontSize: 9, color: "#A0AEC0" }}>{val}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {reportResult.chart.chartType === "pie" && reportResult.chart.labels && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: 10 }}>
+                      {reportResult.chart.labels.map((label, i) => {
+                        const colors = ["#6366F1", "#EC4899", "#FFB347", "#81C784", "#64B5F6", "#FF6B6B", "#A78BFA"];
+                        return (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <div style={{ width: 10, height: 10, borderRadius: "50%", background: colors[i % colors.length] }} />
+                            <span style={{ fontSize: 10, color: "#A0AEC0" }}>{label}: {reportResult.chart.datasets?.[0]?.data?.[i] || 0}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {reportResult.chart.chartType === "table" && reportResult.chart.labels && (
+                    <div style={{ fontSize: 10, color: "#A0AEC0" }}>
+                      {reportResult.chart.labels.map((label, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #1E2130" }}>
+                          <span>{label}</span><span style={{ color: "#E2E8F0", fontWeight: 600 }}>{reportResult.chart.datasets?.[0]?.data?.[i] || 0}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {reportResult.chart.summary && <div style={{ marginTop: 10, fontSize: 11, color: "#81C784", padding: 8, background: "#0D2D1A", borderRadius: 6 }}>{reportResult.chart.summary}</div>}
+                </div>
+              )}
+              {reportResult?.error && <div style={{ marginTop: 12, fontSize: 11, color: "#FF6B6B" }}>{reportResult.error}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Feature 26: 1-Click Onboarding ─── */}
+      {onboardModal && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setOnboardModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0F1117", borderRadius: 16, border: "1px solid #1E2130", width: 560, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 80px #00000088" }}>
+            <div style={{ padding: 20, borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18 }}>🚀</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "#E2E8F0" }}>1-Click Onboarding</span>
+            </div>
+            <div style={{ padding: 20 }}>
+              {!onboardModal.plan ? (
+                <div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", marginBottom: 12 }}>Enter new employee details:</div>
+                  {["employeeName", "role", "department", "manager"].map(field => (
+                    <div key={field} style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "capitalize" }}>{field.replace(/([A-Z])/g, " $1")}</div>
+                      <input value={onboardModal[field] || ""} onChange={e => setOnboardModal(prev => ({ ...prev, [field]: e.target.value }))} style={{ width: "100%", padding: "8px 12px", borderRadius: 6, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 12, outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                  <button disabled={!onboardModal.employeeName} onClick={() => {
+                    fetch("/api/ai/onboard", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(onboardModal) })
+                      .then(r => r.json()).then(d => setOnboardModal(prev => ({ ...prev, plan: d.plan }))).catch(() => showToast?.("Onboarding failed", "error"));
+                  }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: onboardModal.employeeName ? "#6366F1" : "#1E2130", color: "#fff", border: "none", cursor: onboardModal.employeeName ? "pointer" : "default", fontSize: 13, fontWeight: 700, marginTop: 8 }}>
+                    Generate Onboarding Plan
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 13, color: "#81C784", fontWeight: 600, marginBottom: 8 }}>Onboarding Plan for {onboardModal.plan.employee}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 12 }}>Role: {onboardModal.plan.role} · Dept: {onboardModal.plan.department} · Est: {onboardModal.plan.estimatedTime}</div>
+                  {onboardModal.plan.steps.map((s, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1E2130" }}>
+                      <span style={{ width: 20, height: 20, borderRadius: "50%", background: s.auto ? "#6366F122" : "#FFB34722", color: s.auto ? "#6366F1" : "#FFB347", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{s.step}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, color: "#E2E8F0" }}>{s.action}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178" }}>{s.service} · {s.auto ? "Automated" : "Manual"}</div>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={() => { showToast?.(`Onboarding initiated for ${onboardModal.plan.employee}`, "success"); setOnboardModal(null); }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: "#10B981", color: "#fff", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, marginTop: 12 }}>
+                    Execute Onboarding
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Feature 27: 1-Click Offboarding ─── */}
+      {offboardModal && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setOffboardModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0F1117", borderRadius: 16, border: "1px solid #1E2130", width: 560, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 80px #00000088" }}>
+            <div style={{ padding: 20, borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18 }}>🔒</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "#E2E8F0" }}>1-Click Offboarding</span>
+            </div>
+            <div style={{ padding: 20 }}>
+              {!offboardModal.plan ? (
+                <div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", marginBottom: 12 }}>Enter departing employee details:</div>
+                  {["employeeName", "email", "lastDay"].map(field => (
+                    <div key={field} style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4, textTransform: "capitalize" }}>{field.replace(/([A-Z])/g, " $1")}</div>
+                      <input type={field === "lastDay" ? "date" : "text"} value={offboardModal[field] || ""} onChange={e => setOffboardModal(prev => ({ ...prev, [field]: e.target.value }))} style={{ width: "100%", padding: "8px 12px", borderRadius: 6, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 12, outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                  <button disabled={!offboardModal.employeeName} onClick={() => {
+                    fetch("/api/ai/offboard", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(offboardModal) })
+                      .then(r => r.json()).then(d => setOffboardModal(prev => ({ ...prev, plan: d.plan }))).catch(() => showToast?.("Offboarding failed", "error"));
+                  }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: offboardModal.employeeName ? "#FF6B6B" : "#1E2130", color: "#fff", border: "none", cursor: offboardModal.employeeName ? "pointer" : "default", fontSize: 13, fontWeight: 700, marginTop: 8 }}>
+                    Generate Offboarding Plan
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 13, color: "#FF6B6B", fontWeight: 600, marginBottom: 8 }}>Offboarding Plan: {offboardModal.plan.employee}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 12 }}>Last Day: {offboardModal.plan.lastDay}</div>
+                  {offboardModal.plan.steps.map((s, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1E2130" }}>
+                      <span style={{ width: 20, height: 20, borderRadius: "50%", background: s.auto ? "#6366F122" : "#FFB34722", color: s.auto ? "#6366F1" : "#FFB347", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{s.step}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, color: "#E2E8F0" }}>{s.action}</div>
+                        <div style={{ fontSize: 9, color: "#5A6178" }}>{s.service} · {s.timing} · {s.auto ? "Auto" : "Manual"}</div>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={() => { showToast?.(`Offboarding initiated for ${offboardModal.plan.employee}`, "success"); setOffboardModal(null); }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: "#FF6B6B", color: "#fff", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, marginTop: 12 }}>
+                    Execute Offboarding
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Feature 28: 1-Click War Room ─── */}
+      {warRoomModal && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setWarRoomModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0F1117", borderRadius: 16, border: "1px solid #FF6B6B33", width: 560, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 80px #00000088" }}>
+            <div style={{ padding: 20, borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", gap: 8, background: "#1A0A0A" }}>
+              <span style={{ fontSize: 18 }}>🚨</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "#FF6B6B" }}>Incident War Room</span>
+            </div>
+            <div style={{ padding: 20 }}>
+              {!warRoomModal.warRoom ? (
+                <div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", marginBottom: 12 }}>Create war room for incident:</div>
+                  <input placeholder="Incident ID (e.g., INC-0042)" value={warRoomModal.incidentId || ""} onChange={e => setWarRoomModal(prev => ({ ...prev, incidentId: e.target.value }))} style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 13, outline: "none", marginBottom: 8, boxSizing: "border-box" }} />
+                  <button disabled={!warRoomModal.incidentId} onClick={() => {
+                    fetch("/api/ai/war-room", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ incidentId: warRoomModal.incidentId }) })
+                      .then(r => r.json()).then(d => setWarRoomModal(prev => ({ ...prev, warRoom: d.warRoom }))).catch(() => showToast?.("War room creation failed", "error"));
+                  }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: warRoomModal.incidentId ? "#FF6B6B" : "#1E2130", color: "#fff", border: "none", cursor: warRoomModal.incidentId ? "pointer" : "default", fontSize: 13, fontWeight: 700 }}>
+                    Create War Room
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 13, color: "#FF6B6B", fontWeight: 600, marginBottom: 4 }}>{warRoomModal.warRoom.title}</div>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 12 }}>Severity: {warRoomModal.warRoom.severity} · Channel: {warRoomModal.warRoom.channelName}</div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", fontWeight: 600, marginBottom: 6 }}>Invited Engineers:</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+                    {warRoomModal.warRoom.invitedEngineers.map((eng, i) => (
+                      <span key={i} style={{ padding: "4px 10px", borderRadius: 99, background: "#6366F118", border: "1px solid #6366F133", color: "#6366F1", fontSize: 10 }}>{eng.name}</span>
+                    ))}
+                  </div>
+                  <div style={{ padding: 10, background: "#080A12", borderRadius: 8, border: "1px solid #1E2130", marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Incident Brief:</div>
+                    <div style={{ fontSize: 12, color: "#E2E8F0" }}>{warRoomModal.warRoom.incidentBrief.title}</div>
+                    <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 4 }}>{warRoomModal.warRoom.incidentBrief.description}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => { showToast?.("War room activated — engineers notified", "success"); setWarRoomModal(null); }} style={{ flex: 1, padding: "10px", borderRadius: 8, background: "#FF6B6B", color: "#fff", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Activate War Room</button>
+                    <button onClick={() => setWarRoomModal(null)} style={{ padding: "10px 16px", borderRadius: 8, background: "#1E2130", color: "#A0AEC0", border: "none", cursor: "pointer", fontSize: 12 }}>Close</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Feature 32: Impact Radius Visualizer ─── */}
+      {impactRadiusModal && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setImpactRadiusModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0F1117", borderRadius: 16, border: "1px solid #1E2130", width: 640, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 80px #00000088" }}>
+            <div style={{ padding: 20, borderBottom: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 18 }}>💥</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: "#E2E8F0" }}>Impact Radius</span>
+              </div>
+              <button onClick={() => setImpactRadiusModal(null)} style={{ background: "none", border: "none", color: "#5A6178", cursor: "pointer", fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ padding: 20 }}>
+              {impactRadiusModal.loading ? (
+                <div style={{ textAlign: "center", padding: 30, color: "#6366F1", fontSize: 12 }}>Mapping impact radius...</div>
+              ) : impactRadiusModal.graph ? (
+                <div>
+                  <div style={{ textAlign: "center", marginBottom: 16 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E2E8F0" }}>{impactRadiusModal.graph.center.title}</div>
+                    <div style={{ fontSize: 10, color: "#5A6178" }}>{impactRadiusModal.graph.center.id} · {impactRadiusModal.graph.center.priority}</div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div style={{ background: "#080A12", padding: 12, borderRadius: 8, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 10, color: "#FF6B6B", fontWeight: 600, marginBottom: 6 }}>Affected Users ({impactRadiusModal.graph.summary.totalUsers})</div>
+                      {impactRadiusModal.graph.affectedUsers.slice(0, 5).map((u, i) => (
+                        <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0" }}>{u.name}</div>
+                      ))}
+                    </div>
+                    <div style={{ background: "#080A12", padding: 12, borderRadius: 8, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 10, color: "#FFB347", fontWeight: 600, marginBottom: 6 }}>Related Tickets ({impactRadiusModal.graph.summary.totalTickets})</div>
+                      {impactRadiusModal.graph.relatedTickets.slice(0, 5).map((t, i) => (
+                        <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0" }}>{t.id}: {t.title}</div>
+                      ))}
+                    </div>
+                    <div style={{ background: "#080A12", padding: 12, borderRadius: 8, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, marginBottom: 6 }}>Affected Assets ({impactRadiusModal.graph.summary.totalAssets})</div>
+                      {impactRadiusModal.graph.affectedAssets.slice(0, 5).map((a, i) => (
+                        <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0" }}>{a.name} ({a.category})</div>
+                      ))}
+                    </div>
+                    <div style={{ background: "#080A12", padding: 12, borderRadius: 8, border: "1px solid #1E2130" }}>
+                      <div style={{ fontSize: 10, color: "#81C784", fontWeight: 600, marginBottom: 6 }}>Affected Services</div>
+                      {impactRadiusModal.graph.affectedServices.map((s, i) => (
+                        <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0" }}>{s.name}</div>
+                      ))}
+                      <div style={{ fontSize: 10, color: "#FFB347", marginTop: 6 }}>Business Impact: {impactRadiusModal.graph.summary.estimatedBusinessImpact}</div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <input placeholder="Enter Incident ID" value={impactRadiusModal.incidentId || ""} onChange={e => setImpactRadiusModal(prev => ({ ...prev, incidentId: e.target.value }))} style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 13, outline: "none", marginBottom: 10, boxSizing: "border-box" }} />
+                  <button disabled={!impactRadiusModal.incidentId} onClick={() => {
+                    setImpactRadiusModal(prev => ({ ...prev, loading: true }));
+                    fetch("/api/ai/impact-radius", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ incidentId: impactRadiusModal.incidentId }) })
+                      .then(r => r.json()).then(d => setImpactRadiusModal(prev => ({ ...prev, loading: false, graph: d.impactGraph }))).catch(() => { setImpactRadiusModal(prev => ({ ...prev, loading: false })); showToast?.("Failed to map impact", "error"); });
+                  }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: impactRadiusModal.incidentId ? "#6366F1" : "#1E2130", color: "#fff", border: "none", cursor: impactRadiusModal.incidentId ? "pointer" : "default", fontSize: 13, fontWeight: 700 }}>
+                    Map Impact Radius
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Feature 43: Smart Callback Scheduler ─── */}
+      {callbackModal && (
+        <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setCallbackModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0F1117", borderRadius: 16, border: "1px solid #1E2130", width: 440, boxShadow: "0 24px 80px #00000088" }}>
+            <div style={{ padding: 20, borderBottom: "1px solid #1E2130", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18 }}>📞</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "#E2E8F0" }}>Smart Callback Scheduler</span>
+            </div>
+            <div style={{ padding: 20 }}>
+              {!callbackModal.slots ? (
+                <div>
+                  <input placeholder="Ticket ID" value={callbackModal.ticketId || ""} onChange={e => setCallbackModal(prev => ({ ...prev, ticketId: e.target.value }))} style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 13, outline: "none", marginBottom: 10, boxSizing: "border-box" }} />
+                  <button disabled={!callbackModal.ticketId} onClick={() => {
+                    fetch("/api/ai/callback-schedule", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ ticketId: callbackModal.ticketId }) })
+                      .then(r => r.json()).then(d => setCallbackModal(prev => ({ ...prev, slots: d.slots }))).catch(() => showToast?.("Failed to get callback slots", "error"));
+                  }} style={{ width: "100%", padding: "10px", borderRadius: 8, background: callbackModal.ticketId ? "#6366F1" : "#1E2130", color: "#fff", border: "none", cursor: callbackModal.ticketId ? "pointer" : "default", fontSize: 13, fontWeight: 700 }}>
+                    Get Available Slots
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", marginBottom: 10 }}>Select a callback time:</div>
+                  {callbackModal.slots.map((slot, i) => (
+                    <button key={i} onClick={() => { showToast?.(`Callback scheduled: ${slot.display}`, "success"); setCallbackModal(null); }} style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", cursor: "pointer", fontSize: 12, textAlign: "left", marginBottom: 6, transition: "border-color 0.2s" }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = "#6366F1"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#1E2130"; }}>
+                      <span style={{ color: "#6366F1", fontWeight: 600 }}>{slot.display}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

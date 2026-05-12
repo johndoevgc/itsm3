@@ -771,6 +771,132 @@ const [workloadLoading, setWorkloadLoading] = useState(false);
 const [correlationData, setCorrelationData] = useState(null);
 const [correlationLoading, setCorrelationLoading] = useState(false);
 
+// Feature 1: AI Autopilot
+const [autopilotStatus, setAutopilotStatus] = useState(null);
+const [autopilotOpen, setAutopilotOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/autopilot/status", { credentials: "include" })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setAutopilotStatus(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 36: AI Standup
+const [standupData, setStandupData] = useState(null);
+const [standupOpen, setStandupOpen] = useState(false);
+useEffect(() => {
+  if (!currentUser?.name) return;
+  fetch("/api/ai/standup", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ engineerName: currentUser.name }) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setStandupData(d); })
+    .catch(() => {});
+}, [currentUser?.name]);
+
+// Feature 11: Volume Forecast
+const [volumeForecast, setVolumeForecast] = useState(null);
+const [volumeForecastOpen, setVolumeForecastOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/forecast-volume", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setVolumeForecast(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 13: Recurring Issues
+const [recurringIssues, setRecurringIssues] = useState(null);
+const [recurringOpen, setRecurringOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/recurring-issues", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setRecurringIssues(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 15: Burnout Risk
+const [burnoutRisk, setBurnoutRisk] = useState(null);
+const [burnoutOpen, setBurnoutOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/burnout-risk", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setBurnoutRisk(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 37: Skill Gaps
+const [skillGaps, setSkillGaps] = useState(null);
+const [skillGapsOpen, setSkillGapsOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/skill-gaps", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setSkillGaps(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 45: Customer Health
+const [customerHealth, setCustomerHealth] = useState(null);
+const [customerHealthOpen, setCustomerHealthOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/customer-health", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setCustomerHealth(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 48: AI Performance Report
+const [perfReport, setPerfReport] = useState(null);
+const [perfReportOpen, setPerfReportOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/performance-report", { credentials: "include" })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setPerfReport(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 50: Config Recommendations
+const [configRecs, setConfigRecs] = useState(null);
+const [configRecsOpen, setConfigRecsOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/config-recommendations", { credentials: "include" })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setConfigRecs(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 14: Service Degradation Early Warning
+const [degradationWarnings, setDegradationWarnings] = useState(null);
+const [degradationOpen, setDegradationOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/service-degradation", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setDegradationWarnings(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 49: AI Self-Monitor
+const [selfMonitor, setSelfMonitor] = useState(null);
+const [selfMonitorOpen, setSelfMonitorOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/self-monitor", { credentials: "include" })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setSelfMonitor(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 39: Peer Learning
+const [peerLearning, setPeerLearning] = useState(null);
+const [peerLearningOpen, setPeerLearningOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/peer-learning", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setPeerLearning(d); })
+    .catch(() => {});
+}, []);
+
+// Shift Handoff
+const [shiftHandoff, setShiftHandoff] = useState(null);
+const [shiftHandoffLoading, setShiftHandoffLoading] = useState(false);
+const [shiftHandoffOpen, setShiftHandoffOpen] = useState(false);
+
 // (#2 follow-up, 2026-05-03) live system status from /api/status — replaces
 // the hardcoded System Health array. Refreshes every 60s. Falls back to the
 // static placeholders if the fetch fails.
@@ -1334,27 +1460,77 @@ return (
         </div>
       </div>}
 
+      {/* Duplicate / Mass Incident Detection */}
+      {(() => {
+        const oneHourAgo = Date.now() - 3600000;
+        const recentOpen = incidents.filter(i => !["Resolved", "Closed"].includes(i.status) && new Date(i.createdAt || 0).getTime() > oneHourAgo);
+        const wordCounts = {};
+        recentOpen.forEach(i => {
+          const words = (i.title || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter(w => w.length > 3);
+          words.forEach(w => { wordCounts[w] = (wordCounts[w] || []); if (!wordCounts[w].includes(i.id)) wordCounts[w].push(i.id); });
+        });
+        const clusters = Object.entries(wordCounts).filter(([, ids]) => ids.length >= 3).sort((a, b) => b[1].length - a[1].length).slice(0, 2);
+        if (clusters.length === 0) return null;
+        return clusters.map(([keyword, ids]) => {
+          const clusterIncidents = recentOpen.filter(i => ids.includes(i.id));
+          const topTitle = clusterIncidents[0]?.title || keyword;
+          return (
+            <div key={keyword} style={{ marginBottom: 12, padding: "12px 16px", borderRadius: 8, background: "linear-gradient(135deg, #FF6B6B08, #FFB34708)", border: "1px solid #FFB34744", animation: "aiBorderPulse 2s ease-in-out infinite" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 14, animation: "iconBounce 1.5s ease-in-out infinite" }}>🔗</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, color: "#FFB347", fontWeight: 700 }}>Possible Mass Incident — {ids.length} similar tickets in the last hour</div>
+                  <div style={{ fontSize: 11, color: "#A0AEC0", marginTop: 2 }}>"{topTitle.substring(0, 60)}{topTitle.length > 60 ? "..." : ""}"</div>
+                </div>
+                <span style={{ fontSize: 9, padding: "3px 8px", borderRadius: 6, background: "#FF6B6B22", color: "#FF6B6B", fontWeight: 700 }}>{ids.length} tickets</span>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => {
+                  const now = new Date().toISOString();
+                  const resolution = `Mass incident resolved. Root cause: ${keyword}-related service disruption affecting ${ids.length} users. All linked tickets resolved together.`;
+                  setIncidents(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: "Resolved", resolution, resolvedAt: now, linkedIncidents: ids.filter(x => x !== i.id), activityLog: [...(i.activityLog || []), { id: `AL-MASS-${Date.now().toString(36)}`, type: "resolution", user: currentUser?.name || "Engineer", time: now, detail: `Bulk-resolved as part of mass incident (${ids.length} tickets, keyword: ${keyword})` }] } : i));
+                  showToast?.(`Resolved ${ids.length} linked tickets`, "success");
+                }}
+                  style={{ padding: "5px 12px", borderRadius: 6, background: "#10B98118", border: "1px solid #10B98144", color: "#10B981", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
+                  ✓ Link & Resolve All ({ids.length})
+                </button>
+                <button onClick={() => setActiveModule("incidents")}
+                  style={{ padding: "5px 12px", borderRadius: 6, background: "#6366F112", border: "1px solid #6366F133", color: "#6366F1", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
+                  View Tickets
+                </button>
+              </div>
+            </div>
+          );
+        });
+      })()}
+
       {/* Team Performance */}
       {cardVisibility.teamWorkload.on && <div style={{ marginBottom: 20 }}>
         {/* Team Workload */}
         <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 20 }}>
           <h3 onClick={() => setActiveModule("reports")} style={{ margin: "0 0 16px", fontSize: 13, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
             onMouseEnter={e => e.currentTarget.style.color = "#06B6D4"} onMouseLeave={e => e.currentTarget.style.color = "#E8ECF4"}>
-            <span style={{ color: "#06B6D4" }}>👥</span> Team Workload & Performance <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Report →</span>
+            <span style={{ color: "#06B6D4" }}>👥</span> Team Workload & Performance
+            <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, background: "#10B98122", border: "1px solid #10B98144", color: "#10B981", fontWeight: 600, marginLeft: 8, animation: "aiBreathe 4s ease-in-out infinite" }}>⚡ Smart Routing</span>
+            <span style={{ fontSize: 10, color: "#5A617866", marginLeft: "auto" }}>Report →</span>
           </h3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-            {USERS.filter(u => u.rbacRole !== "End User" && u.rbacRole !== "Read Only").map(user => {
+            {(users.length > 0 ? users : USERS).filter(u => u.rbacRole !== "End User" && u.rbacRole !== "Read Only").map((user, index) => {
               const assigned = incidents.filter(i => i.assignee === user.name && i.status !== "Resolved" && i.status !== "Closed").length;
               const resolved = incidents.filter(i => i.assignee === user.name && i.status === "Resolved").length;
               const load = Math.min(100, assigned * 25);
               const loadColor = load >= 75 ? "#FF6B6B" : load >= 50 ? "#FFB347" : "#4CAF50";
+              const uColor = user.color || "#6366F1";
               return (
-                <div key={user.id} onClick={() => setActiveModule("incidents")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer", transition: "background 0.15s" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "#6366F108"}
+                <div key={user.id || user.name} onClick={() => setActiveModule("incidents")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0A0C14", borderRadius: 6, border: "1px solid #1E213044", cursor: "pointer", transition: "background 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.background = `${uColor}08`}
                   onMouseLeave={e => e.currentTarget.style.background = "#0A0C14"}>
-                  <div style={{ width: 28, height: 28, borderRadius: 6, background: "linear-gradient(135deg, #6366F1, #06B6D4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{user.avatar}</div>
+                  <div style={{ position: "relative", width: 34, height: 38, flexShrink: 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: `linear-gradient(135deg, ${uColor}CC, ${uColor}66)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", border: `2px solid ${uColor}88`, animation: "aiBreathe 3s ease-in-out infinite", animationDelay: `${index * 0.4}s` }}>{user.avatar || user.name?.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
+                    {user.badge && <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", padding: "1px 5px", borderRadius: 6, background: `${uColor}DD`, color: "#fff", fontSize: 7, fontWeight: 700, whiteSpace: "nowrap", border: "1px solid #0F111788" }}>{user.badge}</div>}
+                  </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{user.name}</div>
+                    <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>{user.name} {user.team && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 4, background: `${uColor}18`, color: uColor, fontWeight: 600 }}>{user.team}</span>}</div>
                     <div style={{ fontSize: 10, color: "#5A6178" }}>{user.rbacRole}</div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -1371,6 +1547,156 @@ return (
               );
             })}
           </div>
+        </div>
+      </div>}
+
+      {/* Feature 36: My Morning Brief */}
+      {standupData && (
+        <div style={{ background: "#12141E", borderRadius: 10, padding: 16, border: "1px solid #06B6D433", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: standupOpen ? 12 : 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 14 }}>☀️</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#06B6D4" }}>My Morning Brief</span>
+              <span style={{ fontSize: 10, color: "#A0AEC0" }}>{standupData.today?.openCount || 0} open | {standupData.slaRisks?.length || 0} at-risk</span>
+            </div>
+            <button onClick={() => setStandupOpen(!standupOpen)} style={{ background: "#06B6D412", border: "1px solid #06B6D433", borderRadius: 6, color: "#06B6D4", cursor: "pointer", padding: "4px 10px", fontSize: 10, fontWeight: 600 }}>
+              {standupOpen ? "Collapse" : "Expand"}
+            </button>
+          </div>
+          {standupOpen && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
+              <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, border: "1px solid #1E2130" }}>
+                <div style={{ fontSize: 9, color: "#10B981", fontWeight: 600, marginBottom: 6, textTransform: "uppercase" }}>Yesterday ({standupData.yesterday?.resolved || 0} resolved)</div>
+                {(standupData.yesterday?.tickets || []).slice(0, 3).map((t, i) => (
+                  <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: "#10B981", marginRight: 4 }}>✓</span> {t.title || t.id}</div>
+                ))}
+                {(standupData.yesterday?.resolved || 0) === 0 && <div style={{ fontSize: 10, color: "#5A6178" }}>No resolutions yesterday</div>}
+              </div>
+              <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, border: "1px solid #1E2130" }}>
+                <div style={{ fontSize: 9, color: "#FFB347", fontWeight: 600, marginBottom: 6, textTransform: "uppercase" }}>Today's Queue (priority order)</div>
+                {(standupData.today?.queue || []).slice(0, 5).map((t, i) => (
+                  <div key={i} style={{ fontSize: 10, color: "#A0AEC0", padding: "2px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: t.priority === "Sev-A" ? "#FF6B6B" : t.priority === "Sev-B" ? "#FFB347" : "#06B6D4", marginRight: 4 }}>●</span> {t.title || t.id}</div>
+                ))}
+              </div>
+              {standupData.slaRisks?.length > 0 && (
+                <div style={{ gridColumn: "1 / -1", background: "#FF6B6B08", borderRadius: 6, padding: 8, border: "1px solid #FF6B6B33" }}>
+                  <div style={{ fontSize: 9, color: "#FF6B6B", fontWeight: 600, marginBottom: 4 }}>⚠ SLA AT-RISK</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {standupData.slaRisks.map((t, i) => (
+                      <span key={i} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#FF6B6B12", color: "#FF6B6B", border: "1px solid #FF6B6B22" }}>{t.id} ({t.priority})</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {standupData.suggestedFocus && (
+                <div style={{ gridColumn: "1 / -1", fontSize: 10, color: "#6366F1", fontWeight: 600 }}>
+                  💡 Focus: {standupData.suggestedFocus}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Feature 1: AI Autopilot Activity Feed */}
+      {autopilotStatus && (
+        <div style={{ background: "#12141E", borderRadius: 10, padding: 16, border: "1px solid #10B98133", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: autopilotOpen ? 12 : 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 14, animation: "iconBounce 2s ease-in-out infinite" }}>🤖</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#10B981" }}>AI Autopilot</span>
+              <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#10B98118", color: "#10B981", fontWeight: 600 }}>ACTIVE</span>
+              {autopilotStatus.stats && (
+                <span style={{ fontSize: 10, color: "#A0AEC0", marginLeft: 8 }}>
+                  {autopilotStatus.stats.autoTriaged} triaged | {autopilotStatus.stats.autoResolved} resolved autonomously
+                </span>
+              )}
+            </div>
+            <button onClick={() => setAutopilotOpen(!autopilotOpen)} style={{ background: "#10B98112", border: "1px solid #10B98133", borderRadius: 6, color: "#10B981", cursor: "pointer", padding: "4px 10px", fontSize: 10, fontWeight: 600 }}>
+              {autopilotOpen ? "Collapse" : "Details"}
+            </button>
+          </div>
+          {autopilotOpen && (
+            <div style={{ marginTop: 8 }}>
+              {autopilotStatus.lastRun && (
+                <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, marginBottom: 8, border: "1px solid #1E2130" }}>
+                  <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 6 }}>Last Run: {new Date(autopilotStatus.lastRun.startedAt).toLocaleString()} (Week {autopilotStatus.lastRun.rolloutWeek})</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {(autopilotStatus.lastRun.steps || []).map((step, i) => (
+                      <div key={i} style={{ padding: "3px 8px", borderRadius: 4, fontSize: 9, fontWeight: 600, background: step.ok === false ? "#FF6B6B15" : step.skipped ? "#FFB34715" : "#10B98115", color: step.ok === false ? "#FF6B6B" : step.skipped ? "#FFB347" : "#10B981", border: `1px solid ${step.ok === false ? "#FF6B6B33" : step.skipped ? "#FFB34733" : "#10B98133"}` }}>
+                        {step.step.replace("week", "W").replace(/_/g, " ")}
+                        {step.ok === false ? " ✗" : step.skipped ? " ⊘" : " ✓"}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {autopilotStatus.recentRuns?.length > 1 && (
+                <div style={{ fontSize: 10, color: "#5A6178" }}>
+                  {autopilotStatus.totalRuns} total runs | Recent: {autopilotStatus.recentRuns.slice(1, 4).map(r => new Date(r.startedAt).toLocaleTimeString()).join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Shift Handoff Summary */}
+      {cardVisibility.teamWorkload.on && <div style={{ marginBottom: 20 }}>
+        <div style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: shiftHandoffOpen ? 14 : 0 }}>
+            <h4 style={{ margin: 0, fontSize: 12, color: "#FFB347", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+              🔄 Shift Handoff Briefing
+            </h4>
+            <button disabled={shiftHandoffLoading} onClick={async () => {
+              if (shiftHandoff && shiftHandoffOpen) { setShiftHandoffOpen(false); return; }
+              if (shiftHandoff) { setShiftHandoffOpen(true); return; }
+              setShiftHandoffLoading(true);
+              try {
+                const r = await fetch("/api/ai/shift-handoff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ engineer: currentUser?.name || "Engineer", incidents: incidents.filter(i => i.status !== "Closed").slice(0, 30).map(i => ({ id: i.id, title: i.title, priority: i.priority, status: i.status, assignee: i.assignee, category: i.category, createdAt: i.createdAt, slaBreached: i.slaBreached })) }) });
+                const d = await r.json();
+                setShiftHandoff(d);
+                setShiftHandoffOpen(true);
+              } catch { showToast("Shift handoff unavailable", "error"); }
+              setShiftHandoffLoading(false);
+            }} style={{ ...btnStyle("#FFB347"), fontSize: 9, padding: "4px 12px" }}>
+              {shiftHandoffLoading ? "⏳ Generating..." : shiftHandoff ? (shiftHandoffOpen ? "▲ Hide" : "▼ Show") : "📋 Generate Briefing"}
+            </button>
+          </div>
+          {shiftHandoffOpen && shiftHandoff && (
+            <div style={{ display: "grid", gap: 10 }}>
+              {shiftHandoff.immediateActions?.length > 0 && (
+                <div style={{ padding: 10, borderRadius: 6, background: "#FF6B6B08", border: "1px solid #FF6B6B22" }}>
+                  <div style={{ fontSize: 10, color: "#FF6B6B", fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>🚨 Immediate Actions</div>
+                  {shiftHandoff.immediateActions.map((a, i) => <div key={i} style={{ fontSize: 11, color: "#E8ECF4", marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid #FF6B6B44" }}>{a}</div>)}
+                </div>
+              )}
+              {shiftHandoff.slaWarnings?.length > 0 && (
+                <div style={{ padding: 10, borderRadius: 6, background: "#FFB34708", border: "1px solid #FFB34722" }}>
+                  <div style={{ fontSize: 10, color: "#FFB347", fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>⏱ SLA Warnings</div>
+                  {shiftHandoff.slaWarnings.map((w, i) => <div key={i} style={{ fontSize: 11, color: "#E8ECF4", marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid #FFB34744" }}>{w}</div>)}
+                </div>
+              )}
+              {shiftHandoff.myTicketsSummary?.length > 0 && (
+                <div style={{ padding: 10, borderRadius: 6, background: "#6366F108", border: "1px solid #6366F122" }}>
+                  <div style={{ fontSize: 10, color: "#6366F1", fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>📋 Ticket Summary</div>
+                  {shiftHandoff.myTicketsSummary.map((t, i) => <div key={i} style={{ fontSize: 11, color: "#C4CAD6", marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid #6366F144" }}>{t}</div>)}
+                </div>
+              )}
+              {shiftHandoff.recommendation && (
+                <div style={{ padding: 10, borderRadius: 6, background: "#10B98108", border: "1px solid #10B98122" }}>
+                  <div style={{ fontSize: 10, color: "#10B981", fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>💡 Recommendation</div>
+                  <div style={{ fontSize: 11, color: "#E8ECF4" }}>{shiftHandoff.recommendation}</div>
+                </div>
+              )}
+              {shiftHandoff.unacknowledgedAlerts?.length > 0 && (
+                <div style={{ padding: 10, borderRadius: 6, background: "#EC489908", border: "1px solid #EC489922" }}>
+                  <div style={{ fontSize: 10, color: "#EC4899", fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>🔔 Unacknowledged Alerts</div>
+                  {shiftHandoff.unacknowledgedAlerts.map((a, i) => <div key={i} style={{ fontSize: 11, color: "#E8ECF4", marginBottom: 4, paddingLeft: 10, borderLeft: "2px solid #EC489944" }}>{a}</div>)}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>}
 
@@ -3139,6 +3465,265 @@ return (
         </div>
       </div>
     )}
+
+    {/* ─── Feature 14: Service Degradation Early Warning ─── */}
+    {degradationWarnings && degradationWarnings.warnings && degradationWarnings.warnings.length > 0 && (
+      <div style={{ background: "#1A0A0A", borderRadius: 12, border: "1px solid #FF6B6B33", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setDegradationOpen(!degradationOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🔥</span>
+            <span style={{ fontWeight: 700, color: "#FF6B6B", fontSize: 13 }}>Service Degradation Alert</span>
+            <span style={{ background: "#FF6B6B22", color: "#FF6B6B", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{degradationWarnings.warnings.length} warning{degradationWarnings.warnings.length > 1 ? "s" : ""}</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{degradationOpen ? "▲" : "▼"}</span>
+        </div>
+        {degradationOpen && degradationWarnings.warnings.map((w, i) => (
+          <div key={i} style={{ marginTop: 10, padding: 10, background: "#0F1117", borderRadius: 8, border: `1px solid ${w.severity === "critical" ? "#FF6B6B44" : w.severity === "high" ? "#FFB34744" : "#6366F144"}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 600, color: "#E2E8F0", fontSize: 12 }}>{w.service}</span>
+              <span style={{ background: w.severity === "critical" ? "#FF6B6B22" : w.severity === "high" ? "#FFB34722" : "#6366F122", color: w.severity === "critical" ? "#FF6B6B" : w.severity === "high" ? "#FFB347" : "#6366F1", padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600, textTransform: "uppercase" }}>{w.severity}</span>
+            </div>
+            <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 4 }}>{w.ticketCount} related tickets · {w.affectedUsers} users affected</div>
+            <div style={{ fontSize: 10, color: "#81C784", marginTop: 6, background: "#0D2D1A", padding: 6, borderRadius: 4 }}>{w.suggestedComms}</div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 11: Volume Forecast ─── */}
+    {volumeForecast && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setVolumeForecastOpen(!volumeForecastOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>📊</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Ticket Volume Forecast</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{volumeForecastOpen ? "▲" : "▼"}</span>
+        </div>
+        {volumeForecastOpen && volumeForecast.forecast && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ background: "#6366F110", padding: "8px 14px", borderRadius: 8, border: "1px solid #6366F133" }}>
+                <div style={{ fontSize: 9, color: "#5A6178" }}>Tomorrow</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: "#6366F1" }}>{volumeForecast.forecast.nextDay ?? "—"}</div>
+              </div>
+              <div style={{ background: "#EC489910", padding: "8px 14px", borderRadius: 8, border: "1px solid #EC489933" }}>
+                <div style={{ fontSize: 9, color: "#5A6178" }}>Next Week</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: "#EC4899" }}>{volumeForecast.forecast.nextWeek ?? "—"}</div>
+              </div>
+            </div>
+            {volumeForecast.forecast.topCategory && <div style={{ fontSize: 10, color: "#A0AEC0", marginTop: 8 }}>Top category: <span style={{ color: "#FFB347" }}>{volumeForecast.forecast.topCategory}</span></div>}
+            {volumeForecast.forecast.staffingSuggestion && <div style={{ fontSize: 10, color: "#81C784", marginTop: 4 }}>{volumeForecast.forecast.staffingSuggestion}</div>}
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* ─── Feature 13: Recurring Issues ─── */}
+    {recurringIssues && recurringIssues.recurring && recurringIssues.recurring.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setRecurringOpen(!recurringOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🔄</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Recurring Issues</span>
+            <span style={{ background: "#FFB34722", color: "#FFB347", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{recurringIssues.recurring.length}</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{recurringOpen ? "▲" : "▼"}</span>
+        </div>
+        {recurringOpen && recurringIssues.recurring.slice(0, 8).map((r, i) => (
+          <div key={i} style={{ marginTop: 8, padding: 8, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{r.user || r.requester || "Unknown"}</div>
+              <div style={{ fontSize: 9, color: "#5A6178" }}>{r.category || "General"} · {r.count || 0} tickets in 30d</div>
+            </div>
+            <span style={{ background: "#FFB34718", color: "#FFB347", padding: "2px 8px", borderRadius: 4, fontSize: 9 }}>Recurring</span>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 15: Burnout Risk ─── */}
+    {burnoutRisk && burnoutRisk.engineers && burnoutRisk.engineers.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setBurnoutOpen(!burnoutOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🫠</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Burnout Risk Monitor</span>
+            {burnoutRisk.engineers.some(e => (e.riskScore || 0) > 70) && <span style={{ background: "#FF6B6B22", color: "#FF6B6B", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>At Risk</span>}
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{burnoutOpen ? "▲" : "▼"}</span>
+        </div>
+        {burnoutOpen && burnoutRisk.engineers.map((eng, i) => {
+          const risk = eng.riskScore || 0;
+          const color = risk > 70 ? "#FF6B6B" : risk > 40 ? "#FFB347" : "#81C784";
+          return (
+            <div key={i} style={{ marginTop: 8, padding: 8, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{eng.name || eng.engineer}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color }}>{risk}%</span>
+              </div>
+              <div style={{ marginTop: 4, height: 4, background: "#1E2130", borderRadius: 2 }}>
+                <div style={{ height: 4, borderRadius: 2, background: color, width: `${Math.min(risk, 100)}%`, transition: "width 0.5s" }} />
+              </div>
+              {eng.suggestion && <div style={{ fontSize: 9, color: "#5A6178", marginTop: 4 }}>{eng.suggestion}</div>}
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    {/* ─── Feature 37: Skill Gaps ─── */}
+    {skillGaps && skillGaps.gaps && skillGaps.gaps.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setSkillGapsOpen(!skillGapsOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🎯</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Skill Gap Analysis</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{skillGapsOpen ? "▲" : "▼"}</span>
+        </div>
+        {skillGapsOpen && skillGaps.gaps.slice(0, 8).map((g, i) => (
+          <div key={i} style={{ marginTop: 8, padding: 8, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130" }}>
+            <div style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{g.engineer}</div>
+            <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>Category: <span style={{ color: "#FFB347" }}>{g.category}</span> · {g.avgTime || "—"} avg resolution vs team {g.teamAvg || "—"}</div>
+            {g.recommendation && <div style={{ fontSize: 9, color: "#6366F1", marginTop: 2 }}>{g.recommendation}</div>}
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 45: Customer Health ─── */}
+    {customerHealth && customerHealth.customers && customerHealth.customers.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setCustomerHealthOpen(!customerHealthOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>💚</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Customer Health Scores</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{customerHealthOpen ? "▲" : "▼"}</span>
+        </div>
+        {customerHealthOpen && customerHealth.customers.slice(0, 10).map((c, i) => {
+          const score = c.healthScore || c.score || 0;
+          const color = score >= 80 ? "#81C784" : score >= 50 ? "#FFB347" : "#FF6B6B";
+          return (
+            <div key={i} style={{ marginTop: 8, padding: 8, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{c.name || c.customer || c.email}</div>
+                <div style={{ fontSize: 9, color: "#5A6178" }}>{c.ticketCount || 0} tickets · {c.avgSatisfaction || "—"} CSAT</div>
+              </div>
+              <span style={{ fontSize: 14, fontWeight: 700, color }}>{score}</span>
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    {/* ─── Feature 39: Peer Learning ─── */}
+    {peerLearning && peerLearning.suggestions && peerLearning.suggestions.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setPeerLearningOpen(!peerLearningOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🤝</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Peer Learning</span>
+            <span style={{ background: "#6366F122", color: "#6366F1", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{peerLearning.suggestions.length} suggestion{peerLearning.suggestions.length > 1 ? "s" : ""}</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{peerLearningOpen ? "▲" : "▼"}</span>
+        </div>
+        {peerLearningOpen && peerLearning.suggestions.slice(0, 6).map((s, i) => (
+          <div key={i} style={{ marginTop: 8, padding: 8, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130" }}>
+            <div style={{ fontSize: 10, color: "#81C784" }}>Resolved: <span style={{ color: "#E2E8F0" }}>{s.resolvedTicket.title}</span> by {s.resolvedTicket.resolvedBy}</div>
+            <div style={{ fontSize: 10, color: "#FFB347", marginTop: 2 }}>Could help: <span style={{ color: "#E2E8F0" }}>{s.openTicket.title}</span> ({s.openTicket.assignedTo})</div>
+            <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{s.matchReason}</div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 48: AI Performance Report ─── */}
+    {perfReport && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setPerfReportOpen(!perfReportOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>📈</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>AI Performance Report</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{perfReportOpen ? "▲" : "▼"}</span>
+        </div>
+        {perfReportOpen && perfReport.report && (
+          <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {[
+              { label: "Triage Accuracy", value: perfReport.report.triageAccuracy ?? "—", color: "#81C784" },
+              { label: "Auto-Resolved", value: perfReport.report.autoResolved ?? "—", color: "#6366F1" },
+              { label: "Time Saved (hrs)", value: perfReport.report.timeSaved ?? "—", color: "#EC4899" },
+              { label: "KB Generated", value: perfReport.report.kbGenerated ?? "—", color: "#FFB347" },
+              { label: "Override Rate", value: perfReport.report.overrideRate ?? "—", color: "#FF6B6B" },
+              { label: "Total AI Actions", value: perfReport.report.totalActions ?? "—", color: "#64B5F6" },
+            ].map((m, i) => (
+              <div key={i} style={{ background: "#080A12", padding: 10, borderRadius: 8, textAlign: "center" }}>
+                <div style={{ fontSize: 8, color: "#5A6178", textTransform: "uppercase" }}>{m.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: m.color, marginTop: 2 }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* ─── Feature 49: AI Self-Monitor ─── */}
+    {selfMonitor && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: `1px solid ${selfMonitor.healthStatus === "degraded" ? "#FF6B6B44" : selfMonitor.healthStatus === "warning" ? "#FFB34744" : "#1E2130"}`, padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setSelfMonitorOpen(!selfMonitorOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🩺</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>AI Health Monitor</span>
+            <span style={{ background: selfMonitor.healthStatus === "healthy" ? "#81C78422" : selfMonitor.healthStatus === "warning" ? "#FFB34722" : "#FF6B6B22", color: selfMonitor.healthStatus === "healthy" ? "#81C784" : selfMonitor.healthStatus === "warning" ? "#FFB347" : "#FF6B6B", borderRadius: 99, padding: "2px 8px", fontSize: 10, fontWeight: 600, textTransform: "uppercase" }}>{selfMonitor.healthStatus}</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{selfMonitorOpen ? "▲" : "▼"}</span>
+        </div>
+        {selfMonitorOpen && (
+          <div style={{ marginTop: 10 }}>
+            {selfMonitor.anomalies && selfMonitor.anomalies.length > 0 ? selfMonitor.anomalies.map((a, i) => (
+              <div key={i} style={{ marginTop: 6, padding: 8, background: a.severity === "high" ? "#1A0A0A" : "#0F1117", borderRadius: 6, border: `1px solid ${a.severity === "high" ? "#FF6B6B33" : "#FFB34733"}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{a.metric}</span>
+                  <span style={{ fontSize: 10, color: a.severity === "high" ? "#FF6B6B" : "#FFB347" }}>{a.change || a.value}</span>
+                </div>
+                <div style={{ fontSize: 9, color: "#A0AEC0", marginTop: 2 }}>{a.message}</div>
+              </div>
+            )) : <div style={{ fontSize: 10, color: "#81C784", textAlign: "center", padding: 10 }}>All AI systems operating normally</div>}
+            {selfMonitor.metrics && (
+              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 9, color: "#5A6178" }}>
+                <div>This week: {selfMonitor.metrics.thisWeek?.triages || 0} triages, {selfMonitor.metrics.thisWeek?.overrides || 0} overrides</div>
+                <div>Last week: {selfMonitor.metrics.lastWeek?.triages || 0} triages, {selfMonitor.metrics.lastWeek?.overrides || 0} overrides</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* ─── Feature 50: Config Recommendations ─── */}
+    {configRecs && configRecs.recommendations && configRecs.recommendations.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setConfigRecsOpen(!configRecsOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>⚙️</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Configuration Optimizer</span>
+            <span style={{ background: "#6366F122", color: "#6366F1", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{configRecs.recommendations.length}</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{configRecsOpen ? "▲" : "▼"}</span>
+        </div>
+        {configRecsOpen && configRecs.recommendations.map((r, i) => (
+          <div key={i} style={{ marginTop: 8, padding: 10, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130" }}>
+            <div style={{ fontSize: 11, color: "#6366F1", fontWeight: 600 }}>{r.setting}</div>
+            <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>Current: <span style={{ color: "#FF6B6B" }}>{r.current}</span> → Suggested: <span style={{ color: "#81C784" }}>{r.suggested}</span></div>
+            <div style={{ fontSize: 9, color: "#A0AEC0", marginTop: 4 }}>{r.reason}</div>
+            <div style={{ fontSize: 9, color: "#81C784", marginTop: 2 }}>Impact: {r.impact}</div>
+          </div>
+        ))}
+      </div>
+    )}
+
     {/* ─── AI Sentiment Analysis Widget ─── */}
     <SentimentAnalysisWidget incidents={incidents} />
 

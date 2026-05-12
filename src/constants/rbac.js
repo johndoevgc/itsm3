@@ -37,6 +37,46 @@ export const ADMIN_EMAILS = [
   "hlaing@vgctechnology.com",
 ];
 
-export const USERS = [];
+// ─── Team Roster ────────────────────────────────────────────────────────
+export const TEAM_ROSTER = [
+  { id: "zq1", name: "Zhi Qing", email: "zhiqing@vgcsg.com", rbacRole: "L1 Support Engineer", team: "Helpdesk", badge: "Ticket Manager", specialty: ["general", "triage"], color: "#06B6D4", avatar: "ZQ" },
+  { id: "ev1", name: "Evan", email: "evan@vgcsg.com", rbacRole: "L2 Support Engineer", team: "Security", badge: "Security Specialist", specialty: ["security", "entra", "identity"], color: "#FF6B6B", avatar: "EV" },
+  { id: "ad1", name: "Adrian", email: "adrian@vgcsg.com", rbacRole: "L1 Support Engineer", team: "CSE", badge: "Customer Success", specialty: ["customer", "onboarding", "cse"], color: "#81C784", avatar: "AD" },
+  { id: "hm1", name: "Hamadi", email: "hamadi@vgcsg.com", rbacRole: "Service Desk Lead", team: "Lead", badge: "Tech Lead", specialty: ["escalation", "review", "all"], color: "#EC4899", avatar: "HM" },
+  { id: "aw1", name: "Adrian Wong", email: "adrianwong@vgcsg.com", rbacRole: "Network Engineer", team: "Cloud", badge: "Cloud Specialist", specialty: ["cloud", "azure", "m365", "entra"], color: "#6366F1", avatar: "AW" },
+  { id: "jl1", name: "Jia Liang", email: "jialiang@vgcsg.com", rbacRole: "L1 Support Engineer", team: "Helpdesk", badge: "Ticket Manager", specialty: ["general", "triage"], color: "#FFB347", avatar: "JL" },
+  { id: "ch1", name: "Christopher", email: "christopher@vgcsg.com", rbacRole: "Network Engineer", team: "Infra", badge: "Network Monitor", specialty: ["network", "infrastructure", "monitoring"], color: "#26A69A", avatar: "CH" },
+  { id: "et1", name: "Ethan", email: "ethan@vgcsg.com", rbacRole: "L1 Support Engineer", team: "Helpdesk", badge: "Ticket Manager", specialty: ["general", "triage"], color: "#AB47BC", avatar: "ET" },
+  { id: "el1", name: "Elmo", email: "elmo@vgcsg.com", rbacRole: "L2 Support Engineer", team: "SLA", badge: "Incident Response", specialty: ["sla", "critical", "response"], color: "#F44336", avatar: "EL" },
+];
+
+export const USERS = TEAM_ROSTER;
+
+// ─── Specialty Routing Map ──────────────────────────────────────────────
+export const SPECIALTY_ROUTING = {
+  "Security": ["Evan", "Elmo"],
+  "Access/Identity": ["Evan", "Adrian Wong"],
+  "Identity & Access": ["Evan", "Adrian Wong"],
+  "Cloud": ["Adrian Wong"],
+  "Cloud Services": ["Adrian Wong"],
+  "Azure": ["Adrian Wong"],
+  "M365": ["Adrian Wong", "Evan"],
+  "Entra ID": ["Adrian Wong", "Evan"],
+  "Network": ["Christopher"],
+  "Infrastructure": ["Christopher"],
+  "Email": ["Adrian Wong", "Zhi Qing"],
+  "Software": ["Zhi Qing", "Jia Liang", "Ethan"],
+  "Hardware": ["Jia Liang", "Ethan"],
+  "Printing": ["Ethan", "Jia Liang"],
+  "End User Computing": ["Zhi Qing", "Jia Liang"],
+  "Customer Onboarding": ["Adrian"],
+  "General": ["Zhi Qing", "Jia Liang", "Ethan"],
+};
+
+export const ESCALATION_CHAIN = {
+  lead: "Hamadi",
+  slaResponse: "Elmo",
+  criticalIncident: ["Elmo", "Hamadi"],
+};
 
 export const INITIAL_CUSTOMERS = [];

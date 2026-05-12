@@ -408,6 +408,14 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
   const [showQuickForm, setShowQuickForm] = useState(false);
   const [qf, setQf] = useState({ title: "", description: "", urgency: "Standard", contactMethod: "Portal" });
   const [qfSubmitting, setQfSubmitting] = useState(false);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceTicket, setVoiceTicket] = useState(null);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const [selfServiceMode, setSelfServiceMode] = useState("browse");
+  const [botQuery, setBotQuery] = useState("");
+  const [botResponse, setBotResponse] = useState(null);
+  const [botLoading, setBotLoading] = useState(false);
   const userEmail = currentUser.email || currentUser.name;
   const myIncidents = (incidents || []).filter(i => i.reporterEmail === userEmail || i.reporter === currentUser.name);
   const myRequests = (requests || []).filter(r => r.requester === currentUser.name || r.requesterEmail === userEmail);
@@ -459,6 +467,21 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
         <button style={{ ...btnStyle(showQuickForm ? "#333" : "#FF6B6B"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => setShowQuickForm(!showQuickForm)}>{showQuickForm ? "✕ Cancel" : "🎫 Report an Issue"}</button>
         <button style={{ ...btnStyle("#6366F1"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => setPortalTab("catalog")}>📋 Submit a Request</button>
         <button style={{ ...btnStyle("#06B6D4"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => setPortalTab("chat")}>💬 Chat with AI</button>
+        <button style={{ ...btnStyle(voiceListening ? "#FF6B6B" : "#10B981"), padding: "10px 20px", fontSize: 13, fontWeight: 700 }} onClick={() => {
+          if (voiceListening) { setVoiceListening(false); return; }
+          if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) { showToast?.("Speech recognition not supported in this browser", "error"); return; }
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          const recognition = new SpeechRecognition();
+          recognition.continuous = false; recognition.interimResults = true; recognition.lang = "en-US";
+          setVoiceListening(true); setVoiceTranscript(""); setVoiceTicket(null);
+          recognition.onresult = (event) => { const t = Array.from(event.results).map(r => r[0].transcript).join(""); setVoiceTranscript(t); };
+          recognition.onend = () => {
+            setVoiceListening(false);
+            setVoiceTranscript(prev => { if (prev.trim()) { setVoiceLoading(true); fetch("/api/ai/voice-to-ticket", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ transcript: prev }) }).then(r => r.json()).then(d => setVoiceTicket(d.ticket)).catch(() => showToast?.("Voice processing failed", "error")).finally(() => setVoiceLoading(false)); } return prev; });
+          };
+          recognition.onerror = () => setVoiceListening(false);
+          recognition.start();
+        }}>{voiceListening ? "🔴 Listening..." : "🎙️ Voice Ticket"}</button>
         <a
           href="/docs/Customer-Quick-Guide.html"
           target="_blank"
@@ -473,6 +496,70 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
         >
           📘 Help
         </a>
+      </div>
+
+      {/* ─── Feature 7: Voice Ticket Result ─── */}
+      {(voiceListening || voiceTranscript || voiceTicket) && (
+        <div style={{ marginBottom: 16, padding: 16, background: "linear-gradient(135deg, #10B98108, #6366F108)", borderRadius: 12, border: "1px solid #10B98133" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 16 }}>🎙️</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#E2E8F0" }}>Voice-to-Ticket</span>
+            {voiceListening && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#FF6B6B", animation: "pulse 1s infinite" }} />}
+          </div>
+          {voiceTranscript && <div style={{ fontSize: 12, color: "#A0AEC0", padding: 10, background: "#080A12", borderRadius: 6, marginBottom: 8 }}>{voiceTranscript}</div>}
+          {voiceLoading && <div style={{ fontSize: 11, color: "#6366F1" }}>Processing voice input...</div>}
+          {voiceTicket && (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                {[["Title", voiceTicket.title], ["Category", voiceTicket.category], ["Priority", voiceTicket.priority], ["Urgency", voiceTicket.urgency || "Medium"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0A0C14", padding: 8, borderRadius: 6 }}>
+                    <div style={{ fontSize: 9, color: "#5A6178" }}>{k}</div>
+                    <div style={{ fontSize: 11, color: "#E2E8F0" }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: "#A0AEC0", marginBottom: 8 }}>{voiceTicket.description}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => { setQf({ title: voiceTicket.title, description: voiceTicket.description, urgency: voiceTicket.urgency || "Standard", contactMethod: "Voice" }); setShowQuickForm(true); setVoiceTicket(null); setVoiceTranscript(""); }} style={{ padding: "8px 16px", borderRadius: 6, background: "#10B981", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Submit Ticket</button>
+                <button onClick={() => { setVoiceTicket(null); setVoiceTranscript(""); }} style={{ padding: "8px 16px", borderRadius: 6, background: "#1E2130", color: "#A0AEC0", border: "none", cursor: "pointer", fontSize: 11 }}>Discard</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Feature 42: Self-Service Resolution Bot ─── */}
+      <div style={{ marginBottom: 16, padding: 16, background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 16 }}>🤖</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#E2E8F0" }}>Quick Resolve</span>
+          <span style={{ fontSize: 9, color: "#5A6178" }}>— Get instant help without creating a ticket</span>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={botQuery} onChange={e => setBotQuery(e.target.value)} placeholder="Describe your issue: e.g., I can't connect to VPN" onKeyDown={e => {
+            if (e.key === "Enter" && botQuery.trim() && !botLoading) {
+              setBotLoading(true); setBotResponse(null);
+              fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ message: botQuery, mode: "self-service" }) })
+                .then(r => r.json()).then(d => setBotResponse(d)).catch(() => setBotResponse({ reply: "Sorry, I couldn't process your request. Please try again or create a ticket." })).finally(() => setBotLoading(false));
+            }
+          }} style={{ flex: 1, padding: "10px 14px", borderRadius: 8, background: "#080A12", border: "1px solid #1E2130", color: "#E2E8F0", fontSize: 12, outline: "none" }} />
+          <button disabled={botLoading || !botQuery.trim()} onClick={() => {
+            setBotLoading(true); setBotResponse(null);
+            fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ message: botQuery, mode: "self-service" }) })
+              .then(r => r.json()).then(d => setBotResponse(d)).catch(() => setBotResponse({ reply: "Sorry, I couldn't process your request." })).finally(() => setBotLoading(false));
+          }} style={{ padding: "10px 18px", borderRadius: 8, background: botLoading ? "#1E2130" : "#6366F1", color: "#fff", border: "none", cursor: botLoading ? "default" : "pointer", fontSize: 12, fontWeight: 600 }}>
+            {botLoading ? "Thinking..." : "Get Help"}
+          </button>
+        </div>
+        {botResponse && (
+          <div style={{ marginTop: 10, padding: 12, background: "#080A12", borderRadius: 8, border: "1px solid #6366F133" }}>
+            <div style={{ fontSize: 12, color: "#E2E8F0", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{botResponse.reply || botResponse.response || botResponse.message || JSON.stringify(botResponse)}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={() => { setBotResponse(null); setBotQuery(""); showToast?.("Glad that helped!", "success"); }} style={{ padding: "6px 14px", borderRadius: 6, background: "#10B98118", border: "1px solid #10B98133", color: "#10B981", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Resolved</button>
+              <button onClick={() => { setQf({ title: botQuery.slice(0, 80), description: `Issue: ${botQuery}\n\nAI attempted resolution but user still needs help.`, urgency: "Standard", contactMethod: "Portal" }); setShowQuickForm(true); setBotResponse(null); setBotQuery(""); }} style={{ padding: "6px 14px", borderRadius: 6, background: "#FFB34718", border: "1px solid #FFB34733", color: "#FFB347", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Still Need Help → Create Ticket</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ═══ Simplified Quick Issue Form ═══ */}
@@ -561,20 +648,76 @@ export default function SelfServicePortal({ currentUser, incidents, setIncidents
           {myIncidents.length === 0 ? (
             <div style={{ textAlign: "center", padding: 40, color: "#5A6178", fontSize: 13 }}>No tickets found. Click "Report an Issue" to create one.</div>
           ) : (
-            <div style={{ display: "grid", gap: 6 }}>
-              {myIncidents.map(inc => (
-                <div key={inc.id} onClick={() => { setDetailItem(inc); setModal("incidentDetail"); }} style={{ background: "#0F1117", borderRadius: 8, border: "1px solid #1E2130", padding: "12px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, transition: "border-color 0.2s" }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = "#6366F144"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1E2130"}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: statusColor(inc.status), flexShrink: 0 }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{inc.title}</div>
-                    <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{inc.id} · {inc.category} · <span style={{ color: statusColor(inc.status) }}>{inc.status}</span></div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {myIncidents.map(inc => {
+                const STEPS = ["New", "In Progress", "Pending", "Resolved", "Closed"];
+                const currentStep = Math.max(0, STEPS.indexOf(inc.status));
+                const activities = (inc.activityLog || []).filter(a => a.isPublic !== false);
+                const lastUpdate = activities[0];
+                const created = inc.createdAt || inc.created_at;
+                const slaTarget = inc.slaTarget || 24;
+                const hoursElapsed = created ? (Date.now() - new Date(created).getTime()) / 3600000 : 0;
+                const etaHours = Math.max(0, slaTarget - hoursElapsed);
+                return (
+                <div key={inc.id} style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 16, transition: "border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#6366F133"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1E2130"}>
+                  {/* Header */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <PriorityDot priority={inc.priority} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif" }}>{inc.title}</div>
+                      <div style={{ fontSize: 10, color: "#5A6178", marginTop: 2 }}>{inc.id} · {inc.category} · {created ? new Date(created).toLocaleDateString() : "—"}</div>
+                    </div>
+                    {slaStatusBadge(inc)}
+                    {!["Resolved","Closed"].includes(inc.status) && etaHours > 0 && (
+                      <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 6, background: "#06B6D414", color: "#22D3EE", fontWeight: 600 }}>~{etaHours < 1 ? `${Math.round(etaHours*60)}m` : `${Math.round(etaHours)}h`} ETA</span>
+                    )}
                   </div>
-                  {slaStatusBadge(inc)}
-                  <PriorityDot priority={inc.priority} />
-                  <div style={{ fontSize: 10, color: "#5A6178" }}>{inc.createdAt ? new Date(inc.createdAt).toLocaleDateString() : "—"}</div>
+                  {/* Status Stepper */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 0, margin: "10px 0 12px", padding: "0 4px" }}>
+                    {STEPS.map((step, idx) => {
+                      const done = idx <= currentStep;
+                      const active = idx === currentStep;
+                      return (<div key={step} style={{ display: "flex", alignItems: "center", flex: idx < STEPS.length - 1 ? 1 : "none" }}>
+                        <div style={{ width: 20, height: 20, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, background: active ? "#6366F1" : done ? "#4CAF50" : "#1E2130", color: done ? "#fff" : "#5A6178", border: `2px solid ${active ? "#6366F1" : done ? "#4CAF50" : "#2A2F44"}`, flexShrink: 0, transition: "all 0.3s" }}>
+                          {done && !active ? "✓" : idx + 1}
+                        </div>
+                        {idx < STEPS.length - 1 && <div style={{ flex: 1, height: 2, background: done && idx < currentStep ? "#4CAF5066" : "#1E2130", margin: "0 2px", borderRadius: 1 }} />}
+                      </div>);
+                    })}
+                  </div>
+                  <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+                    {STEPS.map((step, idx) => (
+                      <div key={step} style={{ flex: 1, fontSize: 8, textAlign: "center", color: idx === currentStep ? "#818CF8" : idx < currentStep ? "#4CAF50" : "#3A3F55", fontWeight: idx === currentStep ? 700 : 400 }}>{step}</div>
+                    ))}
+                  </div>
+                  {/* Activity Timeline (last 3 public updates) */}
+                  {activities.length > 0 && (
+                    <div style={{ borderTop: "1px solid #1E2130", paddingTop: 8, marginTop: 4 }}>
+                      <div style={{ fontSize: 9, color: "#5A6178", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px", fontWeight: 600 }}>Recent Updates</div>
+                      {activities.slice(0, 3).map((act, idx) => (
+                        <div key={idx} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6, paddingLeft: 8, borderLeft: `2px solid ${idx === 0 ? "#6366F1" : "#1E2130"}` }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 11, color: "#C4CAD6" }}>{act.action || act.message || act.note || "Status updated"}</div>
+                            <div style={{ fontSize: 9, color: "#5A6178", marginTop: 1 }}>{act.user || "System"} · {act.timestamp ? new Date(act.timestamp).toLocaleString() : ""}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Request Update button */}
+                  {!["Resolved","Closed"].includes(inc.status) && (
+                    <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                      <button style={{ ...btnStyle("#6366F1"), fontSize: 10, padding: "5px 12px" }} onClick={(e) => {
+                        e.stopPropagation();
+                        fetch("/api/ai/chat/create-ticket", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: `Update requested for ${inc.id}: ${inc.title}`, description: `Customer ${currentUser.name} is requesting a status update on ticket ${inc.id}.`, category: inc.category, priority: "Sev-D", requesterEmail: userEmail, createdBy: currentUser.name, source: "portal_update_request", linkedIncident: inc.id }) });
+                        if (showToast) showToast(`Update requested for ${inc.id} — the team will respond shortly.`, "success");
+                      }}>📩 Request Update</button>
+                      <button style={{ ...btnStyle("#2A2F44"), fontSize: 10, padding: "5px 12px" }} onClick={(e) => { e.stopPropagation(); setDetailItem(inc); setModal("incidentDetail"); }}>🔍 View Details</button>
+                    </div>
+                  )}
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </div>

@@ -85,22 +85,6 @@ window.__vgcWaitForApiAuth = async function waitForApiAuth(timeoutMs = 8000) {
   return !!(await _waitForApiToken(timeoutMs));
 };
 
-function _currentPortalSessionId() {
-  try {
-    if (typeof window.__vgcGetPortalSessionId === "function") return window.__vgcGetPortalSessionId();
-    return sessionStorage.getItem("vgc_portal_session_id") || "";
-  } catch { return ""; }
-}
-
-function _notifyStalePortalSession(response) {
-  if (!response || response.status !== 409) return;
-  response.clone().json().then(data => {
-    if (data && data.code === "STALE_SESSION") {
-      window.dispatchEvent(new CustomEvent("vgc:portal-session-stale", { detail: data }));
-    }
-  }).catch(() => {});
-}
-
 window.fetch = async function patchedFetch(input, init) {
   try {
     const { isApi, pathname, method } = _apiRequestInfo(input, init);
@@ -113,11 +97,8 @@ window.fetch = async function patchedFetch(input, init) {
     }
     const headers = new Headers((init && init.headers) || (input && input.headers) || {});
     if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
-    const portalSessionId = _currentPortalSessionId();
-    if (portalSessionId && !headers.has("X-ITSM-Session-ID")) headers.set("X-ITSM-Session-ID", portalSessionId);
     const newInit = { ...(init || {}), headers };
     const response = await _origFetch(input, newInit);
-    _notifyStalePortalSession(response);
     return response;
   } catch {
     return _origFetch(input, init);
