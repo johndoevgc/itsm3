@@ -4247,6 +4247,49 @@ return (
                 </div>
               </div>
 
+              {/* ─── AI Threshold Configuration ─── */}
+              <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #6366F133", marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: "#6366F1", fontWeight: 600, marginBottom: 12 }}>🎛️ AI Autonomy Thresholds</div>
+                <p style={{ fontSize: 10, color: "#5A6178", margin: "0 0 12px" }}>Control how aggressively AI acts. Higher thresholds = fewer auto-actions but higher accuracy.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  {[
+                    { id: "autopilot_confidence", label: "Autopilot Confidence", desc: "Min confidence to auto-resolve", defaultVal: "92", unit: "%" },
+                    { id: "sla_breach_threshold", label: "SLA Breach Warning", desc: "% consumed before warning", defaultVal: "70", unit: "%" },
+                    { id: "sla_escalation_threshold", label: "SLA Auto-Escalation", desc: "% consumed before escalation", defaultVal: "85", unit: "%" },
+                    { id: "duplicate_similarity", label: "Duplicate Similarity", desc: "Min match to merge duplicates", defaultVal: "85", unit: "%" },
+                    { id: "frustration_threshold", label: "Frustration Score", desc: "Score to trigger escalation", defaultVal: "0.7", unit: "" },
+                    { id: "storm_min_tickets", label: "Storm Min Tickets", desc: "Min tickets to trigger storm", defaultVal: "3", unit: "" },
+                    { id: "autopilot_interval", label: "Autopilot Interval", desc: "How often autopilot runs", defaultVal: "2", unit: "min" },
+                    { id: "health_check_window", label: "Health Check Window", desc: "Hours after resolve to verify", defaultVal: "48", unit: "h" },
+                  ].map((cfg) => (
+                    <div key={cfg.id} style={{ background: "#080A12", borderRadius: 6, padding: 10, border: "1px solid #1E2130" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{cfg.label}</div>
+                          <div style={{ fontSize: 9, color: "#5A6178" }}>{cfg.desc}</div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input type="number" id={`ai-threshold-${cfg.id}`} defaultValue={cfg.defaultVal} style={{ width: 50, padding: "4px 6px", background: "#0F1117", border: "1px solid #2D3348", borderRadius: 4, color: "#E2E8F0", fontSize: 12, textAlign: "center" }} />
+                          {cfg.unit && <span style={{ fontSize: 9, color: "#5A6178" }}>{cfg.unit}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button style={{ marginTop: 12, padding: "8px 20px", borderRadius: 6, border: "none", background: "#6366F1", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }} onClick={async () => {
+                  const thresholds = {};
+                  ["autopilot_confidence","sla_breach_threshold","sla_escalation_threshold","duplicate_similarity","frustration_threshold","storm_min_tickets","autopilot_interval","health_check_window"].forEach(id => {
+                    const el = document.getElementById(`ai-threshold-${id}`);
+                    if (el) thresholds[id] = parseFloat(el.value);
+                  });
+                  try {
+                    const r = await fetch("/api/db/tenant_settings/ai_thresholds", { method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(thresholds) });
+                    if (r.ok) alert("AI thresholds saved successfully!");
+                    else alert("Failed to save: " + (await r.text()));
+                  } catch (e) { alert("Error: " + e.message); }
+                }}>Save Thresholds</button>
+              </div>
+
               <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #1E2130" }}>
                 <div style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 600, marginBottom: 8 }}>Recent AI Audit Log</div>
                 <div style={{ maxHeight: 300, overflowY: "auto" }}>

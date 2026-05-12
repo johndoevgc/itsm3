@@ -6409,24 +6409,6 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
     }
   }
 
-  // ─── Feature 44: Post-Resolution Health Check ─────────────────────────
-  // POST /api/ai/health-check — verify resolved tickets haven't recurred
-  if (pathname === "/api/ai/health-check" && req.method === "POST") {
-    try {
-      const rows = await db.getAll("incidents");
-      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
-      const cutoff48h = Date.now() - 48 * 3600000;
-      const recentlyResolved = all.filter(i => i.status === "Resolved" && i.resolvedAt && new Date(i.resolvedAt).getTime() <= cutoff48h && new Date(i.resolvedAt).getTime() > (cutoff48h - 24 * 3600000));
-      const results = recentlyResolved.map(resolved => {
-        const recurred = all.filter(i => i.id !== resolved.id && i.reporter === resolved.reporter && i.category === resolved.category && new Date(i.created).getTime() > new Date(resolved.resolvedAt).getTime());
-        return { id: resolved.id, title: resolved.title, reporter: resolved.reporter, resolvedAt: resolved.resolvedAt, recurred: recurred.length > 0, recurrenceCount: recurred.length, action: recurred.length > 0 ? "reopen" : "auto-close" };
-      });
-      return json(res, 200, { checked: results.length, healthy: results.filter(r => !r.recurred).length, recurred: results.filter(r => r.recurred).length, results });
-    } catch (err) {
-      return json(res, 500, { error: "health-check failed", details: err.message });
-    }
-  }
-
   // ─── Feature 45: Customer Success Score ───────────────────────────────
   // POST /api/ai/customer-health — compute per-customer health scores
   if (pathname === "/api/ai/customer-health" && req.method === "POST") {
@@ -6456,72 +6438,10 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
     }
   }
 
-  // ─── Feature 41: Proactive Customer Notification ──────────────────────
-  // POST /api/ai/proactive-notify — generate proactive notification for service issue
-  if (pathname === "/api/ai/proactive-notify" && req.method === "POST") {
-    try {
-      const { incident, affectedCustomers } = body;
-      if (!incident) return json(res, 400, { error: "incident required" });
-      const systemPrompt = `Generate a proactive customer notification for a service issue.
-Tone: professional, transparent, reassuring. Under 80 words.
-Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta": "<estimated resolution time>" }`;
-      const raw = await callAI(systemPrompt, `Service Issue: ${incident.title}\nPriority: ${incident.priority}\nAffected: ${(affectedCustomers || []).join(", ") || "multiple users"}\nStatus: Being investigated`, { tier: "secondary", maxTokens: 400 });
-      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
-      const result = JSON.parse(cleaned);
-      return json(res, 200, result);
-    } catch (err) {
-      return json(res, 500, { error: "proactive-notify failed", details: err.message });
-    }
-  }
-
-  // ─── Feature 48: Weekly AI Performance Report ─────────────────────────
-  // GET /api/ai/performance-report — compute AI accuracy and efficiency metrics
-  if (pathname === "/api/ai/performance-report" && req.method === "GET") {
-    try {
-      const rows = await db.getAll("ai_audit_log");
-      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
-      const weekCutoff = Date.now() - 7 * 86400000;
-      const thisWeek = entries.filter(e => new Date(e.at || e.startedAt || e.createdAt || 0).getTime() >= weekCutoff);
-      const triages = thisWeek.filter(e => e.type === "auto_triage");
-      const overrides = thisWeek.filter(e => e.type === "ai_feedback");
-      const autopilotRuns = thisWeek.filter(e => e.type === "ai_autopilot");
-      const accuracy = triages.length > 0 ? Math.round(((triages.length - overrides.length) / triages.length) * 100) : 100;
-      return json(res, 200, {
-        period: "last_7_days",
-        totalAiActions: thisWeek.length,
-        triages: triages.length,
-        overrides: overrides.length,
-        accuracy: Math.max(0, accuracy),
-        autopilotRuns: autopilotRuns.length,
-        topOverrideFields: (() => { const f = {}; overrides.forEach(o => { f[o.field] = (f[o.field] || 0) + 1; }); return Object.entries(f).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([field, count]) => ({ field, count })); })()
-      });
-    } catch (err) {
-      return json(res, 500, { error: "performance-report failed", details: err.message });
-    }
-  }
-
-  // ─── Feature 50: Configuration Recommendation Engine ──────────────────
-  // GET /api/ai/config-recommendations — suggest threshold/config optimizations
-  if (pathname === "/api/ai/config-recommendations" && req.method === "GET") {
-    try {
-      const rows = await db.getAll("ai_audit_log");
-      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
-      const overrides = entries.filter(e => e.type === "ai_feedback");
-      const triages = entries.filter(e => e.type === "auto_triage");
-      const recommendations = [];
-      const overrideRate = triages.length > 0 ? overrides.length / triages.length : 0;
-      if (overrideRate > 0.2) {
-        recommendations.push({ setting: "AI_AUTO_APPLY_THRESHOLD", current: AI_THRESHOLDS.autoApply, suggested: Math.min(95, AI_THRESHOLDS.autoApply + 5), reason: `Override rate is ${Math.round(overrideRate * 100)}% — increase threshold to reduce false auto-applies`, impact: "fewer incorrect auto-triages" });
-      } else if (overrideRate < 0.05 && triages.length > 20) {
-        recommendations.push({ setting: "AI_AUTO_APPLY_THRESHOLD", current: AI_THRESHOLDS.autoApply, suggested: Math.max(70, AI_THRESHOLDS.autoApply - 5), reason: `Override rate is only ${Math.round(overrideRate * 100)}% — AI is reliable enough to lower threshold`, impact: `~${Math.round(triages.length * 0.1)} more tickets auto-triaged per week` });
-      }
-      if (AI_THRESHOLDS.autoResolveConfidence < 90 && overrideRate < 0.1) {
-        recommendations.push({ setting: "AI_AUTO_RESOLVE_THRESHOLD", current: AI_THRESHOLDS.autoResolveConfidence, suggested: AI_THRESHOLDS.autoResolveConfidence - 3, reason: "High accuracy suggests auto-resolve can be more aggressive", impact: "More routine tickets resolved without human intervention" });
-      }
-      return json(res, 200, { recommendations, metrics: { overrideRate: Math.round(overrideRate * 100), totalTriages: triages.length, totalOverrides: overrides.length } });
-    } catch (err) {
-      return json(res, 500, { error: "config-recommendations failed", details: err.message });
-    }
+  // ─── Wave 2-10 shared body parse ──────────────────────────────────
+  let body = null;
+  if (req.method === "POST") {
+    try { body = await parseBody(req); } catch { body = {}; }
   }
 
   // ─── Feature 9: Conversational Report Builder ──────────────────────

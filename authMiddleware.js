@@ -329,6 +329,18 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
     } catch { /* ignore */ }
   }
 
+  // Internal cron bypass: requests from localhost with X-Internal-Cron header
+  if (req.headers["x-internal-cron"] === "1") {
+    const srcIP = req.socket?.remoteAddress || "";
+    if (srcIP === "127.0.0.1" || srcIP === "::1" || srcIP === "::ffff:127.0.0.1") {
+      return {
+        authenticated: true,
+        user: { email: "cron@internal", name: "Ambient AI Cron", id: "SYSTEM-CRON" },
+        role: "System",
+      };
+    }
+  }
+
   // Rate limiting
   const clientIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
   const isWriteMethod = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
