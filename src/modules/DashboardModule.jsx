@@ -892,6 +892,66 @@ useEffect(() => {
     .catch(() => {});
 }, []);
 
+// Feature 1: Autopilot Status
+const [autopilotActivity, setAutopilotActivity] = useState(null);
+const [autopilotActivityOpen, setAutopilotActivityOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/autopilot/tick", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setAutopilotActivity(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 4: Duplicate Storm Detector
+const [dupStorm, setDupStorm] = useState(null);
+const [dupStormOpen, setDupStormOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/duplicate-storm", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setDupStorm(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 38: Queue Optimizer
+const [queueOptimizer, setQueueOptimizer] = useState(null);
+const [queueOptimizerOpen, setQueueOptimizerOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/queue-optimize", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setQueueOptimizer(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 44: Post-Resolution Health Check
+const [healthCheck, setHealthCheck] = useState(null);
+const [healthCheckOpen, setHealthCheckOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/health-check", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setHealthCheck(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 20: Patch Compliance
+const [patchCompliance, setPatchCompliance] = useState(null);
+const [patchComplianceOpen, setPatchComplianceOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/patch-compliance", { credentials: "include" })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setPatchCompliance(d); })
+    .catch(() => {});
+}, []);
+
+// Feature 18: Certificate Guardian
+const [certGuardian, setCertGuardian] = useState(null);
+const [certGuardianOpen, setCertGuardianOpen] = useState(false);
+useEffect(() => {
+  fetch("/api/ai/cert-guardian", { credentials: "include" })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setCertGuardian(d); })
+    .catch(() => {});
+}, []);
+
 // Shift Handoff
 const [shiftHandoff, setShiftHandoff] = useState(null);
 const [shiftHandoffLoading, setShiftHandoffLoading] = useState(false);
@@ -3719,6 +3779,153 @@ return (
             <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>Current: <span style={{ color: "#FF6B6B" }}>{r.current}</span> → Suggested: <span style={{ color: "#81C784" }}>{r.suggested}</span></div>
             <div style={{ fontSize: 9, color: "#A0AEC0", marginTop: 4 }}>{r.reason}</div>
             <div style={{ fontSize: 9, color: "#81C784", marginTop: 2 }}>Impact: {r.impact}</div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 1: Autopilot Activity ─── */}
+    {autopilotActivity && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setAutopilotActivityOpen(!autopilotActivityOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🤖</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>AI Autopilot Activity</span>
+            {autopilotActivity.results?.resolved?.length > 0 && <span style={{ background: "#81C78422", color: "#81C784", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{autopilotActivity.results.resolved.length} auto-resolved</span>}
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{autopilotActivityOpen ? "▲" : "▼"}</span>
+        </div>
+        {autopilotActivityOpen && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+              <div style={{ background: "#81C78410", padding: "6px 12px", borderRadius: 6, border: "1px solid #81C78433" }}>
+                <div style={{ fontSize: 9, color: "#5A6178" }}>Auto-Resolved</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#81C784" }}>{autopilotActivity.results?.resolved?.length || 0}</div>
+              </div>
+              <div style={{ background: "#5A617810", padding: "6px 12px", borderRadius: 6, border: "1px solid #5A617833" }}>
+                <div style={{ fontSize: 9, color: "#5A6178" }}>Skipped</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#5A6178" }}>{autopilotActivity.results?.skipped || 0}</div>
+              </div>
+            </div>
+            {(autopilotActivity.results?.resolved || []).slice(0, 5).map((t, i) => (
+              <div key={i} style={{ padding: 6, background: "#080A12", borderRadius: 4, border: "1px solid #1E2130", marginTop: 4, fontSize: 10, color: "#A0AEC0" }}>
+                <span style={{ color: "#81C784" }}>✓</span> {t.title?.slice(0, 60)} <span style={{ color: "#5A6178" }}>({t.confidence}%)</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* ─── Feature 4: Duplicate Storm Detector ─── */}
+    {dupStorm && dupStorm.stormsDetected > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #FF6B6B22", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setDupStormOpen(!dupStormOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>⚡</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Duplicate Storm Alert</span>
+            <span style={{ background: "#FF6B6B22", color: "#FF6B6B", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{dupStorm.stormsDetected} storms</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{dupStormOpen ? "▲" : "▼"}</span>
+        </div>
+        {dupStormOpen && dupStorm.merged?.map((m, i) => (
+          <div key={i} style={{ marginTop: 8, padding: 8, background: "#080A12", borderRadius: 6, border: "1px solid #1E2130" }}>
+            <div style={{ fontSize: 11, color: "#FF6B6B", fontWeight: 500 }}>Storm: {m.category}</div>
+            <div style={{ fontSize: 9, color: "#5A6178" }}>Parent: {m.parentId} · Merged {m.childCount} duplicates</div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 38: Queue Optimizer ─── */}
+    {queueOptimizer && queueOptimizer.rebalanceNeeded && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setQueueOptimizerOpen(!queueOptimizerOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>⚖️</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Queue Rebalance Needed</span>
+            <span style={{ background: "#FFB34722", color: "#FFB347", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{queueOptimizer.suggestions?.length || 0} moves</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{queueOptimizerOpen ? "▲" : "▼"}</span>
+        </div>
+        {queueOptimizerOpen && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 10, color: "#A0AEC0", marginBottom: 6 }}>Avg load: {queueOptimizer.averageLoad} tickets/engineer</div>
+            {(queueOptimizer.suggestions || []).slice(0, 5).map((s, i) => (
+              <div key={i} style={{ padding: 6, background: "#080A12", borderRadius: 4, border: "1px solid #1E2130", marginTop: 4, fontSize: 10, color: "#A0AEC0" }}>
+                Move <span style={{ color: "#6366F1" }}>{s.ticketId}</span> from <span style={{ color: "#FF6B6B" }}>{s.from}</span> → <span style={{ color: "#81C784" }}>{s.to}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* ─── Feature 44: Post-Resolution Health Check ─── */}
+    {healthCheck && (healthCheck.reopened > 0 || healthCheck.closed > 0) && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setHealthCheckOpen(!healthCheckOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🩺</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Health Check Results</span>
+            <span style={{ background: "#81C78422", color: "#81C784", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{healthCheck.closed} verified · {healthCheck.reopened} recurred</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{healthCheckOpen ? "▲" : "▼"}</span>
+        </div>
+        {healthCheckOpen && (healthCheck.results || []).slice(0, 8).map((r, i) => (
+          <div key={i} style={{ marginTop: 6, padding: 6, background: "#080A12", borderRadius: 4, border: "1px solid #1E2130", fontSize: 10, display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: "#A0AEC0" }}>{r.title?.slice(0, 50)}</span>
+            <span style={{ color: r.recurred ? "#FF6B6B" : "#81C784", fontWeight: 600 }}>{r.newStatus}</span>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ─── Feature 20: Patch Compliance ─── */}
+    {patchCompliance && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #1E2130", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setPatchComplianceOpen(!patchComplianceOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🛡️</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Patch Compliance</span>
+            <span style={{ background: patchCompliance.complianceRate >= 90 ? "#81C78422" : "#FFB34722", color: patchCompliance.complianceRate >= 90 ? "#81C784" : "#FFB347", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{patchCompliance.complianceRate}%</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{patchComplianceOpen ? "▲" : "▼"}</span>
+        </div>
+        {patchComplianceOpen && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: "#81C784" }}>Compliant: {patchCompliance.compliant}</div>
+              <div style={{ fontSize: 10, color: "#FF6B6B" }}>Non-Compliant: {patchCompliance.nonCompliant?.length || 0}</div>
+            </div>
+            {(patchCompliance.nonCompliant || []).slice(0, 5).map((d, i) => (
+              <div key={i} style={{ padding: 6, background: "#080A12", borderRadius: 4, border: "1px solid #1E2130", marginTop: 4, fontSize: 10, color: "#A0AEC0" }}>
+                <span style={{ color: "#E2E8F0" }}>{d.name}</span> · {d.issues?.map(is => is.detail).join(", ")}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* ─── Feature 18: Certificate Guardian ─── */}
+    {certGuardian && certGuardian.alerts?.length > 0 && (
+      <div style={{ background: "#0F1117", borderRadius: 12, border: "1px solid #FF6B6B22", padding: 16, marginBottom: 16 }}>
+        <div onClick={() => setCertGuardianOpen(!certGuardianOpen)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🔐</span>
+            <span style={{ fontWeight: 700, color: "#E2E8F0", fontSize: 13 }}>Certificate Expiry Alerts</span>
+            <span style={{ background: "#FF6B6B22", color: "#FF6B6B", borderRadius: 99, padding: "2px 8px", fontSize: 10 }}>{certGuardian.alerts.length}</span>
+          </div>
+          <span style={{ color: "#5A6178", fontSize: 10 }}>{certGuardianOpen ? "▲" : "▼"}</span>
+        </div>
+        {certGuardianOpen && certGuardian.alerts.map((a, i) => (
+          <div key={i} style={{ marginTop: 6, padding: 8, background: "#080A12", borderRadius: 4, border: "1px solid #1E2130" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#E2E8F0" }}>{a.name}</span>
+              <span style={{ fontSize: 9, color: a.severity === "critical" ? "#FF6B6B" : "#FFB347", fontWeight: 600 }}>{a.daysUntil <= 0 ? "EXPIRED" : `${a.daysUntil}d left`}</span>
+            </div>
+            <div style={{ fontSize: 9, color: "#5A6178", marginTop: 2 }}>{a.action}</div>
           </div>
         ))}
       </div>
