@@ -5751,7 +5751,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, overflow: "auto", padding: 28 }}>
+        <div style={{ flex: 1, overflow: "auto", padding: 28, scrollbarGutter: "stable" }}>
           {navExplainId === activeModule && AI_FEATURE_EXPLAINERS[activeModule] && activeModule !== "dashboard" && (
             <div style={{ margin: "0 0 20px", padding: "14px 18px", background: "linear-gradient(135deg, #6366F108, #6366F115)", borderRadius: 10, border: "1px solid #6366F133" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>

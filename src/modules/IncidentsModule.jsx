@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { PRIORITY_COLORS, STATUS_COLORS, inputStyle, btnStyle } from "../constants/theme.js";
 import { APP_VERSION } from "../constants/version.js";
 import { genId, timeAgo } from "../utils/slaHelpers.js";
@@ -113,6 +113,8 @@ const IncidentsModule = useStableComponent(() => {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incidents, deferredSearch]);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const handleRowClick = useCallback((row) => { setDetailItem(row); setModal("incidentDetail"); }, [setDetailItem, setModal]);
   return (
     <div>
       <WorkflowHeader module="incidents" version={APP_VERSION.version} stepCounts={[incidents.filter(i => i.status === "Open" && !i.aiTriaged).length, incidents.filter(i => i.aiTriaged && i.status === "Open").length, incidents.filter(i => i.assignee && ["Open","Assigned"].includes(i.status)).length, incidents.filter(i => i.status === "In Progress").length, incidents.filter(i => i.status === "Resolved" || i.status === "Closed").length]} />
@@ -791,7 +793,7 @@ const IncidentsModule = useStableComponent(() => {
           { label: "Created", width: 80, render: r => <span style={{ color: "#5A6178" }}>{timeAgo(r.created)}</span> },
         ]}
         data={filtered}
-        onRowClick={row => { setDetailItem(row); setModal("incidentDetail"); }}
+        onRowClick={handleRowClick}
       />
     </div>
   );
