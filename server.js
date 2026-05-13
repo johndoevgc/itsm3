@@ -341,7 +341,7 @@ let cacheLayer = null;
 let incidentIndex = null;
 
 // ─── Configurable AI Thresholds ─────────────────────────────────────────
-const AI_THRESHOLDS = {
+let AI_THRESHOLDS = {
   autoApply: parseInt(process.env.AI_AUTO_APPLY_THRESHOLD || (PROD_TEST_MODE ? "70" : "85"), 10),
   slaRisk: parseInt(process.env.AI_SLA_RISK_THRESHOLD || "70", 10),
   patternConfidence: parseInt(process.env.AI_PATTERN_CONFIDENCE_THRESHOLD || "70", 10),
@@ -353,8 +353,37 @@ const AI_THRESHOLDS = {
   // v3.35.0 (Phase B) — backlog SLA
   pendingAgeHoursWarn: parseInt(process.env.AI_PENDING_AGE_WARN_H || "4", 10),
   pendingAgeHoursCritical: parseInt(process.env.AI_PENDING_AGE_CRITICAL_H || "24", 10),
+  // Wave 1-10 ambient AI thresholds (synced from Admin UI via DB)
+  autopilotConfidence: parseInt(process.env.AI_AUTOPILOT_CONFIDENCE || "92", 10),
+  slaBreachThreshold: parseInt(process.env.AI_SLA_BREACH || "70", 10),
+  slaEscalationThreshold: parseInt(process.env.AI_SLA_ESCALATION || "85", 10),
+  duplicateSimilarity: parseFloat(process.env.AI_DUPLICATE_SIMILARITY || "0.85"),
+  frustrationThreshold: parseFloat(process.env.AI_FRUSTRATION_THRESHOLD || "0.7"),
+  stormMinTickets: parseInt(process.env.AI_STORM_MIN || "3", 10),
+  autopilotInterval: parseInt(process.env.AI_AUTOPILOT_INTERVAL || "2", 10),
+  healthCheckWindow: parseInt(process.env.AI_HEALTH_CHECK_WINDOW || "48", 10),
 };
 console.log("[AI Thresholds]", JSON.stringify(AI_THRESHOLDS));
+
+async function refreshAIThresholds() {
+  try {
+    const [rows] = await db.query("SELECT value FROM tenant_settings WHERE setting_key = 'ai_thresholds'");
+    if (rows.length && rows[0].value) {
+      const saved = typeof rows[0].value === "string" ? JSON.parse(rows[0].value) : rows[0].value;
+      if (saved.autopilot_confidence != null) AI_THRESHOLDS.autopilotConfidence = Number(saved.autopilot_confidence);
+      if (saved.sla_breach_threshold != null) AI_THRESHOLDS.slaBreachThreshold = Number(saved.sla_breach_threshold);
+      if (saved.sla_escalation_threshold != null) AI_THRESHOLDS.slaEscalationThreshold = Number(saved.sla_escalation_threshold);
+      if (saved.duplicate_similarity != null) AI_THRESHOLDS.duplicateSimilarity = Number(saved.duplicate_similarity);
+      if (saved.frustration_threshold != null) AI_THRESHOLDS.frustrationThreshold = Number(saved.frustration_threshold);
+      if (saved.storm_min_tickets != null) AI_THRESHOLDS.stormMinTickets = Number(saved.storm_min_tickets);
+      if (saved.autopilot_interval != null) AI_THRESHOLDS.autopilotInterval = Number(saved.autopilot_interval);
+      if (saved.health_check_window != null) AI_THRESHOLDS.healthCheckWindow = Number(saved.health_check_window);
+      console.log("[AI Thresholds] Refreshed from DB");
+    }
+  } catch (e) {
+    console.error("[AI Thresholds] refresh failed:", e.message);
+  }
+}
 
 // ─── Phase A safety helpers (Major Incident Process + recipient hygiene) ─
 // Returns true for Sev-A, P1, Critical (any case/dash). Used to block AI auto-resolve.
@@ -3216,6 +3245,9 @@ async function start() {
       }
     } catch (e) { console.log("[Settings] Could not restore persisted settings:", e.message); }
 
+    // Load AI thresholds from DB (Admin UI settings override env defaults)
+    await refreshAIThresholds();
+
     // SECURITY (#3): Auto-seeders below populate fresh DBs with default KB / templates /
     // approval chains / email whitelist / SG holidays. Each block is idempotent (guarded by
     // count === 0) so it cannot overwrite existing prod data, but the master switch lets
@@ -3465,6 +3497,10 @@ async function start() {
     } else {
       console.log(`[Cluster] Worker idx=${process.env.WORKER_INDEX} skipping SLA/Workflow scheduled jobs`);
     }
+
+    // Periodic AI thresholds refresh from DB (every 5 min)
+    const _thresholdInterval = setInterval(refreshAIThresholds, 5 * 60 * 1000);
+    _shutdownIntervals.push(_thresholdInterval);
 
     // Wrap SLA Guardian / ZD AutoSync / Cleanup / Purge / Uptime jobs in
     // the scheduler-worker gate too. Previously these ran on every worker,

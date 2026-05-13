@@ -473,3 +473,30 @@ export const SearchBar = React.memo(function SearchBar({ value, onChange, placeh
   );
 });
 
+export class TabErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error(`[${this.props.label || "Tab"}] crash:`, error, info);
+    try {
+      fetch("/api/client-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tab: this.props.label, error: error.message, stack: error.stack }),
+      });
+    } catch (e) { /* ignore */ }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 40, textAlign: "center", color: "#A0AEC0" }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>⚠</div>
+          <h3 style={{ color: "#E2E8F0", marginBottom: 8 }}>{this.props.label || "Tab"} encountered an error</h3>
+          <p style={{ color: "#718096", fontSize: 13, marginBottom: 16 }}>{this.state.error.message}</p>
+          <button onClick={() => this.setState({ error: null })} style={{ padding: "8px 16px", background: "#2D3748", color: "#E2E8F0", border: "1px solid #4A5568", borderRadius: 4, cursor: "pointer" }}>Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}

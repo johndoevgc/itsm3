@@ -18,7 +18,7 @@ import {
 } from "./src/utils/slaHelpers.js";
 import {
   Badge, PriorityDot, StatCard, DataTable, WORKFLOW_STEPS, WorkflowHeader,
-  Modal, FormField, useStableComponent, SearchBar,
+  Modal, FormField, useStableComponent, SearchBar, TabErrorBoundary,
 } from "./src/components/SharedComponents.jsx";
 import {
   EmailAuditTab, FeatureFlagsTab, AIDecisionsTab, ComplianceTab,
@@ -4857,19 +4857,19 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
     // End Users always get the self-service portal
     if (currentUser.rbacRole === "End User" && !["knowledge", "catalog"].includes(activeModule)) return (<SelfServicePortal currentUser={currentUser} incidents={userIncidents} setIncidents={setIncidents} requests={userRequests} problems={[]} changes={[]} kbArticles={portalKbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
     switch (activeModule) {
-      case "selfService": return (<SelfServicePortal currentUser={currentUser} incidents={currentUser.rbacRole === "End User" ? userIncidents : incidents} setIncidents={setIncidents} requests={currentUser.rbacRole === "End User" ? userRequests : requests} problems={currentUser.rbacRole === "End User" ? [] : problems} changes={currentUser.rbacRole === "End User" ? [] : changes} kbArticles={currentUser.rbacRole === "End User" ? portalKbArticles : kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} />);
-      case "dashboard": return (<DashboardModule ctx={dashboardCtx} />);
-      case "tickets": return (<TicketsModule />);
-      case "incidents": return (<TicketsModule />);
-      case "zendesk": return (<TicketsModule />);
-      case "operations": return (<OperationsModule />);
-      case "problems": return (<OperationsModule />);
-      case "changes": return (<OperationsModule />);
-      case "requests": return (<OperationsModule />);
-      case "slaApprovals": return (<SLAApprovalsModule />);
-      case "sla": return (<SLAApprovalsModule />);
-      case "approvals": return (<SLAApprovalsModule />);
-      case "humanReview": return (<EngineerReviewHub ctx={{
+      case "selfService": return (<TabErrorBoundary key="selfService" label="Self-Service Portal"><SelfServicePortal currentUser={currentUser} incidents={currentUser.rbacRole === "End User" ? userIncidents : incidents} setIncidents={setIncidents} requests={currentUser.rbacRole === "End User" ? userRequests : requests} problems={currentUser.rbacRole === "End User" ? [] : problems} changes={currentUser.rbacRole === "End User" ? [] : changes} kbArticles={currentUser.rbacRole === "End User" ? portalKbArticles : kbArticles} serviceCatalog={serviceCatalog} portalTab={portalTab} setPortalTab={setPortalTab} portalSearch={portalSearch} setPortalSearch={setPortalSearch} setActiveModule={setActiveModule} setDetailItem={setDetailItem} setModal={setModal} showToast={showToast} /></TabErrorBoundary>);
+      case "dashboard": return (<TabErrorBoundary key="dashboard" label="Dashboard"><DashboardModule ctx={dashboardCtx} /></TabErrorBoundary>);
+      case "tickets": return (<TabErrorBoundary key="tickets" label="Tickets"><TicketsModule /></TabErrorBoundary>);
+      case "incidents": return (<TabErrorBoundary key="incidents" label="Incidents"><TicketsModule /></TabErrorBoundary>);
+      case "zendesk": return (<TabErrorBoundary key="zendesk" label="Zendesk"><TicketsModule /></TabErrorBoundary>);
+      case "operations": return (<TabErrorBoundary key="operations" label="Operations"><OperationsModule /></TabErrorBoundary>);
+      case "problems": return (<TabErrorBoundary key="problems" label="Problems"><OperationsModule /></TabErrorBoundary>);
+      case "changes": return (<TabErrorBoundary key="changes" label="Changes"><OperationsModule /></TabErrorBoundary>);
+      case "requests": return (<TabErrorBoundary key="requests" label="Requests"><OperationsModule /></TabErrorBoundary>);
+      case "slaApprovals": return (<TabErrorBoundary key="slaApprovals" label="SLA & Approvals"><SLAApprovalsModule /></TabErrorBoundary>);
+      case "sla": return (<TabErrorBoundary key="sla" label="SLA"><SLAApprovalsModule /></TabErrorBoundary>);
+      case "approvals": return (<TabErrorBoundary key="approvals" label="Approvals"><SLAApprovalsModule /></TabErrorBoundary>);
+      case "humanReview": return (<TabErrorBoundary key="humanReview" label="Engineer Review"><EngineerReviewHub ctx={{
         aiActions, aiActionsLoading,
         zdAiQueue,
         changes, requests,
@@ -4883,9 +4883,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         setDetailItem, setModal,
         aiAutoApprove, setAiAutoApprove,
         bulkAutoApprove, showToast,
-      }} />);
-      case "catalog": return (<CatalogModule />);
-      case "knowledge": return (<KnowledgeModule ctx={{
+      }} /></TabErrorBoundary>);
+      case "catalog": return (<TabErrorBoundary key="catalog" label="Catalog"><CatalogModule /></TabErrorBoundary>);
+      case "knowledge": return (<TabErrorBoundary key="knowledge" label="Knowledge Base"><KnowledgeModule ctx={{
         currentUser, showToast, _save, kbArticles: currentUser.rbacRole === "End User" ? portalKbArticles : kbArticles, setKbArticles: currentUser.rbacRole === "End User" ? () => {} : setKbArticles,
         search, setActiveModule, setDetailItem, setModal,
         guideGenerating, setGuideGenerating, guideTopic, setGuideTopic,
@@ -4903,9 +4903,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         kbAutoGenRunning, kbAutoGenProgress,
         kbGapReport, setKbGapReport,
         generateGuide, generateSpDoc, mdToHtml, exportToWord,
-      }} />);
-      case "assets": return (<AssetsModule />);
-      case "customers": return (<CustomersModule ctx={{
+      }} /></TabErrorBoundary>);
+      case "assets": return (<TabErrorBoundary key="assets" label="Assets"><AssetsModule /></TabErrorBoundary>);
+      case "customers": return (<TabErrorBoundary key="customers" label="Customers"><CustomersModule ctx={{
         currentUser, showToast, _save,
         customers, setCustomers,
         incidents, requests,
@@ -4916,12 +4916,12 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         customerForm, setCustomerForm,
         editingCustomerId, setEditingCustomerId,
         softDelete, userPhotos,
-      }} />);
-      case "vendorPortal": return (<VendorPortalModule ctx={{
+      }} /></TabErrorBoundary>);
+      case "vendorPortal": return (<TabErrorBoundary key="vendorPortal" label="Vendor Portal"><VendorPortalModule ctx={{
         currentUser, showToast, _save,
         vendors, setVendors, incidents,
-      }} />);
-      case "ai": return (<AIAssistModule ctx={{
+      }} /></TabErrorBoundary>);
+      case "ai": return (<TabErrorBoundary key="ai" label="AI Assist"><AIAssistModule ctx={{
         currentUser, showToast,
         aiMessages, setAiMessages,
         aiInput, setAiInput, aiLoading, setAiLoading,
@@ -4934,7 +4934,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         detectAiActionCards, handleCardAction,
         incidents, requests, problems, changes, azureOpenAI,
         setActiveModule, zdAiQueue, zdAutoStats, zdStats,
-      }} />);
+      }} /></TabErrorBoundary>);
       case "analytics":
       case "reports":
       case "cybernews":
@@ -4952,11 +4952,11 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
           aiLearningTrends, aiLearningTrendPeriod, setAiLearningTrendPeriod,
           aiLearningFeedback,
         };
-        return (<AnalyticsModuleWrapper ctx={analyticsCtx} />);
+        return (<TabErrorBoundary key={activeModule} label="Analytics"><AnalyticsModuleWrapper ctx={analyticsCtx} /></TabErrorBoundary>);
       }
-      case "serviceStatus": return (<ServiceStatusModule ctx={{ currentUser, incidents, changes }} />);
-      case "runbook": return (<RunbookActionsTab currentUser={currentUser} showToast={showToast} />);
-      case "admin": return (<AdminSettingsModule ctx={{
+      case "serviceStatus": return (<TabErrorBoundary key="serviceStatus" label="Service Status"><ServiceStatusModule ctx={{ currentUser, incidents, changes }} /></TabErrorBoundary>);
+      case "runbook": return (<TabErrorBoundary key="runbook" label="Runbook"><RunbookActionsTab currentUser={currentUser} showToast={showToast} /></TabErrorBoundary>);
+      case "admin": return (<TabErrorBoundary key="admin" label="Admin Settings"><AdminSettingsModule ctx={{
         currentUser, showToast, _save, adminTab, setAdminTab,
         incidents, problems, changes, requests, assets, kbArticles, serviceCatalog, customers,
         users: managedUsers, vendors, search,
@@ -4983,9 +4983,9 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
         wfAnimStep, setWfAnimStep, wfAnimPlaying, setWfAnimPlaying,
         historicalCloseCutoff, setHistoricalCloseCutoff,
         setVendors, setSearch, zdStats, zdConnected, zdAiQueue, zdAutoMode,
-      }} />);
-      case "productivity": return (<ProductivityDashboard changes={changes} incidents={incidents} smartTasks={smartTasks} setSmartTasks={setSmartTasks} _save={_save} productivityView={productivityView} setProductivityView={setProductivityView} />);
-      default: return (<DashboardModule ctx={dashboardCtx} />);
+      }} /></TabErrorBoundary>);
+      case "productivity": return (<TabErrorBoundary key="productivity" label="Productivity"><ProductivityDashboard changes={changes} incidents={incidents} smartTasks={smartTasks} setSmartTasks={setSmartTasks} _save={_save} productivityView={productivityView} setProductivityView={setProductivityView} /></TabErrorBoundary>);
+      default: return (<TabErrorBoundary key="default" label="Dashboard"><DashboardModule ctx={dashboardCtx} /></TabErrorBoundary>);
     }
   };
 

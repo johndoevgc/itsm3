@@ -6775,7 +6775,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
   // POST /api/ai/autopilot/tick — cron-invoked: auto-triage, assign, respond, resolve routine tickets
   if (pathname === "/api/ai/autopilot/tick" && req.method === "POST") {
     try {
-      const threshold = AI_AUTONOMY_LEVEL || 92;
+      const threshold = AI_THRESHOLDS.autopilotConfidence || 92;
       const incidents = await db.getAll("incidents");
       const open = incidents.filter(i => (i.status === "Open" || i.status === "New") && !i.autopilotProcessed);
       const results = { resolved: [], assigned: [], responded: [], skipped: 0 };
@@ -6866,13 +6866,13 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
         const target = inc.slaTarget || slaMap[inc.priority] || 9;
         const elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt, now) : (inc.created || 0);
         const pct = target > 0 ? (elapsed / target) * 100 : 0;
-        if (pct >= 85 && pct < 100 && !inc.slaDefenderWarned) {
+        if (pct >= (AI_THRESHOLDS.slaEscalationThreshold || 85) && pct < 100 && !inc.slaDefenderWarned) {
           inc.slaDefenderWarned = true;
           inc.activityLog = inc.activityLog || [];
           inc.activityLog.push({ id: `SLA-W-${Date.now().toString(36)}`, type: "sla_warning", user: "AI SLA Defender", time: now.toISOString(), detail: `SLA ${Math.round(pct)}% consumed — breach imminent` });
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
           warned.push({ id: inc.id, pct: Math.round(pct), target });
-        } else if (pct >= 70 && !inc.slaDefenderEscalated && inc.priority && (inc.priority.includes("A") || inc.priority.includes("B"))) {
+        } else if (pct >= (AI_THRESHOLDS.slaBreachThreshold || 70) && !inc.slaDefenderEscalated && inc.priority && (inc.priority.includes("A") || inc.priority.includes("B"))) {
           inc.slaDefenderEscalated = true;
           const prevPriority = inc.priority;
           if (inc.priority.includes("B")) inc.priority = "Sev-A";
@@ -6905,7 +6905,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
       }
       const merged = [];
       for (const [key, group] of Object.entries(groups)) {
-        if (group.length < 3) continue;
+        if (group.length < (AI_THRESHOLDS.stormMinTickets || 3)) continue;
         const parent = group[0];
         const children = group.slice(1);
         parent.isDuplicateParent = true;
@@ -6936,8 +6936,9 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
       if (!message) return json(res, 400, { error: "message required" });
       const frustrationMarkers = /urgent|asap|unacceptable|ridiculous|still\s*(not|broken|waiting)|how\s*many\s*times|escalat|complaint|furious|angry|disappointing|worst|terrible|useless|incompetent|days\s*(now|already)|!!+/i;
       const score = frustrationMarkers.test(message) ? 0.85 : 0.3;
+      const frustThreshold = AI_THRESHOLDS.frustrationThreshold || 0.7;
       let action = null;
-      if (score > 0.7 && ticketId) {
+      if (score > frustThreshold && ticketId) {
         const inc = await db.getOne("incidents", ticketId).catch(() => null);
         if (inc) {
           const data = typeof inc.data === "string" ? JSON.parse(inc.data) : inc.data;
@@ -6952,7 +6953,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
           }
         }
       }
-      return json(res, 200, { score, frustrated: score > 0.7, action, suggestedResponse: score > 0.7 ? "I understand your frustration and I'm prioritizing this immediately. Let me escalate to ensure we resolve this as quickly as possible." : null });
+      return json(res, 200, { score, frustrated: score > frustThreshold, action, suggestedResponse: score > frustThreshold ? "I understand your frustration and I'm prioritizing this immediately. Let me escalate to ensure we resolve this as quickly as possible." : null });
     } catch (err) {
       return json(res, 500, { error: "frustration-detect failed", details: err.message });
     }

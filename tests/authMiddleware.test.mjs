@@ -57,28 +57,28 @@ describe("decodeJWT", () => {
 
 // ─── resolveRole ────────────────────────────────────────────────────────
 describe("resolveRole", () => {
-  it('returns "VGC Dev Admin" for dev admin emails', () => {
-    expect(resolveRole("hlaing@vgctechnology.com")).toBe("VGC Dev Admin");
-    expect(resolveRole("qing@vgctechnology.com")).toBe("VGC Dev Admin");
+  it('returns "VGC Dev Admin" for dev admin emails', async () => {
+    expect(await resolveRole("hlaing@vgctechnology.com")).toBe("VGC Dev Admin");
+    expect(await resolveRole("qing@vgctechnology.com")).toBe("VGC Dev Admin");
   });
 
-  it("is case-insensitive", () => {
-    expect(resolveRole("HLAING@VGCTECHNOLOGY.COM")).toBe("VGC Dev Admin");
+  it("is case-insensitive", async () => {
+    expect(await resolveRole("HLAING@VGCTECHNOLOGY.COM")).toBe("VGC Dev Admin");
   });
 
-  it('returns "Administrator" for admin emails not in dev list', () => {
-    expect(resolveRole("hamidi@vgctechnology.com")).toBe("Administrator");
-    expect(resolveRole("adrian@vgctechnology.com")).toBe("Administrator");
+  it('returns "Administrator" for admin emails not in dev list', async () => {
+    expect(await resolveRole("hamidi@vgctechnology.com")).toBe("Administrator");
+    expect(await resolveRole("adrian@vgctechnology.com")).toBe("Administrator");
   });
 
-  it('returns "L1 Support Engineer" for unknown emails', () => {
-    expect(resolveRole("random@example.com")).toBe("L1 Support Engineer");
+  it('returns "L1 Support Engineer" for unknown emails', async () => {
+    expect(await resolveRole("random@example.com")).toBe("L1 Support Engineer");
   });
 
-  it('returns "L1 Support Engineer" for null/undefined/empty', () => {
-    expect(resolveRole(null)).toBe("L1 Support Engineer");
-    expect(resolveRole(undefined)).toBe("L1 Support Engineer");
-    expect(resolveRole("")).toBe("L1 Support Engineer");
+  it('returns "L1 Support Engineer" for null/undefined/empty', async () => {
+    expect(await resolveRole(null)).toBe("L1 Support Engineer");
+    expect(await resolveRole(undefined)).toBe("L1 Support Engineer");
+    expect(await resolveRole("")).toBe("L1 Support Engineer");
   });
 });
 
