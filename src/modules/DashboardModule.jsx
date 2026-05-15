@@ -324,6 +324,311 @@ function PredictiveAnalyticsWidget({ incidents }) {
   );
 }
 
+/* ─── Ticket Volume Forecaster ─────────────────────────── */
+function ForecastWidget({ incidents }) {
+  const forecast = useMemo(() => {
+    const now = Date.now();
+    const dailyCounts = new Array(30).fill(0);
+    const catDaily = {};
+    incidents.forEach(i => {
+      const ts = new Date(i.createdAt || i.created || 0).getTime();
+      const daysAgo = Math.floor((now - ts) / 86400000);
+      if (daysAgo >= 0 && daysAgo < 30) {
+        dailyCounts[29 - daysAgo]++;
+        const cat = i.category || "Other";
+        if (!catDaily[cat]) catDaily[cat] = 0;
+        catDaily[cat]++;
+      }
+    });
+    const n = dailyCounts.length;
+    const sumX = dailyCounts.reduce((s, _, i) => s + i, 0);
+    const sumY = dailyCounts.reduce((s, c) => s + c, 0);
+    const sumXY = dailyCounts.reduce((s, c, i) => s + i * c, 0);
+    const sumX2 = dailyCounts.reduce((s, _, i) => s + i * i, 0);
+    const denom = n * sumX2 - sumX * sumX;
+    const slope = denom ? (n * sumXY - sumX * sumY) / denom : 0;
+    const intercept = (sumY - slope * sumX) / n;
+
+    const next7 = [];
+    for (let d = 1; d <= 7; d++) {
+      next7.push(Math.max(0, Math.round(intercept + slope * (n + d - 1))));
+    }
+    const currentAvg = sumY / n;
+    const forecastAvg = next7.reduce((s, v) => s + v, 0) / 7;
+    const pctChange = currentAvg > 0 ? Math.round(((forecastAvg - currentAvg) / currentAvg) * 100) : 0;
+    const trend = pctChange > 5 ? "up" : pctChange < -5 ? "down" : "flat";
+    const topCats = Object.entries(catDaily).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const totalCat = topCats.reduce((s, [, c]) => s + c, 0) || 1;
+    const needStaff = forecastAvg > currentAvg * 1.2;
+    return { dailyCounts, next7, currentAvg: Math.round(currentAvg * 10) / 10, forecastAvg: Math.round(forecastAvg * 10) / 10, pctChange, trend, topCats, totalCat, needStaff, slope: Math.round(slope * 100) / 100 };
+  }, [incidents]);
+
+  const allVals = [...forecast.dailyCounts.slice(-14), ...forecast.next7];
+  const maxVal = Math.max(...allVals, 1);
+  const trendColor = forecast.trend === "up" ? "#FF6B6B" : forecast.trend === "down" ? "#4CAF50" : "#FFB347";
+  const trendIcon = forecast.trend === "up" ? "↗" : forecast.trend === "down" ? "↘" : "→";
+
+  return (
+    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>🔮</span> 7-Day Volume Forecast
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: `${trendColor}15`, color: trendColor, fontWeight: 600 }}>
+            {trendIcon} {forecast.pctChange > 0 ? "+" : ""}{forecast.pctChange}% vs current
+          </span>
+        </h3>
+        <div style={{ fontSize: 10, color: "#5A6178" }}>Current avg: {forecast.currentAvg}/day · Forecast avg: {forecast.forecastAvg}/day</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+        <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 10 }}>Last 14 Days + 7-Day Forecast</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 70 }}>
+            {forecast.dailyCounts.slice(-14).map((c, i) => (
+              <div key={`h-${i}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                <span style={{ fontSize: 7, color: "#64B5F6", fontFamily: "'JetBrains Mono', monospace" }}>{c || ""}</span>
+                <div style={{ width: "100%", height: `${(c / maxVal) * 50}px`, background: "linear-gradient(180deg, #64B5F6, #64B5F644)", borderRadius: "2px 2px 0 0", minHeight: c > 0 ? 2 : 0 }} />
+              </div>
+            ))}
+            <div style={{ width: 1, height: 50, background: "#5A617844", margin: "0 1px" }} />
+            {forecast.next7.map((c, i) => (
+              <div key={`f-${i}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                <span style={{ fontSize: 7, color: "#06B6D4", fontFamily: "'JetBrains Mono', monospace" }}>{c}</span>
+                <div style={{ width: "100%", height: `${(c / maxVal) * 50}px`, background: "linear-gradient(180deg, #06B6D4, #06B6D444)", borderRadius: "2px 2px 0 0", minHeight: 2, borderStyle: "dashed", borderWidth: "1px 1px 0 1px", borderColor: "#06B6D444" }} />
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 12, marginTop: 6, justifyContent: "center" }}>
+            <span style={{ fontSize: 9, color: "#64B5F6", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 5, height: 5, borderRadius: 1, background: "#64B5F6", display: "inline-block" }} /> Actual (14d)</span>
+            <span style={{ fontSize: 9, color: "#06B6D4", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 5, height: 5, borderRadius: 1, background: "#06B6D4", display: "inline-block", borderStyle: "dashed", borderWidth: 1 }} /> Forecast (7d)</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ background: "#0A0C14", borderRadius: 8, padding: 14, border: "1px solid #1E213044", flex: 1 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#C4CAD6", marginBottom: 8 }}>Category Breakdown (30d)</div>
+            {forecast.topCats.map(([cat, count], i) => {
+              const pct = Math.round((count / forecast.totalCat) * 100);
+              const barColors = ["#6366F1", "#06B6D4", "#10B981", "#FFB347", "#FF6B6B"];
+              return (
+                <div key={i} style={{ marginBottom: 4 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#C4CAD6", marginBottom: 2 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{cat}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: barColors[i] || "#5A6178" }}>{pct}%</span>
+                  </div>
+                  <div style={{ height: 4, background: "#1E2130", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: barColors[i] || "#5A6178", borderRadius: 2 }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {forecast.needStaff && (
+            <div style={{ background: "#FF6B6B12", borderRadius: 8, padding: 12, border: "1px solid #FF6B6B33" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#FF6B6B", marginBottom: 4 }}>⚠ Staffing Alert</div>
+              <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>Forecast volume is {forecast.pctChange}% above current. Consider adding coverage for the next week.</div>
+            </div>
+          )}
+          {!forecast.needStaff && (
+            <div style={{ background: "#10B98112", borderRadius: 8, padding: 12, border: "1px solid #10B98133" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#10B981", marginBottom: 4 }}>✓ Staffing OK</div>
+              <div style={{ fontSize: 10, color: "#C4CAD6", lineHeight: 1.4 }}>Forecast volume is within normal range. Current staffing should be sufficient.</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── KB Coverage Widget ─────────────────────────────────── */
+function KbCoverageWidget() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/ai/kb-coverage", { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => { if (!cancelled) setData(d); })
+      .catch(e => { if (!cancelled) setErr(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) return (
+    <div style={{ background: "#1e293b", borderRadius: 12, padding: 24, marginBottom: 24 }}>
+      <h3 style={{ color: "#f1f5f9", margin: 0, fontSize: 16 }}>📚 KB Coverage Analysis</h3>
+      <p style={{ color: "#94a3b8", marginTop: 12 }}>Loading…</p>
+    </div>
+  );
+  if (err) return (
+    <div style={{ background: "#1e293b", borderRadius: 12, padding: 24, marginBottom: 24 }}>
+      <h3 style={{ color: "#f1f5f9", margin: 0, fontSize: 16 }}>📚 KB Coverage Analysis</h3>
+      <p style={{ color: "#f87171", marginTop: 12 }}>Error: {err}</p>
+    </div>
+  );
+  if (!data) return null;
+
+  const pct = data.overallCoverage || 0;
+  const ringColor = pct >= 70 ? "#22c55e" : pct >= 30 ? "#eab308" : "#ef4444";
+  const circumference = 2 * Math.PI * 40;
+  const offset = circumference - (pct / 100) * circumference;
+  const topCats = (data.categories || []).slice(0, 6);
+  const gaps = (data.gaps || []).slice(0, 5);
+
+  return (
+    <div style={{ background: "#1e293b", borderRadius: 12, padding: 24, marginBottom: 24 }}>
+      <h3 style={{ color: "#f1f5f9", margin: 0, fontSize: 16, marginBottom: 16 }}>📚 KB Coverage Analysis</h3>
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
+        {/* Ring chart */}
+        <div style={{ textAlign: "center", minWidth: 120 }}>
+          <svg width="100" height="100" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="40" fill="none" stroke="#334155" strokeWidth="8" />
+            <circle cx="50" cy="50" r="40" fill="none" stroke={ringColor} strokeWidth="8"
+              strokeDasharray={circumference} strokeDashoffset={offset}
+              strokeLinecap="round" transform="rotate(-90 50 50)" />
+            <text x="50" y="50" textAnchor="middle" dominantBaseline="central"
+              fill={ringColor} fontSize="20" fontWeight="bold">{pct}%</text>
+          </svg>
+          <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>Overall Coverage</div>
+          <div style={{ color: "#64748b", fontSize: 11 }}>{data.totalKbArticles || 0} articles / {data.totalResolved || 0} resolved</div>
+        </div>
+
+        {/* Category bars */}
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ color: "#94a3b8", fontSize: 12, marginBottom: 8 }}>Category Coverage</div>
+          {topCats.map(c => {
+            const barColor = c.coveragePct >= 70 ? "#22c55e" : c.coveragePct >= 30 ? "#eab308" : "#ef4444";
+            return (
+              <div key={c.category} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                  <span style={{ color: "#e2e8f0" }}>{c.category}</span>
+                  <span style={{ color: barColor }}>{c.coveragePct}%</span>
+                </div>
+                <div style={{ background: "#0f172a", borderRadius: 4, height: 6, marginTop: 2 }}>
+                  <div style={{ background: barColor, height: "100%", borderRadius: 4, width: `${c.coveragePct}%`, transition: "width 0.5s" }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Gap list */}
+        {gaps.length > 0 && (
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>⚠ Coverage Gaps (5+ resolved, 0 articles)</div>
+            {gaps.map(g => (
+              <div key={g.category} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 12px", marginBottom: 6, borderLeft: "3px solid #ef4444" }}>
+                <div style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600 }}>{g.category}</div>
+                <div style={{ color: "#94a3b8", fontSize: 11 }}>{g.resolvedCount} resolved tickets — no KB article</div>
+                <div style={{ color: "#60a5fa", fontSize: 11, marginTop: 2 }}>💡 {g.suggestedTitle}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Team Workload Heatmap ────────────────────────────── */
+function WorkloadHeatmapWidget({ incidents }) {
+  const heatData = useMemo(() => {
+    const engineers = {};
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    incidents.forEach(i => {
+      const assignee = i.assignee;
+      if (!assignee) return;
+      if (!engineers[assignee]) engineers[assignee] = { open: 0, resolved: 0, days: new Array(7).fill(0), totalAge: 0 };
+      const eng = engineers[assignee];
+      const created = new Date(i.createdAt || i.created || 0);
+      if (!isNaN(created.getTime())) eng.days[created.getDay()]++;
+      if (i.status === "Resolved" || i.status === "Closed") eng.resolved++;
+      else {
+        eng.open++;
+        const age = (Date.now() - created.getTime()) / 3600000;
+        if (age > 0) eng.totalAge += age;
+      }
+    });
+    const rows = Object.entries(engineers)
+      .map(([name, data]) => ({
+        name,
+        open: data.open,
+        resolved: data.resolved,
+        days: data.days,
+        avgAge: data.open > 0 ? Math.round(data.totalAge / data.open) : 0,
+        score: Math.min(100, Math.round((data.open / 6) * 100)),
+      }))
+      .sort((a, b) => b.open - a.open)
+      .slice(0, 12);
+    const maxDay = Math.max(...rows.flatMap(r => r.days), 1);
+    return { rows, dayNames, maxDay };
+  }, [incidents]);
+
+  const getHeatColor = (val, max) => {
+    const pct = val / max;
+    if (pct === 0) return "#1E2130";
+    if (pct < 0.25) return "#10B98133";
+    if (pct < 0.5) return "#10B98166";
+    if (pct < 0.75) return "#FFB34766";
+    return "#FF6B6B88";
+  };
+  const getStatusColor = (score) => score <= 40 ? "#81C784" : score <= 70 ? "#FFB347" : "#FF6B6B";
+  const getStatusLabel = (score) => score <= 40 ? "Healthy" : score <= 70 ? "Moderate" : "Heavy";
+
+  if (heatData.rows.length === 0) return null;
+
+  return (
+    <div style={{ background: "#0F1117", borderRadius: 10, border: "1px solid #1E2130", padding: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#E8ECF4", fontFamily: "'Space Grotesk', sans-serif", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>🗓️</span> Team Workload Heatmap
+        </h3>
+        <div style={{ display: "flex", gap: 8, fontSize: 9, color: "#5A6178" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#10B98166" }} /> Low</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#FFB34766" }} /> Med</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#FF6B6B88" }} /> High</span>
+        </div>
+      </div>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", padding: "6px 8px", color: "#5A6178", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", fontSize: 9, borderBottom: "1px solid #1E2130" }}>Engineer</th>
+              {heatData.dayNames.map(d => <th key={d} style={{ textAlign: "center", padding: "6px 4px", color: "#5A6178", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", fontSize: 9, borderBottom: "1px solid #1E2130", width: 44 }}>{d}</th>)}
+              <th style={{ textAlign: "center", padding: "6px 8px", color: "#5A6178", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", fontSize: 9, borderBottom: "1px solid #1E2130", width: 50 }}>Open</th>
+              <th style={{ textAlign: "center", padding: "6px 8px", color: "#5A6178", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", fontSize: 9, borderBottom: "1px solid #1E2130", width: 60 }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {heatData.rows.map((eng, i) => (
+              <tr key={eng.name} style={{ borderBottom: "1px solid #1E213044" }}>
+                <td style={{ padding: "6px 8px", color: "#E8ECF4", fontWeight: 500, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={eng.name}>{eng.name}</td>
+                {eng.days.map((val, d) => (
+                  <td key={d} style={{ padding: 3, textAlign: "center" }}>
+                    <div title={`${val} tickets on ${heatData.dayNames[d]}`} style={{ width: 32, height: 24, borderRadius: 4, background: getHeatColor(val, heatData.maxDay), display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto" }}>
+                      <span style={{ fontSize: 9, color: val > 0 ? "#E8ECF4" : "#5A617844", fontFamily: "'JetBrains Mono', monospace" }}>{val || "·"}</span>
+                    </div>
+                  </td>
+                ))}
+                <td style={{ textAlign: "center", padding: "6px 8px" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: getStatusColor(eng.score), fontFamily: "'JetBrains Mono', monospace" }}>{eng.open}</span>
+                </td>
+                <td style={{ textAlign: "center", padding: "6px 8px" }}>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: getStatusColor(eng.score), padding: "2px 6px", borderRadius: 8, background: `${getStatusColor(eng.score)}15` }}>{getStatusLabel(eng.score)}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Phase 11.1: SLA Countdown Tracker ─────────────────── */
 function SlaCountdownWidget({ incidents, computeIncidentSla, setActiveModule }) {
   const [tick, setTick] = useState(0);
@@ -3936,6 +4241,15 @@ return (
 
     {/* ─── AI Predictive Analytics Widget ─── */}
     <PredictiveAnalyticsWidget incidents={incidents} />
+
+    {/* ─── 7-Day Volume Forecast Widget ─── */}
+    <ForecastWidget incidents={incidents} />
+
+    {/* ─── KB Coverage Analysis Widget ─── */}
+    <KbCoverageWidget />
+
+    {/* ─── Team Workload Heatmap Widget ─── */}
+    <WorkloadHeatmapWidget incidents={incidents} />
 
   </div>
 );

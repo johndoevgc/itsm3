@@ -61,7 +61,7 @@ export default function AnalyticsModuleWrapper({ ctx }) {
         </button>
       </div>
       {analyticsSubTab === "reports" && <ReportingModule assets={assets} changes={changes} csatAiAnalysis={csatAiAnalysis} currentUser={currentUser} customers={customers} incidents={incidents} problems={problems} requests={requests} serviceReports={serviceReports} setActiveModule={setActiveModule} setServiceReports={setServiceReports} showToast={showToast} softDelete={softDelete} />}
-      {analyticsSubTab === "cybernews" && <CyberNewsModule users={users} vendors={vendors} />}
+      {analyticsSubTab === "cybernews" && <CyberNewsModule users={users} vendors={vendors} showToast={showToast} />}
       {analyticsSubTab === "architecture" && <ArchitectureDiagram />}
       {analyticsSubTab === "insights" && (
         <div>

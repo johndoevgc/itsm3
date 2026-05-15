@@ -1,12 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 
-export default function CyberNewsModule({ users, vendors, azureOpenAI }) {
+export default function CyberNewsModule({ users, vendors, azureOpenAI, showToast }) {
   const [threatEmailDraft, setThreatEmailDraft] = React.useState("");
   const [cyberNewsLog, setCyberNewsLog] = React.useState([]);
   const [liveThreats, setLiveThreats] = useState([]);
   const [newsLoading, setNewsLoading] = useState(true);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [feedStatus, setFeedStatus] = useState("");
+  const [autoSentThreats, setAutoSentThreats] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("vgc_auto_sent_advisories") || "[]")); } catch { return new Set(); }
+  });
+  const autoSendingRef = useRef(new Set());
 
   const fetchCyberNews = async (forceRefresh = false) => {
     setNewsLoading(true);
@@ -171,6 +175,53 @@ export default function CyberNewsModule({ users, vendors, azureOpenAI }) {
 
   const allThreats = liveThreats.length > 0 ? liveThreats : fallbackThreats;
 
+  const markAutoSent = (threatId) => {
+    setAutoSentThreats(prev => {
+      const next = new Set(prev);
+      next.add(threatId);
+      try { localStorage.setItem("vgc_auto_sent_advisories", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+
+  const autoSendAdvisory = async (threat) => {
+    if (autoSentThreats.has(threat.id) || autoSendingRef.current.has(threat.id)) return;
+    autoSendingRef.current.add(threat.id);
+    try {
+      const resp = await fetch("/api/threat/advisory/send", {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ threat }),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        markAutoSent(threat.id);
+        if (showToast) showToast(`🔒 Auto-sent cybersecurity advisory: ${threat.title.substring(0, 60)}…`, "success");
+      } else {
+        console.error("[Auto-Advisory] Failed:", data.error);
+      }
+    } catch (err) {
+      console.error("[Auto-Advisory] Error:", err.message);
+    } finally {
+      autoSendingRef.current.delete(threat.id);
+    }
+  };
+
+  useEffect(() => {
+    if (allThreats.length === 0) return;
+    const candidates = allThreats.filter(t =>
+      (t.severity === "Critical" || t.severity === "High") &&
+      t.isNew &&
+      !autoSentThreats.has(t.id) &&
+      !autoSendingRef.current.has(t.id)
+    );
+    if (candidates.length === 0) return;
+    (async () => {
+      for (const threat of candidates) {
+        await autoSendAdvisory(threat);
+      }
+    })();
+  }, [allThreats]);
+
   const [filterSev, setFilterSev] = useState("All");
   const [filterCategory, setFilterCategory] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -264,6 +315,8 @@ export default function CyberNewsModule({ users, vendors, azureOpenAI }) {
                 <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E2130", fontSize: 9, color: "#64B5F6" }}>{threat.region}</span>
                 <span style={{ padding: "1px 6px", borderRadius: 3, background: "#1E213066", fontSize: 9, color: "#A0AEC0" }}>{threat.category}</span>
                 {threat.affectsUs && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#FF444422", fontSize: 9, color: "#FF6B6B", fontWeight: 600 }}>⚠ AFFECTS US</span>}
+                {autoSentThreats.has(threat.id) && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#81C78422", fontSize: 9, color: "#81C784", fontWeight: 600 }}>✓ AUTO-ADVISORY SENT</span>}
+                {autoSendingRef.current.has(threat.id) && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#FFB34722", fontSize: 9, color: "#FFB347", fontWeight: 600, animation: "pulse 2s infinite" }}>⏳ SENDING...</span>}
                 <span style={{ padding: "2px 6px", borderRadius: 3, background: statusColors[status] + "22", color: statusColors[status], fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{statusLabels[status]?.toUpperCase()}</span>
                 <span style={{ fontSize: 9, color: "#5A6178", marginLeft: "auto" }}>{threat.time}</span>
                 <span style={{ color: "#5A6178", fontSize: 10, transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>▼</span>

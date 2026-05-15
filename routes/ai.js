@@ -6207,6 +6207,112 @@ If the command is ambiguous, return multiple possible interpretations in an "alt
     }
   }
 
+  // ─── NLP Command with Execution ───────────────────────────────────
+  // POST /api/ai/nlp-command — parse natural language + optionally execute the action
+  if (pathname === "/api/ai/nlp-command" && req.method === "POST") {
+    try {
+      const { command, confirm } = body || {};
+      if (!command) return json(res, 400, { error: "command required" });
+
+      const systemPrompt = `You are an AI command parser for an ITSM platform. Parse the user's natural language command into a structured action.
+Available actions:
+- create_incident: { action: "create_incident", params: { title, description, priority, category } }
+- assign_incident: { action: "assign_incident", params: { ticketId, assignee } }
+- escalate_incident: { action: "escalate_incident", params: { ticketId, reason } }
+- change_priority: { action: "change_priority", params: { ticketId, newPriority } }
+- add_note: { action: "add_note", params: { ticketId, note } }
+- search_kb: { action: "search_kb", params: { query } }
+- run_report: { action: "run_report", params: { type, timeRange } }
+- close_ticket: { action: "close_ticket", params: { ticketId, resolution } }
+
+Return ONLY JSON: { "action": "<type>", "params": { ... }, "confidence": <0-100>, "explanation": "<what this will do>" }`;
+
+      const raw = await callAI(systemPrompt, `Command: "${command}"`, { tier: "secondary", maxTokens: 400 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (!confirm) return json(res, 200, { ...parsed, executed: false });
+
+      let execResult = null;
+      const p = parsed.params || {};
+      if (parsed.action === "create_incident" && parsed.confidence >= 70) {
+        const newId = `INC-${Date.now().toString(36).toUpperCase()}`;
+        const inc = { id: newId, title: p.title || command, description: p.description || "", priority: p.priority || "Sev-C", category: p.category || "General", status: "Open", createdAt: new Date().toISOString(), source: "AI Command Bar" };
+        await db.upsert("incidents", newId, JSON.stringify(inc));
+        execResult = { created: newId, title: inc.title };
+      } else if (parsed.action === "assign_incident" && p.ticketId && p.assignee) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          d.assignee = p.assignee;
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "assignment", user: "AI Command Bar", time: new Date().toISOString(), detail: `Assigned to ${p.assignee} via command bar` });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { assigned: p.ticketId, to: p.assignee };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "escalate_incident" && p.ticketId) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          const prev = d.priority;
+          if (d.priority === "Sev-D") d.priority = "Sev-C";
+          else if (d.priority === "Sev-C") d.priority = "Sev-B";
+          else if (d.priority === "Sev-B") d.priority = "Sev-A";
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "escalation", user: "AI Command Bar", time: new Date().toISOString(), detail: `Escalated ${prev} → ${d.priority}: ${p.reason || "via command bar"}` });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { escalated: p.ticketId, from: prev, to: d.priority };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "change_priority" && p.ticketId && p.newPriority) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          const prev = d.priority;
+          d.priority = p.newPriority;
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "priority_change", user: "AI Command Bar", time: new Date().toISOString(), detail: `Priority ${prev} → ${p.newPriority} via command bar` });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { changed: p.ticketId, from: prev, to: p.newPriority };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "add_note" && p.ticketId && p.note) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "note", user: "AI Command Bar", time: new Date().toISOString(), detail: p.note });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { noted: p.ticketId };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "search_kb" && p.query) {
+        const kb = await db.getAll("kb");
+        const q = (p.query || "").toLowerCase();
+        const results = kb.filter(k => {
+          const d = typeof k.data === "string" ? JSON.parse(k.data) : k.data;
+          return ((d.title || "") + " " + (d.content || "")).toLowerCase().includes(q);
+        }).slice(0, 5).map(k => { const d = typeof k.data === "string" ? JSON.parse(k.data) : k.data; return { id: k.id, title: d.title }; });
+        execResult = { results, count: results.length };
+      } else if (parsed.action === "close_ticket" && p.ticketId) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          d.status = "Resolved";
+          d.resolvedAt = new Date().toISOString();
+          d.resolution = p.resolution || "Resolved via AI Command Bar";
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "resolve", user: "AI Command Bar", time: new Date().toISOString(), detail: d.resolution });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { closed: p.ticketId };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else {
+        execResult = { error: "Action not executable or confidence too low" };
+      }
+
+      return json(res, 200, { ...parsed, executed: !execResult?.error, result: execResult });
+    } catch (err) {
+      return json(res, 500, { error: "nlp-command failed", details: err.message });
+    }
+  }
+
   // ─── Feature 21: Auto-Generated Status Updates ────────────────────────
   // POST /api/ai/generate-status-update — generate stakeholder update for active incident
   if (pathname === "/api/ai/generate-status-update" && req.method === "POST") {
@@ -6797,6 +6903,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
         await db.upsert("ai_audit_log", `autopilot-${inc.id}-${Date.now()}`, { type: "auto_resolve", ticketId: inc.id, confidence, timestamp: new Date().toISOString() });
         results.resolved.push({ id: inc.id, title: inc.title, confidence });
       }
+      if (wsServer && (results.resolved.length || results.assigned.length || results.responded.length)) wsServer.broadcast("ai_actions", { action: "autopilot", summary: `Resolved ${results.resolved.length}, assigned ${results.assigned.length}, responded ${results.responded.length}` });
       return json(res, 200, { threshold, processed: open.length, results });
     } catch (err) {
       return json(res, 500, { error: "autopilot tick failed", details: err.message });
@@ -6882,6 +6989,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
           escalated.push({ id: inc.id, from: prevPriority, to: inc.priority, pct: Math.round(pct) });
         }
       }
+      if (wsServer && (escalated.length || warned.length)) wsServer.broadcast("ai_actions", { action: "sla_alert", summary: `${escalated.length} escalated, ${warned.length} warned of ${open.length} scanned` });
       return json(res, 200, { scanned: open.length, escalated, warned });
     } catch (err) {
       return json(res, 500, { error: "sla-defender failed", details: err.message });
@@ -6922,6 +7030,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
         }
         merged.push({ parentId: parent.id, childCount: children.length, category: parent.category });
       }
+      if (wsServer && merged.length) wsServer.broadcast("ai_actions", { action: "duplicate_storm", summary: `${merged.length} storms detected, merged ${merged.reduce((s, m) => s + m.childCount, 0)} duplicates` });
       return json(res, 200, { scannedRecent: recent.length, stormsDetected: merged.length, merged });
     } catch (err) {
       return json(res, 500, { error: "duplicate-storm failed", details: err.message });
@@ -6953,7 +7062,9 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
           }
         }
       }
-      return json(res, 200, { score, frustrated: score > frustThreshold, action, suggestedResponse: score > frustThreshold ? "I understand your frustration and I'm prioritizing this immediately. Let me escalate to ensure we resolve this as quickly as possible." : null });
+      const frustrated = score > frustThreshold;
+      if (wsServer && frustrated) wsServer.broadcast("ai_actions", { action: "frustration", summary: `Frustration detected on ${ticketId || "ticket"} (score: ${score})` });
+      return json(res, 200, { score, frustrated, action, suggestedResponse: frustrated ? "I understand your frustration and I'm prioritizing this immediately. Let me escalate to ensure we resolve this as quickly as possible." : null });
     } catch (err) {
       return json(res, 500, { error: "frustration-detect failed", details: err.message });
     }
@@ -6990,6 +7101,7 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
       }
       await db.upsert("incidents", ticketId, JSON.stringify(inc));
       await db.upsert("ai_audit_log", `remediate-${ticketId}-${Date.now()}`, { type: "auto_remediation", ticketId, playbook: matched.name, auto: matched.auto, timestamp: new Date().toISOString() });
+      if (wsServer && matched) wsServer.broadcast("ai_actions", { action: "remediation", summary: `Playbook "${matched.name}" ${matched.auto ? "auto-resolved" : "queued"} for ${ticketId}` });
       return json(res, 200, { executed: true, playbook: matched.name, steps: matched.steps, autoResolved: matched.auto, ticketId });
     } catch (err) {
       return json(res, 500, { error: "auto-remediate failed", details: err.message });
@@ -7428,6 +7540,55 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
       return json(res, 200, { report });
     } catch (err) {
       return json(res, 500, { error: "performance-report failed", details: err.message });
+    }
+  }
+
+  // ─── KB Coverage Analysis (no AI call) ─────────────────────────────
+  // GET /api/ai/kb-coverage — per-category coverage ratio, gaps, and suggested article titles
+  if (pathname === "/api/ai/kb-coverage" && req.method === "GET") {
+    try {
+      const incRaw = await db.getAll("incidents");
+      const incidents = incRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const kbRaw = await db.getAll("kb");
+      const kbArticles = kbRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      const resolved = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+      const catMap = {};
+      for (const inc of resolved) {
+        const cat = inc.category || "General";
+        if (!catMap[cat]) catMap[cat] = { resolved: 0, kbCount: 0, resolutions: {} };
+        catMap[cat].resolved++;
+        const rt = (inc.resolution || inc.resolutionNotes || "").trim();
+        if (rt) catMap[cat].resolutions[rt] = (catMap[cat].resolutions[rt] || 0) + 1;
+      }
+      for (const kb of kbArticles) {
+        const cat = kb.category || "General";
+        if (!catMap[cat]) catMap[cat] = { resolved: 0, kbCount: 0, resolutions: {} };
+        catMap[cat].kbCount++;
+      }
+
+      const categories = [];
+      const gaps = [];
+      let totalResolved = 0, totalKb = 0;
+      for (const [cat, data] of Object.entries(catMap)) {
+        const coverage = data.resolved > 0 ? Math.round((data.kbCount / data.resolved) * 100) : (data.kbCount > 0 ? 100 : 0);
+        const entry = { category: cat, resolvedCount: data.resolved, kbArticleCount: data.kbCount, coveragePct: Math.min(coverage, 100) };
+        categories.push(entry);
+        totalResolved += data.resolved;
+        totalKb += data.kbCount;
+        if (data.resolved >= 5 && data.kbCount === 0) {
+          const topRes = Object.entries(data.resolutions).sort((a, b) => b[1] - a[1])[0];
+          gaps.push({ ...entry, suggestedTitle: topRes ? `KB: ${topRes[0].substring(0, 80)}` : `KB: Troubleshooting ${cat} Issues` });
+        }
+      }
+      categories.sort((a, b) => b.resolvedCount - a.resolvedCount);
+      gaps.sort((a, b) => b.resolvedCount - a.resolvedCount);
+      const overallCoverage = totalResolved > 0 ? Math.round((totalKb / totalResolved) * 100) : 0;
+
+      return json(res, 200, { categories, gaps: gaps.slice(0, 10), overallCoverage: Math.min(overallCoverage, 100), totalResolved, totalKbArticles: kbArticles.length });
+    } catch (err) {
+      console.error("[KB Coverage]", err.message);
+      return json(res, 500, { error: "kb-coverage failed", details: err.message });
     }
   }
 

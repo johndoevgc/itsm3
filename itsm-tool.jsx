@@ -3300,9 +3300,16 @@ export default function ITSMApp() {
         ws.onmessage = (ev) => {
           try {
             const msg = JSON.parse(ev.data);
-            if (!msg || !msg.collection) return;
+            const collection = msg.collection || msg.channel;
+            if (!msg || !collection) return;
+            // ─── AI Actions Push (ambient AI activity toasts) ───
+            if (collection === "ai_actions" && msg.data) {
+              const a = msg.data;
+              const labels = { autopilot: "Autopilot", sla_alert: "SLA Defender", duplicate_storm: "Duplicate Storm", frustration: "Frustration Alert", remediation: "Auto-Remediation", predictive: "Predictive Prevention" };
+              showToast(`🤖 ${labels[a.action] || "AI"}: ${a.summary || a.action}`, "info");
+            }
             // ─── Proactive AI Card Push (real-time card notifications) ───
-            if (msg.collection === "ai_cards" && msg.data) {
+            if (collection === "ai_cards" && msg.data) {
               const cardData = msg.data;
               // Inject proactive card as an AI message
               setAiMessages(prev => [...prev, {
@@ -3318,7 +3325,7 @@ export default function ITSMApp() {
               }
             }
             // ─── In-App Notification Bell ───
-            if (msg.collection === "notifications" && msg.data) {
+            if (collection === "notifications" && msg.data) {
               const nArr = Array.isArray(msg.data) ? msg.data : [msg.data];
               setInAppNotifs(prev => {
                 const ids = new Set(prev.map(n => n.id));
@@ -3327,15 +3334,15 @@ export default function ITSMApp() {
               });
             }
             // ─── v3.31.1 (Phase 1): Anomaly live-refresh on dashboard ───
-            if (msg.collection === "dashboard" && msg.action === "anomaly") {
+            if (collection === "dashboard" && msg.action === "anomaly") {
               try { window.dispatchEvent(new CustomEvent("vgc-anomaly-detected", { detail: msg.data || null })); } catch { /* ignore */ }
             }
             // ─── v3.32.0 (Phase 2): AI Summary live-refresh on worklog change ───
-            if (msg.collection === "worklog" && msg.incidentId) {
+            if (collection === "worklog" && msg.incidentId) {
               try { window.dispatchEvent(new CustomEvent("vgc-worklog-updated", { detail: { incidentId: msg.incidentId } })); } catch { /* ignore */ }
             }
             // ─── Proactive Assignment Notification ───
-            if (msg.collection === "incidents" && msg.data && (msg.action === "upsert" || msg.action === "update")) {
+            if (collection === "incidents" && msg.data && (msg.action === "upsert" || msg.action === "update")) {
               const d = Array.isArray(msg.data) ? msg.data : [msg.data];
               const me = currentUserRef.current?.name;
               if (me) {
@@ -3347,7 +3354,7 @@ export default function ITSMApp() {
               }
             }
             if (msg.action === "delete" || msg.action === "upsert" || msg.action === "update" || msg.action === "bulk_upsert" || msg.action === "bulk_update" || msg.action === "merge") {
-              scheduleRefresh(msg.collection);
+              scheduleRefresh(collection);
             }
           } catch { /* ignore non-JSON */ }
         };
@@ -5996,13 +6003,13 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                   </>
                 )}
 
-                {filtered.length === 0 && smartResults.length === 0 && cmdSearch.trim().split(/\s+/).length >= 3 && (
+                {filtered.length === 0 && smartResults.length === 0 && cmdSearch.trim().split(/\s+/).length >= 2 && (
                   <div style={{ padding: "10px 16px" }}>
                     {!cmdAiResult && !cmdAiLoading && (
                       <button onClick={async () => {
                         setCmdAiLoading(true);
                         try {
-                          const r = await fetch("/api/ai/command", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ command: cmdSearch }) });
+                          const r = await fetch("/api/ai/nlp-command", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ command: cmdSearch }) });
                           if (r.ok) setCmdAiResult(await r.json());
                         } catch {}
                         setCmdAiLoading(false);
@@ -6015,16 +6022,31 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                       <div style={{ background: "#0A0C14", borderRadius: 6, padding: 10, border: "1px solid #6366F133" }}>
                         <div style={{ fontSize: 10, color: "#6366F1", fontWeight: 700, marginBottom: 6 }}>AI Parsed Action</div>
                         <div style={{ fontSize: 12, color: "#E8ECF4", marginBottom: 4 }}>{cmdAiResult.explanation || cmdAiResult.action}</div>
-                        <div style={{ fontSize: 10, color: "#5A6178" }}>Action: {cmdAiResult.action} | Confidence: {cmdAiResult.confidence}%</div>
+                        <div style={{ fontSize: 10, color: "#5A6178", marginBottom: 4 }}>Action: {cmdAiResult.action} | Confidence: {cmdAiResult.confidence}%{cmdAiResult.params ? ` | ${JSON.stringify(cmdAiResult.params)}` : ""}</div>
+                        {cmdAiResult.executed && cmdAiResult.result && (
+                          <div style={{ fontSize: 11, color: "#10B981", padding: "6px 8px", background: "#10B98112", borderRadius: 4, marginBottom: 6 }}>✓ {JSON.stringify(cmdAiResult.result)}</div>
+                        )}
+                        {cmdAiResult.result?.error && (
+                          <div style={{ fontSize: 11, color: "#EF4444", padding: "6px 8px", background: "#EF444412", borderRadius: 4, marginBottom: 6 }}>{cmdAiResult.result.error}</div>
+                        )}
                         <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                          <button onClick={() => { showToast?.(`Command queued: ${cmdAiResult.action}`, "success"); setShowCommandPalette(false); setCmdSearch(""); setCmdAiResult(null); }} style={{ padding: "4px 10px", borderRadius: 4, background: "#10B98118", border: "1px solid #10B98133", color: "#10B981", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Execute</button>
-                          <button onClick={() => setCmdAiResult(null)} style={{ padding: "4px 10px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3F", color: "#A0AEC0", cursor: "pointer", fontSize: 10 }}>Cancel</button>
+                          {!cmdAiResult.executed && (
+                            <button onClick={async () => {
+                              setCmdAiLoading(true);
+                              try {
+                                const r = await fetch("/api/ai/nlp-command", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ command: cmdSearch, confirm: true }) });
+                                if (r.ok) { const data = await r.json(); setCmdAiResult(data); if (data.executed) showToast?.(`✓ ${data.action}: ${data.explanation || "done"}`, "success"); }
+                              } catch {}
+                              setCmdAiLoading(false);
+                            }} style={{ padding: "4px 10px", borderRadius: 4, background: "#10B98118", border: "1px solid #10B98133", color: "#10B981", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Execute</button>
+                          )}
+                          <button onClick={() => { setCmdAiResult(null); if (cmdAiResult.executed) { setShowCommandPalette(false); setCmdSearch(""); } }} style={{ padding: "4px 10px", borderRadius: 4, background: "#1E2130", border: "1px solid #2A2E3F", color: "#A0AEC0", cursor: "pointer", fontSize: 10 }}>{cmdAiResult.executed ? "Done" : "Cancel"}</button>
                         </div>
                       </div>
                     )}
                   </div>
                 )}
-                {filtered.length === 0 && smartResults.length === 0 && cmdSearch.trim().split(/\s+/).length < 3 && cmdSearch.length > 0 && <div style={{ padding: "20px 16px", textAlign: "center", color: "#5A6178", fontSize: 12 }}>No results found. Type 3+ words for AI command.</div>}
+                {filtered.length === 0 && smartResults.length === 0 && cmdSearch.trim().split(/\s+/).length < 2 && cmdSearch.length > 0 && <div style={{ padding: "20px 16px", textAlign: "center", color: "#5A6178", fontSize: 12 }}>No results found. Type 2+ words for AI command.</div>}
               </div>
               <div style={{ padding: "8px 16px", borderTop: "1px solid #1E2130", display: "flex", gap: 16, fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>
                 <span>↵ Select</span><span>ESC Close</span><span>Ctrl+K Toggle</span><span style={{ color: "#6366F1" }}>🤖 AI-powered search</span>
@@ -6203,7 +6225,7 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
             <div style={{ padding: 20, overflow: "auto", maxHeight: "65vh" }}>
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>TO:</div>
-                <input style={{ width: "100%", padding: "8px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 12, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }} defaultValue="itsupport@vgctechnology.com; helpdesk@vgctechnology.com" />
+                <input style={{ width: "100%", padding: "8px 12px", background: "#0A0C14", border: "1px solid #1E2130", borderRadius: 6, color: "#C4CAD6", fontSize: 12, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }} defaultValue="help@vgctechnology.com; itsupport@vgctechnology.com" />
               </div>
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>CC:</div>
@@ -6231,16 +6253,33 @@ INSTRUCTION: Use the LIVE ITSM DATA above to answer ALL questions about tickets,
                 <button onClick={() => setThreatEmailDraft(null)} style={{ padding: "8px 20px", borderRadius: 6, border: "1px solid #1E2130", background: "#0A0C14", color: "#5A6178", cursor: "pointer", fontSize: 12 }}>Cancel</button>
                 {azureOpenAI.enabled && (
                   <button onClick={async () => {
+                    const t = threatEmailDraft;
                     const aiBody = await callAzureOpenAI(
-                      "You are VGC-ITSM security email drafter for VGC Technology Pte Ltd, Singapore. Write professional security advisory emails. Include threat details, risk level, actions required, and sign off as VGC Technology Pte Ltd IT Security Operations.",
-                      `Draft a professional security advisory email about: ${threatEmailDraft.title}. Severity: ${threatEmailDraft.severity}. Summary: ${threatEmailDraft.aiSummary}. Include specific action items.`
+                      "You are VGC-ITSM senior cybersecurity advisory drafter for VGC Technology Pte Ltd, Singapore. Write professional, enterprise-grade security advisory emails. Include executive summary, threat technical details, affected systems, IoCs, numbered action items with clear ownership, reference links, and sign off as VGC Technology Pte Ltd IT Security Operations.",
+                      `Draft a professional cybersecurity advisory email.\n\nThreat: ${t.title}\nSeverity: ${t.severity}\nSource: ${t.source || "N/A"} (${t.sourceUrl || ""})\nCategory: ${t.category || "Advisory"}\n${t.cve ? `CVE: ${t.cve}` : ""}${t.cvss ? ` (CVSS: ${t.cvss})` : ""}\nSummary: ${t.aiSummary || "N/A"}\nAffected Systems: ${(t.affectedSystems || []).join(", ") || "Not specified"}\nMITRE ATT&CK: ${(t.mitreTactics || []).join(", ") || "Not specified"}\nIoCs: ${(t.iocs || []).join("; ") || "None available"}\nRecommended Steps:\n${(t.nextSteps || []).map((s, i) => `${i+1}. ${s}`).join("\n") || "Assess and monitor"}\nReferences:\n${(t.references || []).map(r => `- ${r.title}: ${r.url}`).join("\n") || "See source"}\n\nFormat with clear paragraphs, bullet points for IoCs, numbered next steps with deadlines, and clickable reference links. Be specific and actionable.`
                     );
                     if (aiBody) setThreatEmailDraft(prev => ({ ...prev, emailBody: aiBody }));
                   }} style={{ padding: "8px 20px", borderRadius: 6, border: "1px solid #6366F133", background: "#6366F118", color: "#6366F1", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
                     🔄 Regenerate with AI
                   </button>
                 )}
-                <button onClick={() => { setThreatEmailDraft(null); }} style={{ padding: "8px 20px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>✉️ Send via M365</button>
+                <button onClick={async () => {
+                  try {
+                    const resp = await fetch("/api/threat/advisory/send", {
+                      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+                      body: JSON.stringify({ threat: threatEmailDraft }),
+                    });
+                    const data = await resp.json();
+                    if (resp.ok && data.success) {
+                      showToast(`✉️ Advisory sent to help@vgctechnology.com — ${data.subject?.substring(0, 50)}`, "success");
+                    } else {
+                      showToast(`Failed to send advisory: ${data.error || "Unknown error"}`, "error");
+                    }
+                  } catch (err) {
+                    showToast(`Send failed: ${err.message}`, "error");
+                  }
+                  setThreatEmailDraft(null);
+                }} style={{ padding: "8px 20px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #6366F1, #06B6D4)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>✉️ Send via M365</button>
               </div>
             </div>
           </div>
