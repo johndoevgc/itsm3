@@ -6207,6 +6207,112 @@ If the command is ambiguous, return multiple possible interpretations in an "alt
     }
   }
 
+  // ─── NLP Command with Execution ───────────────────────────────────
+  // POST /api/ai/nlp-command — parse natural language + optionally execute the action
+  if (pathname === "/api/ai/nlp-command" && req.method === "POST") {
+    try {
+      const { command, confirm } = body || {};
+      if (!command) return json(res, 400, { error: "command required" });
+
+      const systemPrompt = `You are an AI command parser for an ITSM platform. Parse the user's natural language command into a structured action.
+Available actions:
+- create_incident: { action: "create_incident", params: { title, description, priority, category } }
+- assign_incident: { action: "assign_incident", params: { ticketId, assignee } }
+- escalate_incident: { action: "escalate_incident", params: { ticketId, reason } }
+- change_priority: { action: "change_priority", params: { ticketId, newPriority } }
+- add_note: { action: "add_note", params: { ticketId, note } }
+- search_kb: { action: "search_kb", params: { query } }
+- run_report: { action: "run_report", params: { type, timeRange } }
+- close_ticket: { action: "close_ticket", params: { ticketId, resolution } }
+
+Return ONLY JSON: { "action": "<type>", "params": { ... }, "confidence": <0-100>, "explanation": "<what this will do>" }`;
+
+      const raw = await callAI(systemPrompt, `Command: "${command}"`, { tier: "secondary", maxTokens: 400 });
+      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (!confirm) return json(res, 200, { ...parsed, executed: false });
+
+      let execResult = null;
+      const p = parsed.params || {};
+      if (parsed.action === "create_incident" && parsed.confidence >= 70) {
+        const newId = `INC-${Date.now().toString(36).toUpperCase()}`;
+        const inc = { id: newId, title: p.title || command, description: p.description || "", priority: p.priority || "Sev-C", category: p.category || "General", status: "Open", createdAt: new Date().toISOString(), source: "AI Command Bar" };
+        await db.upsert("incidents", newId, JSON.stringify(inc));
+        execResult = { created: newId, title: inc.title };
+      } else if (parsed.action === "assign_incident" && p.ticketId && p.assignee) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          d.assignee = p.assignee;
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "assignment", user: "AI Command Bar", time: new Date().toISOString(), detail: `Assigned to ${p.assignee} via command bar` });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { assigned: p.ticketId, to: p.assignee };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "escalate_incident" && p.ticketId) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          const prev = d.priority;
+          if (d.priority === "Sev-D") d.priority = "Sev-C";
+          else if (d.priority === "Sev-C") d.priority = "Sev-B";
+          else if (d.priority === "Sev-B") d.priority = "Sev-A";
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "escalation", user: "AI Command Bar", time: new Date().toISOString(), detail: `Escalated ${prev} → ${d.priority}: ${p.reason || "via command bar"}` });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { escalated: p.ticketId, from: prev, to: d.priority };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "change_priority" && p.ticketId && p.newPriority) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          const prev = d.priority;
+          d.priority = p.newPriority;
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "priority_change", user: "AI Command Bar", time: new Date().toISOString(), detail: `Priority ${prev} → ${p.newPriority} via command bar` });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { changed: p.ticketId, from: prev, to: p.newPriority };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "add_note" && p.ticketId && p.note) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "note", user: "AI Command Bar", time: new Date().toISOString(), detail: p.note });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { noted: p.ticketId };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else if (parsed.action === "search_kb" && p.query) {
+        const kb = await db.getAll("kb");
+        const q = (p.query || "").toLowerCase();
+        const results = kb.filter(k => {
+          const d = typeof k.data === "string" ? JSON.parse(k.data) : k.data;
+          return ((d.title || "") + " " + (d.content || "")).toLowerCase().includes(q);
+        }).slice(0, 5).map(k => { const d = typeof k.data === "string" ? JSON.parse(k.data) : k.data; return { id: k.id, title: d.title }; });
+        execResult = { results, count: results.length };
+      } else if (parsed.action === "close_ticket" && p.ticketId) {
+        const row = await db.getOne("incidents", p.ticketId).catch(() => null);
+        if (row) {
+          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          d.status = "Resolved";
+          d.resolvedAt = new Date().toISOString();
+          d.resolution = p.resolution || "Resolved via AI Command Bar";
+          d.activityLog = d.activityLog || [];
+          d.activityLog.push({ id: `CMD-${Date.now().toString(36)}`, type: "resolve", user: "AI Command Bar", time: new Date().toISOString(), detail: d.resolution });
+          await db.upsert("incidents", p.ticketId, JSON.stringify(d));
+          execResult = { closed: p.ticketId };
+        } else { execResult = { error: "Ticket not found" }; }
+      } else {
+        execResult = { error: "Action not executable or confidence too low" };
+      }
+
+      return json(res, 200, { ...parsed, executed: !execResult?.error, result: execResult });
+    } catch (err) {
+      return json(res, 500, { error: "nlp-command failed", details: err.message });
+    }
+  }
+
   // ─── Feature 21: Auto-Generated Status Updates ────────────────────────
   // POST /api/ai/generate-status-update — generate stakeholder update for active incident
   if (pathname === "/api/ai/generate-status-update" && req.method === "POST") {
@@ -6409,24 +6515,6 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
     }
   }
 
-  // ─── Feature 44: Post-Resolution Health Check ─────────────────────────
-  // POST /api/ai/health-check — verify resolved tickets haven't recurred
-  if (pathname === "/api/ai/health-check" && req.method === "POST") {
-    try {
-      const rows = await db.getAll("incidents");
-      const all = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
-      const cutoff48h = Date.now() - 48 * 3600000;
-      const recentlyResolved = all.filter(i => i.status === "Resolved" && i.resolvedAt && new Date(i.resolvedAt).getTime() <= cutoff48h && new Date(i.resolvedAt).getTime() > (cutoff48h - 24 * 3600000));
-      const results = recentlyResolved.map(resolved => {
-        const recurred = all.filter(i => i.id !== resolved.id && i.reporter === resolved.reporter && i.category === resolved.category && new Date(i.created).getTime() > new Date(resolved.resolvedAt).getTime());
-        return { id: resolved.id, title: resolved.title, reporter: resolved.reporter, resolvedAt: resolved.resolvedAt, recurred: recurred.length > 0, recurrenceCount: recurred.length, action: recurred.length > 0 ? "reopen" : "auto-close" };
-      });
-      return json(res, 200, { checked: results.length, healthy: results.filter(r => !r.recurred).length, recurred: results.filter(r => r.recurred).length, results });
-    } catch (err) {
-      return json(res, 500, { error: "health-check failed", details: err.message });
-    }
-  }
-
   // ─── Feature 45: Customer Success Score ───────────────────────────────
   // POST /api/ai/customer-health — compute per-customer health scores
   if (pathname === "/api/ai/customer-health" && req.method === "POST") {
@@ -6456,72 +6544,10 @@ Keep it concise (under 120 words). Return JSON: { "subject": "<subject>", "body"
     }
   }
 
-  // ─── Feature 41: Proactive Customer Notification ──────────────────────
-  // POST /api/ai/proactive-notify — generate proactive notification for service issue
-  if (pathname === "/api/ai/proactive-notify" && req.method === "POST") {
-    try {
-      const { incident, affectedCustomers } = body;
-      if (!incident) return json(res, 400, { error: "incident required" });
-      const systemPrompt = `Generate a proactive customer notification for a service issue.
-Tone: professional, transparent, reassuring. Under 80 words.
-Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta": "<estimated resolution time>" }`;
-      const raw = await callAI(systemPrompt, `Service Issue: ${incident.title}\nPriority: ${incident.priority}\nAffected: ${(affectedCustomers || []).join(", ") || "multiple users"}\nStatus: Being investigated`, { tier: "secondary", maxTokens: 400 });
-      const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
-      const result = JSON.parse(cleaned);
-      return json(res, 200, result);
-    } catch (err) {
-      return json(res, 500, { error: "proactive-notify failed", details: err.message });
-    }
-  }
-
-  // ─── Feature 48: Weekly AI Performance Report ─────────────────────────
-  // GET /api/ai/performance-report — compute AI accuracy and efficiency metrics
-  if (pathname === "/api/ai/performance-report" && req.method === "GET") {
-    try {
-      const rows = await db.getAll("ai_audit_log");
-      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
-      const weekCutoff = Date.now() - 7 * 86400000;
-      const thisWeek = entries.filter(e => new Date(e.at || e.startedAt || e.createdAt || 0).getTime() >= weekCutoff);
-      const triages = thisWeek.filter(e => e.type === "auto_triage");
-      const overrides = thisWeek.filter(e => e.type === "ai_feedback");
-      const autopilotRuns = thisWeek.filter(e => e.type === "ai_autopilot");
-      const accuracy = triages.length > 0 ? Math.round(((triages.length - overrides.length) / triages.length) * 100) : 100;
-      return json(res, 200, {
-        period: "last_7_days",
-        totalAiActions: thisWeek.length,
-        triages: triages.length,
-        overrides: overrides.length,
-        accuracy: Math.max(0, accuracy),
-        autopilotRuns: autopilotRuns.length,
-        topOverrideFields: (() => { const f = {}; overrides.forEach(o => { f[o.field] = (f[o.field] || 0) + 1; }); return Object.entries(f).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([field, count]) => ({ field, count })); })()
-      });
-    } catch (err) {
-      return json(res, 500, { error: "performance-report failed", details: err.message });
-    }
-  }
-
-  // ─── Feature 50: Configuration Recommendation Engine ──────────────────
-  // GET /api/ai/config-recommendations — suggest threshold/config optimizations
-  if (pathname === "/api/ai/config-recommendations" && req.method === "GET") {
-    try {
-      const rows = await db.getAll("ai_audit_log");
-      const entries = rows.map(r => { try { return typeof r.data === "string" ? JSON.parse(r.data) : r.data; } catch { return null; } }).filter(Boolean);
-      const overrides = entries.filter(e => e.type === "ai_feedback");
-      const triages = entries.filter(e => e.type === "auto_triage");
-      const recommendations = [];
-      const overrideRate = triages.length > 0 ? overrides.length / triages.length : 0;
-      if (overrideRate > 0.2) {
-        recommendations.push({ setting: "AI_AUTO_APPLY_THRESHOLD", current: AI_THRESHOLDS.autoApply, suggested: Math.min(95, AI_THRESHOLDS.autoApply + 5), reason: `Override rate is ${Math.round(overrideRate * 100)}% — increase threshold to reduce false auto-applies`, impact: "fewer incorrect auto-triages" });
-      } else if (overrideRate < 0.05 && triages.length > 20) {
-        recommendations.push({ setting: "AI_AUTO_APPLY_THRESHOLD", current: AI_THRESHOLDS.autoApply, suggested: Math.max(70, AI_THRESHOLDS.autoApply - 5), reason: `Override rate is only ${Math.round(overrideRate * 100)}% — AI is reliable enough to lower threshold`, impact: `~${Math.round(triages.length * 0.1)} more tickets auto-triaged per week` });
-      }
-      if (AI_THRESHOLDS.autoResolveConfidence < 90 && overrideRate < 0.1) {
-        recommendations.push({ setting: "AI_AUTO_RESOLVE_THRESHOLD", current: AI_THRESHOLDS.autoResolveConfidence, suggested: AI_THRESHOLDS.autoResolveConfidence - 3, reason: "High accuracy suggests auto-resolve can be more aggressive", impact: "More routine tickets resolved without human intervention" });
-      }
-      return json(res, 200, { recommendations, metrics: { overrideRate: Math.round(overrideRate * 100), totalTriages: triages.length, totalOverrides: overrides.length } });
-    } catch (err) {
-      return json(res, 500, { error: "config-recommendations failed", details: err.message });
-    }
+  // ─── Wave 2-10 shared body parse ──────────────────────────────────
+  let body = null;
+  if (req.method === "POST") {
+    try { body = await parseBody(req); } catch { body = {}; }
   }
 
   // ─── Feature 9: Conversational Report Builder ──────────────────────
@@ -6855,7 +6881,7 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
   // POST /api/ai/autopilot/tick — cron-invoked: auto-triage, assign, respond, resolve routine tickets
   if (pathname === "/api/ai/autopilot/tick" && req.method === "POST") {
     try {
-      const threshold = AI_AUTONOMY_LEVEL || 92;
+      const threshold = AI_THRESHOLDS.autopilotConfidence || 92;
       const incidents = await db.getAll("incidents");
       const open = incidents.filter(i => (i.status === "Open" || i.status === "New") && !i.autopilotProcessed);
       const results = { resolved: [], assigned: [], responded: [], skipped: 0 };
@@ -6877,6 +6903,7 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
         await db.upsert("ai_audit_log", `autopilot-${inc.id}-${Date.now()}`, { type: "auto_resolve", ticketId: inc.id, confidence, timestamp: new Date().toISOString() });
         results.resolved.push({ id: inc.id, title: inc.title, confidence });
       }
+      if (wsServer && (results.resolved.length || results.assigned.length || results.responded.length)) wsServer.broadcast("ai_actions", { action: "autopilot", summary: `Resolved ${results.resolved.length}, assigned ${results.assigned.length}, responded ${results.responded.length}` });
       return json(res, 200, { threshold, processed: open.length, results });
     } catch (err) {
       return json(res, 500, { error: "autopilot tick failed", details: err.message });
@@ -6946,13 +6973,13 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
         const target = inc.slaTarget || slaMap[inc.priority] || 9;
         const elapsed = inc.createdAt ? getBusinessHoursElapsed(inc.createdAt, now) : (inc.created || 0);
         const pct = target > 0 ? (elapsed / target) * 100 : 0;
-        if (pct >= 85 && pct < 100 && !inc.slaDefenderWarned) {
+        if (pct >= (AI_THRESHOLDS.slaEscalationThreshold || 85) && pct < 100 && !inc.slaDefenderWarned) {
           inc.slaDefenderWarned = true;
           inc.activityLog = inc.activityLog || [];
           inc.activityLog.push({ id: `SLA-W-${Date.now().toString(36)}`, type: "sla_warning", user: "AI SLA Defender", time: now.toISOString(), detail: `SLA ${Math.round(pct)}% consumed — breach imminent` });
           await db.upsert("incidents", inc.id, JSON.stringify(inc));
           warned.push({ id: inc.id, pct: Math.round(pct), target });
-        } else if (pct >= 70 && !inc.slaDefenderEscalated && inc.priority && (inc.priority.includes("A") || inc.priority.includes("B"))) {
+        } else if (pct >= (AI_THRESHOLDS.slaBreachThreshold || 70) && !inc.slaDefenderEscalated && inc.priority && (inc.priority.includes("A") || inc.priority.includes("B"))) {
           inc.slaDefenderEscalated = true;
           const prevPriority = inc.priority;
           if (inc.priority.includes("B")) inc.priority = "Sev-A";
@@ -6962,6 +6989,7 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
           escalated.push({ id: inc.id, from: prevPriority, to: inc.priority, pct: Math.round(pct) });
         }
       }
+      if (wsServer && (escalated.length || warned.length)) wsServer.broadcast("ai_actions", { action: "sla_alert", summary: `${escalated.length} escalated, ${warned.length} warned of ${open.length} scanned` });
       return json(res, 200, { scanned: open.length, escalated, warned });
     } catch (err) {
       return json(res, 500, { error: "sla-defender failed", details: err.message });
@@ -6985,7 +7013,7 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
       }
       const merged = [];
       for (const [key, group] of Object.entries(groups)) {
-        if (group.length < 3) continue;
+        if (group.length < (AI_THRESHOLDS.stormMinTickets || 3)) continue;
         const parent = group[0];
         const children = group.slice(1);
         parent.isDuplicateParent = true;
@@ -7002,6 +7030,7 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
         }
         merged.push({ parentId: parent.id, childCount: children.length, category: parent.category });
       }
+      if (wsServer && merged.length) wsServer.broadcast("ai_actions", { action: "duplicate_storm", summary: `${merged.length} storms detected, merged ${merged.reduce((s, m) => s + m.childCount, 0)} duplicates` });
       return json(res, 200, { scannedRecent: recent.length, stormsDetected: merged.length, merged });
     } catch (err) {
       return json(res, 500, { error: "duplicate-storm failed", details: err.message });
@@ -7016,8 +7045,9 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
       if (!message) return json(res, 400, { error: "message required" });
       const frustrationMarkers = /urgent|asap|unacceptable|ridiculous|still\s*(not|broken|waiting)|how\s*many\s*times|escalat|complaint|furious|angry|disappointing|worst|terrible|useless|incompetent|days\s*(now|already)|!!+/i;
       const score = frustrationMarkers.test(message) ? 0.85 : 0.3;
+      const frustThreshold = AI_THRESHOLDS.frustrationThreshold || 0.7;
       let action = null;
-      if (score > 0.7 && ticketId) {
+      if (score > frustThreshold && ticketId) {
         const inc = await db.getOne("incidents", ticketId).catch(() => null);
         if (inc) {
           const data = typeof inc.data === "string" ? JSON.parse(inc.data) : inc.data;
@@ -7032,7 +7062,9 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
           }
         }
       }
-      return json(res, 200, { score, frustrated: score > 0.7, action, suggestedResponse: score > 0.7 ? "I understand your frustration and I'm prioritizing this immediately. Let me escalate to ensure we resolve this as quickly as possible." : null });
+      const frustrated = score > frustThreshold;
+      if (wsServer && frustrated) wsServer.broadcast("ai_actions", { action: "frustration", summary: `Frustration detected on ${ticketId || "ticket"} (score: ${score})` });
+      return json(res, 200, { score, frustrated, action, suggestedResponse: frustrated ? "I understand your frustration and I'm prioritizing this immediately. Let me escalate to ensure we resolve this as quickly as possible." : null });
     } catch (err) {
       return json(res, 500, { error: "frustration-detect failed", details: err.message });
     }
@@ -7069,6 +7101,7 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
       }
       await db.upsert("incidents", ticketId, JSON.stringify(inc));
       await db.upsert("ai_audit_log", `remediate-${ticketId}-${Date.now()}`, { type: "auto_remediation", ticketId, playbook: matched.name, auto: matched.auto, timestamp: new Date().toISOString() });
+      if (wsServer && matched) wsServer.broadcast("ai_actions", { action: "remediation", summary: `Playbook "${matched.name}" ${matched.auto ? "auto-resolved" : "queued"} for ${ticketId}` });
       return json(res, 200, { executed: true, playbook: matched.name, steps: matched.steps, autoResolved: matched.auto, ticketId });
     } catch (err) {
       return json(res, 500, { error: "auto-remediate failed", details: err.message });
@@ -7507,6 +7540,55 @@ Return JSON: { "subject": "<short subject>", "body": "<notification body>", "eta
       return json(res, 200, { report });
     } catch (err) {
       return json(res, 500, { error: "performance-report failed", details: err.message });
+    }
+  }
+
+  // ─── KB Coverage Analysis (no AI call) ─────────────────────────────
+  // GET /api/ai/kb-coverage — per-category coverage ratio, gaps, and suggested article titles
+  if (pathname === "/api/ai/kb-coverage" && req.method === "GET") {
+    try {
+      const incRaw = await db.getAll("incidents");
+      const incidents = incRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      const kbRaw = await db.getAll("kb");
+      const kbArticles = kbRaw.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+
+      const resolved = incidents.filter(i => i.status === "Resolved" || i.status === "Closed");
+      const catMap = {};
+      for (const inc of resolved) {
+        const cat = inc.category || "General";
+        if (!catMap[cat]) catMap[cat] = { resolved: 0, kbCount: 0, resolutions: {} };
+        catMap[cat].resolved++;
+        const rt = (inc.resolution || inc.resolutionNotes || "").trim();
+        if (rt) catMap[cat].resolutions[rt] = (catMap[cat].resolutions[rt] || 0) + 1;
+      }
+      for (const kb of kbArticles) {
+        const cat = kb.category || "General";
+        if (!catMap[cat]) catMap[cat] = { resolved: 0, kbCount: 0, resolutions: {} };
+        catMap[cat].kbCount++;
+      }
+
+      const categories = [];
+      const gaps = [];
+      let totalResolved = 0, totalKb = 0;
+      for (const [cat, data] of Object.entries(catMap)) {
+        const coverage = data.resolved > 0 ? Math.round((data.kbCount / data.resolved) * 100) : (data.kbCount > 0 ? 100 : 0);
+        const entry = { category: cat, resolvedCount: data.resolved, kbArticleCount: data.kbCount, coveragePct: Math.min(coverage, 100) };
+        categories.push(entry);
+        totalResolved += data.resolved;
+        totalKb += data.kbCount;
+        if (data.resolved >= 5 && data.kbCount === 0) {
+          const topRes = Object.entries(data.resolutions).sort((a, b) => b[1] - a[1])[0];
+          gaps.push({ ...entry, suggestedTitle: topRes ? `KB: ${topRes[0].substring(0, 80)}` : `KB: Troubleshooting ${cat} Issues` });
+        }
+      }
+      categories.sort((a, b) => b.resolvedCount - a.resolvedCount);
+      gaps.sort((a, b) => b.resolvedCount - a.resolvedCount);
+      const overallCoverage = totalResolved > 0 ? Math.round((totalKb / totalResolved) * 100) : 0;
+
+      return json(res, 200, { categories, gaps: gaps.slice(0, 10), overallCoverage: Math.min(overallCoverage, 100), totalResolved, totalKbArticles: kbArticles.length });
+    } catch (err) {
+      console.error("[KB Coverage]", err.message);
+      return json(res, 500, { error: "kb-coverage failed", details: err.message });
     }
   }
 

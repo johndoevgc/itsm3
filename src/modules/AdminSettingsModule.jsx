@@ -83,7 +83,24 @@ export default function AdminSettingsModule({ ctx }) {
   const [generalSettings, setGeneralSettings] = useState({ siteName: "VGC ITSM", language: "en", timezone: "Asia/Singapore", dateFormat: "DD/MM/YYYY", theme: "dark" });
   const [brandingSettings, setBrandingSettings] = useState({ logo: "", primaryColor: "#64B5F6", accentColor: "#81C784" });
   const [smtpConfig, setSmtpConfig] = useState({ host: "", port: 587, user: "", pass: "", from: "", secure: true });
-  const [infraConfig, _setInfraConfig] = useState({ monitoring: true, backupSchedule: "daily", alertThreshold: 90, cost: { total: 0, alerts: [], appService: { name: "App Service", monthly: 0 }, mysql: { name: "MySQL", monthly: 0, storage: 0, note: "" } } });
+  const [infraConfig, _setInfraConfig] = useState({
+    monitoring: true, backupSchedule: "daily", alertThreshold: 90,
+    cost: {
+      total: 74.83,
+      alerts: [
+        { level: "tip", text: "Current setup uses pay-as-you-go pricing. Consider reserved instances for 30-40% savings." },
+        { level: "info", text: "Azure OpenAI costs scale with token usage. Monitor via Azure Cost Management." },
+      ],
+      appService: { name: "App Service", monthly: 13.14, note: "B1 Linux (1 core, 1.75 GB)" },
+      mysql: { name: "MySQL Flexible", monthly: 12.41, storage: 1.28, note: "Burstable B1ms + 20 GB" },
+      openAI: { name: "Azure OpenAI", monthly: 48.00, note: "GPT-4o pay-per-token (est.)" },
+    },
+    webApp: { name: "vgc-itsm1-app", url: "vgc-itsm1-app.azurewebsites.net", region: "Southeast Asia", plan: "B1", runtime: "Node 20 LTS", ssl: "Managed", scaling: "Manual (1 instance)", deployment: "GitHub Actions", status: "Running" },
+    database: { server: "vgc-itsm1-mysql.mysql.database.azure.com", database: "itsm_prod", version: "8.0", sku: "Standard_B1ms", tier: "Burstable", storage: "20 GB", ha: "Disabled", backupRetention: "7 days", status: "Ready" },
+    openAI: { name: "vgc-openai", region: "East US", sku: "S0", endpoint: "https://vgc-openai.openai.azure.com/", rg: "vgc-itsm-rg", status: "Active" },
+    zendesk: { domain: "vgctech.zendesk.com", status: "Connected" },
+    identity: { name: "vgc-itsm-identity", type: "SystemAssigned" },
+  });
   const [infraLive, _setInfraLive] = useState(null);
   const [infraLoading, _setInfraLoading] = useState(false);
   const [swConfig, setSwConfig] = useState({});
@@ -4245,6 +4262,49 @@ return (
                   <div><span style={{ fontSize: 10, color: "#5A6178" }}>Primary Model</span><div style={{ fontSize: 13, color: "#C4CAD6" }}>{aiGovData.governance?.models?.primary || "N/A"}</div></div>
                   <div><span style={{ fontSize: 10, color: "#5A6178" }}>Fallback Model</span><div style={{ fontSize: 13, color: "#C4CAD6" }}>{aiGovData.governance?.models?.secondary || "N/A"}</div></div>
                 </div>
+              </div>
+
+              {/* ─── AI Threshold Configuration ─── */}
+              <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #6366F133", marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: "#6366F1", fontWeight: 600, marginBottom: 12 }}>🎛️ AI Autonomy Thresholds</div>
+                <p style={{ fontSize: 10, color: "#5A6178", margin: "0 0 12px" }}>Control how aggressively AI acts. Higher thresholds = fewer auto-actions but higher accuracy.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  {[
+                    { id: "autopilot_confidence", label: "Autopilot Confidence", desc: "Min confidence to auto-resolve", defaultVal: "92", unit: "%" },
+                    { id: "sla_breach_threshold", label: "SLA Breach Warning", desc: "% consumed before warning", defaultVal: "70", unit: "%" },
+                    { id: "sla_escalation_threshold", label: "SLA Auto-Escalation", desc: "% consumed before escalation", defaultVal: "85", unit: "%" },
+                    { id: "duplicate_similarity", label: "Duplicate Similarity", desc: "Min match to merge duplicates", defaultVal: "85", unit: "%" },
+                    { id: "frustration_threshold", label: "Frustration Score", desc: "Score to trigger escalation", defaultVal: "0.7", unit: "" },
+                    { id: "storm_min_tickets", label: "Storm Min Tickets", desc: "Min tickets to trigger storm", defaultVal: "3", unit: "" },
+                    { id: "autopilot_interval", label: "Autopilot Interval", desc: "How often autopilot runs", defaultVal: "2", unit: "min" },
+                    { id: "health_check_window", label: "Health Check Window", desc: "Hours after resolve to verify", defaultVal: "48", unit: "h" },
+                  ].map((cfg) => (
+                    <div key={cfg.id} style={{ background: "#080A12", borderRadius: 6, padding: 10, border: "1px solid #1E2130" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: "#E2E8F0", fontWeight: 500 }}>{cfg.label}</div>
+                          <div style={{ fontSize: 9, color: "#5A6178" }}>{cfg.desc}</div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input type="number" id={`ai-threshold-${cfg.id}`} defaultValue={cfg.defaultVal} style={{ width: 50, padding: "4px 6px", background: "#0F1117", border: "1px solid #2D3348", borderRadius: 4, color: "#E2E8F0", fontSize: 12, textAlign: "center" }} />
+                          {cfg.unit && <span style={{ fontSize: 9, color: "#5A6178" }}>{cfg.unit}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button style={{ marginTop: 12, padding: "8px 20px", borderRadius: 6, border: "none", background: "#6366F1", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }} onClick={async () => {
+                  const thresholds = {};
+                  ["autopilot_confidence","sla_breach_threshold","sla_escalation_threshold","duplicate_similarity","frustration_threshold","storm_min_tickets","autopilot_interval","health_check_window"].forEach(id => {
+                    const el = document.getElementById(`ai-threshold-${id}`);
+                    if (el) thresholds[id] = parseFloat(el.value);
+                  });
+                  try {
+                    const r = await fetch("/api/db/tenant_settings/ai_thresholds", { method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(thresholds) });
+                    if (r.ok) alert("AI thresholds saved successfully!");
+                    else alert("Failed to save: " + (await r.text()));
+                  } catch (e) { alert("Error: " + e.message); }
+                }}>Save Thresholds</button>
               </div>
 
               <div style={{ background: "#0A0C14", borderRadius: 6, padding: 14, border: "1px solid #1E2130" }}>

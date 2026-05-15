@@ -21,7 +21,7 @@ RUN npm ci --omit=dev && npm cache clean --force && apk del python3 make g++ \
 COPY server.js authMiddleware.js cacheLayer.js graphService.js msalConfig.js \
      notificationEngine.js slaEngine.js workflowEngine.js analyticsEngine.js \
      wsServer.js featureFlags.js piiRedact.js shadowMode.js shadowWorkflow.js \
-     incidentIndex.js cluster.js ./
+     incidentIndex.js cluster.js emailParseAI.js runbookActions.js ./
 
 # Copy route handlers
 COPY routes/ ./routes/

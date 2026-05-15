@@ -721,6 +721,8 @@ const IncidentDetailModal = () => {
   const [kbSurface, setKbSurface] = useState([]);
   const kbSurfaceTimer = useRef(null);
   const fileInputRef = useRef(null);
+  const [timelineFilters, setTimelineFilters] = useState(new Set());
+  const [collapsedActivities, setCollapsedActivities] = useState(new Set());
   // ─── Live SLA Countdown Tick ───
   const [slaTick, setSlaTick] = useState(0);
   useEffect(() => {
@@ -740,6 +742,39 @@ const IncidentDetailModal = () => {
       .catch(() => {})
       .finally(() => setContextLoading(false));
   }, [inc?.id]);
+
+  // ─── Auto-fetch Smart Replies on modal open ───
+  useEffect(() => {
+    if (!inc?.id) return;
+    let cancelled = false;
+    setSuggestedRepliesLoading(true);
+    fetch("/api/ai/suggested-replies", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ ticketId: inc.id }) })
+      .then(r => r.ok ? r.json() : { error: `HTTP ${r.status}` })
+      .then(d => { if (!cancelled) setSuggestedRepliesData(d); })
+      .catch(e => { if (!cancelled) setSuggestedRepliesData({ error: e.message }); })
+      .finally(() => { if (!cancelled) setSuggestedRepliesLoading(false); });
+    return () => { cancelled = true; };
+  }, [inc?.id]);
+
+  const relatedIncidents = useMemo(() => {
+    if (!inc?.id || !incidents?.length) return [];
+    const links = [];
+    const seen = new Set([inc.id]);
+    const add = (target, type) => { if (!seen.has(target.id)) { seen.add(target.id); links.push({ ...target, _relType: type }); } };
+    const incDate = inc.createdAt ? new Date(inc.createdAt).getTime() : 0;
+    const DAY = 86400000;
+    for (const other of incidents) {
+      if (other.id === inc.id) continue;
+      if (inc.parentTicketId && other.id === inc.parentTicketId) add(other, "parent");
+      else if (other.parentTicketId === inc.id) add(other, "child");
+      else if ((inc.childTickets || []).includes(other.id)) add(other, "child");
+      else if ((other.childTickets || []).includes(inc.id)) add(other, "parent");
+      else if (inc.category && other.category === inc.category && other.createdAt && Math.abs(new Date(other.createdAt).getTime() - incDate) < DAY) add(other, "same-category");
+      else if (inc.reporter && other.reporter === inc.reporter) add(other, "same-reporter");
+      else if (inc.assignedTo && other.assignedTo === inc.assignedTo && other.status !== "Closed" && other.status !== "Resolved") add(other, "same-assignee");
+    }
+    return links.slice(0, 20);
+  }, [inc?.id, inc?.category, inc?.reporter, inc?.assignedTo, inc?.parentTicketId, incidents]);
 
   if (!inc) return null;
   const reporterUser = (users || []).find(u => u.name === inc.reporter);
@@ -976,12 +1011,13 @@ const IncidentDetailModal = () => {
         )}
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1E2130", background: "#0F1117", flexShrink: 0, overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap", scrollbarWidth: "none", msOverflowStyle: "none" }}>
-          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "aiResolve", label: "AI Resolve", icon: "✨" }, { id: "m365Expert", label: "M365", icon: "🔷" }, { id: "copilot", label: "Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "MIM", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
+          {[{ id: "details", label: "Details", icon: "📋" }, { id: "activity", label: "Activity", icon: "💬" }, { id: "worklog", label: "Work Log", icon: "⏱️" }, { id: "related", label: "Related", icon: "🔗" }, { id: "aiResolve", label: "AI Resolve", icon: "✨" }, { id: "m365Expert", label: "M365", icon: "🔷" }, { id: "copilot", label: "Co-Pilot", icon: "💫" }, { id: "majorIncident", label: "MIM", icon: "🚨" }, { id: "workflow", label: "Workflow", icon: "⚡" }, { id: "runbook", label: "Runbook", icon: "📖" }].map(t => (
             <button key={t.id} onClick={() => setDetailTab(t.id)}
               style={{ padding: "8px 12px", background: detailTab === t.id ? "#12141E" : "transparent", border: "none", borderBottom: detailTab === t.id ? "2px solid #6366F1" : "2px solid transparent", color: detailTab === t.id ? "#E8ECF4" : "#5A6178", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", display: "flex", alignItems: "center", gap: 4, flexShrink: 0, whiteSpace: "nowrap" }}>
               <span>{t.icon}</span> {t.label}
               {t.id === "activity" && activities.length > 0 && <span style={{ background: "#6366F1", color: "#fff", borderRadius: 10, padding: "1px 5px", fontSize: 8, fontWeight: 700, marginLeft: 2 }}>{activities.length}</span>}
               {t.id === "worklog" && (inc.workLogs || []).length > 0 && <span style={{ background: "#FFB347", color: "#000", borderRadius: 10, padding: "1px 5px", fontSize: 8, fontWeight: 700, marginLeft: 2 }}>{(inc.workLogs || []).length}</span>}
+              {t.id === "related" && relatedIncidents.length > 0 && <span style={{ background: "#8B5CF6", color: "#fff", borderRadius: 10, padding: "1px 5px", fontSize: 8, fontWeight: 700, marginLeft: 2 }}>{relatedIncidents.length}</span>}
             </button>
           ))}
         </div>
@@ -1631,44 +1667,101 @@ const IncidentDetailModal = () => {
               )}
 
               {/* Activity Timeline */}
-              <div style={{ position: "relative", paddingLeft: 24 }}>
-                <div style={{ position: "absolute", left: 7, top: 4, bottom: 4, width: 2, background: "#1E2130" }} />
-                {activities.slice().reverse().map((act, idx) => (
-                  <div key={act.id || idx} style={{ position: "relative", marginBottom: 16 }}>
-                    <div style={{ position: "absolute", left: -20, top: 4, width: 12, height: 12, borderRadius: "50%",
-                      background: act.type === "email" ? "#3B82F6" : act.type === "note" ? "#FFB347" : act.type === "status" ? "#6366F1" : "#5A6178",
-                      border: "2px solid #12141E", zIndex: 1 }} />
-                    <div style={{ background: "#0A0C14", borderRadius: 8, border: `1px solid ${act.type === "email" ? "#3B82F622" : act.type === "note" ? "#FFB34722" : "#1E213044"}`, overflow: "hidden" }}>
-                      <div style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: (act.type === "email" || (act.type === "note" && act.body)) ? "1px solid #1E213022" : "none" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 12 }}>{act.type === "email" ? "📧" : act.type === "note" ? "📝" : "🔄"}</span>
-                          <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{act.user}</span>
-                          {act.isInternal && <span style={{ fontSize: 9, color: "#FFB347", background: "#FFB34718", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>INTERNAL</span>}
-                        </div>
-                        <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{act.time}</span>
+              {(() => {
+                const typeConfig = {
+                  email: { icon: "📧", color: "#3B82F6", label: "Email" },
+                  note: { icon: "📝", color: "#FFB347", label: "Note" },
+                  status: { icon: "🔄", color: "#6366F1", label: "Status" },
+                  resolution: { icon: "✅", color: "#10B981", label: "Resolution" },
+                  escalation: { icon: "🔺", color: "#FF6B6B", label: "Escalation" },
+                  auto_escalation: { icon: "⚡", color: "#FF6B6B", label: "Auto-Escalate" },
+                  auto_resolve: { icon: "🤖", color: "#06B6D4", label: "Auto-Resolve" },
+                  auto_remediation: { icon: "🔧", color: "#06B6D4", label: "Remediation" },
+                  ai_resolution: { icon: "✨", color: "#8B5CF6", label: "AI Resolve" },
+                  ai_summary: { icon: "📊", color: "#8B5CF6", label: "AI Summary" },
+                  sla_warning: { icon: "⏰", color: "#FFB347", label: "SLA Warning" },
+                  frustration_escalation: { icon: "😤", color: "#EC4899", label: "Frustration" },
+                  duplicate_merge: { icon: "🔗", color: "#A78BFA", label: "Duplicate" },
+                  runbook: { icon: "📖", color: "#14B8A6", label: "Runbook" },
+                  sync: { icon: "🔃", color: "#64748B", label: "Sync" },
+                  bulk: { icon: "📦", color: "#64748B", label: "Bulk" },
+                  assignment: { icon: "👤", color: "#6366F1", label: "Assignment" },
+                  priority_change: { icon: "⚡", color: "#FFB347", label: "Priority" },
+                };
+                const getConf = (type) => typeConfig[type] || { icon: "●", color: "#5A6178", label: type || "Event" };
+                const uniqueTypes = [...new Set(activities.map(a => a.type))];
+                const reversed = activities.slice().reverse();
+                const filtered = timelineFilters.size > 0 ? reversed.filter(a => timelineFilters.has(a.type)) : reversed;
+
+                const formatElapsed = (ms) => {
+                  if (ms < 0) return "";
+                  if (ms < 60000) return `${Math.round(ms / 1000)}s later`;
+                  if (ms < 3600000) return `${Math.round(ms / 60000)}m later`;
+                  if (ms < 86400000) { const h = Math.floor(ms / 3600000); const m = Math.round((ms % 3600000) / 60000); return m > 0 ? `${h}h ${m}m later` : `${h}h later`; }
+                  const d = Math.floor(ms / 86400000); return `${d}d later`;
+                };
+
+                return (
+                  <>
+                    {uniqueTypes.length > 1 && (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 12 }}>
+                        <button onClick={() => setTimelineFilters(new Set())} style={{ padding: "3px 8px", borderRadius: 10, fontSize: 9, fontWeight: 600, border: "1px solid", cursor: "pointer", background: timelineFilters.size === 0 ? "#6366F122" : "transparent", borderColor: timelineFilters.size === 0 ? "#6366F1" : "#2A2E3F", color: timelineFilters.size === 0 ? "#818CF8" : "#5A6178" }}>All</button>
+                        {uniqueTypes.map(t => {
+                          const c = getConf(t);
+                          const active = timelineFilters.has(t);
+                          return <button key={t} onClick={() => setTimelineFilters(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; })} style={{ padding: "3px 8px", borderRadius: 10, fontSize: 9, fontWeight: 600, border: "1px solid", cursor: "pointer", background: active ? `${c.color}22` : "transparent", borderColor: active ? c.color : "#2A2E3F", color: active ? c.color : "#5A6178", display: "flex", alignItems: "center", gap: 3 }}><span style={{ fontSize: 10 }}>{c.icon}</span> {c.label}</button>;
+                        })}
                       </div>
-                      <div style={{ padding: "8px 12px" }}>
-                        <div style={{ fontSize: 12, color: "#A0AEC0", marginBottom: act.body ? 8 : 0 }}>{act.detail}</div>
-                        {act.type === "email" && act.subject && (
-                          <div style={{ fontSize: 11, color: "#64B5F6", marginBottom: 4, fontWeight: 600 }}>Subject: {act.subject}</div>
-                        )}
-                        {act.type === "email" && (
-                          <div style={{ fontSize: 10, color: "#5A617888", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>
-                            {act.from && <span>From: {act.from}</span>}{act.to && <span style={{ marginLeft: 12 }}>To: {act.to}</span>}
-                          </div>
-                        )}
-                        {act.body && (
-                          <div style={{ background: "#0F1117", borderRadius: 4, padding: "8px 10px", border: "1px solid #1E213022", fontSize: 12, color: "#C4CAD6", lineHeight: 1.5 }}
-                            dangerouslySetInnerHTML={{ __html: sanitizeHTML(act.body) }} />
-                        )}
-                      </div>
+                    )}
+                    <div style={{ position: "relative", paddingLeft: 24 }}>
+                      <div style={{ position: "absolute", left: 7, top: 4, bottom: 4, width: 2, background: "#1E2130" }} />
+                      {filtered.map((act, idx) => {
+                        const conf = getConf(act.type);
+                        const hasBody = !!(act.body || (act.type === "email" && act.subject));
+                        const isCollapsed = collapsedActivities.has(act.id || idx);
+                        let elapsed = "";
+                        if (idx > 0 && filtered[idx - 1]?.time && act.time) {
+                          const prev = new Date(filtered[idx - 1].time).getTime();
+                          const cur = new Date(act.time).getTime();
+                          if (!isNaN(prev) && !isNaN(cur) && cur > prev) elapsed = formatElapsed(cur - prev);
+                        }
+                        return (
+                          <React.Fragment key={act.id || idx}>
+                            {elapsed && <div style={{ position: "relative", paddingLeft: 4, marginBottom: 6, marginTop: -8 }}><span style={{ fontSize: 9, color: "#5A617866", fontFamily: "'JetBrains Mono', monospace", fontStyle: "italic" }}>⏱ {elapsed}</span></div>}
+                            <div style={{ position: "relative", marginBottom: 16 }}>
+                              <div style={{ position: "absolute", left: -20, top: 4, width: 12, height: 12, borderRadius: "50%", background: conf.color, border: "2px solid #12141E", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <span style={{ fontSize: 7 }}>{conf.icon}</span>
+                              </div>
+                              <div style={{ background: "#0A0C14", borderRadius: 8, border: `1px solid ${conf.color}22`, overflow: "hidden" }}>
+                                <div style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: (hasBody && !isCollapsed) ? "1px solid #1E213022" : "none", cursor: hasBody ? "pointer" : "default" }}
+                                  onClick={() => { if (hasBody) setCollapsedActivities(prev => { const n = new Set(prev); if (n.has(act.id || idx)) n.delete(act.id || idx); else n.add(act.id || idx); return n; }); }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <span style={{ fontSize: 12 }}>{conf.icon}</span>
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: conf.color, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }}>{conf.label}</span>
+                                    <span style={{ fontSize: 12, color: "#E8ECF4", fontWeight: 500 }}>{act.user}</span>
+                                    {act.isInternal && <span style={{ fontSize: 9, color: "#FFB347", background: "#FFB34718", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>INTERNAL</span>}
+                                    {hasBody && <span style={{ fontSize: 9, color: "#5A6178" }}>{isCollapsed ? "▶" : "▼"}</span>}
+                                  </div>
+                                  <span style={{ fontSize: 10, color: "#5A6178", fontFamily: "'JetBrains Mono', monospace" }}>{act.time}</span>
+                                </div>
+                                {!isCollapsed && (
+                                  <div style={{ padding: "8px 12px" }}>
+                                    <div style={{ fontSize: 12, color: "#A0AEC0", marginBottom: act.body ? 8 : 0 }}>{act.detail}</div>
+                                    {act.type === "email" && act.subject && <div style={{ fontSize: 11, color: "#64B5F6", marginBottom: 4, fontWeight: 600 }}>Subject: {act.subject}</div>}
+                                    {act.type === "email" && <div style={{ fontSize: 10, color: "#5A617888", marginBottom: 6, fontFamily: "'JetBrains Mono', monospace" }}>{act.from && <span>From: {act.from}</span>}{act.to && <span style={{ marginLeft: 12 }}>To: {act.to}</span>}</div>}
+                                    {act.body && <div style={{ background: "#0F1117", borderRadius: 4, padding: "8px 10px", border: "1px solid #1E213022", fontSize: 12, color: "#C4CAD6", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: sanitizeHTML(act.body) }} />}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        );
+                      })}
+                      {activities.length === 0 && <div style={{ padding: 30, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No activity yet. Use the buttons above to reply or add notes.</div>}
                     </div>
-                  </div>
-                ))}
-                {activities.length === 0 && (
-                  <div style={{ padding: 30, textAlign: "center", color: "#5A6178", fontSize: 13 }}>No activity yet. Use the buttons above to reply or add notes.</div>
-                )}
-              </div>
+                  </>
+                );
+              })()}
             </>
           )}
 
@@ -1752,6 +1845,60 @@ const IncidentDetailModal = () => {
               </div>
             );
           })()}
+
+          {/* ─── Related Incidents / Correlation Map Tab ─── */}
+          {detailTab === "related" && (
+            <div style={{ padding: 16 }}>
+              {relatedIncidents.length === 0 ? (
+                <div style={{ color: "#5A6178", fontSize: 12, textAlign: "center", padding: 40 }}>No related incidents found.</div>
+              ) : (
+                <>
+                  <div style={{ marginBottom: 12 }}>
+                    <svg width="100%" height={Math.max(180, relatedIncidents.length * 55 + 60)} viewBox={`0 0 600 ${Math.max(180, relatedIncidents.length * 55 + 60)}`} style={{ background: "#1a1d23", borderRadius: 8 }}>
+                      {/* Central node */}
+                      <rect x="220" y={Math.max(180, relatedIncidents.length * 55 + 60) / 2 - 20} width="160" height="40" rx="8" fill="#8B5CF6" stroke="#A78BFA" strokeWidth="2" />
+                      <text x="300" y={Math.max(180, relatedIncidents.length * 55 + 60) / 2 + 4} textAnchor="middle" fill="#fff" fontSize="11" fontWeight="600">{inc.id}</text>
+                      {/* Related nodes and edges */}
+                      {relatedIncidents.map((rel, i) => {
+                        const totalH = Math.max(180, relatedIncidents.length * 55 + 60);
+                        const cy = 30 + i * 55 + 25;
+                        const cx = i % 2 === 0 ? 80 : 520;
+                        const centerY = totalH / 2;
+                        const edgeColor = rel._relType === "parent" ? "#F59E0B" : rel._relType === "child" ? "#10B981" : rel._relType === "same-category" ? "#3B82F6" : rel._relType === "same-reporter" ? "#EC4899" : "#6B7280";
+                        return (
+                          <g key={rel.id}>
+                            <line x1={cx > 300 ? 380 : 220} y1={centerY} x2={cx} y2={cy} stroke={edgeColor} strokeWidth="1.5" strokeDasharray={rel._relType === "same-category" ? "4 2" : "none"} opacity="0.7" />
+                            <rect x={cx - 60} y={cy - 15} width="120" height="30" rx="6" fill="#23262d" stroke={edgeColor} strokeWidth="1.5" />
+                            <text x={cx} y={cy + 1} textAnchor="middle" fill="#E2E8F0" fontSize="9" fontWeight="500">{rel.id}</text>
+                            <text x={cx} y={cy + 12} textAnchor="middle" fill="#5A6178" fontSize="7">{rel._relType}</text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 9 }}>
+                    {[["parent", "#F59E0B"], ["child", "#10B981"], ["same-category", "#3B82F6"], ["same-reporter", "#EC4899"], ["same-assignee", "#6B7280"]].map(([label, color]) => (
+                      <span key={label} style={{ display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 10, height: 3, background: color, borderRadius: 2, display: "inline-block" }} />{label}</span>
+                    ))}
+                  </div>
+                  <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                    {relatedIncidents.map(rel => (
+                      <div key={rel.id} onClick={() => setDetailItem(rel)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: "#23262d", borderRadius: 6, marginBottom: 4, cursor: "pointer", border: "1px solid #2d3748" }}>
+                        <div>
+                          <span style={{ color: "#A78BFA", fontWeight: 600, fontSize: 11, marginRight: 6 }}>{rel.id}</span>
+                          <span style={{ color: "#E2E8F0", fontSize: 11 }}>{(rel.title || rel.subject || "").substring(0, 50)}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: rel._relType === "parent" ? "#F59E0B22" : rel._relType === "child" ? "#10B98122" : "#3B82F622", color: rel._relType === "parent" ? "#F59E0B" : rel._relType === "child" ? "#10B981" : "#3B82F6" }}>{rel._relType}</span>
+                          <span style={{ fontSize: 9, color: "#5A6178" }}>{rel.status}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {/* ─── AI Resolution Suggestions Tab ─── */}
           {detailTab === "aiResolve" && <AiResolveTab inc={inc} addActivity={addActivity} showToast={showToast} />}

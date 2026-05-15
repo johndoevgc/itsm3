@@ -2220,6 +2220,35 @@ module.exports = function createCoreRoutes(ctx) {
     return res.end(header + rows);
   }
 
+  // ─── PDPA Compliance ──────────────────────────────────────────────────
+  if (pathname === "/api/pdpa/config" && req.method === "PUT") {
+    const body = await parseBody(req);
+    await db.upsert("pdpa_config", "default", JSON.stringify(body));
+    await auditLog("pdpa_config_updated", req, body);
+    return json(res, 200, { ok: true });
+  }
+
+  if (pathname === "/api/pdpa/dsar" && req.method === "POST") {
+    const body = await parseBody(req);
+    const dsarId = `DSAR-${Date.now().toString(36).toUpperCase()}`;
+    const record = { id: dsarId, type: body.type || "access", subjectEmail: body.subjectEmail || "", subjectName: body.subjectName || "", reason: body.reason || "", status: "pending", createdAt: new Date().toISOString(), createdBy: req.userEmail || "system" };
+    await db.upsert("pdpa_dsar", dsarId, JSON.stringify(record));
+    await auditLog("dsar_created", req, { dsarId, type: record.type, subjectEmail: record.subjectEmail });
+    return json(res, 201, record);
+  }
+
+  if (pathname.startsWith("/api/pdpa/dsar/") && req.method === "PUT") {
+    const dsarId = pathname.split("/").pop();
+    const existing = await db.getOne("pdpa_dsar", dsarId);
+    if (!existing) return json(res, 404, { error: "DSAR not found" });
+    const current = typeof existing.data === "string" ? JSON.parse(existing.data) : existing.data;
+    const body = await parseBody(req);
+    const updated = { ...current, ...body, updatedAt: new Date().toISOString() };
+    await db.upsert("pdpa_dsar", dsarId, JSON.stringify(updated));
+    await auditLog("dsar_updated", req, { dsarId, status: updated.status });
+    return json(res, 200, updated);
+  }
+
   // ─── Self-Service Portal ──────────────────────────────────────────────
   if (pathname.startsWith("/api/portal") && !FEATURE_PORTAL) {
     return json(res, 404, { error: "Self-service portal not enabled" });
@@ -4577,6 +4606,167 @@ Respond in JSON ONLY:
       return json(res, 500, { error: "Internal server error" });
     }
   }
+
+  // ─── Cybersecurity Threat Advisory — Auto-Draft & Auto-Send ────────────
+  // POST /api/threat/advisory/send — AI generates professional cybersecurity advisory and sends to help@vgctechnology.com
+  if (pathname === "/api/threat/advisory/send" && req.method === "POST") {
+    if (!AZURE_OPENAI_KEY || !AZURE_OPENAI_ENDPOINT) return json(res, 503, { error: "AI not configured" });
+    try {
+      const body = await parseBody(req);
+      const threat = body.threat;
+      if (!threat || !threat.title) return json(res, 400, { error: "threat object with title is required" });
+
+      const cveSection = threat.cve ? `CVE: ${threat.cve}${threat.cvss ? ` (CVSS: ${threat.cvss})` : ""}${threat.cvssVector ? ` Vector: ${threat.cvssVector}` : ""}` : "";
+      const affectedStr = (threat.affectedSystems || []).join(", ") || "Not specified";
+      const mitreStr = (threat.mitreTactics || []).join(", ") || "Not specified";
+      const iocsStr = (threat.iocs || []).length > 0 ? threat.iocs.map(i => `  - ${i}`).join("\n") : "No IoCs available from source";
+      const stepsStr = (threat.nextSteps || []).map((s, i) => `${i + 1}. ${s}`).join("\n") || "Assess and monitor";
+      const refsStr = (threat.references || []).map(r => `- ${r.title}: ${r.url}`).join("\n") || "See source link";
+
+      const aiPrompt = `You are a senior cybersecurity advisory specialist at VGC Technology Pte Ltd, Singapore.
+Draft a professional enterprise-class cybersecurity advisory email for the IT Security team.
+
+THREAT INTELLIGENCE:
+- Title: ${threat.title}
+- Severity: ${threat.severity}
+- Source: ${threat.source || "Unknown"}
+- Source URL: ${threat.sourceUrl || "N/A"}
+- Region: ${threat.region || "Global"}
+- Category: ${threat.category || "Advisory"}
+${cveSection ? `- ${cveSection}` : ""}
+- Summary: ${threat.aiSummary || "No summary available"}
+- Affected Systems: ${affectedStr}
+- MITRE ATT&CK Tactics: ${mitreStr}
+- Indicators of Compromise:
+${iocsStr}
+- Recommended Actions:
+${stepsStr}
+- References:
+${refsStr}
+
+Generate a professional advisory email. Include ALL sections even if data is limited — use professional language to note "pending further analysis" for missing data.
+
+Respond in JSON ONLY (no markdown fences):
+{
+  "subject": "email subject line with severity prefix",
+  "executiveSummary": "HTML — 2-3 professional paragraphs on what happened, why it matters, and urgency",
+  "threatDetails": "HTML — technical details: CVE, CVSS with risk interpretation, attack vector, MITRE tactics mapped to kill chain stage",
+  "affectedSystemsHtml": "HTML — bullet list of affected systems with version info",
+  "iocsHtml": "HTML — monospace formatted IoCs (IPs, hashes, domains, files) or 'Pending intelligence gathering' if none",
+  "recommendedActions": "HTML — numbered professional action items with clear ownership (IT team, Security team, All staff) and deadlines where applicable",
+  "referencesHtml": "HTML — clickable links to official sources, vendor advisories, CVE databases",
+  "severity": "critical|high|medium|low"
+}`;
+
+      const aiResult = await callAI(
+        "You are a senior cybersecurity advisory specialist at VGC Technology Pte Ltd. Generate professional enterprise-class cybersecurity advisory emails with technical depth and clear actionable guidance. Respond ONLY in valid JSON.",
+        aiPrompt,
+        { tier: "secondary", maxTokens: 4000, timeout: 90000 }
+      );
+
+      const aiText = aiResult.text;
+      let advisory;
+      try {
+        let cleaned = aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        const firstBrace = cleaned.indexOf("{");
+        const lastBrace = cleaned.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace > firstBrace) cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+        advisory = JSON.parse(cleaned);
+      } catch {
+        return json(res, 500, { error: "AI returned invalid JSON response" });
+      }
+
+      const sevColors = { critical: "#DC2626", high: "#EA580C", medium: "#D97706", low: "#2563EB" };
+      const sevColor = sevColors[(advisory.severity || threat.severity || "high").toLowerCase()] || "#EA580C";
+      const sevLabel = (advisory.severity || threat.severity || "HIGH").toUpperCase();
+
+      const affectedBadges = (threat.affectedSystems || [])
+        .map(s => `<span style="display:inline-block;padding:3px 10px;border-radius:4px;background:#1E293B;color:#94A3B8;font-size:12px;margin:2px 4px 2px 0;border:1px solid #334155;">${s.replace(/</g, "&lt;")}</span>`)
+        .join("");
+
+      const advisoryHtml = `<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:720px;margin:0 auto;background:#ffffff;">
+  <div style="background:linear-gradient(135deg, #0F172A, #1E293B);padding:24px 28px;border-radius:10px 10px 0 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;">VGC TECHNOLOGY — CYBERSECURITY ADVISORY</div>
+        <h1 style="margin:0;color:#F8FAFC;font-size:20px;line-height:1.3;">${(advisory.subject || threat.title).replace(/</g, "&lt;")}</h1>
+      </div>
+      <div style="text-align:right;">
+        <div style="display:inline-block;padding:5px 14px;border-radius:6px;background:${sevColor};color:#fff;font-size:11px;font-weight:700;letter-spacing:1px;">${sevLabel}</div>
+        <div style="font-size:10px;color:#64748B;margin-top:6px;">${new Date().toLocaleDateString("en-SG", { day: "numeric", month: "long", year: "numeric" })}</div>
+      </div>
+    </div>
+    ${affectedBadges ? `<div style="margin-top:12px;">${affectedBadges}</div>` : ""}
+    ${threat.cve ? `<div style="margin-top:8px;"><span style="display:inline-block;padding:3px 10px;border-radius:4px;background:#DC262622;color:#FCA5A5;font-size:12px;font-weight:600;border:1px solid #DC262644;">${threat.cve}${threat.cvss ? ` — CVSS ${threat.cvss}` : ""}</span></div>` : ""}
+  </div>
+
+  <div style="padding:28px;border:1px solid #E2E8F0;border-top:none;">
+    <div style="margin-bottom:24px;">
+      <h3 style="margin:0 0 10px;color:#0F172A;font-size:15px;border-bottom:2px solid #3B82F6;padding-bottom:6px;">📋 Executive Summary</h3>
+      <div style="color:#334155;font-size:14px;line-height:1.7;">${advisory.executiveSummary || ""}</div>
+    </div>
+
+    <div style="margin-bottom:24px;padding:16px;background:#FFF7ED;border-radius:8px;border-left:4px solid #F59E0B;">
+      <h3 style="margin:0 0 10px;color:#92400E;font-size:14px;">🔍 Threat Details & Technical Analysis</h3>
+      <div style="color:#78350F;font-size:13px;line-height:1.7;">${advisory.threatDetails || ""}</div>
+    </div>
+
+    ${advisory.affectedSystemsHtml ? `<div style="margin-bottom:24px;padding:16px;background:#F0F9FF;border-radius:8px;border-left:4px solid #0EA5E9;">
+      <h3 style="margin:0 0 10px;color:#0C4A6E;font-size:14px;">💻 Affected Systems</h3>
+      <div style="color:#0C4A6E;font-size:13px;line-height:1.7;">${advisory.affectedSystemsHtml}</div>
+    </div>` : ""}
+
+    ${advisory.iocsHtml ? `<div style="margin-bottom:24px;padding:16px;background:#FEF2F2;border-radius:8px;border-left:4px solid #DC2626;">
+      <h3 style="margin:0 0 10px;color:#991B1B;font-size:14px;">🚨 Indicators of Compromise (IoCs)</h3>
+      <div style="color:#7F1D1D;font-size:13px;line-height:1.7;font-family:'Courier New',monospace;">${advisory.iocsHtml}</div>
+    </div>` : ""}
+
+    <div style="margin-bottom:24px;padding:16px;background:#EFF6FF;border-radius:8px;border-left:4px solid #3B82F6;">
+      <h3 style="margin:0 0 10px;color:#1E40AF;font-size:14px;">🎯 Recommended Actions & Next Steps</h3>
+      <div style="color:#1E3A5F;font-size:13px;line-height:1.7;">${advisory.recommendedActions || ""}</div>
+    </div>
+
+    ${advisory.referencesHtml ? `<div style="margin-bottom:16px;">
+      <h3 style="margin:0 0 10px;color:#0F172A;font-size:14px;">📚 Official References & Guidelines</h3>
+      <div style="color:#334155;font-size:13px;line-height:1.8;">${advisory.referencesHtml}</div>
+    </div>` : ""}
+  </div>
+
+  <div style="background:#F8FAFC;padding:16px 28px;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 10px 10px;">
+    <p style="margin:0 0 4px;color:#64748B;font-size:12px;"><strong>VGC Technology IT Security Operations</strong> — Cybersecurity Advisory</p>
+    <p style="margin:0;color:#94A3B8;font-size:10px;">This advisory was auto-generated by the VGC ITSM AI Engine based on threat intelligence feeds. No human approval was required for Critical/High severity threats. For questions, contact the IT Security team at help@vgctechnology.com.</p>
+  </div>
+</div>`;
+
+      const emailSubject = advisory.subject || `[SECURITY ADVISORY] ${sevLabel}: ${threat.title.substring(0, 80)}`;
+
+      await graphSendMail({
+        to: ["help@vgctechnology.com"],
+        subject: emailSubject,
+        body: advisoryHtml,
+        isCustomerEmail: false,
+        from: senderFor("noreply"),
+      });
+
+      const advisoryId = `TADV-${Date.now()}`;
+      await db.upsert("advisories", advisoryId, JSON.stringify({
+        id: advisoryId, threatId: threat.id, headline: threat.title,
+        source: threat.source, severity: advisory.severity || threat.severity,
+        cve: threat.cve || null, cvss: threat.cvss || null,
+        affectedSystems: threat.affectedSystems || [],
+        subject: emailSubject, sentAt: new Date().toISOString(),
+        sentTo: "help@vgctechnology.com", autoSent: true,
+        type: "cybersecurity_threat_advisory",
+      }));
+
+      console.log(`[Threat Advisory] Sent "${emailSubject}" to help@vgctechnology.com (severity: ${sevLabel})`);
+      return json(res, 200, { success: true, advisoryId, subject: emailSubject, severity: sevLabel, sentTo: "help@vgctechnology.com", threatId: threat.id });
+    } catch (err) {
+      console.error("[Threat Advisory]", err.message);
+      return json(res, 500, { error: "Internal server error" });
+    }
+  }
+
   // ─── AI Workflow Assist (Zendesk Internal Notes Only) ──────────────────
   if (pathname === "/api/ai/workflow-assist" && req.method === "POST") {
     try {

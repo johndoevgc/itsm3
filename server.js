@@ -341,7 +341,7 @@ let cacheLayer = null;
 let incidentIndex = null;
 
 // ─── Configurable AI Thresholds ─────────────────────────────────────────
-const AI_THRESHOLDS = {
+let AI_THRESHOLDS = {
   autoApply: parseInt(process.env.AI_AUTO_APPLY_THRESHOLD || (PROD_TEST_MODE ? "70" : "85"), 10),
   slaRisk: parseInt(process.env.AI_SLA_RISK_THRESHOLD || "70", 10),
   patternConfidence: parseInt(process.env.AI_PATTERN_CONFIDENCE_THRESHOLD || "70", 10),
@@ -353,8 +353,37 @@ const AI_THRESHOLDS = {
   // v3.35.0 (Phase B) — backlog SLA
   pendingAgeHoursWarn: parseInt(process.env.AI_PENDING_AGE_WARN_H || "4", 10),
   pendingAgeHoursCritical: parseInt(process.env.AI_PENDING_AGE_CRITICAL_H || "24", 10),
+  // Wave 1-10 ambient AI thresholds (synced from Admin UI via DB)
+  autopilotConfidence: parseInt(process.env.AI_AUTOPILOT_CONFIDENCE || "92", 10),
+  slaBreachThreshold: parseInt(process.env.AI_SLA_BREACH || "70", 10),
+  slaEscalationThreshold: parseInt(process.env.AI_SLA_ESCALATION || "85", 10),
+  duplicateSimilarity: parseFloat(process.env.AI_DUPLICATE_SIMILARITY || "0.85"),
+  frustrationThreshold: parseFloat(process.env.AI_FRUSTRATION_THRESHOLD || "0.7"),
+  stormMinTickets: parseInt(process.env.AI_STORM_MIN || "3", 10),
+  autopilotInterval: parseInt(process.env.AI_AUTOPILOT_INTERVAL || "2", 10),
+  healthCheckWindow: parseInt(process.env.AI_HEALTH_CHECK_WINDOW || "48", 10),
 };
 console.log("[AI Thresholds]", JSON.stringify(AI_THRESHOLDS));
+
+async function refreshAIThresholds() {
+  try {
+    const [rows] = await db.query("SELECT value FROM tenant_settings WHERE setting_key = 'ai_thresholds'");
+    if (rows.length && rows[0].value) {
+      const saved = typeof rows[0].value === "string" ? JSON.parse(rows[0].value) : rows[0].value;
+      if (saved.autopilot_confidence != null) AI_THRESHOLDS.autopilotConfidence = Number(saved.autopilot_confidence);
+      if (saved.sla_breach_threshold != null) AI_THRESHOLDS.slaBreachThreshold = Number(saved.sla_breach_threshold);
+      if (saved.sla_escalation_threshold != null) AI_THRESHOLDS.slaEscalationThreshold = Number(saved.sla_escalation_threshold);
+      if (saved.duplicate_similarity != null) AI_THRESHOLDS.duplicateSimilarity = Number(saved.duplicate_similarity);
+      if (saved.frustration_threshold != null) AI_THRESHOLDS.frustrationThreshold = Number(saved.frustration_threshold);
+      if (saved.storm_min_tickets != null) AI_THRESHOLDS.stormMinTickets = Number(saved.storm_min_tickets);
+      if (saved.autopilot_interval != null) AI_THRESHOLDS.autopilotInterval = Number(saved.autopilot_interval);
+      if (saved.health_check_window != null) AI_THRESHOLDS.healthCheckWindow = Number(saved.health_check_window);
+      console.log("[AI Thresholds] Refreshed from DB");
+    }
+  } catch (e) {
+    console.error("[AI Thresholds] refresh failed:", e.message);
+  }
+}
 
 // ─── Phase A safety helpers (Major Incident Process + recipient hygiene) ─
 // Returns true for Sev-A, P1, Critical (any case/dash). Used to block AI auto-resolve.
@@ -3216,6 +3245,9 @@ async function start() {
       }
     } catch (e) { console.log("[Settings] Could not restore persisted settings:", e.message); }
 
+    // Load AI thresholds from DB (Admin UI settings override env defaults)
+    await refreshAIThresholds();
+
     // SECURITY (#3): Auto-seeders below populate fresh DBs with default KB / templates /
     // approval chains / email whitelist / SG holidays. Each block is idempotent (guarded by
     // count === 0) so it cannot overwrite existing prod data, but the master switch lets
@@ -3465,6 +3497,10 @@ async function start() {
     } else {
       console.log(`[Cluster] Worker idx=${process.env.WORKER_INDEX} skipping SLA/Workflow scheduled jobs`);
     }
+
+    // Periodic AI thresholds refresh from DB (every 5 min)
+    const _thresholdInterval = setInterval(refreshAIThresholds, 5 * 60 * 1000);
+    _shutdownIntervals.push(_thresholdInterval);
 
     // Wrap SLA Guardian / ZD AutoSync / Cleanup / Purge / Uptime jobs in
     // the scheduler-worker gate too. Previously these ran on every worker,
@@ -4219,6 +4255,135 @@ async function start() {
     console.log("[Scheduled Purge] Log auto-purge every 6 hours (keep 2 days)");
     console.log("[Terminal Purge] Terminal-status purge every 6 hours (keep 7 days, cap 500)");
     console.log("[Audit Purge] Audit log purge every 6 hours (keep " + AUDIT_KEEP_DAYS + " days)");
+
+    // ─── Ambient AI Cron Jobs ──────────────────────────────────────────
+    // These run in the background continuously to deliver zero-input AI.
+    const _ambientFetch = async (path, method = "POST") => {
+      try {
+        const http = require("http");
+        const opts = { hostname: "127.0.0.1", port: PORT, path, method, headers: { "Content-Type": "application/json", "X-Internal-Cron": "1" }, timeout: 30000 };
+        return new Promise((resolve) => {
+          const req = http.request(opts, (res) => {
+            let data = "";
+            res.on("data", c => { data += c; });
+            res.on("end", () => { try { resolve(JSON.parse(data)); } catch { resolve({}); } });
+          });
+          req.on("error", () => resolve({}));
+          req.on("timeout", () => { req.destroy(); resolve({}); });
+          if (method === "POST") req.write("{}");
+          req.end();
+        });
+      } catch { return {}; }
+    };
+
+    // Feature 1: Autopilot Tick — every 2 minutes, auto-resolve routine tickets
+    const AUTOPILOT_CRON_INTERVAL = 2 * 60 * 1000;
+    const autopilotCronTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/autopilot/tick");
+          if (r.results?.resolved?.length > 0) console.log(`[Ambient AI] Autopilot resolved ${r.results.resolved.length} tickets`);
+        } catch (e) { console.warn("[Ambient AI] Autopilot tick error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, AUTOPILOT_CRON_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 90 * 1000);
+    _shutdownTimeouts.push(autopilotCronTimer);
+
+    // Feature 3: SLA Defender — every 5 minutes, auto-escalate approaching breaches
+    const SLA_DEFENDER_INTERVAL = 5 * 60 * 1000;
+    const slaDefenderTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/sla-defender");
+          if (r.escalated?.length > 0 || r.warned?.length > 0) console.log(`[Ambient AI] SLA Defender: ${r.escalated?.length || 0} escalated, ${r.warned?.length || 0} warned`);
+        } catch (e) { console.warn("[Ambient AI] SLA Defender error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, SLA_DEFENDER_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 120 * 1000);
+    _shutdownTimeouts.push(slaDefenderTimer);
+
+    // Feature 4: Duplicate Storm — every 3 minutes, merge duplicate bursts
+    const DUP_STORM_INTERVAL = 3 * 60 * 1000;
+    const dupStormTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/duplicate-storm");
+          if (r.stormsDetected > 0) console.log(`[Ambient AI] Duplicate Storm: merged ${r.stormsDetected} storms`);
+        } catch (e) { console.warn("[Ambient AI] Duplicate Storm error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, DUP_STORM_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 150 * 1000);
+    _shutdownTimeouts.push(dupStormTimer);
+
+    // Feature 2: Predictive Prevention — every 10 minutes, detect pattern bursts
+    const PREDICT_PREV_INTERVAL = 10 * 60 * 1000;
+    const predictPrevTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/predictive-prevention");
+          if (r.preventiveActions?.length > 0) console.log(`[Ambient AI] Predictive Prevention: ${r.preventiveActions.length} actions`);
+        } catch (e) { console.warn("[Ambient AI] Predictive Prevention error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, PREDICT_PREV_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 180 * 1000);
+    _shutdownTimeouts.push(predictPrevTimer);
+
+    // Feature 38: Queue Optimizer — every 30 minutes, rebalance workload
+    const QUEUE_OPT_INTERVAL = 30 * 60 * 1000;
+    const queueOptTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/queue-optimize");
+          if (r.rebalanceNeeded) console.log(`[Ambient AI] Queue Optimizer: ${r.suggestions?.length || 0} rebalance suggestions`);
+        } catch (e) { console.warn("[Ambient AI] Queue Optimizer error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, QUEUE_OPT_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 240 * 1000);
+    _shutdownTimeouts.push(queueOptTimer);
+
+    // Feature 44: Health Check — every 60 minutes, verify resolved tickets
+    const HEALTH_CHECK_INTERVAL = 60 * 60 * 1000;
+    const healthCheckTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/health-check");
+          if (r.checked > 0) console.log(`[Ambient AI] Health Check: ${r.closed} closed, ${r.reopened} reopened`);
+        } catch (e) { console.warn("[Ambient AI] Health Check error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, HEALTH_CHECK_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 300 * 1000);
+    _shutdownTimeouts.push(healthCheckTimer);
+
+    // Feature 41: Proactive Notifications — every 15 minutes
+    const PROACTIVE_NOTIFY_INTERVAL = 15 * 60 * 1000;
+    const proactiveNotifyTimer = setTimeout(() => {
+      const run = async () => {
+        try {
+          const r = await _ambientFetch("/api/ai/proactive-notify");
+          if (r.notifications?.length > 0) console.log(`[Ambient AI] Proactive Notify: ${r.notifications.length} service alerts`);
+        } catch (e) { console.warn("[Ambient AI] Proactive Notify error:", e.message); }
+      };
+      run();
+      const intv = setInterval(run, PROACTIVE_NOTIFY_INTERVAL);
+      _shutdownIntervals.push(intv);
+    }, 360 * 1000);
+    _shutdownTimeouts.push(proactiveNotifyTimer);
+
+    console.log("[Ambient AI] Scheduled 7 ambient intelligence cron jobs:");
+    console.log("  Autopilot Tick: every 2 min | SLA Defender: every 5 min | Duplicate Storm: every 3 min");
+    console.log("  Predictive Prevention: every 10 min | Queue Optimizer: every 30 min | Health Check: every 60 min | Proactive Notify: every 15 min");
 
     // ─── Daily AI Knowledge Sync (every 6h, first run 5 min after boot) ──
     // Scans recent tickets/email bodies and refreshes/creates KB articles

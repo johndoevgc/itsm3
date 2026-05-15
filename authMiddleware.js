@@ -240,7 +240,7 @@ const _workerCount = Math.max(1, parseInt(process.env.WEB_CONCURRENCY || "1", 10
 const _share = (n) => Math.max(1, Math.ceil(n / _workerCount));
 const RATE_LIMIT_MAX = _share(300);       // 300 req/min per IP cluster-wide
 const RATE_LIMIT_MAX_WRITE = _share(60);  // 60 writes/min per IP cluster-wide
-const RATE_LIMIT_MAX_AI = _share(30);     // 30 AI calls/min per IP cluster-wide
+const RATE_LIMIT_MAX_AI = _share(120);    // 120 AI calls/min per IP cluster-wide
 
 function checkRateLimit(ip, isWrite, isAI) {
   const now = Date.now();
@@ -327,6 +327,18 @@ async function authMiddleware(req, res, pathname, tenantId, clientId, allowedTen
         };
       }
     } catch { /* ignore */ }
+  }
+
+  // Internal cron bypass: requests from localhost with X-Internal-Cron header
+  if (req.headers["x-internal-cron"] === "1") {
+    const srcIP = req.socket?.remoteAddress || "";
+    if (srcIP === "127.0.0.1" || srcIP === "::1" || srcIP === "::ffff:127.0.0.1") {
+      return {
+        authenticated: true,
+        user: { email: "cron@internal", name: "Ambient AI Cron", id: "SYSTEM-CRON" },
+        role: "System",
+      };
+    }
   }
 
   // Rate limiting
